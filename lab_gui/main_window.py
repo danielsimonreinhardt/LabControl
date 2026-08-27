@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWid
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from device_worker import DeviceWorker
+from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
 
 CONNECTED_STYLE = "color: green; font-weight: bold;"
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
 
         self._setup_worker()
         self._wire_control_tab()
+        self._wire_testcase_tab()
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
@@ -69,6 +71,25 @@ class MainWindow(QMainWindow):
         psu.set_ovp.connect(self._worker.set_psu_ovp)
         psu.set_ocp.connect(self._worker.set_psu_ocp)
         psu.recall_memory.connect(self._worker.recall_psu_memory)
+
+    def _wire_testcase_tab(self) -> None:
+        self._test_runner = TestRunner()
+        self._test_runner.execute_action.connect(self._worker.execute_action)
+        self._worker.action_completed.connect(self._test_runner.on_action_completed)
+        self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
+        self._test_runner.step_failed.connect(self.testcase_tab.on_step_failed)
+        self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
+        self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
+
+        self.testcase_tab.run_requested.connect(self._on_run_requested)
+        self.testcase_tab.stop_requested.connect(self._test_runner.stop)
+
+    def _on_run_requested(self) -> None:
+        steps = self.testcase_tab.steps()
+        if not any(step.enabled for step in steps):
+            return
+        self.testcase_tab.on_run_started()
+        self._test_runner.start(steps)
 
     def _apply_load_setpoint(self, mode_code: str, value: float) -> None:
         setters = {

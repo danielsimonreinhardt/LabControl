@@ -33,9 +33,24 @@ USB_VID = 0x10C4
 USB_PID = 0xEA60
 DEFAULT_BAUDRATE = 9600
 
+# Laut Anleitung (Kap. 10, Technische Daten) ist die Ausgangsspannung nur ab
+# 1 V einstellbar ("Ausgangsspannung variabel: 1 - 16/32/60 V"). Gegen die
+# reale Hardware verifiziert: VOLT000/SOVP000 werden vom Geraet ignoriert
+# (keine Antwort, kein OK) -- ohne diese Pruefung liefe die Anfrage in den
+# Timeout und der Treiber wuerde das faelschlich als Verbindungsabbruch werten.
+MIN_VOLTAGE = 1.0
+
 
 class PowerSupplyError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Labornetzteil."""
+
+
+class PowerSupplyValueError(PowerSupplyError):
+    """Wert ausserhalb des vom Geraet akzeptierten Bereichs.
+
+    Kein Verbindungsproblem -- im Gegensatz zu anderen PowerSupplyError
+    sollte dies NICHT dazu fuehren, dass der Aufrufer die Verbindung trennt.
+    """
 
 
 @dataclass
@@ -127,6 +142,11 @@ class HCS34xx:
     # -- setpoints -----------------------------------------------------------
 
     def set_voltage(self, volts: float) -> None:
+        if volts < MIN_VOLTAGE:
+            raise PowerSupplyValueError(
+                f"Spannung {volts}V unterschreitet das Minimum von {MIN_VOLTAGE}V "
+                "(Geraet nimmt Werte darunter kommentarlos nicht an)."
+            )
         self._query("VOLT" + self._encode_field(volts, 3, 10))
 
     def set_current(self, amps: float) -> None:
@@ -155,6 +175,11 @@ class HCS34xx:
         return self._decode_fields(self._query("GOVP"), 3, 10)[0]
 
     def set_ovp(self, volts: float) -> None:
+        if volts < MIN_VOLTAGE:
+            raise PowerSupplyValueError(
+                f"OVP-Schwelle {volts}V unterschreitet das Minimum von {MIN_VOLTAGE}V "
+                "(Geraet nimmt Werte darunter kommentarlos nicht an)."
+            )
         self._query("SOVP" + self._encode_field(volts, 3, 10))
 
     def get_ocp(self) -> float:

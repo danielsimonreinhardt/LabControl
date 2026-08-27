@@ -58,8 +58,8 @@ class LoadControlGroup(QGroupBox):
         layout.addRow(apply_button)
 
         input_layout = QHBoxLayout()
-        on_button = QPushButton("Ausgang EIN")
-        off_button = QPushButton("Ausgang AUS")
+        on_button = QPushButton("EIN")
+        off_button = QPushButton("AUS")
         on_button.clicked.connect(lambda: self.set_input.emit(True))
         off_button.clicked.connect(lambda: self.set_input.emit(False))
         input_layout.addWidget(on_button)
@@ -94,12 +94,12 @@ class PsuControlGroup(QGroupBox):
 
         self._voltage_spin = QDoubleSpinBox()
         self._voltage_spin.setDecimals(1)
-        self._voltage_spin.setRange(0, 60)
+        self._voltage_spin.setRange(1, 60)  # Geraet nimmt Werte unter 1V nicht an
         self._voltage_spin.setSuffix(" V")
         self._voltage_spin.setMaximumWidth(120)
         voltage_button = QPushButton("Setzen")
         voltage_button.clicked.connect(lambda: self.set_voltage.emit(self._voltage_spin.value()))
-        layout.addRow("Spannung Soll:", self._row(self._voltage_spin, voltage_button))
+        layout.addRow("Spannung:", self._row(self._voltage_spin, voltage_button))
 
         self._current_spin = QDoubleSpinBox()
         self._current_spin.setDecimals(1)
@@ -108,11 +108,21 @@ class PsuControlGroup(QGroupBox):
         self._current_spin.setMaximumWidth(120)
         current_button = QPushButton("Setzen")
         current_button.clicked.connect(lambda: self.set_current.emit(self._current_spin.value()))
-        layout.addRow("Strom Soll:", self._row(self._current_spin, current_button))
+        layout.addRow("Strom:", self._row(self._current_spin, current_button))
+
+        output_layout = QHBoxLayout()
+        output_on_button = QPushButton("EIN")
+        output_off_button = QPushButton("AUS")
+        output_on_button.clicked.connect(self._on_output_on)
+        output_off_button.clicked.connect(self._on_output_off)
+        output_layout.addWidget(output_on_button)
+        output_layout.addWidget(output_off_button)
+        output_layout.addStretch()
+        layout.addRow("Ausgang:", output_layout)
 
         self._ovp_spin = QDoubleSpinBox()
         self._ovp_spin.setDecimals(1)
-        self._ovp_spin.setRange(0, 65)
+        self._ovp_spin.setRange(1, 65)  # Geraet nimmt Werte unter 1V nicht an
         self._ovp_spin.setSuffix(" V")
         self._ovp_spin.setMaximumWidth(120)
         ovp_button = QPushButton("Setzen")
@@ -128,16 +138,19 @@ class PsuControlGroup(QGroupBox):
         ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._ocp_spin.value()))
         layout.addRow("OCP:", self._row(self._ocp_spin, ocp_button))
 
-        preset_layout = QHBoxLayout()
+        """preset_layout = QHBoxLayout()
         for index, name in enumerate(["P1", "P2", "P3"]):
             button = QPushButton(name)
             button.clicked.connect(lambda checked=False, i=index: self.recall_memory.emit(i))
             preset_layout.addWidget(button)
-        layout.addRow("Presets abrufen:", preset_layout)
+        layout.addRow("Presets:", preset_layout)"""
 
-        note = QLabel("Hinweis: Ausgang EIN/AUS ist über USB nicht steuerbar\n(nur Fernsteueranschluss oder manuell am Gerät).")
-        note.setStyleSheet("color: gray;")
-        layout.addRow(note)
+    def _on_output_on(self) -> None:
+        self.set_voltage.emit(self._voltage_spin.value())
+        self.set_current.emit(max(self._current_spin.value(), 0.1))
+
+    def _on_output_off(self) -> None:
+        self.set_current.emit(0.0)
 
     @staticmethod
     def _row(*widgets: QWidget) -> QWidget:

@@ -40,3 +40,13 @@ with HCS34xx.open_first() as psu:
 - Baudrate ist bei diesem CP210x-UART (anders als beim USB-CDC-Gerät der
   elektronischen Last) relevant – 9600 8N1 wurde gegen die reale Hardware
   bestätigt.
+- **Minimale Ausgangsspannung 1,0 V.** Laut technischen Daten der Anleitung
+  ist die Ausgangsspannung nur ab 1 V einstellbar. Gegen die reale Hardware
+  verifiziert: `VOLT000`/`SOVP000` (0,0 V) werden vom Gerät kommentarlos
+  ignoriert (keine Antwort, kein `OK`) – ohne Prüfung würde der Treiber in
+  den Timeout laufen und das fälschlich als Verbindungsabbruch werten.
+  `set_voltage()`/`set_ovp()` werfen daher unterhalb von 1,0 V sofort ein
+  `PowerSupplyValueError` (Subklasse von `PowerSupplyError`), das explizit
+  **kein** Verbindungsfehler ist – Aufrufer sollten es getrennt behandeln
+  und die Verbindung dabei nicht schließen. `set_current()`/`set_ocp()`
+  akzeptieren 0 problemlos.

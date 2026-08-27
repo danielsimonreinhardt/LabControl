@@ -1,0 +1,5 @@
+pyserial>=3.5
+PySide6>=6.6
+
+# nur zum Bauen der .exe (siehe lab_gui/README.md)
+pyinstaller>=6.0
