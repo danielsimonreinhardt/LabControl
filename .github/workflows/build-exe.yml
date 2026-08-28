@@ -23,23 +23,28 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip -r requirements.txt
 
+      - name: Read version
+        run: |
+          $version = python -c "from lab_gui.version import __version__; print(__version__)"
+          echo "EXE_NAME=LabControl_v$version" >> $env:GITHUB_ENV
+
       - name: Build EXE with PyInstaller
-        run: pyinstaller --name LaborSteuerung --paths . --add-data "lab_gui/icons;lab_gui/icons" --onefile --windowed lab_gui/main.py
+        run: pyinstaller --name $env:EXE_NAME --paths . --add-data "lab_gui/icons;lab_gui/icons" --onefile --windowed lab_gui/main.py
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LaborSteuerung-exe
-          path: dist/LaborSteuerung.exe
+          name: ${{ env.EXE_NAME }}
+          path: dist/${{ env.EXE_NAME }}.exe
 
       - name: Publish "latest" release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "LaborSteuerung (latest master build)"
+          name: "LabControl (latest master build)"
           body: |
             Automatisch aus dem aktuellen `master` gebaut.
             Commit: ${{ github.sha }}
           prerelease: false
           make_latest: true
-          files: dist/LaborSteuerung.exe
+          files: dist/${{ env.EXE_NAME }}.exe
