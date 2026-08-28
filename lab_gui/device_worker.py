@@ -132,6 +132,13 @@ class DeviceWorker(QObject):
             self._loads[device_id] = candidate
             self.device_added.emit("load", device_id)
             self.load_connected.emit(device_id, True)
+            # Sofort abfragen statt auf den naechsten Poll-Zyklus zu warten
+            # (bis zu POLL_INTERVAL_MS spaeter) -- der EIN/AUS-Button im
+            # Control-Tab soll den echten Zustand so frueh wie moeglich zeigen.
+            try:
+                self.load_input_state.emit(device_id, candidate.get_input())
+            except LoadError:
+                pass  # naechster Poll-Zyklus liefert den Status ohnehin nach
 
     def _reconnect_psus(self) -> None:
         candidates = _resolve_device_ids("psu", HCS34xx.discover_ports())

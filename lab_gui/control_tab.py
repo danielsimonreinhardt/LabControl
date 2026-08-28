@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -97,11 +98,16 @@ class LoadControlGroup(QGroupBox):
         input_layout = QHBoxLayout()
         self._on_button = QPushButton("EIN")
         self._off_button = QPushButton("AUS")
+        # Expanding statt addStretch(): beide Buttons teilen sich zu gleichen
+        # Teilen die Feldbreite, die QFormLayout auch den anderen Zeilen
+        # (Modus-Combo, Sollwert-Spinbox) gibt, statt schmal und mit
+        # ungenutztem Leerraum danebenzustehen.
+        self._on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._on_button.clicked.connect(lambda: self.set_input.emit(self._device_id, True))
         self._off_button.clicked.connect(lambda: self.set_input.emit(self._device_id, False))
         input_layout.addWidget(self._on_button)
         input_layout.addWidget(self._off_button)
-        input_layout.addStretch()
         layout.addRow("Ausgang:", input_layout)
 
         # Solange noch keine Hardware-Rueckfrage eingetroffen ist (siehe
@@ -187,19 +193,21 @@ class PsuControlGroup(QGroupBox):
         output_layout = QHBoxLayout()
         self._output_on_button = QPushButton("EIN")
         self._output_off_button = QPushButton("AUS")
+        self._output_on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._output_off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._output_on_button.clicked.connect(self._on_output_on)
         self._output_off_button.clicked.connect(self._on_output_off)
         output_layout.addWidget(self._output_on_button)
         output_layout.addWidget(self._output_off_button)
-        output_layout.addStretch()
         layout.addRow("Ausgang:", output_layout)
 
         # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
         # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
-        # indem der Strom auf 0 gesetzt wird. Die Einfaerbung spiegelt deshalb
-        # nur den zuletzt hier geklickten Zustand wider, nicht zwingend die
-        # Hardware (z.B. nach manuellem Eingriff am Geraet unbekannt).
-        self._output_on: bool | None = None
+        # indem der Strom auf 0 gesetzt wird. Deshalb kein "unbekannter"
+        # Startzustand wie bei der Last: ein frisch verbundenes/simuliertes
+        # Netzteil hat Strom 0, gilt also standardmaessig als AUS, bis hier
+        # geklickt wird.
+        self._output_on: bool | None = False
         self._update_output_buttons()
 
         self._ovp_spin = QDoubleSpinBox()

@@ -27,7 +27,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
-        self.setWindowTitle(f"Labor-Steuerung v{__version__}")
+        self.setWindowTitle(f"LAB CONTROL v{__version__}")
         self.resize(1000, 700)
 
         central = QWidget()
