@@ -19,9 +19,15 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from korad_kel102.driver import KoradKEL102, LoadError
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
+from hcs34xx.mock import MockHCS34xx
 
 POLL_INTERVAL_MS = 500
 RECONNECT_INTERVAL_MS = 3000
+
+# Feste Device-ID fuer das simulierte Netzteil (siehe set_simulation_mode) --
+# im Gegensatz zu echten Geraeten gibt es hier keine USB-Seriennummer/COM-Port,
+# aus der sich eine ID ableiten liesse.
+SIM_PSU_ID = "psu:SIM"
 
 
 def _resolve_device_ids(kind: str, infos: list) -> dict[str, object]:
@@ -52,12 +58,14 @@ class DeviceWorker(QObject):
     psu_connected = Signal(str, bool)        # device_id, online
     load_measurement = Signal(str, float, float, float)  # device_id, voltage, current, power
     psu_measurement = Signal(str, float, float, bool)     # device_id, voltage, current, constant_current
+    load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
     action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
 
-    def __init__(self) -> None:
+    def __init__(self, simulation_mode: bool = False) -> None:
         super().__init__()
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
+        self._simulation_mode = simulation_mode
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
@@ -65,9 +73,37 @@ class DeviceWorker(QObject):
 
     @Slot()
     def start(self) -> None:
+        if self._simulation_mode:
+            self._add_mock_psu()
         self._try_reconnect()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
+
+    # -- Simulationsmodus ----------------------------------------------------
+
+    @Slot(bool)
+    def set_simulation_mode(self, enabled: bool) -> None:
+        if enabled == self._simulation_mode:
+            return
+        self._simulation_mode = enabled
+        if enabled:
+            self._add_mock_psu()
+        else:
+            self._remove_mock_psu()
+
+    def _add_mock_psu(self) -> None:
+        if SIM_PSU_ID in self._psus:
+            return
+        self._psus[SIM_PSU_ID] = MockHCS34xx()
+        self.device_added.emit("psu", SIM_PSU_ID)
+        self.psu_connected.emit(SIM_PSU_ID, True)
+
+    def _remove_mock_psu(self) -> None:
+        psu = self._psus.pop(SIM_PSU_ID, None)
+        if psu is not None:
+            psu.close()
+            self.psu_connected.emit(SIM_PSU_ID, False)
+            self.device_removed.emit("psu", SIM_PSU_ID)
 
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass
@@ -119,6 +155,7 @@ class DeviceWorker(QObject):
             try:
                 m = load.measure()
                 self.load_measurement.emit(device_id, m.voltage, m.current, m.power)
+                self.load_input_state.emit(device_id, load.get_input())
             except LoadError:
                 load.close()
                 del self._loads[device_id]

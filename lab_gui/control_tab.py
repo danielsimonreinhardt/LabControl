@@ -9,7 +9,7 @@ keine eingestellten Werte verloren gehen.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -22,6 +22,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from icons import IconButton
+from theme import Palette, ThemeManager
+from theme import current as current_palette
 
 # Anzeigename -> SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS)
 LOAD_MODES = {
@@ -41,6 +45,18 @@ LOAD_MODE_UNITS = {
 }
 
 
+def _style_toggle_buttons(
+    on_button: QPushButton, off_button: QPushButton, state: bool | None, pal: Palette
+) -> None:
+    """Hebt den Button des aktiven Zustands farbig hervor (gruen=ein, rot=aus).
+
+    state=None (Zustand noch unbekannt, z.B. vor der ersten Hardware-Rueckfrage
+    bei der Last) laesst beide Buttons im neutralen Standard-Look."""
+    active_style = "background-color: {color}; color: {text}; font-weight: bold;"
+    on_button.setStyleSheet(active_style.format(color=pal.success, text=pal.surface) if state is True else "")
+    off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
+
+
 class LoadControlGroup(QGroupBox):
     apply_function = Signal(str, str)         # device_id, SCPI mode code
     apply_setpoint = Signal(str, str, float)  # device_id, SCPI mode code, value
@@ -54,10 +70,11 @@ class LoadControlGroup(QGroupBox):
         outer = QVBoxLayout(self)
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        subtitle = QLabel("Elektronische Last (KEL102)")
-        subtitle.setStyleSheet("color: gray;")
+        self._subtitle = QLabel("Elektronische Last (KEL102)")
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
         outer.addWidget(self._title_label)
-        outer.addWidget(subtitle)
+        outer.addWidget(self._subtitle)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
 
         layout = QFormLayout()
         outer.addLayout(layout)
@@ -73,19 +90,37 @@ class LoadControlGroup(QGroupBox):
         layout.addRow("Sollwert:", self._setpoint_spin)
         self._on_mode_changed(self._mode_combo.currentText())
 
-        apply_button = QPushButton("Übernehmen")
+        apply_button = IconButton("mdi.check-bold", "Übernehmen")
         apply_button.clicked.connect(self._on_apply)
         layout.addRow(apply_button)
 
         input_layout = QHBoxLayout()
-        on_button = QPushButton("EIN")
-        off_button = QPushButton("AUS")
-        on_button.clicked.connect(lambda: self.set_input.emit(self._device_id, True))
-        off_button.clicked.connect(lambda: self.set_input.emit(self._device_id, False))
-        input_layout.addWidget(on_button)
-        input_layout.addWidget(off_button)
+        self._on_button = QPushButton("EIN")
+        self._off_button = QPushButton("AUS")
+        self._on_button.clicked.connect(lambda: self.set_input.emit(self._device_id, True))
+        self._off_button.clicked.connect(lambda: self.set_input.emit(self._device_id, False))
+        input_layout.addWidget(self._on_button)
+        input_layout.addWidget(self._off_button)
         input_layout.addStretch()
         layout.addRow("Ausgang:", input_layout)
+
+        # Solange noch keine Hardware-Rueckfrage eingetroffen ist (siehe
+        # set_input_state, gespeist vom DeviceWorker-Polling), ist der
+        # tatsaechliche Eingangszustand unbekannt -- neutrale Buttons statt
+        # eines geratenen Zustands.
+        self._input_on: bool | None = None
+        self._update_input_buttons()
+
+    def set_input_state(self, on: bool) -> None:
+        self._input_on = on
+        self._update_input_buttons()
+
+    def _update_input_buttons(self) -> None:
+        _style_toggle_buttons(self._on_button, self._off_button, self._input_on, current_palette())
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
+        self._update_input_buttons()
 
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
@@ -118,10 +153,11 @@ class PsuControlGroup(QGroupBox):
         outer = QVBoxLayout(self)
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        subtitle = QLabel("Labornetzteil (HCS-34xx)")
-        subtitle.setStyleSheet("color: gray;")
+        self._subtitle = QLabel("Labornetzteil (HCS-34xx)")
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
         outer.addWidget(self._title_label)
-        outer.addWidget(subtitle)
+        outer.addWidget(self._subtitle)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
 
         layout = QFormLayout()
         outer.addLayout(layout)
@@ -131,7 +167,7 @@ class PsuControlGroup(QGroupBox):
         self._voltage_spin.setRange(1, 60)  # Geraet nimmt Werte unter 1V nicht an
         self._voltage_spin.setSuffix(" V")
         self._voltage_spin.setMaximumWidth(120)
-        voltage_button = QPushButton("Setzen")
+        voltage_button = IconButton("mdi.check", "Setzen")
         voltage_button.clicked.connect(
             lambda: self.set_voltage.emit(self._device_id, self._voltage_spin.value())
         )
@@ -142,28 +178,36 @@ class PsuControlGroup(QGroupBox):
         self._current_spin.setRange(0, 10)
         self._current_spin.setSuffix(" A")
         self._current_spin.setMaximumWidth(120)
-        current_button = QPushButton("Setzen")
+        current_button = IconButton("mdi.check", "Setzen")
         current_button.clicked.connect(
             lambda: self.set_current.emit(self._device_id, self._current_spin.value())
         )
         layout.addRow("Strom:", self._row(self._current_spin, current_button))
 
         output_layout = QHBoxLayout()
-        output_on_button = QPushButton("EIN")
-        output_off_button = QPushButton("AUS")
-        output_on_button.clicked.connect(self._on_output_on)
-        output_off_button.clicked.connect(self._on_output_off)
-        output_layout.addWidget(output_on_button)
-        output_layout.addWidget(output_off_button)
+        self._output_on_button = QPushButton("EIN")
+        self._output_off_button = QPushButton("AUS")
+        self._output_on_button.clicked.connect(self._on_output_on)
+        self._output_off_button.clicked.connect(self._on_output_off)
+        output_layout.addWidget(self._output_on_button)
+        output_layout.addWidget(self._output_off_button)
         output_layout.addStretch()
         layout.addRow("Ausgang:", output_layout)
+
+        # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
+        # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
+        # indem der Strom auf 0 gesetzt wird. Die Einfaerbung spiegelt deshalb
+        # nur den zuletzt hier geklickten Zustand wider, nicht zwingend die
+        # Hardware (z.B. nach manuellem Eingriff am Geraet unbekannt).
+        self._output_on: bool | None = None
+        self._update_output_buttons()
 
         self._ovp_spin = QDoubleSpinBox()
         self._ovp_spin.setDecimals(1)
         self._ovp_spin.setRange(1, 65)  # Geraet nimmt Werte unter 1V nicht an
         self._ovp_spin.setSuffix(" V")
         self._ovp_spin.setMaximumWidth(120)
-        ovp_button = QPushButton("Setzen")
+        ovp_button = IconButton("mdi.check", "Setzen")
         ovp_button.clicked.connect(lambda: self.set_ovp.emit(self._device_id, self._ovp_spin.value()))
         layout.addRow("OVP:", self._row(self._ovp_spin, ovp_button))
 
@@ -172,9 +216,13 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.setRange(0, 11)
         self._ocp_spin.setSuffix(" A")
         self._ocp_spin.setMaximumWidth(120)
-        ocp_button = QPushButton("Setzen")
+        ocp_button = IconButton("mdi.check", "Setzen")
         ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._device_id, self._ocp_spin.value()))
         layout.addRow("OCP:", self._row(self._ocp_spin, ocp_button))
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
+        self._update_output_buttons()
 
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
@@ -182,9 +230,16 @@ class PsuControlGroup(QGroupBox):
     def _on_output_on(self) -> None:
         self.set_voltage.emit(self._device_id, self._voltage_spin.value())
         self.set_current.emit(self._device_id, max(self._current_spin.value(), 0.1))
+        self._output_on = True
+        self._update_output_buttons()
 
     def _on_output_off(self) -> None:
         self.set_current.emit(self._device_id, 0.0)
+        self._output_on = False
+        self._update_output_buttons()
+
+    def _update_output_buttons(self) -> None:
+        _style_toggle_buttons(self._output_on_button, self._output_off_button, self._output_on, current_palette())
 
     @staticmethod
     def _row(*widgets: QWidget) -> QWidget:
@@ -231,6 +286,10 @@ class ControlTab(QWidget):
             section = PsuControlGroup(device_id, label)
         section.hide()
         self._content_layout.insertWidget(self._content_layout.count() - 1, section)
+        # Ohne explizites Alignment streckt QVBoxLayout die Sektion auf die
+        # volle Breite -- stattdessen soll sie sich an ihrem Inhalt (Formular
+        # + Spinboxen fester Breite) orientieren und links ausgerichtet sein.
+        self._content_layout.setAlignment(section, Qt.AlignmentFlag.AlignLeft)
         self._sections[device_id] = section
         self.section_created.emit(kind, device_id, section)
 
@@ -249,3 +308,8 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if section is not None:
             section.setVisible(online)
+
+    def set_load_input_state(self, device_id: str, on: bool) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, LoadControlGroup):
+            section.set_input_state(on)

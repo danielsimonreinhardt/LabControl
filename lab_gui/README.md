@@ -20,14 +20,16 @@ wird im Fenstertitel angezeigt. Bei jedem Release dort hochzählen und beim
 ```
 pip install -r ../requirements.txt
 cd ..
-pyinstaller --name LaborSteuerung-0.1.1 --paths . --onefile --windowed lab_gui/main.py
+pyinstaller --name LaborSteuerung-0.2.0 --paths . --add-data "lab_gui/icons;lab_gui/icons" --onefile --windowed lab_gui/main.py
 ```
 
 Wichtig: Der Befehl muss aus `labor-dashboard/` (nicht aus `lab_gui/`) laufen, da
 `--paths .` PyInstaller sagt, wo es die Pakete `korad_kel102` und `hcs34xx`
-findet. Ergebnis liegt danach in `dist/LaborSteuerung-0.1.1.exe` (einzelne
-Datei, kein Konsolenfenster). Gespeicherte Testabläufe landen automatisch
-neben der .exe in `dist/testcases/` (nicht im flüchtigen
+findet. `--add-data "lab_gui/icons;lab_gui/icons"` bündelt die Spinbox-Pfeil-
+Icons (theme.py) mit ins .exe -- ohne das fehlen sie im Onefile-Build (kein
+Absturz, nur optisch). Ergebnis liegt danach in `dist/LaborSteuerung-0.2.0.exe`
+(einzelne Datei, kein Konsolenfenster). Gespeicherte Testabläufe landen
+automatisch neben der .exe in `dist/testcases/` (nicht im flüchtigen
 PyInstaller-Temp-Verzeichnis).
 
 `build/`, `dist/` und `*.spec` sind in `.gitignore` – bei Bedarf neu bauen

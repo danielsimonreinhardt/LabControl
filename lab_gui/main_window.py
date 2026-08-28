@@ -8,13 +8,13 @@ from control_tab import ControlTab
 from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
+from settings import Settings
+from settings_tab import SettingsTab
 from testcase_model import DEVICE_KIND_LABELS
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
+from theme import Palette, ThemeManager
 from version import __version__
-
-CONNECTED_STYLE = "color: green; font-weight: bold;"
-DISCONNECTED_STYLE = "color: red; font-weight: bold;"
 
 
 class MainWindow(QMainWindow):
@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
     # Connection korrekt in den Worker-Thread gelangt.
     _dispatch_test_action = Signal(str, str, str, float)  # device_id, kind, action, value
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
         self.setWindowTitle(f"Labor-Steuerung v{__version__}")
         self.resize(1000, 700)
@@ -39,8 +39,10 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.control_tab = ControlTab()
         self.testcase_tab = TestcaseTab()
+        self.settings_tab = SettingsTab()
         self.tabs.addTab(self.control_tab, "Control")
         self.tabs.addTab(self.testcase_tab, "Testcase")
+        self.tabs.addTab(self.settings_tab, "Settings")
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
@@ -55,15 +57,19 @@ class MainWindow(QMainWindow):
         self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set()}
 
         self._registry = DeviceRegistry()
+        self._settings = settings if settings is not None else Settings()
 
         self._setup_worker()
         self._wire_registry()
         self._wire_control_tab()
         self._wire_testcase_tab()
+        self._wire_settings_tab()
+
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
-        self._worker = DeviceWorker()
+        self._worker = DeviceWorker(simulation_mode=self._settings.simulation_mode)
         self._worker.moveToThread(self._thread)
 
         self._worker.device_added.connect(self._registry.on_device_added)
@@ -72,6 +78,7 @@ class MainWindow(QMainWindow):
         self._worker.psu_connected.connect(self._on_psu_connected)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
+        self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -103,6 +110,15 @@ class MainWindow(QMainWindow):
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
+
+    def _wire_settings_tab(self) -> None:
+        self.settings_tab.set_simulation_mode(self._settings.simulation_mode)
+        self.settings_tab.simulation_mode_toggled.connect(self._settings.set_simulation_mode)
+        self._settings.simulation_mode_changed.connect(self._worker.set_simulation_mode)
+
+        self.settings_tab.set_dark_mode(self._settings.dark_mode)
+        self.settings_tab.dark_mode_toggled.connect(self._settings.set_dark_mode)
+        self._settings.dark_mode_changed.connect(ThemeManager.instance().apply)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()
@@ -195,7 +211,13 @@ class MainWindow(QMainWindow):
         label = self._device_labels.get(device_id, device_id)
         online = self._device_online.get(device_id, False)
         status_label.setText(f"{label}: {'verbunden' if online else 'getrennt'}")
-        status_label.setStyleSheet(CONNECTED_STYLE if online else DISCONNECTED_STYLE)
+        pal = ThemeManager.instance().palette
+        color = pal.success if online else pal.danger
+        status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+    def _on_theme_changed(self, _palette: Palette) -> None:
+        for device_id in self._status_labels:
+            self._render_status_label(device_id)
 
     def closeEvent(self, event) -> None:
         self._thread.quit()

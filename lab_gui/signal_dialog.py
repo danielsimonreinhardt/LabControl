@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from testcase_model import ACTION_VALUE_RANGE, ARB_TARGETS, action_label, arb_value
+from theme import current as current_palette
 
 SHAPES = {"Sinus": "sine", "Rechteck": "square"}
 PREVIEW_PERIODS = 3.0
@@ -49,7 +50,8 @@ class _ScopePreview(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(6, 6, -6, -6)
-        painter.fillRect(self.rect(), QColor("#0d1117"))
+        pal = current_palette()
+        painter.fillRect(self.rect(), QColor(pal.plot_bg))
 
         if not self._params or rect.width() <= 0 or rect.height() <= 0:
             return
@@ -72,7 +74,7 @@ class _ScopePreview(QWidget):
             return rect.bottom() - frac * rect.height()
 
         # Gitter
-        grid_pen = QPen(QColor("#22303c"))
+        grid_pen = QPen(QColor(pal.plot_grid))
         painter.setPen(grid_pen)
         for i in range(5):
             y = rect.top() + i * rect.height() / 4
@@ -80,7 +82,7 @@ class _ScopePreview(QWidget):
 
         # Zulaessiger Geraete-Wertebereich als gestrichelte Referenzlinien
         if lo < hi:
-            ref_pen = QPen(QColor("#e0a030"))
+            ref_pen = QPen(QColor(pal.plot_ref))
             ref_pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(ref_pen)
             painter.drawLine(rect.left(), int(y_of(lo)), rect.right(), int(y_of(lo)))
@@ -106,7 +108,7 @@ class _ScopePreview(QWidget):
             x = rect.left() + (t / window_s) * rect.width()
             points.append((x, y_of(value)))
 
-        signal_pen = QPen(QColor("#39d353"))
+        signal_pen = QPen(QColor(pal.plot_signal))
         signal_pen.setWidth(2)
         painter.setPen(signal_pen)
         for (x0, y0), (x1, y1) in zip(points, points[1:]):
@@ -114,7 +116,7 @@ class _ScopePreview(QWidget):
             # ein DAC/Sollwert-Kommando den Wert bis zum naechsten Update haelt.
             painter.drawLine(int(x0), int(y0), int(x1), int(y0))
             painter.drawLine(int(x1), int(y0), int(x1), int(y1))
-        dot_pen = QPen(QColor("#39d353"))
+        dot_pen = QPen(QColor(pal.plot_signal))
         dot_pen.setWidth(5)
         painter.setPen(dot_pen)
         for x, y in points:
@@ -172,7 +174,7 @@ class SignalDialog(QDialog):
         duration_label = QLabel(
             f"Signal-Dauer: {step_duration:g} s (siehe Spalte „Dauer (s)“ in der Testschritt-Zeile)"
         )
-        duration_label.setStyleSheet("color: gray;")
+        duration_label.setStyleSheet(f"color: {current_palette().text_muted};")
         layout.addWidget(duration_label)
 
         layout.addWidget(QLabel("Vorschau (Oszilloskop):"))
@@ -180,7 +182,7 @@ class SignalDialog(QDialog):
         layout.addWidget(self._preview)
 
         self._warning_label = QLabel("")
-        self._warning_label.setStyleSheet("color: #e0a030;")
+        self._warning_label.setStyleSheet(f"color: {current_palette().warning};")
         self._warning_label.setWordWrap(True)
         layout.addWidget(self._warning_label)
 

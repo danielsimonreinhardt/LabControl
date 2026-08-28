@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
-    QPushButton,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -28,8 +27,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from icons import IconButton
 from paths import app_dir
 from signal_dialog import SignalDialog
+from theme import Palette, ThemeManager
+from theme import current as current_palette
 from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
@@ -44,11 +46,17 @@ from testcase_model import (
 )
 
 COLUMNS = ["#", "Gerät", "Aktion", "Wert", "Dauer (s)", "Aktiv"]
+# Default-Spaltenbreiten (Pixel) fuer die Standard-Fenstergroesse (1000x700
+# Hauptfenster -> ca. 958px Tabellenbreite). Aus einem vom Nutzer vorgegebenen
+# Referenz-Screenshot als Anteile ermittelt und auf diese Breite umgerechnet --
+# absolute Pixelwerte 1:1 aus dem (viel breiteren) Screenshot zu uebernehmen
+# liess der Aktion-Spalte bei der Standardgroesse kaum Platz. Aktion (Index 2)
+# bleibt Stretch und nimmt sich den Rest; alle Spalten bleiben per Drag&Drop
+# veraenderbar (Interactive-Resize).
+DEFAULT_COLUMN_WIDTHS = {0: 49, 1: 167, 3: 119, 4: 94, 5: 77}
 
 DEFAULT_DIR = app_dir() / "testcases"
 
-BLINK_COLOR = "#43a047"   # gruen: aktiver Schritt
-ERROR_COLOR = "#e53935"   # rot: Schritt mit Problem abgebrochen
 BLINK_INTERVAL_MS = 400
 
 
@@ -70,12 +78,12 @@ class TestcaseTab(QWidget):
         self._blink_on = False
 
         button_row = QHBoxLayout()
-        self._add_button = QPushButton("Zeile hinzufügen")
-        self._remove_button = QPushButton("Zeile entfernen")
-        self._up_button = QPushButton("Nach oben")
-        self._down_button = QPushButton("Nach unten")
-        self._load_button = QPushButton("Laden…")
-        self._save_button = QPushButton("Speichern…")
+        self._add_button = IconButton("mdi.plus", "Zeile hinzufügen")
+        self._remove_button = IconButton("mdi.minus", "Zeile entfernen")
+        self._up_button = IconButton("mdi.arrow-up", "Nach oben")
+        self._down_button = IconButton("mdi.arrow-down", "Nach unten")
+        self._load_button = IconButton("mdi.folder-open-outline", "Laden…")
+        self._save_button = IconButton("mdi.content-save-outline", "Speichern…")
         self._add_button.clicked.connect(self._add_row_clicked)
         self._remove_button.clicked.connect(self._remove_selected_row)
         self._up_button.clicked.connect(lambda: self._move_selected_row(-1))
@@ -91,27 +99,52 @@ class TestcaseTab(QWidget):
 
         self._table = QTableWidget(0, len(COLUMNS))
         self._table.setHorizontalHeaderLabels(COLUMNS)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header = self._table.horizontalHeader()
+        for col in range(len(COLUMNS)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+        for col, width in DEFAULT_COLUMN_WIDTHS.items():
+            header.resizeSection(col, width)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         layout.addWidget(self._table)
 
         run_row = QHBoxLayout()
-        self._run_button = QPushButton("Start")
-        self._stop_button = QPushButton("Stop")
+        self._run_button = IconButton("mdi.play", "Start", text="Start")
+        self._stop_button = IconButton("mdi.stop", "Stop", text="Stop")
         self._stop_button.setEnabled(False)
         self._run_button.clicked.connect(self.run_requested.emit)
         self._stop_button.clicked.connect(self._on_stop_clicked)
         self._status_label = QLabel("Bereit")
-        self._status_label.setStyleSheet("color: gray;")
+        self._status_is_error = False
+        self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
         run_row.addWidget(self._run_button)
         run_row.addWidget(self._stop_button)
         run_row.addWidget(self._status_label)
         run_row.addStretch()
         layout.addLayout(run_row)
 
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+
         self._add_row_clicked()
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        if self._status_is_error:
+            self._status_label.setStyleSheet(f"color: {palette.danger}; font-weight: bold;")
+        else:
+            self._status_label.setStyleSheet(f"color: {palette.text_muted};")
+        # Arbiträrsignal-Zusammenfassung je Zeile (arb_page, Index 1 im
+        # value_stack) haengt nicht am ThemeManager-Signal -- Zeilen kommen
+        # und gehen (Zeile hinzufuegen/entfernen/verschieben), ein direktes
+        # Signal-Connect pro Label wuerde beim Entfernen einer Zeile nicht
+        # sauber wieder abgehaengt. Stattdessen hier zentral ueber die aktuell
+        # vorhandenen Zeilen iterieren.
+        for row in range(self._table.rowCount()):
+            value_stack: QStackedWidget = self._table.cellWidget(row, 3)
+            arb_page = value_stack.widget(1)
+            arb_summary_label = arb_page.findChild(QLabel)
+            arb_summary_label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic;")
 
     # -- Geraeteregistrierung (von MainWindow/DeviceRegistry gespeist) --------
 
@@ -193,8 +226,8 @@ class TestcaseTab(QWidget):
         arb_layout = QHBoxLayout(arb_page)
         arb_layout.setContentsMargins(2, 0, 2, 0)
         arb_summary_label = QLabel()
-        arb_summary_label.setStyleSheet("color: gray; font-style: italic;")
-        arb_button = QPushButton("Signal definieren…")
+        arb_summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+        arb_button = IconButton("mdi.sine-wave", "Signal definieren…")
         arb_layout.addWidget(arb_summary_label, 1)
         arb_layout.addWidget(arb_button)
         arb_page._params = dict(
@@ -392,7 +425,8 @@ class TestcaseTab(QWidget):
     def on_run_started(self) -> None:
         self._clear_all_row_colors()
         self.set_running(True)
-        self._status_label.setStyleSheet("color: gray;")
+        self._status_is_error = False
+        self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
         self._status_label.setText("Läuft…")
 
     def on_step_started(self, index: int, step: TestStep) -> None:
@@ -416,24 +450,27 @@ class TestcaseTab(QWidget):
     def on_run_finished(self) -> None:
         self._stop_blink()
         self.set_running(False)
-        self._status_label.setStyleSheet("color: gray;")
+        self._status_is_error = False
+        self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
         self._status_label.setText("Fertig")
 
     def on_run_stopped(self) -> None:
         self._stop_blink()
         self.set_running(False)
-        self._status_label.setStyleSheet("color: gray;")
+        self._status_is_error = False
+        self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
         self._status_label.setText("Gestoppt")
 
     def on_step_failed(self, index: int, message: str) -> None:
         self._stop_blink()
-        self._set_row_color(index, ERROR_COLOR)
+        self._set_row_color(index, current_palette().danger)
         # Ablauf ist intern zwar schon gestoppt, aber der Fehler bleibt sichtbar
         # (rote Zeile) und die Bedienelemente gesperrt, bis er ueber "Stop"
         # quittiert wird -- set_running(True) haelt dafuer den Stop-Button aktiv.
         self.set_running(True)
         total = self._table.rowCount()
-        self._status_label.setStyleSheet("color: #e53935; font-weight: bold;")
+        self._status_is_error = True
+        self._status_label.setStyleSheet(f"color: {current_palette().danger}; font-weight: bold;")
         self._status_label.setText(
             f"Fehler bei Schritt {index + 1}/{total}: {message} — mit Stop quittieren"
         )
@@ -443,7 +480,8 @@ class TestcaseTab(QWidget):
         self._stop_blink()
         self._clear_all_row_colors()
         self.set_running(False)
-        self._status_label.setStyleSheet("color: gray;")
+        self._status_is_error = False
+        self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
         self._status_label.setText("Gestoppt")
 
     # -- Blink-/Fehleranzeige -------------------------------------------------
@@ -463,7 +501,7 @@ class TestcaseTab(QWidget):
 
     def _toggle_blink(self) -> None:
         self._blink_on = not self._blink_on
-        self._set_row_color(self._blink_row, BLINK_COLOR if self._blink_on else None)
+        self._set_row_color(self._blink_row, current_palette().success if self._blink_on else None)
 
     def _set_row_color(self, row: int, color: str | None) -> None:
         if row < 0 or row >= self._table.rowCount():

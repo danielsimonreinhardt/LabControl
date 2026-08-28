@@ -10,11 +10,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (
 from PySide6.QtWidgets import QApplication
 
 from main_window import MainWindow
+from settings import Settings
+from theme import ThemeManager
 
 
 def main() -> None:
     app = QApplication(sys.argv)
-    window = MainWindow()
+    settings = Settings()
+    ThemeManager.instance().apply(settings.dark_mode)
+    window = MainWindow(settings)
     window.show()
     sys.exit(app.exec())
 

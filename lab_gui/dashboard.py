@@ -16,16 +16,21 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from icons import IconButton
+from theme import Palette, ThemeManager
+from theme import current as current_palette
+
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
 PANEL_WIDTH = 220
-PANEL_MAX_HEIGHT = 170
+# Zusätzlicher Platz für die Scrollleiste am unteren Rand (falls horizontal
+# gescrollt werden muss) sowie den Rahmen der ScrollArea.
+SCROLL_AREA_MARGIN = 24
 
 LOAD_FIELDS = ["Spannung (V)", "Strom (A)", "Leistung (W)"]
 PSU_FIELDS = ["Spannung (V)", "Strom (A)", "Modus"]
@@ -40,24 +45,22 @@ class _DevicePanel(QGroupBox):
         self._kind = kind
         self._device_id = device_id
         self.setFixedWidth(PANEL_WIDTH)
-        self.setMaximumHeight(PANEL_MAX_HEIGHT)
 
         outer = QVBoxLayout(self)
 
         header = QHBoxLayout()
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        rename_button = QPushButton("✎")
-        rename_button.setFixedWidth(28)
-        rename_button.setToolTip("Gerät umbenennen")
+        rename_button = IconButton("mdi.pencil-outline", "Gerät umbenennen")
         rename_button.clicked.connect(self._on_rename_clicked)
         header.addWidget(self._title_label, 1)
         header.addWidget(rename_button)
         outer.addLayout(header)
 
-        subtitle = QLabel(KIND_TITLE.get(kind, kind))
-        subtitle.setStyleSheet("color: gray;")
-        outer.addWidget(subtitle)
+        self._subtitle = QLabel(KIND_TITLE.get(kind, kind))
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
+        outer.addWidget(self._subtitle)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
 
         form = QFormLayout()
         self._value_labels: dict[str, QLabel] = {}
@@ -67,6 +70,9 @@ class _DevicePanel(QGroupBox):
             self._value_labels[field_name] = value_label
             form.addRow(field_name + ":", value_label)
         outer.addLayout(form)
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
 
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
@@ -94,20 +100,29 @@ class DashboardWidget(QGroupBox):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
 
-        container = QWidget()
-        self._panel_layout = QHBoxLayout(container)
+        self._container = QWidget()
+        self._panel_layout = QHBoxLayout(self._container)
         self._panel_layout.addStretch()
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(container)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        scroll_area.setMaximumHeight(PANEL_MAX_HEIGHT + 12)
-        outer.addWidget(scroll_area)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setWidget(self._container)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        outer.addWidget(self._scroll_area)
 
         self._panels: dict[str, _DevicePanel] = {}
+        self._update_scroll_height()
+
+    def _update_scroll_height(self) -> None:
+        # Die Panel-Hoehe ergibt sich aus dem tatsaechlichen Inhalt (Schrift,
+        # Uebersetzung, DPI, ...), nicht aus einer festen Konstante -- sonst
+        # wird bei laengeren Texten/anderen Schriftarten der untere Teil der
+        # Panels abgeschnitten. Etwas Rand fuer eine ggf. sichtbare
+        # horizontale Scrollleiste einrechnen.
+        content_height = self._container.sizeHint().height()
+        self._scroll_area.setFixedHeight(content_height + SCROLL_AREA_MARGIN)
 
     # -- Geraete-Lebenszyklus --------------------------------------------------
 
@@ -121,6 +136,7 @@ class DashboardWidget(QGroupBox):
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
             self._panels[device_id] = panel
+            self._update_scroll_height()
         else:
             panel.set_label(label)
 
@@ -145,6 +161,7 @@ class DashboardWidget(QGroupBox):
         panel.setVisible(online)
         if not online:
             panel.clear_values()
+        self._update_scroll_height()
 
     # -- Messwerte -----------------------------------------------------------
 
