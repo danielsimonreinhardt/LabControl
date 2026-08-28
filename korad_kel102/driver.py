@@ -47,6 +47,15 @@ class KoradKEL102:
         return None
 
     @classmethod
+    def discover_ports(cls) -> list:
+        """Wie discover(), liefert aber alle passenden ListPortInfo-Objekte
+        (u.a. .serial_number) fuer die Unterscheidung mehrerer Geraete."""
+        return [
+            info for info in list_ports.comports()
+            if info.vid == USB_VID and info.pid == USB_PID
+        ]
+
+    @classmethod
     def open_first(cls, baudrate: int = DEFAULT_BAUDRATE, timeout: float = 1.0) -> "KoradKEL102":
         port = cls.discover()
         if port is None:

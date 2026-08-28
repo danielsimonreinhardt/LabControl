@@ -9,19 +9,26 @@ und das Labornetzteil ([hcs34xx](../hcs34xx/)).
 python main.py
 ```
 
+## Version
+
+Die Versionsnummer steht zentral in `lab_gui/version.py` (`__version__`) und
+wird im Fenstertitel angezeigt. Bei jedem Release dort hochzählen und beim
+.exe-Bau unten im `--name` mit übernehmen.
+
 ## Als .exe bauen (Windows)
 
 ```
 pip install -r ../requirements.txt
 cd ..
-pyinstaller --name LaborSteuerung --paths . --onefile --windowed lab_gui/main.py
+pyinstaller --name LaborSteuerung-0.1.1 --paths . --onefile --windowed lab_gui/main.py
 ```
 
 Wichtig: Der Befehl muss aus `labor-dashboard/` (nicht aus `lab_gui/`) laufen, da
 `--paths .` PyInstaller sagt, wo es die Pakete `korad_kel102` und `hcs34xx`
-findet. Ergebnis liegt danach in `dist/LaborSteuerung.exe` (einzelne Datei,
-kein Konsolenfenster). Gespeicherte Testabläufe landen automatisch neben der
-.exe in `dist/testcases/` (nicht im flüchtigen PyInstaller-Temp-Verzeichnis).
+findet. Ergebnis liegt danach in `dist/LaborSteuerung-0.1.1.exe` (einzelne
+Datei, kein Konsolenfenster). Gespeicherte Testabläufe landen automatisch
+neben der .exe in `dist/testcases/` (nicht im flüchtigen
+PyInstaller-Temp-Verzeichnis).
 
 `build/`, `dist/` und `*.spec` sind in `.gitignore` – bei Bedarf neu bauen
 statt die .exe zu versionieren.

@@ -7,7 +7,6 @@ run_requested/stop_requested angesteuert wird.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -22,32 +21,31 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from paths import app_dir
+from signal_dialog import SignalDialog
 from testcase_model import (
     ACTION_VALUE_RANGE,
+    ARB_TARGETS,
     DEVICE_ACTIONS,
+    DEVICE_KIND_LABELS,
     VALUELESS_ACTIONS,
     TestStep,
     action_label,
+    is_arb_action,
     load_steps,
     save_steps,
 )
 
 COLUMNS = ["#", "Gerät", "Aktion", "Wert", "Dauer (s)", "Aktiv"]
 
-# Als PyInstaller-.exe liegt __file__ im ephemeren Temp-Extraktionsordner;
-# dort gespeicherte Testablaeufe wuerden beim Beenden verloren gehen. Daher
-# im gefrorenen Fall neben der .exe speichern, sonst neben dem Skript.
-if getattr(sys, "frozen", False):
-    _APP_DIR = Path(sys.executable).resolve().parent
-else:
-    _APP_DIR = Path(__file__).resolve().parent
-DEFAULT_DIR = _APP_DIR / "testcases"
+DEFAULT_DIR = app_dir() / "testcases"
 
 BLINK_COLOR = "#43a047"   # gruen: aktiver Schritt
 ERROR_COLOR = "#e53935"   # rot: Schritt mit Problem abgebrochen
@@ -61,6 +59,10 @@ class TestcaseTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
+
+        # device_id -> (kind, label) fuer alle in dieser Session bekannten Geraete;
+        # gespeist von DeviceRegistry ueber on_device_known()/on_label_changed().
+        self._known_devices: dict[str, tuple[str, str]] = {}
 
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_blink)
@@ -111,6 +113,60 @@ class TestcaseTab(QWidget):
 
         self._add_row_clicked()
 
+    # -- Geraeteregistrierung (von MainWindow/DeviceRegistry gespeist) --------
+
+    def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        self._known_devices[device_id] = (kind, label)
+        self._refresh_device_combos()
+
+    def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        self._known_devices[device_id] = (kind, label)
+        self._refresh_device_combos()
+
+    def _refresh_device_combos(self) -> None:
+        for row in range(self._table.rowCount()):
+            combo: QComboBox = self._table.cellWidget(row, 1)
+            self._populate_device_combo(combo, combo.currentData())
+
+    def _device_combo_items(self) -> list[tuple[str, tuple[str, str]]]:
+        items = [
+            (f"{display} (automatisch)", (kind, ""))
+            for kind, display in DEVICE_KIND_LABELS.items()
+        ]
+        for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
+            items.append((f"{label} ({DEVICE_KIND_LABELS.get(kind, kind)})", (kind, device_id)))
+        return items
+
+    def _populate_device_combo(
+        self, combo: QComboBox, selected: tuple[str, str] | None
+    ) -> None:
+        if selected is None:
+            selected = ("load", "")
+        combo.blockSignals(True)
+        combo.clear()
+        for text, data in self._device_combo_items():
+            combo.addItem(text, data)
+        index = combo.findData(selected)
+        if index < 0:
+            kind, device_id = selected
+            if device_id:
+                # Aus einer gespeicherten Datei geladenes Geraet, das diese
+                # Session noch nicht gesehen hat -- Eintrag beibehalten statt
+                # die Auswahl stillschweigend zu verwerfen.
+                combo.addItem(f"{device_id} (nicht verbunden)", selected)
+                index = combo.count() - 1
+            else:
+                index = max(combo.findData((kind, "")), 0)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+        combo.currentIndexChanged.emit(index)
+
+    def _device_display(self, kind: str, device_id: str) -> str:
+        if device_id in self._known_devices:
+            return self._known_devices[device_id][1]
+        base = DEVICE_KIND_LABELS.get(kind, kind)
+        return f"{base} (automatisch)" if not device_id else f"{base} ({device_id}, nicht verbunden)"
+
     # -- Zeilenverwaltung -----------------------------------------------------
 
     def _add_row_clicked(self) -> None:
@@ -125,8 +181,6 @@ class TestcaseTab(QWidget):
         self._table.setItem(row_index, 0, number_item)
 
         device_combo = QComboBox()
-        device_combo.addItems(DEVICE_ACTIONS.keys())
-        device_combo.setCurrentText(step.device)
         self._table.setCellWidget(row_index, 1, device_combo)
 
         action_combo = QComboBox()
@@ -134,7 +188,28 @@ class TestcaseTab(QWidget):
 
         value_spin = QDoubleSpinBox()
         value_spin.setDecimals(3)
-        self._table.setCellWidget(row_index, 3, value_spin)
+
+        arb_page = QWidget()
+        arb_layout = QHBoxLayout(arb_page)
+        arb_layout.setContentsMargins(2, 0, 2, 0)
+        arb_summary_label = QLabel()
+        arb_summary_label.setStyleSheet("color: gray; font-style: italic;")
+        arb_button = QPushButton("Signal definieren…")
+        arb_layout.addWidget(arb_summary_label, 1)
+        arb_layout.addWidget(arb_button)
+        arb_page._params = dict(
+            shape=step.arb_shape,
+            target=step.arb_target or ARB_TARGETS[step.device_kind][0],
+            amplitude=step.arb_amplitude,
+            offset=step.arb_offset,
+            frequency=step.arb_frequency,
+            interval_ms=step.arb_interval_ms,
+        )
+
+        value_stack = QStackedWidget()
+        value_stack.addWidget(value_spin)  # Index 0: normaler Zahlenwert
+        value_stack.addWidget(arb_page)    # Index 1: Arbiträrsignal-Zusammenfassung + Button
+        self._table.setCellWidget(row_index, 3, value_stack)
 
         duration_spin = QDoubleSpinBox()
         duration_spin.setRange(0, 36000)
@@ -153,26 +228,58 @@ class TestcaseTab(QWidget):
         check_layout.setContentsMargins(0, 0, 0, 0)
         self._table.setCellWidget(row_index, 5, check_container)
 
+        def current_kind() -> str:
+            data = device_combo.currentData()
+            return data[0] if data else "load"
+
         def refresh_actions(current_action: str = step.action) -> None:
+            kind = current_kind()
             action_combo.blockSignals(True)
             action_combo.clear()
-            action_combo.addItems(DEVICE_ACTIONS[device_combo.currentText()].keys())
-            code_to_label = {v: k for k, v in DEVICE_ACTIONS[device_combo.currentText()].items()}
+            action_combo.addItems(DEVICE_ACTIONS[kind].keys())
+            code_to_label = {v: k for k, v in DEVICE_ACTIONS[kind].items()}
             if current_action in code_to_label:
                 action_combo.setCurrentText(code_to_label[current_action])
             action_combo.blockSignals(False)
             action_combo.currentTextChanged.emit(action_combo.currentText())
 
+        def refresh_arb_summary() -> None:
+            kind = current_kind()
+            params = arb_page._params
+            shape_label = "Sinus" if params["shape"] != "square" else "Rechteck"
+            target_label = action_label(kind, params["target"]) if params["target"] else "?"
+            arb_summary_label.setText(
+                f"{shape_label}: {target_label}, {params['offset']:g}±{params['amplitude']:g}, "
+                f"{params['frequency']:g} Hz"
+            )
+
+        def open_signal_dialog() -> None:
+            kind = current_kind()
+            dialog = SignalDialog(kind, duration_spin.value(), arb_page._params, self)
+            if dialog.exec() == SignalDialog.DialogCode.Accepted:
+                arb_page._params = dialog.params()
+                refresh_arb_summary()
+
+        arb_button.clicked.connect(open_signal_dialog)
+
         def on_action_changed(label: str) -> None:
-            code = DEVICE_ACTIONS[device_combo.currentText()].get(label, "")
+            kind = current_kind()
+            code = DEVICE_ACTIONS[kind].get(label, "")
             unit, lo, hi = ACTION_VALUE_RANGE.get(code, ("", -1000, 10000))
             value_spin.setSuffix(f" {unit}" if unit else "")
             value_spin.setRange(lo, hi)
             value_spin.setEnabled(code not in VALUELESS_ACTIONS)
+            if is_arb_action(code):
+                if arb_page._params.get("target") not in ARB_TARGETS.get(kind, []):
+                    arb_page._params["target"] = ARB_TARGETS[kind][0]
+                refresh_arb_summary()
+                value_stack.setCurrentIndex(1)
+            else:
+                value_stack.setCurrentIndex(0)
 
-        device_combo.currentTextChanged.connect(lambda _=None: refresh_actions())
+        device_combo.currentIndexChanged.connect(lambda _=None: refresh_actions())
         action_combo.currentTextChanged.connect(on_action_changed)
-        refresh_actions()
+        self._populate_device_combo(device_combo, (step.device_kind, step.device_id))
         value_spin.setValue(step.value)
 
         self._renumber_rows()
@@ -202,19 +309,29 @@ class TestcaseTab(QWidget):
     def _row_to_step(self, row: int) -> TestStep:
         device_combo: QComboBox = self._table.cellWidget(row, 1)
         action_combo: QComboBox = self._table.cellWidget(row, 2)
-        value_spin: QDoubleSpinBox = self._table.cellWidget(row, 3)
+        value_stack: QStackedWidget = self._table.cellWidget(row, 3)
+        value_spin: QDoubleSpinBox = value_stack.widget(0)
+        arb_page: QWidget = value_stack.widget(1)
         duration_spin: QDoubleSpinBox = self._table.cellWidget(row, 4)
         check_container = self._table.cellWidget(row, 5)
         enabled_check: QCheckBox = check_container.findChild(QCheckBox)
 
-        device = device_combo.currentText()
-        action_code = DEVICE_ACTIONS[device].get(action_combo.currentText(), "")
+        kind, device_id = device_combo.currentData() or ("load", "")
+        action_code = DEVICE_ACTIONS[kind].get(action_combo.currentText(), "")
+        params = arb_page._params
         return TestStep(
-            device=device,
+            device_kind=kind,
+            device_id=device_id,
             action=action_code,
             value=value_spin.value(),
             duration=duration_spin.value(),
             enabled=enabled_check.isChecked(),
+            arb_shape=params["shape"],
+            arb_target=params["target"],
+            arb_amplitude=params["amplitude"],
+            arb_offset=params["offset"],
+            arb_frequency=params["frequency"],
+            arb_interval_ms=params["interval_ms"],
         )
 
     def steps(self) -> list[TestStep]:
@@ -281,9 +398,19 @@ class TestcaseTab(QWidget):
     def on_step_started(self, index: int, step: TestStep) -> None:
         self._start_blink(index)
         total = self._table.rowCount()
-        label = action_label(step.device, step.action)
+        label = action_label(step.device_kind, step.action)
+        device_display = self._device_display(step.device_kind, step.device_id)
+        if is_arb_action(step.action):
+            shape = "Sinus" if step.arb_shape != "square" else "Rechteck"
+            target_label = action_label(step.device_kind, step.arb_target)
+            detail = (
+                f"{shape} auf {target_label}, {step.arb_offset:g}±{step.arb_amplitude:g}, "
+                f"{step.arb_frequency:g} Hz, {step.duration:g} s"
+            )
+        else:
+            detail = f"{step.value}"
         self._status_label.setText(
-            f"Schritt {index + 1}/{total}: {step.device} – {label} ({step.value})"
+            f"Schritt {index + 1}/{total}: {device_display} – {label} ({detail})"
         )
 
     def on_run_finished(self) -> None:
