@@ -191,17 +191,21 @@ class MainWindow(QMainWindow):
         self._test_runner.execute_action.connect(self._on_test_execute_action)
         self._dispatch_test_action.connect(self._worker.execute_action)
         self._worker.action_completed.connect(self._test_runner.on_action_completed)
+        self._worker.load_measurement.connect(self._test_runner.on_load_measurement)
+        self._worker.psu_measurement.connect(self._test_runner.on_psu_measurement)
+        self._worker.device_removed.connect(self._test_runner.on_device_removed)
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
         self._test_runner.step_failed.connect(self.testcase_tab.on_step_failed)
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
+        self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
 
         self.testcase_tab.run_requested.connect(self._on_run_requested)
         self.testcase_tab.stop_requested.connect(self._test_runner.stop)
 
     def _on_run_requested(self) -> None:
         steps = self.testcase_tab.steps()
-        if not any(step.enabled for step in steps):
+        if not any(step.enabled and step.step_type == "action" for step in steps):
             return
         self.testcase_tab.on_run_started()
         self._test_runner.start(steps)

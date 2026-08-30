@@ -49,6 +49,25 @@ statt die .exe zu versionieren.
   der aktuelle Schritt wird markiert und in der Statuszeile angezeigt.
   Das Wert-Feld passt Einheit/Min/Max automatisch an die gewählte Aktion an
   (z.B. Netzteil-Spannung nur 1–60V, siehe `hcs34xx/driver.py`: `MIN_VOLTAGE`).
+  - **Ablaufsteuerung**: über das „+“-Menü lassen sich neben Aktionsschritten
+    auch Zählschleifen („Schleife n×“, z.B. für Lade-/Entlade-Zyklen bei
+    Akku-Tests), While-Schleifen, If/Else-Verzweigungen und Laufvariablen
+    (Variable setzen/erhöhen) einfügen, beliebig verschachtelbar. Block-Start
+    und `Ende` werden als Paar eingefügt; der Editor zeigt die Verschachtelung
+    als Einrückung und sperrt den Start-Button bei unausbalancierter Struktur
+    (siehe `testcase_model.validate_structure`).
+  - **Bedingungen** (While/If, `condition_dialog.py`) vergleichen einen
+    Live-Messwert (Spannung/Strom/Leistung, Gerät automatisch oder gezielt),
+    die verstrichene Zeit (seit Blockstart/Teststart) oder eine Laufvariable
+    gegen einen Wert. Der Runner cached dafür die zuletzt empfangenen
+    Messwerte der Geräte und lässt eine Bedingung bei fehlender/veralteter
+    Messung bewusst fehlschlagen, statt mit einem stehengebliebenen Wert
+    weiterzurechnen. While-Schleifen haben eine einstellbare
+    Endlosschleifen-Bremse ("Max. Durchläufe").
+  - Testablauf-Dateien liegen seit v0.4.0 im Format v2 vor (JSON-Objekt mit
+    `version`-Feld statt eines nackten Arrays); ältere v1-Dateien werden
+    weiterhin geladen, v2-Dateien lassen sich aber nicht mit älteren
+    Programmversionen öffnen.
 - **Ausgang Ein/Aus-Workaround fürs Netzteil**: Das HCS-34xx hat kein
   Software-Ausgang-Ein/Aus (siehe `hcs34xx/README.md`). „Aus“ setzt den
   Strom auf 0A; „Ein“ übernimmt die Spannung und hebt den Strom auf
@@ -78,3 +97,12 @@ steuert die Schrittfolge per `QTimer` (nicht-blockierend), sendet die
 eigentlichen Befehle aber per Signal an `DeviceWorker.execute_action()`
 im Worker-Thread. Das Datenmodell (`testcase_model.py`, `TestStep`) ist
 von der UI getrennt und JSON-serialisierbar.
+
+Für Bedingungen (While/If) hängt sich `TestRunner` zusätzlich direkt an
+`DeviceWorker.load_measurement`/`psu_measurement` (dieselben Signale wie
+Timeline-Tab und Recorder) und pflegt einen kleinen Cache der zuletzt
+empfangenen Messwerte je Gerät. Jeder Rücksprung am Ende einer
+Schleifeniteration läuft über einen 0ms-`QTimer` statt direkt weiterzuspringen,
+damit die Event-Loop zwischen den Iterationen atmen kann — sonst kämen bei
+einer eng getakteten While-Schleife weder GUI-Updates noch die für die
+nächste Bedingungsauswertung nötigen Messwert-Signale an.

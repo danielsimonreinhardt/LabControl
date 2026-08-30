@@ -18,16 +18,18 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from korad_kel102.driver import KoradKEL102, LoadError
+from korad_kel102.mock import MockKoradKEL102
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 
 POLL_INTERVAL_MS = 500
 RECONNECT_INTERVAL_MS = 3000
 
-# Feste Device-ID fuer das simulierte Netzteil (siehe set_simulation_mode) --
+# Feste Device-IDs fuer die simulierten Geraete (siehe set_simulation_mode) --
 # im Gegensatz zu echten Geraeten gibt es hier keine USB-Seriennummer/COM-Port,
 # aus der sich eine ID ableiten liesse.
 SIM_PSU_ID = "psu:SIM"
+SIM_LOAD_ID = "load:SIM"
 
 
 def _resolve_device_ids(kind: str, infos: list) -> dict[str, object]:
@@ -76,6 +78,7 @@ class DeviceWorker(QObject):
     def start(self) -> None:
         if self._simulation_mode:
             self._add_mock_psu()
+            self._add_mock_load()
         self._try_reconnect()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
@@ -89,8 +92,10 @@ class DeviceWorker(QObject):
         self._simulation_mode = enabled
         if enabled:
             self._add_mock_psu()
+            self._add_mock_load()
         else:
             self._remove_mock_psu()
+            self._remove_mock_load()
 
     def _add_mock_psu(self) -> None:
         if SIM_PSU_ID in self._psus:
@@ -106,6 +111,21 @@ class DeviceWorker(QObject):
             psu.close()
             self.psu_connected.emit(SIM_PSU_ID, False)
             self.device_removed.emit("psu", SIM_PSU_ID)
+
+    def _add_mock_load(self) -> None:
+        if SIM_LOAD_ID in self._loads:
+            return
+        self._loads[SIM_LOAD_ID] = MockKoradKEL102()
+        self.device_added.emit("load", SIM_LOAD_ID)
+        self.load_connected.emit(SIM_LOAD_ID, True)
+        self.load_input_state.emit(SIM_LOAD_ID, False)
+
+    def _remove_mock_load(self) -> None:
+        load = self._loads.pop(SIM_LOAD_ID, None)
+        if load is not None:
+            load.close()
+            self.load_connected.emit(SIM_LOAD_ID, False)
+            self.device_removed.emit("load", SIM_LOAD_ID)
 
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass

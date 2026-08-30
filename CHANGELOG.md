@@ -4,6 +4,41 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [0.4.0]
+
+### Hinzugefügt
+- **Ablaufsteuerung im Testcase-Editor**: Schleifen, If/Else-Verzweigungen,
+  While-Schleifen und einfache Laufvariablen, beliebig verschachtelbar —
+  z.B. „wiederhole Schritte 3–7 zehnmal“ für Lade-/Entlade-Zyklen bei
+  Akku-Tests, oder „entlade solange Spannung > 3,0 V“. Neuer Zeilentyp-Dropdown
+  über das „+“-Menü im Testcase-Tab (Aktionsschritt/Schleife/Solange/Wenn/
+  Sonst/Ende/Variable setzen/Variable erhöhen); Block-Start und -Ende werden
+  als Paar eingefügt, verschachtelte Bloecke werden im Editor eingerückt
+  dargestellt. Der Start-Button wird gesperrt, solange die Blockstruktur
+  nicht ausbalanciert ist (fehlendes „Ende“, „Sonst“ ohne „Wenn“, …).
+- **Bedingungen** (`lab_gui/condition_dialog.py`, neuer Dialog analog zu
+  `signal_dialog.py`) können sich auf einen Live-Messwert (Spannung/Strom/
+  Leistung eines Geräts, automatisch oder gezielt ausgewählt), die
+  verstrichene Zeit (seit Blockstart oder seit Teststart) oder eine
+  Laufvariable beziehen. Der Testrunner (`testcase_runner.py`) cached dafür
+  neu die zuletzt empfangenen Messwerte (`DeviceWorker.load_measurement`/
+  `psu_measurement`) und lässt den Ablauf bei einer veralteten oder fehlenden
+  Messung bewusst fehlschlagen (fail-fast), statt mit einem stehengebliebenen
+  Wert weiterzurechnen. While-Schleifen haben eine konfigurierbare
+  Endlosschleifen-Bremse („Max. Durchläufe“, Default 1000).
+- Neues Testablauf-Dateiformat v2 (`{"format": "labor-testcase", "version": 2,
+  "steps": [...]}` statt eines nackten Arrays) für die zusätzlichen Felder;
+  alte v1-Dateien werden weiterhin geladen. **v2-Dateien lassen sich nicht
+  mit älteren Programmversionen öffnen** (klare Fehlermeldung statt Absturz).
+- **Simulationsmodus simuliert jetzt auch eine elektronische Last**
+  (`korad_kel102/mock.py`, `MockKoradKEL102`, analog zur bestehenden
+  simulierten PSU) — damit lässt sich der Haupt-Anwendungsfall der neuen
+  Bedingungen („entlade solange Spannung > 3,0 V“) ohne angeschlossene
+  Hardware durchspielen.
+
+### Geändert
+- Version auf 0.4.0 angehoben.
+
 ## [0.3.0]
 
 ### Hinzugefügt

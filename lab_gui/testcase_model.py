@@ -92,6 +92,41 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "PSU_ARB": ("", 0, 0),
 }
 
+# Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
+# Geraete-Aktionsschritt ("action"). "loop"/"while"/"if" eroeffnen einen
+# Block, der durch ein zugehoeriges "end" geschlossen wird (siehe
+# validate_structure()); "else" ist optional und nur innerhalb eines
+# "if"-Blocks gueltig. "set_var"/"inc_var" setzen bzw. erhoehen eine
+# Laufvariable, die in Bedingungen als cond_source=="variable" gelesen wird.
+STEP_TYPE_ACTION = "action"
+CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var"}
+BLOCK_START_TYPES = {"loop", "while", "if"}
+CONDITION_STEP_TYPES = {"while", "if"}
+
+# step_type-Basis-Anzeigenamen (Uebersetzungsschluessel), analog zu
+# DEVICE_KIND_LABELS/LOAD_ACTIONS oben.
+CONTROL_STEP_LABELS = {
+    "loop": "Schleife",
+    "while": "Solange",
+    "if": "Wenn",
+    "else": "Sonst",
+    "end": "Ende",
+    "set_var": "Variable setzen",
+    "inc_var": "Variable erhöhen",
+}
+
+COND_SOURCES = ("measurement", "time", "variable")
+COND_FIELDS = ("voltage", "current", "power")
+COND_OPS = ("<", "<=", ">", ">=", "==", "!=")
+COND_OP_LABELS = {"<": "<", "<=": "≤", ">": ">", ">=": "≥", "==": "=", "!=": "≠"}
+COND_TIME_REFS = ("block", "run")
+COND_FIELD_UNITS = {"voltage": "V", "current": "A", "power": "W"}
+COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
+
+# Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
+# war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
+FILE_FORMAT_VERSION = 2
+
 
 @dataclass
 class TestStep:
@@ -106,6 +141,9 @@ class TestStep:
     # Setzen des Sollwerts, bevor der naechste Schritt beginnt. Bei einem
     # Arbiträrsignal-Schritt (action in ARB_ACTIONS) ist es stattdessen die
     # Laufzeit des Signals selbst -- der Schritt ist also selbst "die Aktion".
+    # Bei "set_var"/"inc_var" ist es weiterhin die Wartezeit NACH dem Schritt;
+    # bei allen anderen Kontrollfluss-Schritten (loop/while/if/else/end) wird
+    # sie ignoriert.
     duration: float = 0.0
     enabled: bool = True
     # -- Arbiträrsignal-Parameter (nur relevant wenn action in ARB_ACTIONS) --
@@ -115,6 +153,25 @@ class TestStep:
     arb_offset: float = 0.0
     arb_frequency: float = 1.0    # Hz
     arb_interval_ms: int = 200    # Abstand zwischen zwei Sollwert-Updates
+
+    # -- Ablaufsteuerung: Schritttyp-Diskriminator ------------------------
+    # "action" (Standard, s.o.) | "loop" | "while" | "if" | "else" | "end"
+    # | "set_var" | "inc_var". Bei allen Nicht-"action"-Typen spielen
+    # device_kind/action/arb_* keine Rolle.
+    step_type: str = STEP_TYPE_ACTION
+    loop_count: int = 2         # nur "loop": Anzahl Durchlaeufe
+    max_iterations: int = 1000  # nur "while": Endlosschleifen-Schutz, 0 = unbegrenzt
+    var_name: str = ""          # nur "set_var"/"inc_var" (Zielvariable); `value` ist der Setz-/Inkrementwert
+
+    # -- Bedingung (nur "while"/"if", siehe CONDITION_STEP_TYPES) --------
+    cond_source: str = "measurement"   # "measurement" | "time" | "variable"
+    cond_device_kind: str = "load"
+    cond_device_id: str = ""           # leer = automatisch (einziges verbundenes Geraet dieser Art)
+    cond_field: str = "voltage"        # "voltage" | "current" | "power"
+    cond_op: str = "<"
+    cond_value: float = 0.0
+    cond_time_ref: str = "block"       # "block" (seit Blockstart) | "run" (seit Teststart)
+    cond_var: str = ""                 # Variablenname bei cond_source=="variable"
 
 
 def arb_value(step: "TestStep", t: float) -> float:
@@ -132,15 +189,147 @@ def is_arb_action(action_code: str) -> bool:
     return action_code in ARB_ACTIONS
 
 
+def is_control_step(step: TestStep) -> bool:
+    return step.step_type != STEP_TYPE_ACTION
+
+
+def is_block_start(step: TestStep) -> bool:
+    return step.step_type in BLOCK_START_TYPES
+
+
+@dataclass
+class BlockMatch:
+    """Verknuepfung der drei Marker-Zeilen eines Kontrollfluss-Blocks.
+
+    Unter allen drei Indizes (start_index, ggf. else_index, end_index) im
+    `matching`-Dict von validate_structure() abgelegt, damit Runner/Editor von
+    jeder der drei Zeilen aus die anderen nachschlagen koennen, ohne je nach
+    Aufrufstelle unterschiedliche Lookup-Richtungen zu brauchen.
+    """
+
+    start_index: int
+    else_index: int | None
+    end_index: int
+
+
+def validate_structure(
+    steps: list[TestStep],
+) -> tuple[dict[int, BlockMatch], list[int], list[tuple[int, str]]]:
+    """Prueft die Verschachtelung der Block-Marker (loop/while/if/else/end).
+
+    Ein Stack-Scan ueber alle Schritte (auch deaktivierte -- die Struktur muss
+    unabhaengig vom "enabled"-Flag konsistent sein, sonst koennte ein spaeteres
+    Aktivieren einen unbalancierten Ablauf erzeugen). Rueckgabe:
+      - matching: siehe BlockMatch, erreichbar ueber jede der drei Marker-Zeilen.
+      - depths: Einrueckungstiefe je Zeile (0 = oberste Ebene) fuer die
+        Editor-Darstellung; Start-/Sonst-/Ende-Zeile liegen auf der Tiefe des
+        Blocks selbst, der Blockinhalt eine Ebene tiefer.
+      - errors: (Zeilenindex, Fehlermeldung) fuer strukturelle Probleme --
+        "end" ohne offenen Block, "else" ausserhalb/doppelt in einem "if",
+        am Dateiende nicht geschlossene Bloecke.
+    """
+    matching: dict[int, BlockMatch] = {}
+    depths = [0] * len(steps)
+    errors: list[tuple[int, str]] = []
+    # Je offener Block: [start_index, kind, else_index-oder-None].
+    stack: list[list] = []
+    depth = 0
+
+    for i, step in enumerate(steps):
+        t = step.step_type
+        if t in BLOCK_START_TYPES:
+            depths[i] = depth
+            stack.append([i, t, None])
+            depth += 1
+        elif t == "else":
+            if not stack or stack[-1][1] != "if":
+                errors.append((i, tr("„Sonst“ ohne zugehöriges „Wenn“")))
+                depths[i] = depth
+                continue
+            if stack[-1][2] is not None:
+                errors.append((i, tr("Mehrfaches „Sonst“ im selben „Wenn“-Block")))
+                depths[i] = depth
+                continue
+            depth -= 1
+            depths[i] = depth
+            stack[-1][2] = i
+            depth += 1
+        elif t == "end":
+            if not stack:
+                errors.append((i, tr("„Ende“ ohne offenen Block")))
+                depths[i] = depth
+                continue
+            depth -= 1
+            depths[i] = depth
+            start_index, _kind, else_index = stack.pop()
+            match = BlockMatch(start_index=start_index, else_index=else_index, end_index=i)
+            matching[start_index] = match
+            matching[i] = match
+            if else_index is not None:
+                matching[else_index] = match
+        else:
+            depths[i] = depth
+
+    for start_index, _kind, _else_index in stack:
+        errors.append((start_index, tr("Block nicht geschlossen (fehlendes „Ende“)")))
+
+    return matching, depths, errors
+
+
+def condition_summary(step: TestStep) -> str:
+    """Anzeigetext einer Bedingung (Zeile/Statuszeile), z.B.
+
+    "Last (automatisch): Spannung < 3.0 V", "Zeit seit Blockstart ≥ 3600 s",
+    "i < 10". Kennt keine Geraete-Anzeigenamen (dafuer fehlt der Kontext) --
+    der Editor zeigt bei bekannten Geraeten stattdessen deren Label an.
+    """
+    op = COND_OP_LABELS.get(step.cond_op, step.cond_op)
+    if step.cond_source == "measurement":
+        device = (
+            step.cond_device_id
+            if step.cond_device_id
+            else tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind))
+        )
+        field = tr(COND_FIELD_LABELS.get(step.cond_field, step.cond_field))
+        unit = COND_FIELD_UNITS.get(step.cond_field, "")
+        return tr(
+            "{device}: {field} {op} {value:g} {unit}",
+            device=device, field=field, op=op, value=step.cond_value, unit=unit,
+        ).rstrip()
+    if step.cond_source == "time":
+        ref = tr("seit Blockstart") if step.cond_time_ref == "block" else tr("seit Teststart")
+        return tr("Zeit {ref} {op} {value:g} s", ref=ref, op=op, value=step.cond_value)
+    if step.cond_source == "variable":
+        return f"{step.cond_var or '?'} {op} {step.cond_value:g}"
+    return ""
+
+
 def save_steps(steps: list[TestStep], path: Path) -> None:
-    data = [asdict(step) for step in steps]
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    payload = {
+        "format": "labor-testcase",
+        "version": FILE_FORMAT_VERSION,
+        "steps": [asdict(step) for step in steps],
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def load_steps(path: Path) -> list[TestStep]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        items = data  # Altes Dateiformat (v1): nacktes Array ohne Umschlag.
+    else:
+        version = int(data.get("version", 0))
+        if version > FILE_FORMAT_VERSION:
+            raise ValueError(
+                tr(
+                    "Testablauf-Datei stammt aus einer neueren Programmversion "
+                    "(Format {version}) und kann nicht geladen werden.",
+                    version=version,
+                )
+            )
+        items = data["steps"]
     steps = []
-    for item in data:
+    for item in items:
         if "device" in item and "device_kind" not in item:
             item = dict(item)
             legacy = item.pop("device")

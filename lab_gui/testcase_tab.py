@@ -19,7 +19,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QMenu,
     QMessageBox,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -27,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from condition_dialog import ConditionDialog
 from i18n import Translator, tr
 from icons import IconButton
 from paths import app_dir
@@ -36,16 +40,43 @@ from theme import current as current_palette
 from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
+    CONTROL_STEP_LABELS,
     DEVICE_ACTIONS,
     DEVICE_KIND_LABELS,
+    STEP_TYPE_ACTION,
     VALUELESS_ACTIONS,
     TestStep,
     action_label,
+    condition_summary,
     is_arb_action,
     kind_label,
     load_steps,
     save_steps,
+    validate_structure,
 )
+
+# step_type -> welche der 6 Basisspalten eine Kontrollfluss-Zeile tatsaechlich
+# mit einem Widget belegt (Spalte 0 = Zeilennummer ist immer vorhanden, Spalte
+# 1 immer ein Label). Nur zur Dokumentation der Zeilenlayouts, siehe
+# _build_control_row:
+#   loop:            Spalte 3 = Durchlaufzahl-Spinbox,        Spalte 5 = Aktiv
+#   while/if:        Spalte 3 = Bedingungs-Zusammenfassung,   Spalte 5 = Aktiv (nur "while"/"if"-Zeile selbst)
+#   else/end:        keine weiteren Spalten
+#   set_var/inc_var: Spalte 2 = Variablenname, Spalte 3 = Wert, Spalte 4 = Dauer, Spalte 5 = Aktiv
+CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var"}
+
+
+def _cond_params_to_step(params: dict) -> TestStep:
+    return TestStep(
+        cond_source=params["cond_source"],
+        cond_device_kind=params["cond_device_kind"],
+        cond_device_id=params["cond_device_id"],
+        cond_field=params["cond_field"],
+        cond_op=params["cond_op"],
+        cond_value=params["cond_value"],
+        cond_time_ref=params["cond_time_ref"],
+        cond_var=params["cond_var"],
+    )
 
 # Deutsche Basis-Anzeigenamen (Uebersetzungsschluessel) der Spaltenkoepfe.
 # "#" ist sprachunabhaengig.
@@ -113,6 +144,16 @@ class TestcaseTab(QWidget):
         # Status einen stabilen Schluessel statt des schon uebersetzten Texts.
         self._status_key = "Bereit"
         self._status_key_kwargs: dict = {}
+        # Anzeige des aktuell aktiven Durchlaufs (innerste laufende
+        # Schleife/While, siehe on_iteration_changed) -- bereits uebersetzter
+        # Text, der an die "Schritt x/y..."-Statuszeile angehaengt wird.
+        self._iteration_text = ""
+
+        # Aus validate_structure() (siehe testcase_model.py), von
+        # _revalidate_structure() nach jeder Strukturaenderung neu berechnet;
+        # Runner.start() validiert zusaetzlich als Backstop.
+        self._structure_ok = True
+        self._is_running = False
 
         button_row = QHBoxLayout()
         self._add_button = IconButton("mdi.plus", "")
@@ -121,7 +162,24 @@ class TestcaseTab(QWidget):
         self._down_button = IconButton("mdi.arrow-down", "")
         self._load_button = IconButton("mdi.folder-open-outline", "")
         self._save_button = IconButton("mdi.content-save-outline", "")
-        self._add_button.clicked.connect(self._add_row_clicked)
+        self._add_menu = QMenu(self._add_button)
+        self._action_add_action = self._add_menu.addAction("")
+        self._action_add_loop = self._add_menu.addAction("")
+        self._action_add_while = self._add_menu.addAction("")
+        self._action_add_if = self._add_menu.addAction("")
+        self._action_add_else = self._add_menu.addAction("")
+        self._action_add_end = self._add_menu.addAction("")
+        self._action_add_set_var = self._add_menu.addAction("")
+        self._action_add_inc_var = self._add_menu.addAction("")
+        self._action_add_action.triggered.connect(lambda: self._insert_new_step(TestStep()))
+        self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
+        self._action_add_while.triggered.connect(lambda: self._insert_block("while"))
+        self._action_add_if.triggered.connect(lambda: self._insert_block("if"))
+        self._action_add_else.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="else")))
+        self._action_add_end.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="end")))
+        self._action_add_set_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="set_var")))
+        self._action_add_inc_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="inc_var")))
+        self._add_button.setMenu(self._add_menu)
         self._remove_button.clicked.connect(self._remove_selected_row)
         self._up_button.clicked.connect(lambda: self._move_selected_row(-1))
         self._down_button.clicked.connect(lambda: self._move_selected_row(1))
@@ -177,6 +235,14 @@ class TestcaseTab(QWidget):
         self._down_button.setToolTip(tr("Nach unten"))
         self._load_button.setToolTip(tr("Laden…"))
         self._save_button.setToolTip(tr("Speichern…"))
+        self._action_add_action.setText(tr("Aktionsschritt"))
+        self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
+        self._action_add_while.setText(tr("Solange … Ende"))
+        self._action_add_if.setText(tr("Wenn … Ende"))
+        self._action_add_else.setText(tr("Sonst"))
+        self._action_add_end.setText(tr("Ende"))
+        self._action_add_set_var.setText(tr("Variable setzen"))
+        self._action_add_inc_var.setText(tr("Variable erhöhen"))
         self._run_button.setToolTip(tr("Start"))
         self._run_button.setText(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
@@ -184,8 +250,15 @@ class TestcaseTab(QWidget):
         self._set_status(self._status_key, error=self._status_is_error, **self._status_key_kwargs)
         for row in range(self._table.rowCount()):
             self._retranslate_row(row)
+        self._revalidate_structure()
 
     def _retranslate_row(self, row: int) -> None:
+        number_item = self._table.item(row, 0)
+        step_type = number_item.data(Qt.ItemDataRole.UserRole) or STEP_TYPE_ACTION
+        if step_type != STEP_TYPE_ACTION:
+            self._retranslate_control_row(row, step_type)
+            return
+
         device_combo: QComboBox = self._table.cellWidget(row, 1)
         action_combo: QComboBox = self._table.cellWidget(row, 2)
         value_stack: QStackedWidget = self._table.cellWidget(row, 3)
@@ -202,6 +275,23 @@ class TestcaseTab(QWidget):
         arb_page._refresh_summary()
         arb_page._arb_button.setToolTip(tr("Signal definieren…"))
 
+    def _retranslate_control_row(self, row: int, step_type: str) -> None:
+        label: QLabel = self._table.cellWidget(row, 1)
+        if label is not None and step_type != "end":
+            label.setText(tr(CONTROL_STEP_LABELS.get(step_type, step_type)))
+        elif label is not None and not label.text():
+            label.setText(tr("Ende"))  # vorlaeufig, _revalidate_structure ergaenzt den Blocktyp
+        if step_type in ("while", "if"):
+            container = self._table.cellWidget(row, 3)
+            cond_button = container.findChild(IconButton)
+            if cond_button is not None:
+                cond_button.setToolTip(tr("Bedingung…"))
+            container._refresh_summary()
+        if step_type in ("set_var", "inc_var"):
+            name_edit: QLineEdit = self._table.cellWidget(row, 2)
+            if name_edit is not None:
+                name_edit.setPlaceholderText(tr("Variablenname"))
+
     def _on_theme_changed(self, palette: Palette) -> None:
         if self._status_is_error:
             self._status_label.setStyleSheet(f"color: {palette.danger}; font-weight: bold;")
@@ -214,13 +304,22 @@ class TestcaseTab(QWidget):
         # sauber wieder abgehaengt. Stattdessen hier zentral ueber die aktuell
         # vorhandenen Zeilen iterieren.
         for row in range(self._table.rowCount()):
-            value_stack: QStackedWidget = self._table.cellWidget(row, 3)
-            arb_page = value_stack.widget(1)
-            arb_summary_label = arb_page.findChild(QLabel)
-            arb_summary_label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic;")
-            refresh = getattr(value_stack.widget(0), "_refresh_limit_warning", None)
-            if refresh is not None:
-                refresh()
+            value_stack = self._table.cellWidget(row, 3)
+            if isinstance(value_stack, QStackedWidget):
+                arb_page = value_stack.widget(1)
+                arb_summary_label = arb_page.findChild(QLabel)
+                arb_summary_label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic;")
+                refresh = getattr(value_stack.widget(0), "_refresh_limit_warning", None)
+                if refresh is not None:
+                    refresh()
+            elif value_stack is not None:
+                # Kontrollfluss-Zeile (while/if-Bedingungscontainer oder
+                # loop-Spinbox, siehe _build_control_row) -- kein
+                # QStackedWidget, hoechstens eine Zusammenfassungs-Label
+                # nachzufaerben.
+                summary_label = value_stack.findChild(QLabel)
+                if summary_label is not None:
+                    summary_label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic;")
             self._apply_row_style(row)
 
     # -- Statusanzeige ----------------------------------------------------------
@@ -249,7 +348,9 @@ class TestcaseTab(QWidget):
     def on_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         self._psu_limits[device_id] = (ovp, ocp)
         for row in range(self._table.rowCount()):
-            value_stack: QStackedWidget = self._table.cellWidget(row, 3)
+            value_stack = self._table.cellWidget(row, 3)
+            if not isinstance(value_stack, QStackedWidget):
+                continue  # Kontrollfluss-Zeile -- kein Wert-Feld mit OVP/OCP-Warnung
             value_spin = value_stack.widget(0)
             refresh = getattr(value_spin, "_refresh_limit_warning", None)
             if refresh is not None:
@@ -257,8 +358,22 @@ class TestcaseTab(QWidget):
 
     def _refresh_device_combos(self) -> None:
         for row in range(self._table.rowCount()):
-            combo: QComboBox = self._table.cellWidget(row, 1)
-            self._populate_device_combo(combo, _parse_device_key(combo.currentData()))
+            combo = self._table.cellWidget(row, 1)
+            if isinstance(combo, QComboBox):
+                self._populate_device_combo(combo, _parse_device_key(combo.currentData()))
+
+    def _condition_device_items(self) -> list[tuple[str, str, str]]:
+        """Wie _device_combo_items(), aber als (Anzeigetext, kind, device_id)
+        statt eines kodierten Combo-Schluessels -- fuer ConditionDialog, das
+        (anders als die Zeilen-Closures hier) keinen Zugriff auf
+        testcase_tab._device_key/_parse_device_key haben soll."""
+        items = [
+            (tr("{kind} (automatisch)", kind=kind_label(kind)), kind, "")
+            for kind in DEVICE_KIND_LABELS
+        ]
+        for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
+            items.append((f"{label} ({kind_label(kind)})", kind, device_id))
+        return items
 
     def _device_combo_items(self) -> list[tuple[str, str]]:
         items = [
@@ -305,7 +420,31 @@ class TestcaseTab(QWidget):
     # -- Zeilenverwaltung -----------------------------------------------------
 
     def _add_row_clicked(self) -> None:
-        self._insert_row(self._table.rowCount(), TestStep())
+        self._insert_new_step(TestStep())
+
+    def _insert_at_selection(self) -> int:
+        """Einfuegeposition fuer einen neuen Schritt: direkt nach der
+        markierten Zeile, sonst ans Ende -- so landen neu eingefuegte
+        Kontrollfluss-Bloecke da, wo der Nutzer gerade arbeitet, statt immer
+        am Tabellenende."""
+        if self._selected_row >= 0:
+            return self._selected_row + 1
+        return self._table.rowCount()
+
+    def _insert_new_step(self, step: TestStep) -> None:
+        index = self._insert_at_selection()
+        self._insert_row(index, step)
+        self._table.selectRow(index)
+        self._revalidate_structure()
+
+    def _insert_block(self, kind: str) -> None:
+        """Fuegt einen Block-Start (loop/while/if) zusammen mit seinem
+        passenden "Ende" als Paar ein, mit leerem Rumpf dazwischen."""
+        index = self._insert_at_selection()
+        self._insert_row(index, TestStep(step_type=kind))
+        self._insert_row(index + 1, TestStep(step_type="end"))
+        self._table.selectRow(index)
+        self._revalidate_structure()
 
     def _refresh_actions_for_row(
         self, action_combo: QComboBox, device_combo: QComboBox, current_action: str
@@ -326,8 +465,17 @@ class TestcaseTab(QWidget):
         number_item = QTableWidgetItem()
         number_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         number_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        number_item.setData(Qt.ItemDataRole.UserRole, step.step_type)
         self._table.setItem(row_index, 0, number_item)
 
+        if step.step_type == STEP_TYPE_ACTION:
+            self._build_action_row(row_index, step)
+        else:
+            self._build_control_row(row_index, step)
+
+        self._renumber_rows()
+
+    def _build_action_row(self, row_index: int, step: TestStep) -> None:
         device_combo = QComboBox()
         self._table.setCellWidget(row_index, 1, device_combo)
 
@@ -455,7 +603,92 @@ class TestcaseTab(QWidget):
         self._populate_device_combo(device_combo, (step.device_kind, step.device_id))
         value_spin.setValue(step.value)
 
-        self._renumber_rows()
+    def _build_control_row(self, row_index: int, step: TestStep) -> None:
+        t = step.step_type
+
+        label = QLabel()
+        label.setStyleSheet("font-weight: bold;")
+        self._table.setCellWidget(row_index, 1, label)
+
+        if t in CONTROL_ROW_WITH_CHECKBOX:
+            enabled_check = QCheckBox()
+            enabled_check.setChecked(step.enabled)
+            check_container = QWidget()
+            check_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            check_layout = QHBoxLayout(check_container)
+            check_layout.addWidget(enabled_check)
+            check_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            check_layout.setContentsMargins(0, 0, 0, 0)
+            self._table.setCellWidget(row_index, 5, check_container)
+
+        if t == "loop":
+            count_spin = QSpinBox()
+            count_spin.setRange(1, 100000)
+            count_spin.setSuffix(" ×")
+            count_spin.setValue(max(step.loop_count, 1))
+            count_spin.valueChanged.connect(lambda _=None: self._revalidate_structure())
+            self._table.setCellWidget(row_index, 3, count_spin)
+
+        elif t in ("while", "if"):
+            container = QWidget()
+            h_layout = QHBoxLayout(container)
+            h_layout.setContentsMargins(2, 0, 2, 0)
+            summary_label = QLabel()
+            summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+            cond_button = IconButton("mdi.help-rhombus-outline", tr("Bedingung…"))
+            h_layout.addWidget(summary_label, 1)
+            h_layout.addWidget(cond_button)
+            container._cond_params = dict(
+                cond_source=step.cond_source,
+                cond_device_kind=step.cond_device_kind,
+                cond_device_id=step.cond_device_id,
+                cond_field=step.cond_field,
+                cond_op=step.cond_op,
+                cond_value=step.cond_value,
+                cond_time_ref=step.cond_time_ref,
+                cond_var=step.cond_var,
+            )
+            if t == "while":
+                container._cond_params["max_iterations"] = step.max_iterations
+
+            def refresh_summary() -> None:
+                summary_label.setText(condition_summary(_cond_params_to_step(container._cond_params)))
+
+            container._refresh_summary = refresh_summary
+            refresh_summary()
+
+            def open_condition_dialog() -> None:
+                dialog = ConditionDialog(
+                    container._cond_params, self._condition_device_items(), is_while=(t == "while"), parent=self
+                )
+                if dialog.exec() == ConditionDialog.DialogCode.Accepted:
+                    container._cond_params = dialog.params()
+                    refresh_summary()
+                    self._revalidate_structure()
+
+            cond_button.clicked.connect(open_condition_dialog)
+            self._table.setCellWidget(row_index, 3, container)
+
+        elif t in ("set_var", "inc_var"):
+            name_edit = QLineEdit(step.var_name)
+            name_edit.setPlaceholderText(tr("Variablenname"))
+            name_edit.textChanged.connect(lambda _=None: self._revalidate_structure())
+            self._table.setCellWidget(row_index, 2, name_edit)
+
+            value_spin = QDoubleSpinBox()
+            value_spin.setDecimals(3)
+            value_spin.setRange(-1e9, 1e9)
+            value_spin.setValue(step.value)
+            self._table.setCellWidget(row_index, 3, value_spin)
+
+            duration_spin = QDoubleSpinBox()
+            duration_spin.setRange(0, 36000)
+            duration_spin.setDecimals(1)
+            duration_spin.setSuffix(" s")
+            duration_spin.setValue(step.duration)
+            self._table.setCellWidget(row_index, 4, duration_spin)
+
+        self._retranslate_control_row(row_index, t)
 
     def _remove_selected_row(self) -> None:
         # Bewusst self._selected_row (die tatsaechlich markierte Zeile) statt
@@ -480,6 +713,7 @@ class TestcaseTab(QWidget):
         self._table.blockSignals(False)
         self._renumber_rows()
         self._resync_selection()
+        self._revalidate_structure()
 
     def _move_selected_row(self, offset: int) -> None:
         row = self._selected_row
@@ -493,6 +727,7 @@ class TestcaseTab(QWidget):
         self._table.selectRow(target)
         self._table.blockSignals(False)
         self._resync_selection()
+        self._revalidate_structure()
 
     def _resync_selection(self) -> None:
         """Liest die tatsaechliche Tabellenauswahl neu ein und faerbt alle
@@ -511,6 +746,13 @@ class TestcaseTab(QWidget):
     # -- Lesen/Schreiben der Zeilen -------------------------------------------
 
     def _row_to_step(self, row: int) -> TestStep:
+        number_item = self._table.item(row, 0)
+        step_type = number_item.data(Qt.ItemDataRole.UserRole) or STEP_TYPE_ACTION
+        if step_type == STEP_TYPE_ACTION:
+            return self._action_row_to_step(row)
+        return self._control_row_to_step(row, step_type)
+
+    def _action_row_to_step(self, row: int) -> TestStep:
         device_combo: QComboBox = self._table.cellWidget(row, 1)
         action_combo: QComboBox = self._table.cellWidget(row, 2)
         value_stack: QStackedWidget = self._table.cellWidget(row, 3)
@@ -537,6 +779,50 @@ class TestcaseTab(QWidget):
             arb_frequency=params["frequency"],
             arb_interval_ms=params["interval_ms"],
         )
+
+    def _control_row_to_step(self, row: int, step_type: str) -> TestStep:
+        enabled = True
+        check_container = self._table.cellWidget(row, 5)
+        if check_container is not None:
+            enabled_check = check_container.findChild(QCheckBox)
+            if enabled_check is not None:
+                enabled = enabled_check.isChecked()
+
+        if step_type == "loop":
+            count_spin: QSpinBox = self._table.cellWidget(row, 3)
+            return TestStep(step_type="loop", loop_count=count_spin.value(), enabled=enabled)
+
+        if step_type in ("while", "if"):
+            container = self._table.cellWidget(row, 3)
+            params = container._cond_params
+            return TestStep(
+                step_type=step_type,
+                enabled=enabled,
+                max_iterations=params.get("max_iterations", 1000) if step_type == "while" else 1000,
+                cond_source=params["cond_source"],
+                cond_device_kind=params["cond_device_kind"],
+                cond_device_id=params["cond_device_id"],
+                cond_field=params["cond_field"],
+                cond_op=params["cond_op"],
+                cond_value=params["cond_value"],
+                cond_time_ref=params["cond_time_ref"],
+                cond_var=params["cond_var"],
+            )
+
+        if step_type in ("set_var", "inc_var"):
+            name_edit: QLineEdit = self._table.cellWidget(row, 2)
+            value_spin: QDoubleSpinBox = self._table.cellWidget(row, 3)
+            duration_spin: QDoubleSpinBox = self._table.cellWidget(row, 4)
+            return TestStep(
+                step_type=step_type,
+                enabled=enabled,
+                var_name=name_edit.text().strip(),
+                value=value_spin.value(),
+                duration=duration_spin.value(),
+            )
+
+        # "else"/"end": keine weiteren Felder.
+        return TestStep(step_type=step_type)
 
     def steps(self) -> list[TestStep]:
         return [self._row_to_step(row) for row in range(self._table.rowCount())]
@@ -576,11 +862,60 @@ class TestcaseTab(QWidget):
             self._insert_row(self._table.rowCount(), step)
         if not steps:
             self._add_row_clicked()
+        self._revalidate_structure()
+
+    # -- Struktur-Validierung (Schleifen/If/While-Verschachtelung) --------------
+    #
+    # Nach jeder Zeilenmutation neu berechnet: Einrueckungstiefe je Zeile
+    # (Anzeige ueber padding-left am Label/Combo in Spalte 1, siehe
+    # _apply_row_style), "Ende (Schleife/Solange/Wenn)"-Beschriftung, und ob
+    # der Start-Button ueberhaupt gedrueckt werden darf. testcase_runner.start()
+    # validiert zusaetzlich als Backstop (Dateien koennen von Hand bearbeitet
+    # oder aus einer aelteren Programmversion geladen worden sein).
+
+    def _revalidate_structure(self) -> None:
+        steps = self.steps()
+        matching, depths, errors = validate_structure(steps)
+        error_by_row = dict(errors)
+        end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn")}
+
+        for row in range(self._table.rowCount()):
+            step = steps[row]
+            col1 = self._table.cellWidget(row, 1)
+            if col1 is None:
+                continue
+            col1._indent_depth = depths[row] if row < len(depths) else 0
+            col1._structure_error = row in error_by_row
+            if row in error_by_row:
+                col1.setToolTip(error_by_row[row])
+            elif step.step_type == "end" and row in matching:
+                suffix = end_kind_labels.get(steps[matching[row].start_index].step_type, "")
+                col1.setText(tr("Ende ({kind})", kind=suffix) if suffix else tr("Ende"))
+                col1.setToolTip("")
+            elif step.step_type in ("while", "if"):
+                col1.setToolTip("")
+            else:
+                col1.setToolTip("")
+
+        self._structure_ok = not errors
+        if errors:
+            self._run_button.setToolTip(
+                tr("Struktur unvollständig: {message}", message=error_by_row[errors[0][0]])
+            )
+        else:
+            self._run_button.setToolTip(tr("Start"))
+        self._update_run_enabled()
+
+        for row in range(self._table.rowCount()):
+            self._apply_row_style(row)
+
+    def _update_run_enabled(self) -> None:
+        self._run_button.setEnabled(not self._is_running and self._structure_ok)
 
     # -- Ausfuehrung -----------------------------------------------------------
 
     def set_running(self, running: bool) -> None:
-        self._run_button.setEnabled(not running)
+        self._is_running = running
         self._stop_button.setEnabled(running)
         self._table.setEnabled(not running)
         for button in (
@@ -592,15 +927,34 @@ class TestcaseTab(QWidget):
             self._save_button,
         ):
             button.setEnabled(not running)
+        self._update_run_enabled()
 
     def on_run_started(self) -> None:
         self._clear_all_row_colors()
+        self._iteration_text = ""
         self.set_running(True)
         self._set_status("Läuft…")
+
+    def on_iteration_changed(self, _row: int, iteration: int, total: int) -> None:
+        # Nur die innerste gerade aktive Schleife/While wird angezeigt (siehe
+        # testcase_runner.iteration_changed) -- bei verschachtelten Schleifen
+        # ein bewusster Kompromiss statt einer vollen Stack-Anzeige.
+        if total:
+            self._iteration_text = tr("(Durchlauf {i}/{n})", i=iteration, n=total)
+        else:
+            self._iteration_text = tr("(Durchlauf {i})", i=iteration)
 
     def on_step_started(self, index: int, step: TestStep) -> None:
         self._start_blink(index)
         total = self._table.rowCount()
+        if step.step_type in ("set_var", "inc_var"):
+            op = "=" if step.step_type == "set_var" else "+="
+            detail = f"{step.var_name} {op} {step.value:g}"
+            self._set_status(
+                "Schritt {index}/{total}: {detail} {iter}",
+                index=index + 1, total=total, detail=detail, iter=self._iteration_text,
+            )
+            return
         label = action_label(step.device_kind, step.action)
         device_display = self._device_display(step.device_kind, step.device_id)
         if is_arb_action(step.action):
@@ -618,21 +972,24 @@ class TestcaseTab(QWidget):
         else:
             detail = f"{step.value}"
         self._set_status(
-            "Schritt {index}/{total}: {device} – {action} ({detail})",
+            "Schritt {index}/{total}: {device} – {action} ({detail}) {iter}",
             index=index + 1,
             total=total,
             device=device_display,
             action=label,
             detail=detail,
+            iter=self._iteration_text,
         )
 
     def on_run_finished(self) -> None:
         self._stop_blink()
+        self._iteration_text = ""
         self.set_running(False)
         self._set_status("Fertig")
 
     def on_run_stopped(self) -> None:
         self._stop_blink()
+        self._iteration_text = ""
         self.set_running(False)
         self._set_status("Gestoppt")
 
@@ -656,6 +1013,7 @@ class TestcaseTab(QWidget):
     def _on_stop_clicked(self) -> None:
         self.stop_requested.emit()
         self._stop_blink()
+        self._iteration_text = ""
         self._clear_all_row_colors()
         self.set_running(False)
         self._set_status("Gestoppt")
@@ -691,12 +1049,27 @@ class TestcaseTab(QWidget):
             widget = self._table.cellWidget(row, col)
             if widget is None:
                 continue
-            widget.setStyleSheet(combo_style if isinstance(widget, QComboBox) else style)
+            if col == 1:
+                # Spalte 1 traegt zusaetzlich die Einrueckung (Verschachtelung
+                # von Schleifen/If) und ggf. eine Fehlermarkierung, siehe
+                # _revalidate_structure() -- beides an _indent_depth/
+                # _structure_error am Widget selbst abgelegt, weil dieselbe
+                # Zeile beim Verschieben/Neuladen komplett neu aufgebaut wird.
+                depth = getattr(widget, "_indent_depth", 0)
+                has_error = getattr(widget, "_structure_error", False)
+                border = f"border: 1px solid {current_palette().danger};" if has_error else ""
+                if isinstance(widget, QComboBox):
+                    widget.setStyleSheet(self._combo_row_style(color, depth * 18, border))
+                else:
+                    base = f"background-color: {color};" if color else ""
+                    widget.setStyleSheet(f"{base} padding-left: {depth * 18}px; {border}")
+            else:
+                widget.setStyleSheet(combo_style if isinstance(widget, QComboBox) else style)
         number_item = self._table.item(row, 0)
         if number_item is not None:
             number_item.setBackground(QBrush(QColor(color)) if color else QBrush())
 
-    def _combo_row_style(self, color: str | None) -> str:
+    def _combo_row_style(self, color: str | None, indent_px: int = 0, border: str = "") -> str:
         # QComboBox braucht einen eigenen Stylesheet-Zweig: eine einfache
         # "background-color: ...;"-Deklaration ohne Selektor faerbt zwar die
         # Box selbst, wird aber zusaetzlich an das Popup (QAbstractItemView)
@@ -712,8 +1085,9 @@ class TestcaseTab(QWidget):
         # mehr, weil dieses spezifischere Stylesheet sie ueberschreibt).
         pal = current_palette()
         combo_bg = f"background-color: {color};" if color else ""
+        indent = f"padding-left: {indent_px}px;" if indent_px else ""
         return (
-            f"QComboBox {{ {combo_bg} }}"
+            f"QComboBox {{ {combo_bg} {indent} {border} }}"
             f"QComboBox QAbstractItemView {{"
             f" background-color: {pal.surface}; color: {pal.text}; }}"
             f"QComboBox QAbstractItemView::item {{"

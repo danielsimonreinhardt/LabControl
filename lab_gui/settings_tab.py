@@ -48,11 +48,12 @@ class SettingsTab(QWidget):
         self._retranslate()
 
     def _retranslate(self) -> None:
-        self._sim_checkbox.setText(tr("Simulationsmodus (simuliertes Netzteil statt Hardware)"))
+        self._sim_checkbox.setText(tr("Simulationsmodus (simulierte Geräte statt Hardware)"))
         self._hint.setText(
             tr(
-                "Im Simulationsmodus steht ein virtuelles Labornetzteil im Dashboard/Control-Tab\n"
-                "zur Verfuegung, um die GUI ohne angeschlossene Hardware zu testen."
+                "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\n"
+                "elektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\n"
+                "angeschlossene Hardware zu testen."
             )
         )
         self._dark_checkbox.setText(tr("Dark Mode (Amber Industrial statt Modern Light)"))
