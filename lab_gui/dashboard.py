@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from i18n import Translator, tr
 from icons import IconButton
 from theme import Palette, ThemeManager
 from theme import current as current_palette
@@ -32,18 +33,32 @@ PANEL_WIDTH = 220
 # gescrollt werden muss) sowie den Rahmen der ScrollArea.
 SCROLL_AREA_MARGIN = 24
 
-LOAD_FIELDS = ["Spannung (V)", "Strom (A)", "Leistung (W)"]
-PSU_FIELDS = ["Spannung (V)", "Strom (A)", "Modus"]
+# field_key -> (deutscher Basis-Anzeigename, Einheit); Einheit ist
+# sprachunabhaengig und wird nicht ueber i18n.tr uebersetzt.
+FIELD_DEFS: dict[str, tuple[str, str]] = {
+    "voltage": ("Spannung", "V"),
+    "current": ("Strom", "A"),
+    "power": ("Leistung", "W"),
+    "mode": ("Modus", ""),
+}
+LOAD_FIELD_KEYS = ["voltage", "current", "power"]
+PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
+
+
+def _field_display(field_key: str) -> str:
+    name, unit = FIELD_DEFS[field_key]
+    return f"{tr(name)} ({unit})" if unit else tr(name)
 
 
 class _DevicePanel(QGroupBox):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
-    def __init__(self, kind: str, device_id: str, label: str, fields: list[str]) -> None:
+    def __init__(self, kind: str, device_id: str, label: str, field_keys: list[str]) -> None:
         super().__init__()
         self._kind = kind
         self._device_id = device_id
+        self._field_keys = field_keys
         self.setFixedWidth(PANEL_WIDTH)
 
         outer = QVBoxLayout(self)
@@ -51,25 +66,34 @@ class _DevicePanel(QGroupBox):
         header = QHBoxLayout()
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        rename_button = IconButton("mdi.pencil-outline", "Gerät umbenennen")
-        rename_button.clicked.connect(self._on_rename_clicked)
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
         header.addWidget(self._title_label, 1)
-        header.addWidget(rename_button)
+        header.addWidget(self._rename_button)
         outer.addLayout(header)
 
-        self._subtitle = QLabel(KIND_TITLE.get(kind, kind))
+        self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
-        form = QFormLayout()
+        self._form = QFormLayout()
         self._value_labels: dict[str, QLabel] = {}
-        for field_name in fields:
+        for field_key in field_keys:
             value_label = QLabel("--")
             value_label.setStyleSheet(VALUE_STYLE)
-            self._value_labels[field_name] = value_label
-            form.addRow(field_name + ":", value_label)
-        outer.addLayout(form)
+            self._value_labels[field_key] = value_label
+            self._form.addRow(" ", value_label)
+        outer.addLayout(self._form)
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr(KIND_TITLE.get(self._kind, self._kind)))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        for field_key in self._field_keys:
+            self._form.labelForField(self._value_labels[field_key]).setText(_field_display(field_key) + ":")
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
@@ -77,8 +101,8 @@ class _DevicePanel(QGroupBox):
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
 
-    def set_value(self, field: str, text: str) -> None:
-        self._value_labels[field].setText(text)
+    def set_value(self, field_key: str, text: str) -> None:
+        self._value_labels[field_key].setText(text)
 
     def clear_values(self) -> None:
         for value_label in self._value_labels.values():
@@ -86,7 +110,7 @@ class _DevicePanel(QGroupBox):
 
     def _on_rename_clicked(self) -> None:
         new_label, ok = QInputDialog.getText(
-            self, "Gerät umbenennen", "Name:", text=self._title_label.text()
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self._title_label.text()
         )
         if ok and new_label.strip():
             self.rename_requested.emit(self._kind, self._device_id, new_label.strip())
@@ -96,7 +120,7 @@ class DashboardWidget(QGroupBox):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
     def __init__(self) -> None:
-        super().__init__("Dashboard")
+        super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
 
@@ -115,6 +139,12 @@ class DashboardWidget(QGroupBox):
         self._panels: dict[str, _DevicePanel] = {}
         self._update_scroll_height()
 
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self.setTitle(tr("Dashboard"))
+
     def _update_scroll_height(self) -> None:
         # Die Panel-Hoehe ergibt sich aus dem tatsaechlichen Inhalt (Schrift,
         # Uebersetzung, DPI, ...), nicht aus einer festen Konstante -- sonst
@@ -130,8 +160,8 @@ class DashboardWidget(QGroupBox):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
-            fields = LOAD_FIELDS if kind == "load" else PSU_FIELDS
-            panel = _DevicePanel(kind, device_id, label, fields)
+            field_keys = LOAD_FIELD_KEYS if kind == "load" else PSU_FIELD_KEYS
+            panel = _DevicePanel(kind, device_id, label, field_keys)
             panel.rename_requested.connect(self.rename_requested)
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
@@ -170,15 +200,15 @@ class DashboardWidget(QGroupBox):
         panel = self._panels.get(device_id)
         if panel is None:
             return
-        panel.set_value("Spannung (V)", f"{voltage:.3f}")
-        panel.set_value("Strom (A)", f"{current:.3f}")
-        panel.set_value("Leistung (W)", f"{power:.3f}")
+        panel.set_value("voltage", f"{voltage:.3f}")
+        panel.set_value("current", f"{current:.3f}")
+        panel.set_value("power", f"{power:.3f}")
 
     @Slot(str, float, float, bool)
     def update_psu(self, device_id: str, voltage: float, current: float, constant_current: bool) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
             return
-        panel.set_value("Spannung (V)", f"{voltage:.2f}")
-        panel.set_value("Strom (A)", f"{current:.2f}")
-        panel.set_value("Modus", "CC" if constant_current else "CV")
+        panel.set_value("voltage", f"{voltage:.2f}")
+        panel.set_value("current", f"{current:.2f}")
+        panel.set_value("mode", "CC" if constant_current else "CV")

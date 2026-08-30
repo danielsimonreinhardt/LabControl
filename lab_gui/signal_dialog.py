@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from i18n import Translator, tr
 from testcase_model import ACTION_VALUE_RANGE, ARB_TARGETS, action_label, arb_value
 from theme import current as current_palette
 
-SHAPES = {"Sinus": "sine", "Rechteck": "square"}
+# Interner Signalform-Code -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
+SHAPE_BASE_LABELS = {"sine": "Sinus", "square": "Rechteck"}
 PREVIEW_PERIODS = 3.0
 MIN_SAMPLES_PER_PERIOD_WARN = 8
 
@@ -124,20 +126,34 @@ class _ScopePreview(QWidget):
 
 
 class SignalDialog(QDialog):
-    def __init__(self, device_kind: str, step_duration: float, params: dict, parent=None) -> None:
+    def __init__(
+        self,
+        device_kind: str,
+        step_duration: float,
+        params: dict,
+        parent=None,
+        limits: tuple[float, float] | None = None,
+    ) -> None:
+        """limits: bekannte (OVP, OCP) des Ziel-Netzteils, falls bekannt und
+        device_kind == "psu" -- siehe testcase_tab._psu_limits. Werte, deren
+        Spitzenwert (Offset+Amplitude) die jeweilige Schwelle ueberschreitet,
+        werden vom Geraet kommentarlos ignoriert (siehe hcs34xx/driver.py);
+        die Vorschau warnt in dem Fall statt den Nutzer erst beim Ausfuehren
+        des Testablaufs scheitern zu lassen.
+        """
         super().__init__(parent)
-        self.setWindowTitle("Arbiträrsignal definieren")
         self._device_kind = device_kind
+        self._step_duration = step_duration
+        self._limits = limits
 
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        self._form = QFormLayout()
 
         self._shape_combo = QComboBox()
-        self._shape_combo.addItems(SHAPES.keys())
+        self._populate_shape_combo()
 
         self._target_combo = QComboBox()
-        for code in ARB_TARGETS[device_kind]:
-            self._target_combo.addItem(action_label(device_kind, code), code)
+        self._populate_target_combo()
 
         self._amplitude_spin = QDoubleSpinBox()
         self._amplitude_spin.setDecimals(3)
@@ -156,28 +172,21 @@ class SignalDialog(QDialog):
         self._interval_spin.setSingleStep(50)
         self._interval_spin.setSuffix(" ms")
         self._interval_spin.setValue(200)
-        self._interval_spin.setToolTip(
-            "Abstand zwischen zwei Sollwert-Updates. Die Geräte sind keine echten\n"
-            "Signalgeneratoren -- das Signal wird als Folge einzelner Kommandos über\n"
-            "die serielle Schnittstelle angenähert. Werte unter ~100 ms können bei\n"
-            "manchen Geräten (v.a. dem Netzteil) nicht zuverlässig eingehalten werden."
-        )
 
-        form.addRow("Signalform:", self._shape_combo)
-        form.addRow("Zielgröße:", self._target_combo)
-        form.addRow("Amplitude (±):", self._amplitude_spin)
-        form.addRow("Offset (Mitte):", self._offset_spin)
-        form.addRow("Frequenz:", self._frequency_spin)
-        form.addRow("Update-Intervall:", self._interval_spin)
-        layout.addLayout(form)
+        self._form.addRow(" ", self._shape_combo)
+        self._form.addRow(" ", self._target_combo)
+        self._form.addRow(" ", self._amplitude_spin)
+        self._form.addRow(" ", self._offset_spin)
+        self._form.addRow(" ", self._frequency_spin)
+        self._form.addRow(" ", self._interval_spin)
+        layout.addLayout(self._form)
 
-        duration_label = QLabel(
-            f"Signal-Dauer: {step_duration:g} s (siehe Spalte „Dauer (s)“ in der Testschritt-Zeile)"
-        )
-        duration_label.setStyleSheet(f"color: {current_palette().text_muted};")
-        layout.addWidget(duration_label)
+        self._duration_label = QLabel()
+        self._duration_label.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._duration_label)
 
-        layout.addWidget(QLabel("Vorschau (Oszilloskop):"))
+        self._preview_label = QLabel()
+        layout.addWidget(self._preview_label)
         self._preview = _ScopePreview()
         layout.addWidget(self._preview)
 
@@ -191,7 +200,7 @@ class SignalDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self._shape_combo.currentTextChanged.connect(self._update_preview)
+        self._shape_combo.currentIndexChanged.connect(self._update_preview)
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         self._amplitude_spin.valueChanged.connect(self._update_preview)
         self._offset_spin.valueChanged.connect(self._update_preview)
@@ -201,11 +210,61 @@ class SignalDialog(QDialog):
         self._load_params(params)
         self._on_target_changed()
 
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _populate_shape_combo(self) -> None:
+        current_code = self._shape_combo.currentData() if self._shape_combo.count() else None
+        self._shape_combo.blockSignals(True)
+        self._shape_combo.clear()
+        for code, base_label in SHAPE_BASE_LABELS.items():
+            self._shape_combo.addItem(tr(base_label), code)
+        index = self._shape_combo.findData(current_code) if current_code else 0
+        self._shape_combo.setCurrentIndex(max(index, 0))
+        self._shape_combo.blockSignals(False)
+
+    def _populate_target_combo(self) -> None:
+        current_code = self._target_combo.currentData() if self._target_combo.count() else None
+        self._target_combo.blockSignals(True)
+        self._target_combo.clear()
+        for code in ARB_TARGETS[self._device_kind]:
+            self._target_combo.addItem(action_label(self._device_kind, code), code)
+        index = self._target_combo.findData(current_code) if current_code else 0
+        self._target_combo.setCurrentIndex(max(index, 0))
+        self._target_combo.blockSignals(False)
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(tr("Arbiträrsignal definieren"))
+        self._populate_shape_combo()
+        self._populate_target_combo()
+        self._form.labelForField(self._shape_combo).setText(tr("Signalform:"))
+        self._form.labelForField(self._target_combo).setText(tr("Zielgröße:"))
+        self._form.labelForField(self._amplitude_spin).setText(tr("Amplitude (±):"))
+        self._form.labelForField(self._offset_spin).setText(tr("Offset (Mitte):"))
+        self._form.labelForField(self._frequency_spin).setText(tr("Frequenz:"))
+        self._form.labelForField(self._interval_spin).setText(tr("Update-Intervall:"))
+        self._interval_spin.setToolTip(
+            tr(
+                "Abstand zwischen zwei Sollwert-Updates. Die Geräte sind keine echten\n"
+                "Signalgeneratoren -- das Signal wird als Folge einzelner Kommandos über\n"
+                "die serielle Schnittstelle angenähert. Werte unter ~100 ms können bei\n"
+                "manchen Geräten (v.a. dem Netzteil) nicht zuverlässig eingehalten werden."
+            )
+        )
+        self._duration_label.setText(
+            tr(
+                "Signal-Dauer: {duration:g} s (siehe Spalte „Dauer (s)“ in der Testschritt-Zeile)",
+                duration=self._step_duration,
+            )
+        )
+        self._preview_label.setText(tr("Vorschau (Oszilloskop):"))
+        self._update_preview()
+
     def _load_params(self, params: dict) -> None:
         self._pending_amplitude: float | None = params.get("amplitude", 0.0)
         self._pending_offset: float | None = params.get("offset", 0.0)
-        shape_label = next((label for label, code in SHAPES.items() if code == params.get("shape")), "Sinus")
-        self._shape_combo.setCurrentText(shape_label)
+        shape_index = self._shape_combo.findData(params.get("shape", "sine"))
+        self._shape_combo.setCurrentIndex(max(shape_index, 0))
         target_index = self._target_combo.findData(params.get("target", ARB_TARGETS[self._device_kind][0]))
         self._target_combo.setCurrentIndex(max(target_index, 0))
         self._frequency_spin.setValue(params.get("frequency", 1.0))
@@ -233,7 +292,7 @@ class SignalDialog(QDialog):
         self._update_preview()
 
     def _update_preview(self) -> None:
-        shape = SHAPES[self._shape_combo.currentText()]
+        shape = self._shape_combo.currentData()
         target = self._target_combo.currentData()
         amplitude = self._amplitude_spin.value()
         offset = self._offset_spin.value()
@@ -241,18 +300,38 @@ class SignalDialog(QDialog):
         interval_ms = self._interval_spin.value()
         self._preview.set_params(shape, target, amplitude, offset, frequency, interval_ms)
 
+        warnings = []
         samples_per_period = (1000.0 / interval_ms) / frequency
         if samples_per_period < MIN_SAMPLES_PER_PERIOD_WARN:
-            self._warning_label.setText(
-                f"Nur ~{samples_per_period:.1f} Stützstellen pro Periode -- das Signal wird stufig/kantig "
-                "ausgegeben. Für eine glattere Annäherung Frequenz verringern oder Update-Intervall verkleinern."
+            warnings.append(
+                tr(
+                    "Nur ~{samples:.1f} Stützstellen pro Periode -- das Signal wird stufig/kantig "
+                    "ausgegeben. Für eine glattere Annäherung Frequenz verringern oder Update-Intervall verkleinern.",
+                    samples=samples_per_period,
+                )
             )
-        else:
-            self._warning_label.setText("")
+
+        if self._limits is not None and target in ("PSU_VOLT", "PSU_CURR"):
+            ovp, ocp = self._limits
+            threshold = ovp if target == "PSU_VOLT" else ocp
+            label = "OVP" if target == "PSU_VOLT" else "OCP"
+            unit = "V" if target == "PSU_VOLT" else "A"
+            peak = offset + amplitude
+            if peak > threshold:
+                warnings.append(
+                    tr(
+                        "Spitzenwert ({peak:g}{unit}) liegt über der aktuellen {label}-Schwelle "
+                        "({threshold:g}{unit}) -- diese Samples werden vom Netzteil kommentarlos "
+                        "abgelehnt und brechen den Testschritt ab.",
+                        peak=peak, unit=unit, label=label, threshold=threshold,
+                    )
+                )
+
+        self._warning_label.setText(" ".join(warnings))
 
     def params(self) -> dict:
         return dict(
-            shape=SHAPES[self._shape_combo.currentText()],
+            shape=self._shape_combo.currentData(),
             target=self._target_combo.currentData(),
             amplitude=self._amplitude_spin.value(),
             offset=self._offset_spin.value(),

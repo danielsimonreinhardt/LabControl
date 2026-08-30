@@ -32,6 +32,10 @@ class IconButton(QPushButton):
         self._apply_icon(current_palette())
         ThemeManager.instance().changed.connect(self._apply_icon)
 
+    def set_icon(self, icon_name: str) -> None:
+        self._icon_name = icon_name
+        self._apply_icon(current_palette())
+
     def _apply_icon(self, pal: Palette) -> None:
         if not self.isEnabled():
             color = pal.text_muted

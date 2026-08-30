@@ -6,26 +6,29 @@ import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# Anzeigename -> interner Aktionscode, je Geraeteart ("load"/"psu")
+from i18n import tr
+
+# Interner Aktionscode -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
+# fuer i18n.tr, siehe action_label()), je Geraeteart ("load"/"psu").
 LOAD_ACTIONS = {
-    "Konstantstrom (CC)": "CURR",
-    "Konstantspannung (CV)": "VOLT",
-    "Konstantwiderstand (CR)": "RES",
-    "Konstantleistung (CW)": "POW",
-    "Ausgang EIN": "OUT_ON",
-    "Ausgang AUS": "OUT_OFF",
-    "Arbiträrsignal": "ARB",
+    "CURR": "Konstantstrom (CC)",
+    "VOLT": "Konstantspannung (CV)",
+    "RES": "Konstantwiderstand (CR)",
+    "POW": "Konstantleistung (CW)",
+    "OUT_ON": "Ausgang EIN",
+    "OUT_OFF": "Ausgang AUS",
+    "ARB": "Arbiträrsignal",
 }
 
 PSU_ACTIONS = {
-    "Spannung setzen": "PSU_VOLT",
-    "Strom setzen": "PSU_CURR",
-    "Ausgang EIN": "PSU_OUT_ON",
-    "Ausgang AUS": "PSU_OUT_OFF",
-    "Preset P1 abrufen": "PSU_P1",
-    "Preset P2 abrufen": "PSU_P2",
-    "Preset P3 abrufen": "PSU_P3",
-    "Arbiträrsignal": "PSU_ARB",
+    "PSU_VOLT": "Spannung setzen",
+    "PSU_CURR": "Strom setzen",
+    "PSU_OUT_ON": "Ausgang EIN",
+    "PSU_OUT_OFF": "Ausgang AUS",
+    "PSU_P1": "Preset P1 abrufen",
+    "PSU_P2": "Preset P2 abrufen",
+    "PSU_P3": "Preset P3 abrufen",
+    "PSU_ARB": "Arbiträrsignal",
 }
 
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
@@ -44,6 +47,7 @@ DEVICE_ACTIONS = {
     "psu": PSU_ACTIONS,
 }
 
+# Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
 DEVICE_KIND_LABELS = {
     "load": "Last",
     "psu": "Netzteil",
@@ -64,7 +68,8 @@ VALUELESS_ACTIONS = {
     "ARB", "PSU_ARB",
 }
 
-# Anzeigename-Einheit/Min/Max fuer das Wert-Feld je Aktionscode. Die
+# Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
+# sprachunabhaengig, daher nicht ueber i18n.tr uebersetzt). Die
 # Netzteil-Spannungsgrenzen (1-60V) sind keine willkuerliche GUI-Beschraenkung,
 # sondern spiegeln eine echte Geraete-Eigenschaft: Werte unter 1V werden vom
 # HCS-34xx kommentarlos ignoriert (siehe hcs34xx/driver.py: MIN_VOLTAGE).
@@ -145,8 +150,10 @@ def load_steps(path: Path) -> list[TestStep]:
     return steps
 
 
+def kind_label(device_kind: str) -> str:
+    return tr(DEVICE_KIND_LABELS.get(device_kind, device_kind))
+
+
 def action_label(device_kind: str, action_code: str) -> str:
-    for label, code in DEVICE_ACTIONS[device_kind].items():
-        if code == action_code:
-            return label
-    return action_code
+    base_label = DEVICE_ACTIONS[device_kind].get(action_code)
+    return tr(base_label) if base_label is not None else action_code

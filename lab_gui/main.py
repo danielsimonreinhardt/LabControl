@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (
 
 from PySide6.QtWidgets import QApplication
 
+from i18n import Translator
 from main_window import MainWindow
 from settings import Settings
 from theme import ThemeManager
@@ -17,6 +18,7 @@ from theme import ThemeManager
 def main() -> None:
     app = QApplication(sys.argv)
     settings = Settings()
+    Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
     window = MainWindow(settings)
     window.show()

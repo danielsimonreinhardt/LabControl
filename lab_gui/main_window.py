@@ -8,12 +8,14 @@ from control_tab import ControlTab
 from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
+from i18n import Translator, tr
 from settings import Settings
 from settings_tab import SettingsTab
-from testcase_model import DEVICE_KIND_LABELS
+from testcase_model import kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
 from theme import Palette, ThemeManager
+from timeline_tab import TimelineTab
 from version import __version__
 
 
@@ -39,10 +41,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.control_tab = ControlTab()
         self.testcase_tab = TestcaseTab()
+        self.timeline_tab = TimelineTab()
         self.settings_tab = SettingsTab()
-        self.tabs.addTab(self.control_tab, "Control")
-        self.tabs.addTab(self.testcase_tab, "Testcase")
-        self.tabs.addTab(self.settings_tab, "Settings")
+        self.tabs.addTab(self.control_tab, "")
+        self.tabs.addTab(self.testcase_tab, "")
+        self.tabs.addTab(self.timeline_tab, "")
+        self.tabs.addTab(self.settings_tab, "")
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
@@ -66,6 +70,16 @@ class MainWindow(QMainWindow):
         self._wire_settings_tab()
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self.tabs.setTabText(0, tr("Steuerung"))
+        self.tabs.setTabText(1, tr("Testablauf"))
+        self.tabs.setTabText(2, tr("Verlauf"))
+        self.tabs.setTabText(3, tr("Einstellungen"))
+        for device_id in self._status_labels:
+            self._render_status_label(device_id)
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
@@ -78,7 +92,11 @@ class MainWindow(QMainWindow):
         self._worker.psu_connected.connect(self._on_psu_connected)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
+        self._worker.load_measurement.connect(self.timeline_tab.update_load)
+        self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
+        self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
+        self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -87,11 +105,13 @@ class MainWindow(QMainWindow):
         self._registry.device_known.connect(self.dashboard.on_device_known)
         self._registry.device_known.connect(self.control_tab.on_device_known)
         self._registry.device_known.connect(self.testcase_tab.on_device_known)
+        self._registry.device_known.connect(self.timeline_tab.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
 
         self._registry.label_changed.connect(self.dashboard.on_label_changed)
         self._registry.label_changed.connect(self.control_tab.on_label_changed)
         self._registry.label_changed.connect(self.testcase_tab.on_label_changed)
+        self._registry.label_changed.connect(self.timeline_tab.on_label_changed)
         self._registry.label_changed.connect(self._on_label_changed_status)
 
         self.dashboard.rename_requested.connect(self._registry.rename)
@@ -119,6 +139,10 @@ class MainWindow(QMainWindow):
         self.settings_tab.set_dark_mode(self._settings.dark_mode)
         self.settings_tab.dark_mode_toggled.connect(self._settings.set_dark_mode)
         self._settings.dark_mode_changed.connect(ThemeManager.instance().apply)
+
+        self.settings_tab.set_language(self._settings.language)
+        self.settings_tab.language_selected.connect(self._settings.set_language)
+        self._settings.language_changed.connect(Translator.instance().set_language)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()
@@ -153,10 +177,13 @@ class MainWindow(QMainWindow):
         candidates = self._online_devices.get(kind, set())
         if len(candidates) == 1:
             return next(iter(candidates)), ""
-        label = DEVICE_KIND_LABELS.get(kind, kind)
+        label = kind_label(kind)
         if not candidates:
-            return None, f"Kein Gerät des Typs '{label}' verbunden"
-        return None, f"Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen"
+            return None, tr("Kein Gerät des Typs '{label}' verbunden", label=label)
+        return None, tr(
+            "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
+            label=label,
+        )
 
     def _apply_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
         setters = {
@@ -210,7 +237,7 @@ class MainWindow(QMainWindow):
             return
         label = self._device_labels.get(device_id, device_id)
         online = self._device_online.get(device_id, False)
-        status_label.setText(f"{label}: {'verbunden' if online else 'getrennt'}")
+        status_label.setText(f"{label}: {tr('verbunden') if online else tr('getrennt')}")
         pal = ThemeManager.instance().palette
         color = pal.success if online else pal.danger
         status_label.setStyleSheet(f"color: {color}; font-weight: bold;")

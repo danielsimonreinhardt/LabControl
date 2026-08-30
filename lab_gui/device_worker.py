@@ -59,6 +59,7 @@ class DeviceWorker(QObject):
     load_measurement = Signal(str, float, float, float)  # device_id, voltage, current, power
     psu_measurement = Signal(str, float, float, bool)     # device_id, voltage, current, constant_current
     load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
+    psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
     action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
 
     def __init__(self, simulation_mode: bool = False) -> None:
@@ -97,6 +98,7 @@ class DeviceWorker(QObject):
         self._psus[SIM_PSU_ID] = MockHCS34xx()
         self.device_added.emit("psu", SIM_PSU_ID)
         self.psu_connected.emit(SIM_PSU_ID, True)
+        self._emit_psu_limits(SIM_PSU_ID)
 
     def _remove_mock_psu(self) -> None:
         psu = self._psus.pop(SIM_PSU_ID, None)
@@ -156,6 +158,28 @@ class DeviceWorker(QObject):
             self._psus[device_id] = candidate
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
+            self._emit_psu_limits(device_id)
+
+    def _emit_psu_limits(self, device_id: str) -> None:
+        """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.
+
+        Wird beim (Wieder-)Verbinden und nach jedem erfolgreichen Setzen von
+        OVP/OCP aufgerufen -- die GUI zeigt damit den zuletzt bekannten Stand
+        in den Steuer-/Testablauf-Feldern und kann davor warnen, wenn ein
+        Sollwert die Schwelle ueberschreitet (das Geraet ignoriert solche
+        Werte sonst kommentarlos, siehe hcs34xx/driver.py). Kein Live-Polling
+        bei jedem Zyklus, damit eine laufende Nutzereingabe im OVP/OCP-Feld
+        nicht durch einen Poll ueberschrieben wird; bei manueller Aenderung
+        direkt am Geraet bleibt der GUI-Stand daher bis zum naechsten
+        Verbindungsaufbau ggf. veraltet.
+        """
+        psu = self._psus.get(device_id)
+        if psu is None:
+            return
+        try:
+            self.psu_limits.emit(device_id, psu.get_ovp(), psu.get_ocp())
+        except PowerSupplyError:
+            pass  # naechster erfolgreicher Poll-Zyklus deckt einen echten Verbindungsabbruch ohnehin auf
 
     def _poll(self) -> None:
         for device_id, load in list(self._loads.items()):
@@ -250,11 +274,15 @@ class DeviceWorker(QObject):
 
     @Slot(str, float)
     def set_psu_ovp(self, device_id: str, volts: float) -> None:
-        self._guard_psu(device_id, lambda psu: psu.set_ovp(volts))
+        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_ovp(volts))
+        if ok:
+            self._emit_psu_limits(device_id)
 
     @Slot(str, float)
     def set_psu_ocp(self, device_id: str, amps: float) -> None:
-        self._guard_psu(device_id, lambda psu: psu.set_ocp(amps))
+        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_ocp(amps))
+        if ok:
+            self._emit_psu_limits(device_id)
 
     @Slot(str, int)
     def recall_psu_memory(self, device_id: str, index: int) -> None:

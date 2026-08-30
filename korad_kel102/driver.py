@@ -77,10 +77,21 @@ class KoradKEL102:
     # -- low level -----------------------------------------------------
 
     def _write(self, cmd: str) -> None:
-        self._ser.write((cmd + "\n").encode("ascii"))
+        # pyserial wirft bei einem ungueltig gewordenen Port-Handle (z.B. nach
+        # Windows-Standby/Wakeup: "ClearCommError failed" o.ae.) ein rohes
+        # SerialException/OSError statt eines LoadError -- ohne diesen Fang
+        # wuerde device_worker.py (faengt nur LoadError) das Geraet weiterhin
+        # als verbunden fuehren, obwohl die Verbindung tot ist.
+        try:
+            self._ser.write((cmd + "\n").encode("ascii"))
+        except (serial.SerialException, OSError) as exc:
+            raise LoadError(f"Schreibfehler auf Port {self._ser.port}: {exc}") from exc
 
     def _read_line(self) -> str:
-        raw = self._ser.readline()
+        try:
+            raw = self._ser.readline()
+        except (serial.SerialException, OSError) as exc:
+            raise LoadError(f"Lesefehler auf Port {self._ser.port}: {exc}") from exc
         if not raw:
             raise LoadError(f"Keine Antwort vom Geraet (Timeout) auf Port {self._ser.port}")
         return raw.decode("ascii", errors="replace").strip()

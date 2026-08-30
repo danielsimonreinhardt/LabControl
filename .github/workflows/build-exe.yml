@@ -29,7 +29,7 @@ jobs:
           echo "EXE_NAME=LabControl_v$version" >> $env:GITHUB_ENV
 
       - name: Build EXE with PyInstaller
-        run: pyinstaller --name $env:EXE_NAME --paths . --add-data "lab_gui/icons;lab_gui/icons" --onefile --windowed lab_gui/main.py
+        run: pyinstaller --name $env:EXE_NAME --paths . --add-data "lab_gui/icons;lab_gui/icons" --add-data "lab_gui/translations;lab_gui/translations" --onefile --windowed lab_gui/main.py
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

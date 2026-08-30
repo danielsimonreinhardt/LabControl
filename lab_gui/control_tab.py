@@ -9,7 +9,7 @@ keine eingestellten Werte verloren gehen.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -24,17 +24,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from flow_layout import FlowLayout
+from i18n import Translator, tr
 from icons import IconButton
 from theme import Palette, ThemeManager
 from theme import current as current_palette
 
-# Anzeigename -> SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS)
+# Interner SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS) ->
+# deutscher Basis-Anzeigename (Uebersetzungsschluessel fuer i18n.tr).
 LOAD_MODES = {
-    "Konstantstrom (CC)": "CURR",
-    "Konstantspannung (CV)": "VOLT",
-    "Konstantwiderstand (CR)": "RES",
-    "Konstantleistung (CW)": "POW",
-    "Kurzschluss (SHORT)": "SHORT",
+    "CURR": "Konstantstrom (CC)",
+    "VOLT": "Konstantspannung (CV)",
+    "RES": "Konstantwiderstand (CR)",
+    "POW": "Konstantleistung (CW)",
+    "SHORT": "Kurzschluss (SHORT)",
 }
 
 LOAD_MODE_UNITS = {
@@ -66,38 +69,37 @@ class LoadControlGroup(QGroupBox):
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
-        self._title_label_text = label
 
         outer = QVBoxLayout(self)
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        self._subtitle = QLabel("Elektronische Last (KEL102)")
+        self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
         outer.addWidget(self._title_label)
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
-        layout = QFormLayout()
-        outer.addLayout(layout)
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
 
         self._mode_combo = QComboBox()
-        self._mode_combo.addItems(LOAD_MODES.keys())
-        self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
-        layout.addRow("Modus:", self._mode_combo)
+        self._populate_mode_combo()
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
+        self._form.addRow(" ", self._mode_combo)
 
         self._setpoint_spin = QDoubleSpinBox()
         self._setpoint_spin.setDecimals(3)
         self._setpoint_spin.setMaximumWidth(150)
-        layout.addRow("Sollwert:", self._setpoint_spin)
-        self._on_mode_changed(self._mode_combo.currentText())
+        self._form.addRow(" ", self._setpoint_spin)
+        self._on_mode_index_changed(self._mode_combo.currentIndex())
 
-        apply_button = IconButton("mdi.check-bold", "Übernehmen")
-        apply_button.clicked.connect(self._on_apply)
-        layout.addRow(apply_button)
+        self._apply_button = IconButton("mdi.check-bold", "")
+        self._apply_button.clicked.connect(self._on_apply)
+        self._form.addRow(self._apply_button)
 
-        input_layout = QHBoxLayout()
-        self._on_button = QPushButton("EIN")
-        self._off_button = QPushButton("AUS")
+        self._input_layout = input_layout = QHBoxLayout()
+        self._on_button = QPushButton()
+        self._off_button = QPushButton()
         # Expanding statt addStretch(): beide Buttons teilen sich zu gleichen
         # Teilen die Feldbreite, die QFormLayout auch den anderen Zeilen
         # (Modus-Combo, Sollwert-Spinbox) gibt, statt schmal und mit
@@ -108,7 +110,7 @@ class LoadControlGroup(QGroupBox):
         self._off_button.clicked.connect(lambda: self.set_input.emit(self._device_id, False))
         input_layout.addWidget(self._on_button)
         input_layout.addWidget(self._off_button)
-        layout.addRow("Ausgang:", input_layout)
+        self._form.addRow(" ", input_layout)
 
         # Solange noch keine Hardware-Rueckfrage eingetroffen ist (siehe
         # set_input_state, gespeist vom DeviceWorker-Polling), ist der
@@ -116,6 +118,29 @@ class LoadControlGroup(QGroupBox):
         # eines geratenen Zustands.
         self._input_on: bool | None = None
         self._update_input_buttons()
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _populate_mode_combo(self) -> None:
+        current_code = self._mode_combo.currentData() if self._mode_combo.count() else None
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.clear()
+        for code, base_label in LOAD_MODES.items():
+            self._mode_combo.addItem(tr(base_label), code)
+        index = self._mode_combo.findData(current_code) if current_code else 0
+        self._mode_combo.setCurrentIndex(max(index, 0))
+        self._mode_combo.blockSignals(False)
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("Elektronische Last (KEL102)"))
+        self._populate_mode_combo()
+        self._form.labelForField(self._mode_combo).setText(tr("Modus:"))
+        self._form.labelForField(self._setpoint_spin).setText(tr("Sollwert:"))
+        self._apply_button.setToolTip(tr("Übernehmen"))
+        self._on_button.setText(tr("EIN"))
+        self._off_button.setText(tr("AUS"))
+        self._form.labelForField(self._input_layout).setText(tr("Ausgang:"))
 
     def set_input_state(self, on: bool) -> None:
         self._input_on = on
@@ -131,15 +156,15 @@ class LoadControlGroup(QGroupBox):
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
 
-    def _on_mode_changed(self, label: str) -> None:
-        code = LOAD_MODES[label]
+    def _on_mode_index_changed(self, index: int) -> None:
+        code = self._mode_combo.itemData(index)
         unit, lo, hi = LOAD_MODE_UNITS[code]
         self._setpoint_spin.setSuffix(f" {unit}" if unit else "")
         self._setpoint_spin.setRange(lo, hi)
         self._setpoint_spin.setEnabled(code != "SHORT")
 
     def _on_apply(self) -> None:
-        code = LOAD_MODES[self._mode_combo.currentText()]
+        code = self._mode_combo.currentData()
         self.apply_function.emit(self._device_id, code)
         if code != "SHORT":
             self.apply_setpoint.emit(self._device_id, code, self._setpoint_spin.value())
@@ -159,47 +184,49 @@ class PsuControlGroup(QGroupBox):
         outer = QVBoxLayout(self)
         self._title_label = QLabel(label)
         self._title_label.setStyleSheet("font-weight: bold;")
-        self._subtitle = QLabel("Labornetzteil (HCS-34xx)")
+        self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
         outer.addWidget(self._title_label)
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
-        layout = QFormLayout()
-        outer.addLayout(layout)
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
 
         self._voltage_spin = QDoubleSpinBox()
         self._voltage_spin.setDecimals(1)
         self._voltage_spin.setRange(1, 60)  # Geraet nimmt Werte unter 1V nicht an
         self._voltage_spin.setSuffix(" V")
         self._voltage_spin.setMaximumWidth(120)
-        voltage_button = IconButton("mdi.check", "Setzen")
-        voltage_button.clicked.connect(
+        self._voltage_button = IconButton("mdi.check", "")
+        self._voltage_button.clicked.connect(
             lambda: self.set_voltage.emit(self._device_id, self._voltage_spin.value())
         )
-        layout.addRow("Spannung:", self._row(self._voltage_spin, voltage_button))
+        self._voltage_row = self._row(self._voltage_spin, self._voltage_button)
+        self._form.addRow(" ", self._voltage_row)
 
         self._current_spin = QDoubleSpinBox()
         self._current_spin.setDecimals(1)
         self._current_spin.setRange(0, 10)
         self._current_spin.setSuffix(" A")
         self._current_spin.setMaximumWidth(120)
-        current_button = IconButton("mdi.check", "Setzen")
-        current_button.clicked.connect(
+        self._current_button = IconButton("mdi.check", "")
+        self._current_button.clicked.connect(
             lambda: self.set_current.emit(self._device_id, self._current_spin.value())
         )
-        layout.addRow("Strom:", self._row(self._current_spin, current_button))
+        self._current_row = self._row(self._current_spin, self._current_button)
+        self._form.addRow(" ", self._current_row)
 
-        output_layout = QHBoxLayout()
-        self._output_on_button = QPushButton("EIN")
-        self._output_off_button = QPushButton("AUS")
+        self._output_layout = QHBoxLayout()
+        self._output_on_button = QPushButton()
+        self._output_off_button = QPushButton()
         self._output_on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._output_off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._output_on_button.clicked.connect(self._on_output_on)
         self._output_off_button.clicked.connect(self._on_output_off)
-        output_layout.addWidget(self._output_on_button)
-        output_layout.addWidget(self._output_off_button)
-        layout.addRow("Ausgang:", output_layout)
+        self._output_layout.addWidget(self._output_on_button)
+        self._output_layout.addWidget(self._output_off_button)
+        self._form.addRow(" ", self._output_layout)
 
         # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
         # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
@@ -215,21 +242,90 @@ class PsuControlGroup(QGroupBox):
         self._ovp_spin.setRange(1, 65)  # Geraet nimmt Werte unter 1V nicht an
         self._ovp_spin.setSuffix(" V")
         self._ovp_spin.setMaximumWidth(120)
-        ovp_button = IconButton("mdi.check", "Setzen")
-        ovp_button.clicked.connect(lambda: self.set_ovp.emit(self._device_id, self._ovp_spin.value()))
-        layout.addRow("OVP:", self._row(self._ovp_spin, ovp_button))
+        self._ovp_button = IconButton("mdi.check", "")
+        self._ovp_button.clicked.connect(lambda: self.set_ovp.emit(self._device_id, self._ovp_spin.value()))
+        self._ovp_row = self._row(self._ovp_spin, self._ovp_button)
+        self._form.addRow(" ", self._ovp_row)
 
         self._ocp_spin = QDoubleSpinBox()
         self._ocp_spin.setDecimals(1)
         self._ocp_spin.setRange(0, 11)
         self._ocp_spin.setSuffix(" A")
         self._ocp_spin.setMaximumWidth(120)
-        ocp_button = IconButton("mdi.check", "Setzen")
-        ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._device_id, self._ocp_spin.value()))
-        layout.addRow("OCP:", self._row(self._ocp_spin, ocp_button))
+        self._ocp_button = IconButton("mdi.check", "")
+        self._ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._device_id, self._ocp_spin.value()))
+        self._ocp_row = self._row(self._ocp_spin, self._ocp_button)
+        self._form.addRow(" ", self._ocp_row)
+
+        # Das Geraet ignoriert Spannungs-/Stromwerte oberhalb der aktuell
+        # eingestellten OVP/OCP-Schwelle kommentarlos (siehe hcs34xx/driver.py)
+        # -- dieser Hinweis vergleicht die Eingabefelder live, statt den
+        # Nutzer erst beim Klick auf "Setzen" scheitern zu lassen.
+        self._limit_warning = QLabel("")
+        self._limit_warning.setWordWrap(True)
+        self._limit_warning.setStyleSheet(f"color: {current_palette().warning};")
+        outer.addWidget(self._limit_warning)
+
+        self._voltage_spin.valueChanged.connect(self._update_limit_warning)
+        self._current_spin.valueChanged.connect(self._update_limit_warning)
+        self._ovp_spin.valueChanged.connect(self._update_limit_warning)
+        self._ocp_spin.valueChanged.connect(self._update_limit_warning)
+        self._update_limit_warning()
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("Labornetzteil (HCS-34xx)"))
+        self._form.labelForField(self._voltage_row).setText(tr("Spannung:"))
+        self._form.labelForField(self._current_row).setText(tr("Strom:"))
+        self._form.labelForField(self._output_layout).setText(tr("Ausgang:"))
+        self._form.labelForField(self._ovp_row).setText(tr("OVP:"))
+        self._form.labelForField(self._ocp_row).setText(tr("OCP:"))
+        for button in (self._voltage_button, self._current_button, self._ovp_button, self._ocp_button):
+            button.setToolTip(tr("Setzen"))
+        self._output_on_button.setText(tr("EIN"))
+        self._output_off_button.setText(tr("AUS"))
+        self._update_limit_warning()
+
+    def set_limits(self, ovp: float, ocp: float) -> None:
+        """Uebernimmt die vom Geraet bekannte OVP/OCP-Schwelle in die Felder.
+
+        Nur beim (Wieder-)Verbinden und nach einem eigenen "Setzen"-Klick
+        aufgerufen (siehe device_worker._emit_psu_limits) -- nicht bei jedem
+        Poll-Zyklus, damit eine laufende Eingabe hier nicht ueberschrieben wird.
+        """
+        self._ovp_spin.blockSignals(True)
+        self._ovp_spin.setValue(ovp)
+        self._ovp_spin.blockSignals(False)
+        self._ocp_spin.blockSignals(True)
+        self._ocp_spin.setValue(ocp)
+        self._ocp_spin.blockSignals(False)
+        self._update_limit_warning()
+
+    def _update_limit_warning(self) -> None:
+        messages = []
+        if self._voltage_spin.value() > self._ovp_spin.value():
+            messages.append(
+                tr(
+                    "Spannung ({voltage:g}V) liegt über der OVP-Schwelle "
+                    "({threshold:g}V) -- wird vom Gerät kommentarlos abgelehnt.",
+                    voltage=self._voltage_spin.value(), threshold=self._ovp_spin.value(),
+                )
+            )
+        if self._current_spin.value() > self._ocp_spin.value():
+            messages.append(
+                tr(
+                    "Strom ({current:g}A) liegt über der OCP-Schwelle "
+                    "({threshold:g}A) -- wird vom Gerät kommentarlos abgelehnt.",
+                    current=self._current_spin.value(), threshold=self._ocp_spin.value(),
+                )
+            )
+        self._limit_warning.setText(" ".join(messages))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
+        self._limit_warning.setStyleSheet(f"color: {palette.warning};")
         self._update_output_buttons()
 
     def set_label(self, label: str) -> None:
@@ -273,8 +369,7 @@ class ControlTab(QWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
         content = QWidget()
-        self._content_layout = QVBoxLayout(content)
-        self._content_layout.addStretch()
+        self._content_layout = FlowLayout(content)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -293,11 +388,7 @@ class ControlTab(QWidget):
         else:
             section = PsuControlGroup(device_id, label)
         section.hide()
-        self._content_layout.insertWidget(self._content_layout.count() - 1, section)
-        # Ohne explizites Alignment streckt QVBoxLayout die Sektion auf die
-        # volle Breite -- stattdessen soll sie sich an ihrem Inhalt (Formular
-        # + Spinboxen fester Breite) orientieren und links ausgerichtet sein.
-        self._content_layout.setAlignment(section, Qt.AlignmentFlag.AlignLeft)
+        self._content_layout.addWidget(section)
         self._sections[device_id] = section
         self.section_created.emit(kind, device_id, section)
 
@@ -316,6 +407,11 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if section is not None:
             section.setVisible(online)
+
+    def set_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_limits(ovp, ocp)
 
     def set_load_input_state(self, device_id: str, on: bool) -> None:
         section = self._sections.get(device_id)

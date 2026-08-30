@@ -118,9 +118,17 @@ class HCS34xx:
     # -- low level -----------------------------------------------------
 
     def _query(self, cmd: str) -> str:
-        self._ser.reset_input_buffer()
-        self._ser.write((cmd + "\r").encode("ascii"))
-        raw = self._ser.read_until(b"OK\r")
+        # pyserial wirft bei einem ungueltig gewordenen Port-Handle (z.B. nach
+        # Windows-Standby/Wakeup: "ClearCommError failed" o.ae.) ein rohes
+        # SerialException/OSError statt eines PowerSupplyError -- ohne diesen
+        # Fang wuerde device_worker.py (faengt nur PowerSupplyError) das
+        # Geraet weiterhin als verbunden fuehren, obwohl die Verbindung tot ist.
+        try:
+            self._ser.reset_input_buffer()
+            self._ser.write((cmd + "\r").encode("ascii"))
+            raw = self._ser.read_until(b"OK\r")
+        except (serial.SerialException, OSError) as exc:
+            raise PowerSupplyError(f"Kommunikationsfehler auf Port {self._ser.port}: {exc}") from exc
         if not raw.endswith(b"OK\r"):
             raise PowerSupplyError(
                 f"Keine/unklare Antwort auf {cmd!r} (Timeout): {raw!r}"
@@ -156,10 +164,43 @@ class HCS34xx:
                 f"Spannung {volts}V unterschreitet das Minimum von {MIN_VOLTAGE}V "
                 "(Geraet nimmt Werte darunter kommentarlos nicht an)."
             )
-        self._query("VOLT" + self._encode_field(volts, 3, 10))
+        try:
+            self._query("VOLT" + self._encode_field(volts, 3, 10))
+        except PowerSupplyError:
+            if self._probe_alive():
+                raise PowerSupplyValueError(
+                    f"Spannung {volts}V wurde vom Geraet nicht angenommen "
+                    "(vermutlich ueber der aktuell eingestellten OVP-Schwelle)."
+                )
+            raise
 
     def set_current(self, amps: float) -> None:
-        self._query("CURR" + self._encode_field(amps, 3, 10))
+        try:
+            self._query("CURR" + self._encode_field(amps, 3, 10))
+        except PowerSupplyError:
+            if self._probe_alive():
+                raise PowerSupplyValueError(
+                    f"Strom {amps}A wurde vom Geraet nicht angenommen "
+                    "(vermutlich ueber der aktuell eingestellten OCP-Schwelle)."
+                )
+            raise
+
+    def _probe_alive(self) -> bool:
+        """Lebenszeichen-Abfrage nach einem Timeout auf VOLT/CURR.
+
+        Das Geraet ignoriert Sollwerte oberhalb der aktuell eingestellten
+        OVP/OCP-Schwelle kommentarlos (keine Antwort, kein OK) -- genauso wie
+        Werte unter MIN_VOLTAGE (siehe Modul-Docstring). Anders als bei
+        MIN_VOLTAGE laesst sich das hier nicht statisch vorab pruefen, da OVP/
+        OCP zur Laufzeit (auch manuell am Geraet) veraendert werden koennen.
+        Antwortet das Geraet auf eine harmlose GET-Abfrage noch, war der
+        vorige Timeout ein abgelehnter Wert und kein Verbindungsabbruch.
+        """
+        try:
+            self.get_display()
+            return True
+        except PowerSupplyError:
+            return False
 
     def get_setpoint(self) -> tuple[float, float]:
         """Aktuell voreingestellte Spannung/Strom (V, A)."""

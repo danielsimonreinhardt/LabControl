@@ -9,6 +9,7 @@ import json
 
 from PySide6.QtCore import QObject, Signal
 
+from i18n import DEFAULT_LANGUAGE
 from paths import app_dir
 
 SETTINGS_PATH = app_dir() / "settings.json"
@@ -17,6 +18,7 @@ SETTINGS_PATH = app_dir() / "settings.json"
 class Settings(QObject):
     simulation_mode_changed = Signal(bool)
     dark_mode_changed = Signal(bool)
+    language_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -56,3 +58,14 @@ class Settings(QObject):
         self._data["dark_mode"] = enabled
         self._save()
         self.dark_mode_changed.emit(enabled)
+
+    @property
+    def language(self) -> str:
+        return str(self._data.get("language", DEFAULT_LANGUAGE))
+
+    def set_language(self, language: str) -> None:
+        if language == self.language:
+            return
+        self._data["language"] = language
+        self._save()
+        self.language_changed.emit(language)
