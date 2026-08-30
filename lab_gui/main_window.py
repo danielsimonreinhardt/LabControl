@@ -9,6 +9,8 @@ from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
 from i18n import Translator, tr
+from recording import Recorder
+from recording_tab import RecordingTab
 from settings import Settings
 from settings_tab import SettingsTab
 from testcase_model import kind_label
@@ -42,10 +44,12 @@ class MainWindow(QMainWindow):
         self.control_tab = ControlTab()
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
+        self.recording_tab = RecordingTab()
         self.settings_tab = SettingsTab()
         self.tabs.addTab(self.control_tab, "")
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
+        self.tabs.addTab(self.recording_tab, "")
         self.tabs.addTab(self.settings_tab, "")
         layout.addWidget(self.tabs)
 
@@ -62,11 +66,13 @@ class MainWindow(QMainWindow):
 
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
+        self._recorder = Recorder()
 
         self._setup_worker()
         self._wire_registry()
         self._wire_control_tab()
         self._wire_testcase_tab()
+        self._wire_recording_tab()
         self._wire_settings_tab()
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -77,7 +83,8 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, tr("Steuerung"))
         self.tabs.setTabText(1, tr("Testablauf"))
         self.tabs.setTabText(2, tr("Verlauf"))
-        self.tabs.setTabText(3, tr("Einstellungen"))
+        self.tabs.setTabText(3, tr("Aufzeichnung"))
+        self.tabs.setTabText(4, tr("Einstellungen"))
         for device_id in self._status_labels:
             self._render_status_label(device_id)
 
@@ -94,6 +101,8 @@ class MainWindow(QMainWindow):
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.load_measurement.connect(self.timeline_tab.update_load)
         self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
+        self._worker.load_measurement.connect(self._recorder.on_load_measurement)
+        self._worker.psu_measurement.connect(self._recorder.on_psu_measurement)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
@@ -106,12 +115,15 @@ class MainWindow(QMainWindow):
         self._registry.device_known.connect(self.control_tab.on_device_known)
         self._registry.device_known.connect(self.testcase_tab.on_device_known)
         self._registry.device_known.connect(self.timeline_tab.on_device_known)
+        self._registry.device_known.connect(self.recording_tab.on_device_known)
+        self._registry.device_known.connect(self._recorder.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
 
         self._registry.label_changed.connect(self.dashboard.on_label_changed)
         self._registry.label_changed.connect(self.control_tab.on_label_changed)
         self._registry.label_changed.connect(self.testcase_tab.on_label_changed)
         self._registry.label_changed.connect(self.timeline_tab.on_label_changed)
+        self._registry.label_changed.connect(self._recorder.on_label_changed)
         self._registry.label_changed.connect(self._on_label_changed_status)
 
         self.dashboard.rename_requested.connect(self._registry.rename)
@@ -130,6 +142,36 @@ class MainWindow(QMainWindow):
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
+
+    def _wire_recording_tab(self) -> None:
+        self.recording_tab.start_requested.connect(self._recorder.start)
+        self.recording_tab.stop_requested.connect(self._recorder.stop)
+        self.recording_tab.clear_requested.connect(self._recorder.clear)
+        self._recorder.recording_changed.connect(self.recording_tab.on_recording_changed)
+        self._recorder.stats_changed.connect(self.recording_tab.on_stats_changed)
+        self.recording_tab.export_csv_to.connect(self._on_export_csv)
+        self.recording_tab.export_mf4_to.connect(self._on_export_mf4)
+
+    def _on_export_csv(self, path) -> None:
+        try:
+            self._recorder.export_csv(path)
+        except OSError as exc:
+            self.recording_tab.show_export_error(str(exc))
+            return
+        self.recording_tab.show_export_success(path)
+
+    def _on_export_mf4(self, path) -> None:
+        try:
+            self._recorder.export_mf4(path)
+        except ImportError:
+            self.recording_tab.show_export_error(
+                tr("MF4-Export benötigt das Paket 'asammdf' (siehe requirements.txt).")
+            )
+            return
+        except (OSError, ValueError) as exc:
+            self.recording_tab.show_export_error(str(exc))
+            return
+        self.recording_tab.show_export_success(path)
 
     def _wire_settings_tab(self) -> None:
         self.settings_tab.set_simulation_mode(self._settings.simulation_mode)

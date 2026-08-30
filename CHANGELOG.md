@@ -4,6 +4,27 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [0.3.0]
+
+### Hinzugefügt
+- **Neuer „Aufzeichnung“-Tab**: Start/Stop-Messwert-Logging für alle bekannten
+  Geräte (Zeitstempel, Geräte-ID, Kanal, Wert), unabhängig vom Timeline-Tab
+  und ohne dessen 30-Minuten-Ringpuffer-Deckelung. Neues Modul
+  `lab_gui/recording.py` (`Recorder`) hängt sich dafür — analog zum
+  Timeline-Tab — direkt an `DeviceWorker.load_measurement`/`psu_measurement`,
+  sammelt aber nur, während eine Aufnahme aktiv ist.
+- **Export als CSV und MF4** (`lab_gui/recording_export.py`): CSV im
+  Long-Format (eine Zeile je Messwert), MF4 (ASAM MDF4, über die neue
+  Abhängigkeit `asammdf`) mit einem Signal je Gerät+Kanal und eigenem
+  Zeitvektor — beides ohne Resampling, auch bei unregelmäßig eintreffenden
+  Messwerten (z.B. nach einem kurzen Verbindungsabbruch) verlustfrei. Export
+  ist auch bei laufender Aufnahme möglich (liefert den Zwischenstand). Fehlt
+  `asammdf`, bleibt der CSV-Export unabhängig davon nutzbar; der MF4-Export
+  meldet den fehlenden Import als normale Fehlermeldung statt abzustürzen.
+
+### Geändert
+- Version auf 0.3.0 angehoben.
+
 ## [0.2.1]
 
 ### Hinzugefügt
