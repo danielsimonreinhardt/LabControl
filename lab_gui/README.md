@@ -64,6 +64,17 @@ statt die .exe zu versionieren.
     Messung bewusst fehlschlagen, statt mit einem stehengebliebenen Wert
     weiterzurechnen. While-Schleifen haben eine einstellbare
     Endlosschleifen-Bremse ("Max. Durchläufe").
+  - **Pass/Fail-Grenzwerte** (Spalte „Prüfung“, `check_dialog.py`): jeder
+    Aktionsschritt kann optional einen erwarteten Bereich [Min, Max] einer
+    Messgröße (Spannung/Strom/Leistung des Schritt-Geräts) bekommen. Nach
+    Ablauf der Wartezeit (bzw. nach dem Signalende eines Arbiträrsignals)
+    bewertet der Runner die **erste danach eintreffende** Messung — nicht den
+    bis zu 500 ms alten Cache-Stand — und färbt die Zeile dauerhaft grün/rot
+    (in Schleifen „sticky“: einmal rot bleibt rot); der Messwert steht als
+    Tooltip an der Prüfzelle. Pro Schritt wählbar bricht eine Verletzung den
+    Lauf ab (wie ein Gerätefehler) oder der Test läuft durch und die
+    Statuszeile meldet am Ende „BESTANDEN“/„NICHT bestanden“ mit Zähler.
+    Bleibt die Messung aus (Gerät tot/getrennt), schlägt der Schritt fehl.
   - Testablauf-Dateien liegen seit v0.4.0 im Format v2 vor (JSON-Objekt mit
     `version`-Feld statt eines nackten Arrays); ältere v1-Dateien werden
     weiterhin geladen, v2-Dateien lassen sich aber nicht mit älteren

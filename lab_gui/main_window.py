@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
         self._worker.psu_measurement.connect(self._test_runner.on_psu_measurement)
         self._worker.device_removed.connect(self._test_runner.on_device_removed)
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
+        self._test_runner.step_result.connect(self.testcase_tab.on_step_result)
         self._test_runner.step_failed.connect(self.testcase_tab.on_step_failed)
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)

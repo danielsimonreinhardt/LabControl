@@ -3,7 +3,6 @@
   "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\nelektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\nangeschlossene Hardware zu testen.": "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\nelektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\nangeschlossene Hardware zu testen.",
   "Dark Mode (Amber Industrial statt Modern Light)": "Dark Mode (Amber Industrial statt Modern Light)",
   "Sprache:": "Sprache:",
-
   "Elektronische Last (KEL102)": "Elektronische Last (KEL102)",
   "Modus:": "Modus:",
   "Sollwert:": "Sollwert:",
@@ -24,7 +23,6 @@
   "Konstantwiderstand (CR)": "Konstantwiderstand (CR)",
   "Konstantleistung (CW)": "Konstantleistung (CW)",
   "Kurzschluss (SHORT)": "Kurzschluss (SHORT)",
-
   "Gerät umbenennen": "Gerät umbenennen",
   "Name:": "Name:",
   "Dashboard": "Dashboard",
@@ -34,7 +32,6 @@
   "Modus": "Modus",
   "Elektronische Last": "Elektronische Last",
   "Labornetzteil": "Labornetzteil",
-
   "Arbiträrsignal definieren": "Arbiträrsignal definieren",
   "Signalform:": "Signalform:",
   "Zielgröße:": "Zielgröße:",
@@ -49,7 +46,6 @@
   "Spitzenwert ({peak:g}{unit}) liegt über der aktuellen {label}-Schwelle ({threshold:g}{unit}) -- diese Samples werden vom Netzteil kommentarlos abgelehnt und brechen den Testschritt ab.": "Spitzenwert ({peak:g}{unit}) liegt über der aktuellen {label}-Schwelle ({threshold:g}{unit}) -- diese Samples werden vom Netzteil kommentarlos abgelehnt und brechen den Testschritt ab.",
   "Sinus": "Sinus",
   "Rechteck": "Rechteck",
-
   "Ausgang EIN": "Ausgang EIN",
   "Ausgang AUS": "Ausgang AUS",
   "Arbiträrsignal": "Arbiträrsignal",
@@ -60,7 +56,6 @@
   "Preset P3 abrufen": "Preset P3 abrufen",
   "Last": "Last",
   "Netzteil": "Netzteil",
-
   "Gerät": "Gerät",
   "Aktion": "Aktion",
   "Wert": "Wert",
@@ -88,7 +83,6 @@
   "(Durchlauf {i})": "(Durchlauf {i})",
   "{shape} auf {target}, {offset:g}±{amplitude:g}, {frequency:g} Hz, {duration:g} s": "{shape} auf {target}, {offset:g}±{amplitude:g}, {frequency:g} Hz, {duration:g} s",
   "Fehler bei Schritt {index}/{total}: {message} — mit Stop quittieren": "Fehler bei Schritt {index}/{total}: {message} — mit Stop quittieren",
-
   "Aktionsschritt": "Aktionsschritt",
   "Schleife (n×) … Ende": "Schleife (n×) … Ende",
   "Solange … Ende": "Solange … Ende",
@@ -113,9 +107,6 @@
   "seit Teststart": "seit Teststart",
   "{device}: {field} {op} {value:g} {unit}": "{device}: {field} {op} {value:g} {unit}",
   "Zeit {ref} {op} {value:g} s": "Zeit {ref} {op} {value:g} s",
-  "Spannung": "Spannung",
-  "Strom": "Strom",
-  "Leistung": "Leistung",
   "Messwert": "Messwert",
   "Zeit": "Zeit",
   "Variable": "Variable",
@@ -142,7 +133,6 @@
   "Testablauf laden": "Testablauf laden",
   "Fehler beim Laden": "Fehler beim Laden",
   "{value:g} liegt über der aktuellen {limit_label}-Schwelle ({threshold:g}) -- wird vom Netzteil kommentarlos abgelehnt.": "{value:g} liegt über der aktuellen {limit_label}-Schwelle ({threshold:g}) -- wird vom Netzteil kommentarlos abgelehnt.",
-
   "Kein Signal zugeordnet": "Kein Signal zugeordnet",
   "jetzt": "jetzt",
   "Signal aus Diagramm entfernen": "Signal aus Diagramm entfernen",
@@ -156,7 +146,6 @@
   "Aufzeichnung zurücksetzen": "Aufzeichnung zurücksetzen",
   "Diagramm hinzufügen": "Diagramm hinzufügen",
   "Pause": "Pause",
-
   "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\nAufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand).": "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\nAufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand).",
   "Aufnahme starten": "Aufnahme starten",
   "Aufnahme stoppen": "Aufnahme stoppen",
@@ -174,7 +163,6 @@
   "Fehler beim Export": "Fehler beim Export",
   "Exportiert nach {name}": "Exportiert nach {name}",
   "MF4-Export benötigt das Paket 'asammdf' (siehe requirements.txt).": "MF4-Export benötigt das Paket 'asammdf' (siehe requirements.txt).",
-
   "Steuerung": "Steuerung",
   "Testablauf": "Testablauf",
   "Verlauf": "Verlauf",
@@ -183,5 +171,22 @@
   "verbunden": "verbunden",
   "getrennt": "getrennt",
   "Kein Gerät des Typs '{label}' verbunden": "Kein Gerät des Typs '{label}' verbunden",
-  "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen"
+  "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
+  "Prüfung": "Prüfung",
+  "Prüfung…": "Prüfung…",
+  "Prüfung definieren": "Prüfung definieren",
+  "Prüfung aktiv": "Prüfung aktiv",
+  "Minimum:": "Minimum:",
+  "Maximum:": "Maximum:",
+  "Bei Verletzung abbrechen": "Bei Verletzung abbrechen",
+  "Minimum ist größer als Maximum.": "Minimum ist größer als Maximum.",
+  "Keine Prüfung": "Keine Prüfung",
+  "(Abbruch)": "(Abbruch)",
+  "Gemessen: {value:g}": "Gemessen: {value:g}",
+  "Messwert {value:g} {unit} außerhalb {lo:g}–{hi:g} {unit}": "Messwert {value:g} {unit} außerhalb {lo:g}–{hi:g} {unit}",
+  "Unbekannte Messgröße '{field}'": "Unbekannte Messgröße '{field}'",
+  "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.": "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.",
+  "Fertig – BESTANDEN ({total} Prüfungen)": "Fertig – BESTANDEN ({total} Prüfungen)",
+  "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)": "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)",
+  "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen"
 }

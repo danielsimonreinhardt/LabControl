@@ -4,6 +4,37 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [0.5.0]
+
+### Hinzugefügt
+- **Pass/Fail-Grenzwerte pro Testschritt**: Jeder Aktionsschritt kann optional
+  einen erwarteten Wertebereich für eine Messgröße (Spannung/Strom/Leistung
+  des Schritt-Geräts) bekommen, z.B. „Spannung muss 11,8–12,2 V sein". Neue
+  Spalte „Prüfung" im Testcase-Editor mit Kurzzusammenfassung („U: 11.8–12.2 V")
+  und Dialog (`lab_gui/check_dialog.py`, analog zum Bedingungs-Dialog; sperrt
+  OK bei Minimum > Maximum). Der Runner bewertet **die erste Messung nach
+  Ablauf der Wartezeit** des Schritts (bzw. nach dem Signalende eines
+  Arbiträrsignal-Schritts) — bewusst nicht den bis zu 500 ms alten
+  Cache-Stand, der bei kurzer Wartezeit noch von vor dem Sollwert stammen
+  könnte. Bleibt die Messung aus (Gerät tot/getrennt), schlägt der Schritt
+  fehl (fail-fast wie bei Bedingungen).
+- Ergebnisanzeige: bestandene Schritte werden dauerhaft grün, fehlgeschlagene
+  rot markiert (in Schleifen „sticky": einmal rot bleibt rot); der Messwert
+  steht als Tooltip an der Prüfzelle. Die Statuszeile zeigt am Ende
+  „Fertig – BESTANDEN (n Prüfungen)" bzw. „Fertig – NICHT bestanden (k/n
+  Prüfungen fehlgeschlagen)"; die Farben bleiben zur Inspektion stehen, bis
+  der nächste Lauf startet. Pro Schritt wählbar: „Bei Verletzung abbrechen"
+  stoppt den Lauf sofort wie ein Gerätefehler (Quittieren über Stop),
+  ansonsten läuft der Test durch und sammelt alle Ergebnisse.
+- Deaktivierte Schritte werden weiterhin übersprungen und zählen nicht als
+  Prüfung; die Prüfungszähler zählen jede Ausführung (ein Prüfschritt in
+  einer 10er-Schleife = 10 Prüfungen).
+
+### Geändert
+- Version auf 0.5.0 angehoben. Testablauf-Dateiformat bleibt v2; Dateien ohne
+  Prüfungen sind unverändert kompatibel, die neuen `check_*`-Felder werden
+  beim Laden älterer Dateien mit Defaults aufgefüllt.
+
 ## [0.4.0]
 
 ### Hinzugefügt

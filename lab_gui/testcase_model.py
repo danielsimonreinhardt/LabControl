@@ -123,6 +123,13 @@ COND_TIME_REFS = ("block", "run")
 COND_FIELD_UNITS = {"voltage": "V", "current": "A", "power": "W"}
 COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
 
+# Kurzsymbole fuer die kompakte Pruefungs-Zusammenfassung in der
+# Testcase-Tabelle (siehe check_summary()) -- sprachunabhaengig, daher nicht
+# uebersetzt. Die Messgroessen selbst sind dieselben wie bei Bedingungen
+# (COND_FIELDS); die Leistung wird beim Netzteil aus U*I berechnet (siehe
+# testcase_runner.on_psu_measurement).
+CHECK_FIELD_SYMBOLS = {"voltage": "U", "current": "I", "power": "P"}
+
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
 # war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
 FILE_FORMAT_VERSION = 2
@@ -172,6 +179,16 @@ class TestStep:
     cond_value: float = 0.0
     cond_time_ref: str = "block"       # "block" (seit Blockstart) | "run" (seit Teststart)
     cond_var: str = ""                 # Variablenname bei cond_source=="variable"
+
+    # -- Pass/Fail-Pruefung (optional, nur Aktionsschritte) ---------------
+    # Nach Ablauf der Wartezeit (bzw. nach dem Signalende bei ARB-Schritten)
+    # wird die erste danach eintreffende Messung des Schritt-Geraets gegen
+    # [check_min, check_max] geprueft (siehe testcase_runner._finish_step).
+    check_enabled: bool = False
+    check_field: str = "voltage"  # "voltage" | "current" | "power" (siehe COND_FIELDS)
+    check_min: float = 0.0
+    check_max: float = 0.0
+    check_abort: bool = False     # True = Lauf bei Verletzung abbrechen (wie Geraetefehler)
 
 
 def arb_value(step: "TestStep", t: float) -> float:
@@ -302,6 +319,20 @@ def condition_summary(step: TestStep) -> str:
     if step.cond_source == "variable":
         return f"{step.cond_var or '?'} {op} {step.cond_value:g}"
     return ""
+
+
+def check_summary(step: TestStep) -> str:
+    """Anzeigetext einer Pass/Fail-Pruefung, z.B. "U: 11.8–12.2 V".
+
+    Leer, wenn keine Pruefung aktiv ist. Bewusst sprachunabhaengig
+    (Kurzsymbol + Einheit statt uebersetzter Messgroessen-Namen), damit die
+    schmale Tabellenspalte nicht ueberlaeuft.
+    """
+    if not step.check_enabled:
+        return ""
+    symbol = CHECK_FIELD_SYMBOLS.get(step.check_field, step.check_field)
+    unit = COND_FIELD_UNITS.get(step.check_field, "")
+    return f"{symbol}: {step.check_min:g}–{step.check_max:g} {unit}".rstrip()
 
 
 def save_steps(steps: list[TestStep], path: Path) -> None:
