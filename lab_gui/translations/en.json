@@ -188,5 +188,21 @@
   "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.": "For arbitrary-signal steps the value is measured after the signal ends.",
   "Fertig – BESTANDEN ({total} Prüfungen)": "Finished – PASSED ({total} checks)",
   "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)": "Finished – FAILED ({failed}/{total} checks failed)",
-  "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Multiple devices of type '{kind}' connected -- please select the target device in the test case row"
+  "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Multiple devices of type '{kind}' connected -- please select the target device in the test case row",
+  "Globale Grenzwerte (Sicherheitsabschaltung)": "Global limits (safety shutdown)",
+  "Bei Überschreitung werden alle Ausgänge sofort abgeschaltet (Netzteil: Strom auf 0 A).": "If exceeded, all outputs are switched off immediately (power supply: current set to 0 A).",
+  "max. Spannung": "max. voltage",
+  "max. Strom": "max. current",
+  "max. Leistung": "max. power",
+  "ALLE AUS": "ALL OFF",
+  "Alle Ausgänge sofort abschalten": "Switch off all outputs immediately",
+  "Quittieren": "Acknowledge",
+  "Sicherheit:": "Safety:",
+  "AKTIV": "ARMED",
+  "AUSGELÖST": "TRIPPED",
+  "Grenzwert überschritten: {device_id} {measure} = {measured:.3g} {unit} > {limit:.3g} {unit}": "Limit exceeded: {device_id} {measure} = {measured:.3g} {unit} > {limit:.3g} {unit}",
+  "Messwerte veraltet für Gerät '{device_id}'": "Stale measurements for device '{device_id}'",
+  "Gerät '{device_id}' während des Testlaufs getrennt": "Device '{device_id}' disconnected during the test run",
+  "Testlauf gesperrt: Sicherheitsabschaltung zuerst quittieren": "Test run blocked: acknowledge the safety shutdown first",
+  "Sicherheitsabschaltung bei folgenden Geräten fehlgeschlagen: {failures}": "Safety shutdown failed for the following devices: {failures}"
 }

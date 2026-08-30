@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -118,11 +119,22 @@ class _DevicePanel(QGroupBox):
 
 class DashboardWidget(QGroupBox):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    all_off_requested = Signal()  # Panic-Button: alle Ausgaenge sofort aus
 
     def __init__(self) -> None:
         super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
+
+        header = QHBoxLayout()
+        header.addStretch()
+        self._all_off_button = QPushButton()
+        self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
+        self._all_off_button.clicked.connect(self.all_off_requested)
+        header.addWidget(self._all_off_button)
+        outer.addLayout(header)
+        ThemeManager.instance().changed.connect(self._style_all_off_button)
+        self._style_all_off_button(current_palette())
 
         self._container = QWidget()
         self._panel_layout = QHBoxLayout(self._container)
@@ -144,6 +156,15 @@ class DashboardWidget(QGroupBox):
 
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
+        self._all_off_button.setText(tr("ALLE AUS"))
+        self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
+
+    def _style_all_off_button(self, palette: Palette | None = None) -> None:
+        pal = palette if palette is not None else current_palette()
+        self._all_off_button.setStyleSheet(
+            f"background-color: {pal.danger}; color: #ffffff; font-weight: bold; "
+            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: 5px 12px;"
+        )
 
     def _update_scroll_height(self) -> None:
         # Die Panel-Hoehe ergibt sich aus dem tatsaechlichen Inhalt (Schrift,

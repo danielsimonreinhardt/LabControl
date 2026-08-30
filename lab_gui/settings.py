@@ -1,16 +1,19 @@
-"""Persistente App-Einstellungen (aktuell: Simulationsmodus fuer Debugging ohne Hardware).
+"""Persistente App-Einstellungen (Simulationsmodus, Dark Mode, Sprache,
+globale Sicherheits-Grenzwerte).
 
 Analog zu device_registry.py lokal als JSON-Datei gespeichert, damit die
 Einstellung Neustarts uebersteht.
 """
 from __future__ import annotations
 
+import copy
 import json
 
 from PySide6.QtCore import QObject, Signal
 
 from i18n import DEFAULT_LANGUAGE
 from paths import app_dir
+from safety import default_safety_limits
 
 SETTINGS_PATH = app_dir() / "settings.json"
 
@@ -19,6 +22,7 @@ class Settings(QObject):
     simulation_mode_changed = Signal(bool)
     dark_mode_changed = Signal(bool)
     language_changed = Signal(str)
+    safety_limits_changed = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -69,3 +73,41 @@ class Settings(QObject):
         self._data["language"] = language
         self._save()
         self.language_changed.emit(language)
+
+    @property
+    def safety_limits(self) -> dict:
+        """Globale Sicherheits-Grenzwerte je Geraeteart (siehe safety.py).
+
+        Deep-Merge des gespeicherten Stands ueber die Defaults, damit
+        fehlende/kaputte Eintraege (aeltere settings.json, von Hand editiert)
+        auf einen gueltigen Default zurueckfallen statt einen KeyError beim
+        Zugriff ueber safety.SAFETY_LIMIT_FIELDS auszuloesen.
+        """
+        merged = default_safety_limits()
+        stored = self._data.get("safety_limits")
+        if isinstance(stored, dict):
+            for kind, fields in stored.items():
+                if kind not in merged or not isinstance(fields, dict):
+                    continue
+                for field, entry in fields.items():
+                    if field not in merged[kind] or not isinstance(entry, dict):
+                        continue
+                    if "enabled" in entry:
+                        merged[kind][field]["enabled"] = bool(entry["enabled"])
+                    if "value" in entry:
+                        try:
+                            merged[kind][field]["value"] = float(entry["value"])
+                        except (TypeError, ValueError):
+                            pass
+        return merged
+
+    def set_safety_limit(self, kind: str, field: str, enabled: bool, value: float) -> None:
+        current = self.safety_limits
+        if kind not in current or field not in current[kind]:
+            return
+        if current[kind][field]["enabled"] == enabled and current[kind][field]["value"] == value:
+            return
+        current[kind][field] = {"enabled": enabled, "value": value}
+        self._data["safety_limits"] = current
+        self._save()
+        self.safety_limits_changed.emit(copy.deepcopy(current))

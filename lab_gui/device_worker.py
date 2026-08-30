@@ -12,6 +12,7 @@ Slots referenziert wird.
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Callable
 
@@ -21,6 +22,8 @@ from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
+
+logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_MS = 500
 RECONNECT_INTERVAL_MS = 3000
@@ -63,6 +66,7 @@ class DeviceWorker(QObject):
     load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
     action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
+    all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
     def __init__(self, simulation_mode: bool = False) -> None:
         super().__init__()
@@ -152,6 +156,7 @@ class DeviceWorker(QObject):
                     candidate.close()
                 continue
             self._loads[device_id] = candidate
+            logger.info("Last verbunden: %s", device_id)
             self.device_added.emit("load", device_id)
             self.load_connected.emit(device_id, True)
             # Sofort abfragen statt auf den naechsten Poll-Zyklus zu warten
@@ -176,6 +181,7 @@ class DeviceWorker(QObject):
                     candidate.close()
                 continue
             self._psus[device_id] = candidate
+            logger.info("Netzteil verbunden: %s", device_id)
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
             self._emit_psu_limits(device_id)
@@ -207,7 +213,8 @@ class DeviceWorker(QObject):
                 m = load.measure()
                 self.load_measurement.emit(device_id, m.voltage, m.current, m.power)
                 self.load_input_state.emit(device_id, load.get_input())
-            except LoadError:
+            except LoadError as exc:
+                logger.warning("Last %s getrennt: %s", device_id, exc)
                 load.close()
                 del self._loads[device_id]
                 self.load_connected.emit(device_id, False)
@@ -217,7 +224,8 @@ class DeviceWorker(QObject):
             try:
                 d = psu.get_display()
                 self.psu_measurement.emit(device_id, d.voltage, d.current, d.constant_current)
-            except PowerSupplyError:
+            except PowerSupplyError as exc:
+                logger.warning("Netzteil %s getrennt: %s", device_id, exc)
                 psu.close()
                 del self._psus[device_id]
                 self.psu_connected.emit(device_id, False)
@@ -255,6 +263,79 @@ class DeviceWorker(QObject):
             self.psu_connected.emit(device_id, False)
             self.device_removed.emit("psu", device_id)
             return False, str(exc)
+
+    # -- Sicherheitsabschaltung (Watchdog, siehe safety.py) -------------------
+
+    @Slot(str)
+    def all_outputs_off(self, reason: str) -> None:
+        """Schaltet ALLE bekannten Geraete sofort ab, unabhaengig von einem
+        laufenden Testablauf.
+
+        Last: echtes Ausgang-AUS (set_input(False)). Netzteil: kein
+        Ausgang-Kommando vorhanden (siehe hcs34xx/README.md) -- Emulation
+        ueber Stromsollwert 0A (dieselbe PSU_OUT_OFF-Konvention wie im
+        Testablauf, siehe _dispatch_action).
+
+        Ein haengendes/fehlerhaftes Geraet darf die anderen nicht blockieren:
+        jedes Geraet bekommt einen Versuch + einen Retry, danach wird es wie
+        bei einem normalen Verbindungsabbruch fallengelassen und mit dem
+        naechsten weitergemacht -- kein except darf diese Schleife verlassen.
+        """
+        logger.info("ALL OFF angefordert (reason=%s)", reason)
+        failures: list[str] = []
+        for device_id, load in list(self._loads.items()):
+            try:
+                if not self._kill_load(device_id, load):
+                    failures.append(device_id)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei Last %s", device_id)
+                failures.append(device_id)
+        for device_id, psu in list(self._psus.items()):
+            try:
+                if not self._kill_psu(device_id, psu):
+                    failures.append(device_id)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei Netzteil %s", device_id)
+                failures.append(device_id)
+        self.all_off_finished.emit(";".join(failures))
+
+    def _kill_load(self, device_id: str, load: KoradKEL102) -> bool:
+        for attempt in (1, 2):
+            try:
+                load.set_input(False)
+                logger.info("ALL OFF: Last %s -> Ausgang AUS", device_id)
+                return True
+            except LoadError as exc:
+                if attempt == 1:
+                    continue
+                logger.error("ALL OFF: Last %s nicht erreichbar: %s", device_id, exc)
+                load.close()
+                del self._loads[device_id]
+                self.load_connected.emit(device_id, False)
+                self.device_removed.emit("load", device_id)
+                return False
+        return False
+
+    def _kill_psu(self, device_id: str, psu: HCS34xx) -> bool:
+        for attempt in (1, 2):
+            try:
+                psu.set_current(0.0)
+                logger.info("ALL OFF: Netzteil %s -> Strom 0A", device_id)
+                return True
+            except PowerSupplyValueError as exc:
+                # Wert abgelehnt, keine Verbindungsstoerung -- Retry hilft nicht.
+                logger.error("ALL OFF: Netzteil %s lehnte Strom 0A ab: %s", device_id, exc)
+                return False
+            except PowerSupplyError as exc:
+                if attempt == 1:
+                    continue
+                logger.error("ALL OFF: Netzteil %s nicht erreichbar: %s", device_id, exc)
+                psu.close()
+                del self._psus[device_id]
+                self.psu_connected.emit(device_id, False)
+                self.device_removed.emit("psu", device_id)
+                return False
+        return False
 
     # -- Last: Steuerbefehle ------------------------------------------------
 

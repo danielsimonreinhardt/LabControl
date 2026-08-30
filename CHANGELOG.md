@@ -4,6 +4,33 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [0.6.0]
+
+### Hinzugefügt
+- **Software-Watchdog / Sicherheitsabbruch**: schrittunabhängige, geräteartweite
+  Grenzwerte (max. Spannung/Strom/Leistung je für Lasten und Netzteile,
+  neuer Reiter-Abschnitt „Globale Grenzwerte" in den Einstellungen). Wird ein
+  aktivierter Grenzwert überschritten, schalten **alle** Ausgänge sofort ab
+  (Last: Ausgang AUS, Netzteil: Strom auf 0 A) — unabhängig davon, ob und
+  welcher Testschritt gerade läuft (`lab_gui/safety.py`,
+  `DeviceWorker.all_outputs_off`). Der Auslöser ist latchend: ein rotes
+  Banner mit Grund bleibt stehen, bis er über „Quittieren" bestätigt wird;
+  bis dahin ist ein Testlauf-Start gesperrt. Ein Statusleisten-Indikator
+  zeigt „Sicherheit: AUS/AKTIV/AUSGELÖST".
+- Während eines laufenden Testablaufs überwacht der Watchdog zusätzlich die
+  beteiligten Geräte auf Verbindungsabbruch/veraltete Messwerte (2 s
+  Toleranz, wie `testcase_runner.MEASUREMENT_STALE_S`) und löst ebenfalls
+  aus — das deckt insbesondere unbeaufsichtigte Übernacht-Läufe ab, bei
+  denen ein Gerät die Verbindung verliert.
+- **Safe-Stop**: Stop-Button, ein fehlgeschlagener Testschritt und das
+  Schließen des Fensters schalten jetzt ebenfalls alle Ausgänge ab (bisher
+  blieb der zuletzt gesetzte Sollwert unbegrenzt aktiv). Zusätzlich ein
+  manueller „ALLE AUS"-Panic-Button im Dashboard-Header.
+- **Datei-Logging** (`lab_gui/app_logging.py`, `labdash.log` neben der .exe/
+  dem Skript, rotierend): Verbindungs-Ereignisse, Sicherheitsabbrüche und
+  Abschaltversuche sind damit auch bei der `--windowed`-.exe im Nachhinein
+  nachvollziehbar.
+
 ## [0.5.0]
 
 ### Hinzugefügt

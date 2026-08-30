@@ -188,5 +188,21 @@
   "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.": "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.",
   "Fertig – BESTANDEN ({total} Prüfungen)": "Fertig – BESTANDEN ({total} Prüfungen)",
   "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)": "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)",
-  "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen"
+  "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
+  "Globale Grenzwerte (Sicherheitsabschaltung)": "Globale Grenzwerte (Sicherheitsabschaltung)",
+  "Bei Überschreitung werden alle Ausgänge sofort abgeschaltet (Netzteil: Strom auf 0 A).": "Bei Überschreitung werden alle Ausgänge sofort abgeschaltet (Netzteil: Strom auf 0 A).",
+  "max. Spannung": "max. Spannung",
+  "max. Strom": "max. Strom",
+  "max. Leistung": "max. Leistung",
+  "ALLE AUS": "ALLE AUS",
+  "Alle Ausgänge sofort abschalten": "Alle Ausgänge sofort abschalten",
+  "Quittieren": "Quittieren",
+  "Sicherheit:": "Sicherheit:",
+  "AKTIV": "AKTIV",
+  "AUSGELÖST": "AUSGELÖST",
+  "Grenzwert überschritten: {device_id} {measure} = {measured:.3g} {unit} > {limit:.3g} {unit}": "Grenzwert überschritten: {device_id} {measure} = {measured:.3g} {unit} > {limit:.3g} {unit}",
+  "Messwerte veraltet für Gerät '{device_id}'": "Messwerte veraltet für Gerät '{device_id}'",
+  "Gerät '{device_id}' während des Testlaufs getrennt": "Gerät '{device_id}' während des Testlaufs getrennt",
+  "Testlauf gesperrt: Sicherheitsabschaltung zuerst quittieren": "Testlauf gesperrt: Sicherheitsabschaltung zuerst quittieren",
+  "Sicherheitsabschaltung bei folgenden Geräten fehlgeschlagen: {failures}": "Sicherheitsabschaltung bei folgenden Geräten fehlgeschlagen: {failures}"
 }

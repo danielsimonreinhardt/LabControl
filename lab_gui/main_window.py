@@ -1,8 +1,18 @@
 """Hauptfenster: Dashboard (immer sichtbar) + Reiter (Control/Testcase) + Statusleiste."""
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal, Slot
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+import logging
+
+from PySide6.QtCore import QMetaObject, QThread, Q_ARG, Qt, Signal, Slot
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from control_tab import ControlTab
 from dashboard import DashboardWidget
@@ -11,14 +21,17 @@ from device_worker import DeviceWorker
 from i18n import Translator, tr
 from recording import Recorder
 from recording_tab import RecordingTab
+from safety import SafetyMonitor
 from settings import Settings
 from settings_tab import SettingsTab
-from testcase_model import kind_label
+from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
 from theme import Palette, ThemeManager
 from timeline_tab import TimelineTab
 from version import __version__
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -29,6 +42,12 @@ class MainWindow(QMainWindow):
     # Connection korrekt in den Worker-Thread gelangt.
     _dispatch_test_action = Signal(str, str, str, float)  # device_id, kind, action, value
 
+    # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
+    # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
+    # demselben Grund wie _dispatch_test_action (Queued Connection in den
+    # Worker-Thread).
+    _request_all_off = Signal(str)  # reason
+
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
         self.setWindowTitle(f"LAB CONTROL v{__version__}")
@@ -36,6 +55,19 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         layout = QVBoxLayout(central)
+
+        self._safety_banner = QWidget()
+        self._safety_banner.setObjectName("safetyBanner")
+        banner_layout = QHBoxLayout(self._safety_banner)
+        banner_layout.setContentsMargins(8, 4, 8, 4)
+        self._safety_banner_label = QLabel()
+        self._safety_banner_label.setWordWrap(True)
+        banner_layout.addWidget(self._safety_banner_label, 1)
+        self._safety_ack_button = QPushButton()
+        self._safety_ack_button.clicked.connect(self._on_safety_acknowledge)
+        banner_layout.addWidget(self._safety_ack_button)
+        self._safety_banner.hide()
+        layout.addWidget(self._safety_banner)
 
         self.dashboard = DashboardWidget()
         layout.addWidget(self.dashboard)
@@ -58,6 +90,8 @@ class MainWindow(QMainWindow):
         self._status_container = QWidget()
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
+        self._safety_status_label = QLabel()
+        self._status_layout.addWidget(self._safety_status_label)
         self.statusBar().addPermanentWidget(self._status_container)
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
@@ -67,16 +101,21 @@ class MainWindow(QMainWindow):
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
         self._recorder = Recorder()
+        self._safety = SafetyMonitor(self._settings.safety_limits)
 
         self._setup_worker()
+        self._wire_safety()
         self._wire_registry()
         self._wire_control_tab()
         self._wire_testcase_tab()
         self._wire_recording_tab()
         self._wire_settings_tab()
 
+        self.dashboard.all_off_requested.connect(lambda: self._safe_stop("manual all-off"))
+
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
+        self._style_safety_banner()
         self._retranslate()
 
     def _retranslate(self) -> None:
@@ -87,6 +126,8 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(4, tr("Einstellungen"))
         for device_id in self._status_labels:
             self._render_status_label(device_id)
+        self._safety_ack_button.setText(tr("Quittieren"))
+        self._render_safety_status(self._safety.current_state())
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
@@ -109,6 +150,60 @@ class MainWindow(QMainWindow):
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
+
+    def _wire_safety(self) -> None:
+        self._worker.load_measurement.connect(self._safety.on_load_measurement)
+        self._worker.psu_measurement.connect(self._safety.on_psu_measurement)
+        self._worker.device_removed.connect(self._safety.on_device_removed)
+        self._safety.all_off_requested.connect(self._worker.all_outputs_off)
+        self._request_all_off.connect(self._worker.all_outputs_off)
+        self._worker.all_off_finished.connect(self._on_all_off_finished)
+        self._settings.safety_limits_changed.connect(self._safety.set_limits)
+        self._safety.tripped.connect(self._on_safety_tripped)
+        self._safety.state_changed.connect(self._render_safety_status)
+
+    def _safe_stop(self, reason: str) -> None:
+        logger.warning("Safe-Stop ausgelöst: %s", reason)
+        self._request_all_off.emit(reason)
+
+    def _on_all_off_finished(self, failures: str) -> None:
+        if not failures:
+            return
+        logger.warning("ALL OFF: fehlgeschlagene Geräte: %s", failures)
+        self.statusBar().showMessage(
+            tr(
+                "Sicherheitsabschaltung bei folgenden Geräten fehlgeschlagen: {failures}",
+                failures=failures,
+            ),
+            10000,
+        )
+
+    # -- Sicherheits-Watchdog: Banner + Statusanzeige --------------------------
+
+    def _on_safety_tripped(self, device_id: str, reason: str) -> None:
+        self._test_runner.stop()
+        self._safety_banner_label.setText(reason)
+        self._safety_banner.show()
+
+    def _on_safety_acknowledge(self) -> None:
+        self._safety.acknowledge()
+        self._safety_banner.hide()
+
+    def _render_safety_status(self, state: str) -> None:
+        pal = ThemeManager.instance().palette
+        texts = {"off": tr("AUS"), "armed": tr("AKTIV"), "tripped": tr("AUSGELÖST")}
+        colors = {"off": pal.text_muted, "armed": pal.success, "tripped": pal.danger}
+        self._safety_status_label.setText(f"{tr('Sicherheit:')} {texts.get(state, state)}")
+        self._safety_status_label.setStyleSheet(
+            f"color: {colors.get(state, pal.text)}; font-weight: bold;"
+        )
+
+    def _style_safety_banner(self) -> None:
+        pal = ThemeManager.instance().palette
+        self._safety_banner.setStyleSheet(
+            f"#safetyBanner {{ background-color: {pal.danger}; border-radius: 4px; }}"
+        )
+        self._safety_banner_label.setStyleSheet("color: #ffffff; font-weight: bold;")
 
     def _wire_registry(self) -> None:
         self._registry.device_known.connect(self.dashboard.on_device_known)
@@ -186,6 +281,9 @@ class MainWindow(QMainWindow):
         self.settings_tab.language_selected.connect(self._settings.set_language)
         self._settings.language_changed.connect(Translator.instance().set_language)
 
+        self.settings_tab.set_safety_limits(self._settings.safety_limits)
+        self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
+
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()
         self._test_runner.execute_action.connect(self._on_test_execute_action)
@@ -201,15 +299,60 @@ class MainWindow(QMainWindow):
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
 
+        # Watchdog-Ueberwachung endet mit dem Testlauf (egal ob normal beendet,
+        # gestoppt oder fehlgeschlagen) -- sonst wuerde der Stale-Timer nach
+        # einem bewussten Stop noch nachtriggern.
+        self._test_runner.run_finished.connect(self._safety.end_run_supervision)
+        self._test_runner.run_stopped.connect(self._safety.end_run_supervision)
+        self._test_runner.step_failed.connect(lambda *_args: self._safety.end_run_supervision())
+
+        # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
+        # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen")
+        # schaltet sofort alle Ausgaenge ab, statt auf das manuelle Quittieren
+        # per Stop-Button zu warten (siehe testcase_tab.on_step_failed).
+        self._test_runner.step_failed.connect(
+            lambda _index, message: self._safe_stop(f"step failed: {message}")
+        )
+
         self.testcase_tab.run_requested.connect(self._on_run_requested)
         self.testcase_tab.stop_requested.connect(self._test_runner.stop)
+        self.testcase_tab.stop_requested.connect(lambda: self._safe_stop("stop button"))
 
     def _on_run_requested(self) -> None:
         steps = self.testcase_tab.steps()
         if not any(step.enabled and step.step_type == "action" for step in steps):
             return
+        if self._safety.is_tripped():
+            self.statusBar().showMessage(
+                tr("Testlauf gesperrt: Sicherheitsabschaltung zuerst quittieren"), 5000
+            )
+            return
         self.testcase_tab.on_run_started()
+        self._safety.begin_run_supervision(self._resolve_step_device_ids(steps))
         self._test_runner.start(steps)
+
+    def _resolve_step_device_ids(self, steps: list[TestStep]) -> set[str]:
+        """Ermittelt die an einem Testlauf beteiligten Geraete-IDs fuer die
+        Watchdog-Verbindungsueberwachung (siehe safety.begin_run_supervision).
+
+        Nicht aufloesbare Ziele (z.B. "automatisch" ohne aktuell verbundenes
+        Geraet dieser Art) werden uebersprungen -- der Runner scheitert an
+        solchen Schritten ohnehin sofort (step_failed), was ueber die
+        step_failed-Verdrahtung oben ebenfalls zum Safe-Stop fuehrt.
+        """
+        device_ids: set[str] = set()
+        for step in steps:
+            if not step.enabled:
+                continue
+            if step.step_type == "action":
+                resolved, _ = self._resolve_device_id(step.device_kind, step.device_id)
+                if resolved:
+                    device_ids.add(resolved)
+            elif step.step_type in ("while", "if") and step.cond_source == "measurement":
+                resolved, _ = self._resolve_device_id(step.cond_device_kind, step.cond_device_id)
+                if resolved:
+                    device_ids.add(resolved)
+        return device_ids
 
     def _on_test_execute_action(self, device_id: str, kind: str, action: str, value: float) -> None:
         resolved_id, error = self._resolve_device_id(kind, device_id)
@@ -292,8 +435,20 @@ class MainWindow(QMainWindow):
     def _on_theme_changed(self, _palette: Palette) -> None:
         for device_id in self._status_labels:
             self._render_status_label(device_id)
+        self._render_safety_status(self._safety.current_state())
+        self._style_safety_banner()
 
     def closeEvent(self, event) -> None:
+        # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit
+        # der Kill garantiert VOR thread.quit()/wait() abgeschlossen ist --
+        # sonst koennte die Anwendung schliessen, bevor der Worker die
+        # Ausgaenge tatsaechlich abgeschaltet hat.
+        QMetaObject.invokeMethod(
+            self._worker,
+            "all_outputs_off",
+            Qt.ConnectionType.BlockingQueuedConnection,
+            Q_ARG(str, "window close"),
+        )
         self._thread.quit()
         self._thread.wait(2000)
         super().closeEvent(event)

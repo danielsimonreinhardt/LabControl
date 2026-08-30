@@ -3,4 +3,4 @@
 Bei jedem nennenswerten Release hochzaehlen (semantisch: MAJOR.MINOR.PATCH)
 und beim .exe-Bau in --name uebernehmen, siehe README.md.
 """
-__version__ = "0.5.0"
+__version__ = "0.6.0"
