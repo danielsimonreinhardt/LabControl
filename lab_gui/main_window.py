@@ -20,7 +20,6 @@ from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
 from i18n import Translator, tr
 from recording import Recorder
-from recording_tab import RecordingTab
 from safety import SafetyMonitor
 from settings import Settings
 from settings_tab import SettingsTab
@@ -76,12 +75,10 @@ class MainWindow(QMainWindow):
         self.control_tab = ControlTab()
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
-        self.recording_tab = RecordingTab()
         self.settings_tab = SettingsTab()
         self.tabs.addTab(self.control_tab, "")
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
-        self.tabs.addTab(self.recording_tab, "")
         self.tabs.addTab(self.settings_tab, "")
         layout.addWidget(self.tabs)
 
@@ -108,7 +105,7 @@ class MainWindow(QMainWindow):
         self._wire_registry()
         self._wire_control_tab()
         self._wire_testcase_tab()
-        self._wire_recording_tab()
+        self._wire_recording()
         self._wire_settings_tab()
 
         self.dashboard.all_off_requested.connect(lambda: self._safe_stop("manual all-off"))
@@ -122,8 +119,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, tr("Steuerung"))
         self.tabs.setTabText(1, tr("Testablauf"))
         self.tabs.setTabText(2, tr("Verlauf"))
-        self.tabs.setTabText(3, tr("Aufzeichnung"))
-        self.tabs.setTabText(4, tr("Einstellungen"))
+        self.tabs.setTabText(3, tr("Einstellungen"))
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._safety_ack_button.setText(tr("Quittieren"))
@@ -210,7 +206,6 @@ class MainWindow(QMainWindow):
         self._registry.device_known.connect(self.control_tab.on_device_known)
         self._registry.device_known.connect(self.testcase_tab.on_device_known)
         self._registry.device_known.connect(self.timeline_tab.on_device_known)
-        self._registry.device_known.connect(self.recording_tab.on_device_known)
         self._registry.device_known.connect(self._recorder.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
 
@@ -238,35 +233,37 @@ class MainWindow(QMainWindow):
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
 
-    def _wire_recording_tab(self) -> None:
-        self.recording_tab.start_requested.connect(self._recorder.start)
-        self.recording_tab.stop_requested.connect(self._recorder.stop)
-        self.recording_tab.clear_requested.connect(self._recorder.clear)
-        self._recorder.recording_changed.connect(self.recording_tab.on_recording_changed)
-        self._recorder.stats_changed.connect(self.recording_tab.on_stats_changed)
-        self.recording_tab.export_csv_to.connect(self._on_export_csv)
-        self.recording_tab.export_mf4_to.connect(self._on_export_mf4)
+    def _wire_recording(self) -> None:
+        # Aufzeichnung-Steuerung sitzt im Verlauf-Tab (siehe timeline_tab.py-
+        # Docstring), Recorder haelt die Daten -- hier nur die Verkabelung.
+        self.timeline_tab.start_requested.connect(self._recorder.start)
+        self.timeline_tab.stop_requested.connect(self._recorder.stop)
+        self.timeline_tab.clear_requested.connect(self._recorder.clear)
+        self._recorder.recording_changed.connect(self.timeline_tab.on_recording_changed)
+        self._recorder.stats_changed.connect(self.timeline_tab.on_stats_changed)
+        self.timeline_tab.export_csv_to.connect(self._on_export_csv)
+        self.timeline_tab.export_mf4_to.connect(self._on_export_mf4)
 
     def _on_export_csv(self, path) -> None:
         try:
             self._recorder.export_csv(path)
         except OSError as exc:
-            self.recording_tab.show_export_error(str(exc))
+            self.timeline_tab.show_export_error(str(exc))
             return
-        self.recording_tab.show_export_success(path)
+        self.timeline_tab.show_export_success(path)
 
     def _on_export_mf4(self, path) -> None:
         try:
             self._recorder.export_mf4(path)
         except ImportError:
-            self.recording_tab.show_export_error(
+            self.timeline_tab.show_export_error(
                 tr("MF4-Export benötigt das Paket 'asammdf' (siehe requirements.txt).")
             )
             return
         except (OSError, ValueError) as exc:
-            self.recording_tab.show_export_error(str(exc))
+            self.timeline_tab.show_export_error(str(exc))
             return
-        self.recording_tab.show_export_success(path)
+        self.timeline_tab.show_export_success(path)
 
     def _wire_settings_tab(self) -> None:
         self.settings_tab.set_simulation_mode(self._settings.simulation_mode)

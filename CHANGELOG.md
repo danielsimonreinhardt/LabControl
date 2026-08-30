@@ -4,6 +4,19 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [0.6.1]
+
+### Geändert
+- **Aufzeichnung in den Verlauf-Tab verschoben**: der bisher eigenständige
+  „Aufzeichnung"-Reiter (v0.3.0) ist entfallen; Start/Stop/Zurücksetzen sowie
+  CSV-/MF4-Export sitzen jetzt oben im „Verlauf"-Tab, direkt über den
+  Diagrammen, da beide Funktionen dieselben Messwerte betreffen. Der
+  bisherige „Aufzeichnung zurücksetzen"-Button der Diagramm-Steuerung (löscht
+  nur die Ringpuffer der Live-Ansicht) heißt jetzt „Anzeige zurücksetzen“, um
+  ihn klar vom neuen, separaten Aufzeichnung-Reset zu unterscheiden — beide
+  wirken unabhängig voneinander.
+- Version auf 0.6.1 angehoben.
+
 ## [0.6.0]
 
 ### Hinzugefügt

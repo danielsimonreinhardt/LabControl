@@ -26,6 +26,16 @@ werden nicht persistiert. Da die Geraete beim Start noch nicht verbunden
 sind, existieren ihre SignalSeries zu dem Zeitpunkt noch nicht; die
 Zuordnung wird deshalb als "pending" gemerkt und erst aufgeloest, sobald
 on_device_known fuer das jeweilige Geraet feuert (siehe _resolve_pending).
+
+Oberhalb der Diagramme sitzt der Aufzeichnung-Bereich (Start/Stop/Export):
+bewusst hier statt in einem eigenen Reiter, weil Aufzeichnung und Live-Ansicht
+dieselben Messwerte betreffen und der Nutzer sie meist gemeinsam im Blick hat.
+Die eigentliche Sammlung uebernimmt Recorder (recording.py), an den dieser
+Tab nur Start/Stop/Zuruecksetzen und die Statusanzeige anbindet (siehe
+main_window.py: _wire_recording) -- getrennt von den hiesigen Ringpuffern
+(SignalSeries.data), die weiterhin nur der Live-Oszilloskop-Anzeige dienen
+und unabhaengig von einer laufenden Aufzeichnung ueber das Zeitfenster
+gedeckelt bleiben.
 """
 from __future__ import annotations
 
@@ -33,17 +43,20 @@ import json
 import time
 from collections import deque
 from dataclasses import dataclass, field as dataclass_field
+from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMenu,
+    QMessageBox,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -53,7 +66,7 @@ from PySide6.QtWidgets import (
 from i18n import Translator, tr
 from icons import IconButton
 from paths import app_dir
-from theme import ThemeManager
+from theme import Palette, ThemeManager
 from theme import current as current_palette
 
 # Diagramme, die der Nutzer umbenannt hat, werden hier persistiert (Name +
@@ -97,6 +110,19 @@ WINDOW_CHOICES = [
 DEFAULT_WINDOW_INDEX = 1
 MAX_WINDOW_S = WINDOW_CHOICES[-1][1]
 REPAINT_INTERVAL_MS = 500
+
+# Aufzeichnung-Bereich (siehe Klassen-Docstring): eigener Export-Zielordner,
+# eigenes Timer-Intervall fuer die Dauer-Anzeige -- unabhaengig vom
+# REPAINT_INTERVAL_MS der Diagramme.
+RECORDING_DEFAULT_DIR = app_dir() / "recordings"
+RECORDING_DURATION_REFRESH_MS = 500
+
+
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 def signal_key(device_id: str, field: str) -> str:
@@ -408,7 +434,14 @@ class _ChartRow(QGroupBox):
 
 class TimelineTab(QWidget):
     """Gestapelte, per Button erweiterbare Diagramme mit Signal-Zuordnung ueber
-    ein Menue im jeweiligen Diagramm-Header."""
+    ein Menue im jeweiligen Diagramm-Header, plus Aufzeichnung-Bereich
+    (Start/Stop/Export) darueber -- siehe Modul-Docstring."""
+
+    start_requested = Signal()
+    stop_requested = Signal()
+    clear_requested = Signal()
+    export_csv_to = Signal(object)  # Path
+    export_mf4_to = Signal(object)  # Path
 
     def __init__(self) -> None:
         super().__init__()
@@ -422,7 +455,53 @@ class TimelineTab(QWidget):
         # (die SignalSeries existiert erst ab on_device_known) -- siehe _resolve_pending.
         self._pending_assignments: dict[str, int] = {}
 
+        # Aufzeichnung-Bereich: Zustand vom Recorder (siehe main_window.py:
+        # _wire_recording) gespiegelt, fuer die Statuszeile/Button-Enablement.
+        self._recording_sample_count = 0
+        self._recording_elapsed_s = 0.0
+        self._is_recording = False
+
         outer = QVBoxLayout(self)
+
+        self._recording_group = QGroupBox()
+        recording_layout = QVBoxLayout(self._recording_group)
+
+        self._recording_status_label = QLabel()
+        self._recording_status_label.setStyleSheet("font-weight: bold;")
+        recording_layout.addWidget(self._recording_status_label)
+
+        self._recording_hint_label = QLabel()
+        self._recording_hint_label.setStyleSheet(f"color: {current_palette().text_muted};")
+        recording_layout.addWidget(self._recording_hint_label)
+
+        recording_button_row = QHBoxLayout()
+        self._recording_start_button = IconButton("mdi.record-circle-outline", "", text=tr("Aufnahme starten"))
+        self._recording_stop_button = IconButton("mdi.stop-circle-outline", "", text=tr("Aufnahme stoppen"))
+        self._recording_clear_button = IconButton("mdi.delete-sweep-outline", "", text=tr("Zurücksetzen"))
+        self._recording_start_button.clicked.connect(self.start_requested.emit)
+        self._recording_stop_button.clicked.connect(self.stop_requested.emit)
+        self._recording_clear_button.clicked.connect(self._on_recording_clear_clicked)
+        recording_button_row.addWidget(self._recording_start_button)
+        recording_button_row.addWidget(self._recording_stop_button)
+        recording_button_row.addWidget(self._recording_clear_button)
+        recording_button_row.addStretch()
+        recording_layout.addLayout(recording_button_row)
+
+        recording_export_row = QHBoxLayout()
+        self._export_csv_button = IconButton("mdi.file-delimited-outline", "", text=tr("Als CSV exportieren…"))
+        self._export_mf4_button = IconButton("mdi.file-chart-outline", "", text=tr("Als MF4 exportieren…"))
+        self._export_csv_button.clicked.connect(self._on_export_csv_clicked)
+        self._export_mf4_button.clicked.connect(self._on_export_mf4_clicked)
+        recording_export_row.addWidget(self._export_csv_button)
+        recording_export_row.addWidget(self._export_mf4_button)
+        recording_export_row.addStretch()
+        recording_layout.addLayout(recording_export_row)
+
+        outer.addWidget(self._recording_group)
+
+        self._recording_duration_timer = QTimer(self)
+        self._recording_duration_timer.timeout.connect(self._refresh_recording_status_text)
+        self._update_recording_button_states()
 
         controls = QHBoxLayout()
         self._window_label = QLabel()
@@ -439,9 +518,9 @@ class TimelineTab(QWidget):
         self._pause_button.toggled.connect(self._on_pause_toggled)
         controls.addWidget(self._pause_button)
 
-        self._clear_button = IconButton("mdi.delete-sweep-outline", "")
-        self._clear_button.clicked.connect(self._on_clear_clicked)
-        controls.addWidget(self._clear_button)
+        self._view_clear_button = IconButton("mdi.delete-sweep-outline", "")
+        self._view_clear_button.clicked.connect(self._on_view_clear_clicked)
+        controls.addWidget(self._view_clear_button)
 
         self._add_chart_button = IconButton("mdi.plus", "")
         self._add_chart_button.clicked.connect(self._on_add_chart_clicked)
@@ -463,13 +542,33 @@ class TimelineTab(QWidget):
         self._repaint_timer.timeout.connect(self._repaint_all)
         self._repaint_timer.start(REPAINT_INTERVAL_MS)
 
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
 
     def _retranslate(self) -> None:
+        self._recording_group.setTitle(tr("Aufzeichnung"))
+        self._recording_hint_label.setText(
+            tr(
+                "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\n"
+                "Aufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand)."
+            )
+        )
+        self._recording_start_button.setToolTip(tr("Aufnahme starten"))
+        self._recording_start_button.setText(tr("Aufnahme starten"))
+        self._recording_stop_button.setToolTip(tr("Aufnahme stoppen"))
+        self._recording_stop_button.setText(tr("Aufnahme stoppen"))
+        self._recording_clear_button.setToolTip(tr("Zurücksetzen"))
+        self._recording_clear_button.setText(tr("Zurücksetzen"))
+        self._export_csv_button.setToolTip(tr("Als CSV exportieren…"))
+        self._export_csv_button.setText(tr("Als CSV exportieren…"))
+        self._export_mf4_button.setToolTip(tr("Als MF4 exportieren…"))
+        self._export_mf4_button.setText(tr("Als MF4 exportieren…"))
+        self._refresh_recording_status_text()
+
         self._window_label.setText(tr("Zeitfenster:"))
         self._pause_button.setToolTip(tr("Fortsetzen") if self._pause_button.isChecked() else tr("Pause"))
-        self._clear_button.setToolTip(tr("Aufzeichnung zurücksetzen"))
+        self._view_clear_button.setToolTip(tr("Anzeige zurücksetzen"))
         self._add_chart_button.setToolTip(tr("Diagramm hinzufügen"))
         for key, series in self._series.items():
             for row in self._charts:
@@ -706,7 +805,103 @@ class TimelineTab(QWidget):
             self._pause_button.set_icon("mdi.pause")
             self._pause_button.setToolTip(tr("Pause"))
 
-    def _on_clear_clicked(self) -> None:
+    def _on_view_clear_clicked(self) -> None:
         for series in self._series.values():
             series.data.clear()
         self._repaint_all()
+
+    # -- Aufzeichnung: Start/Stop/Export ---------------------------------------
+    # Steuerung/Statusanzeige nur; die eigentliche Sammlung/den Export macht
+    # Recorder (recording.py), angebunden ueber die oben deklarierten Signale
+    # (siehe main_window.py: _wire_recording).
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._recording_hint_label.setStyleSheet(f"color: {palette.text_muted};")
+
+    def on_recording_changed(self, active: bool) -> None:
+        self._is_recording = active
+        if active:
+            self._recording_duration_timer.start(RECORDING_DURATION_REFRESH_MS)
+        else:
+            self._recording_duration_timer.stop()
+        self._update_recording_button_states()
+        self._refresh_recording_status_text()
+
+    def on_stats_changed(self, sample_count: int, elapsed_s: float) -> None:
+        self._recording_sample_count = sample_count
+        self._recording_elapsed_s = elapsed_s
+        self._update_recording_button_states()
+        self._refresh_recording_status_text()
+
+    def _refresh_recording_status_text(self) -> None:
+        if self._is_recording:
+            device_count = len({s.device_id for s in self._series.values()})
+            text = tr(
+                "● Aufnahme läuft seit {duration} · {count} Werte ({devices} Geräte)",
+                duration=_format_duration(self._recording_elapsed_s),
+                count=self._recording_sample_count,
+                devices=device_count,
+            )
+            self._recording_status_label.setStyleSheet(f"color: {current_palette().danger}; font-weight: bold;")
+        elif self._recording_sample_count:
+            text = tr(
+                "Aufnahme gestoppt · {count} Werte über {duration} aufgezeichnet",
+                count=self._recording_sample_count,
+                duration=_format_duration(self._recording_elapsed_s),
+            )
+            self._recording_status_label.setStyleSheet(f"color: {current_palette().text}; font-weight: bold;")
+        else:
+            text = tr("Keine Aufnahme aktiv")
+            self._recording_status_label.setStyleSheet(f"color: {current_palette().text_muted}; font-weight: bold;")
+        self._recording_status_label.setText(text)
+
+    def _update_recording_button_states(self) -> None:
+        self._recording_start_button.setEnabled(not self._is_recording)
+        self._recording_stop_button.setEnabled(self._is_recording)
+        self._recording_clear_button.setEnabled(not self._is_recording and self._recording_sample_count > 0)
+        has_samples = self._recording_sample_count > 0
+        self._export_csv_button.setEnabled(has_samples)
+        self._export_mf4_button.setEnabled(has_samples)
+
+    def _on_recording_clear_clicked(self) -> None:
+        if self._recording_sample_count and QMessageBox.question(
+            self,
+            tr("Zurücksetzen"),
+            tr("Aufgezeichnete Werte wirklich verwerfen?"),
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.clear_requested.emit()
+
+    def _on_export_csv_clicked(self) -> None:
+        RECORDING_DEFAULT_DIR.mkdir(exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, tr("Als CSV exportieren"), str(RECORDING_DEFAULT_DIR), tr("CSV-Datei (*.csv)")
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        self.export_csv_to.emit(path)
+
+    def _on_export_mf4_clicked(self) -> None:
+        RECORDING_DEFAULT_DIR.mkdir(exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, tr("Als MF4 exportieren"), str(RECORDING_DEFAULT_DIR), tr("MF4-Datei (*.mf4)")
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".mf4":
+            path = path.with_suffix(".mf4")
+        self.export_mf4_to.emit(path)
+
+    def show_export_error(self, message: str) -> None:
+        QMessageBox.critical(self, tr("Fehler beim Export"), message)
+
+    def show_export_success(self, path: Path) -> None:
+        # Bewusst kein Modal-Dialog (anders als der Fehlerfall) -- blendet die
+        # Statuszeile kurz um, dann zurueck zum normalen Aufnahmestatus.
+        self._recording_status_label.setText(tr("Exportiert nach {name}", name=path.name))
+        self._recording_status_label.setStyleSheet(f"color: {current_palette().success}; font-weight: bold;")
+        QTimer.singleShot(4000, self._refresh_recording_status_text)

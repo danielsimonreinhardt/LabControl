@@ -125,7 +125,7 @@ class Recorder(QObject):
 
     # -- Export ----------------------------------------------------------------
     # Delegiert an recording_export.py, aber als Methode hier, damit Aufrufer
-    # (RecordingTab/MainWindow) nicht selbst auf die interne Sample-Liste
+    # (TimelineTab/MainWindow) nicht selbst auf die interne Sample-Liste
     # zugreifen muessen -- ein Export liest immer den zum Aufrufzeitpunkt
     # aktuellen Stand, auch waehrend eine Aufnahme noch laeuft.
 

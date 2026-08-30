@@ -87,11 +87,16 @@ statt die .exe zu versionieren.
   eingetragenen Sollwerte; im Testcase-Editor nutzt „Ausgang EIN
   (Workaround)“ den Wert der Zeile als Spannung und liest den zuletzt vom
   Gerät gespeicherten Stromsollwert.
-- **Reiter „Aufzeichnung“**: Start/Stop einer Messwert-Aufzeichnung über alle
-  bekannten Geräte (Zeitstempel, Gerät, Kanal, Wert), unabhängig vom
-  Ringpuffer des Timeline-Tabs. Export als CSV (Long-Format) oder MF4 (ASAM
-  MDF4, ein Signal je Gerät+Kanal, benötigt das Paket `asammdf`), auch bei
-  laufender Aufnahme möglich.
+- **Reiter „Verlauf“**: fortlaufende Oszilloskop-Ansicht aller Geräte-
+  Messwerte in mehreren, per Button hinzufügbaren Diagrammen (gemeinsame
+  Y-Achse je Einheit, eigenes QPainter-Rendering). Oberhalb der Diagramme
+  sitzt die Aufzeichnung: Start/Stop eines Messwert-Logs über alle bekannten
+  Geräte (Zeitstempel, Gerät, Kanal, Wert), unabhängig vom zeitfenster-
+  gedeckelten Ringpuffer der Diagramme selbst. Export als CSV (Long-Format)
+  oder MF4 (ASAM MDF4, ein Signal je Gerät+Kanal, benötigt das Paket
+  `asammdf`), auch bei laufender Aufnahme möglich. Der „Anzeige
+  zurücksetzen“-Button der Diagramm-Steuerung leert nur die Ringpuffer der
+  Live-Ansicht — unabhängig vom separaten Aufzeichnung-Reset.
 - **Statusleiste**: USB-Verbindungsstatus beider Geräte (rot = getrennt,
   grün = verbunden). Verbindung wird automatisch alle 3 s neu versucht,
   falls ein Gerät (noch) nicht erreichbar ist.

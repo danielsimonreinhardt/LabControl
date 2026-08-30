@@ -143,7 +143,7 @@
   "Keine weiteren Signale verfügbar": "No more signals available",
   "Zeitfenster:": "Time window:",
   "Fortsetzen": "Resume",
-  "Aufzeichnung zurücksetzen": "Reset recording",
+  "Anzeige zurücksetzen": "Reset view",
   "Diagramm hinzufügen": "Add chart",
   "Pause": "Pause",
   "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\nAufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand).": "Records timestamp, device and value for all known devices while the\nrecording is running. Export is possible even while recording (partial data).",
