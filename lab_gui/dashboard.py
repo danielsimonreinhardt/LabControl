@@ -9,14 +9,14 @@ sein eigenes Panel mit eindeutigem, umbenennbarem Label.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, Slot
+import qtawesome as qta
+from PySide6.QtCore import QEvent, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -29,7 +29,12 @@ from theme import Palette, ThemeManager
 from theme import current as current_palette
 
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
+COMPACT_VALUE_STYLE = "font-size: 16px; font-weight: bold;"
 PANEL_WIDTH = 220
+COMPACT_ICON_SIZE = 18
+# Qt-Konstante QWIDGETSIZE_MAX (in PySide6 nicht exportiert) -- hebt das
+# setFixedWidth der Normalansicht im Kompaktmodus wieder auf.
+_WIDGET_SIZE_MAX = 16777215
 # Zusätzlicher Platz für die Scrollleiste am unteren Rand (falls horizontal
 # gescrollt werden muss) sowie den Rahmen der ScrollArea.
 SCROLL_AREA_MARGIN = 24
@@ -45,6 +50,15 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
 LOAD_FIELD_KEYS = ["voltage", "current", "power"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
+
+# Icons fuer die Kompaktansicht: dort ersetzen sie die Text-Beschriftung der
+# Messgroessen komplett (der volle Name bleibt als Tooltip erreichbar).
+FIELD_ICONS: dict[str, str] = {
+    "voltage": "mdi.flash-outline",
+    "current": "mdi.current-dc",
+    "power": "mdi.gauge",
+    "mode": "mdi.swap-horizontal-bold",
+}
 
 
 def _field_display(field_key: str) -> str:
@@ -63,6 +77,14 @@ class _DevicePanel(QGroupBox):
         self.setFixedWidth(PANEL_WIDTH)
 
         outer = QVBoxLayout(self)
+        self._outer = outer
+
+        # Normalansicht: Kopfzeile (Name + Umbenennen), Untertitel, Formular
+        # mit beschrifteten Messwerten -- als ein Widget gebuendelt, damit die
+        # Kompaktansicht sie mit einem einzigen hide() ausblenden kann.
+        self._normal_widget = QWidget()
+        normal = QVBoxLayout(self._normal_widget)
+        normal.setContentsMargins(0, 0, 0, 0)
 
         header = QHBoxLayout()
         self._title_label = QLabel(label)
@@ -71,11 +93,11 @@ class _DevicePanel(QGroupBox):
         self._rename_button.clicked.connect(self._on_rename_clicked)
         header.addWidget(self._title_label, 1)
         header.addWidget(self._rename_button)
-        outer.addLayout(header)
+        normal.addLayout(header)
 
         self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
-        outer.addWidget(self._subtitle)
+        normal.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
         self._form = QFormLayout()
@@ -85,7 +107,34 @@ class _DevicePanel(QGroupBox):
             value_label.setStyleSheet(VALUE_STYLE)
             self._value_labels[field_key] = value_label
             self._form.addRow(" ", value_label)
-        outer.addLayout(self._form)
+        normal.addLayout(self._form)
+        outer.addWidget(self._normal_widget)
+
+        # Kompaktansicht: eine einzige Zeile -- Geraetename, dann je Messgroesse
+        # Icon + Wert (mit Einheit) statt Text-Beschriftung. Der Name der
+        # Messgroesse bleibt als Tooltip auf Icon und Wert erreichbar.
+        self._compact_widget = QWidget()
+        compact = QHBoxLayout(self._compact_widget)
+        compact.setContentsMargins(0, 0, 0, 0)
+        self._compact_title = QLabel(label)
+        self._compact_title.setStyleSheet("font-weight: bold;")
+        compact.addWidget(self._compact_title)
+        compact.addSpacing(8)
+        self._compact_icons: dict[str, QLabel] = {}
+        self._compact_values: dict[str, QLabel] = {}
+        for field_key in field_keys:
+            icon_label = QLabel()
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value_label = QLabel("--")
+            value_label.setStyleSheet(COMPACT_VALUE_STYLE)
+            self._compact_icons[field_key] = icon_label
+            self._compact_values[field_key] = value_label
+            compact.addWidget(icon_label)
+            compact.addWidget(value_label)
+            compact.addSpacing(10)
+        outer.addWidget(self._compact_widget)
+        self._compact_widget.hide()
+        self._apply_compact_icons(current_palette())
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -95,18 +144,51 @@ class _DevicePanel(QGroupBox):
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         for field_key in self._field_keys:
             self._form.labelForField(self._value_labels[field_key]).setText(_field_display(field_key) + ":")
+            tooltip = _field_display(field_key)
+            self._compact_icons[field_key].setToolTip(tooltip)
+            self._compact_values[field_key].setToolTip(tooltip)
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
+        self._apply_compact_icons(palette)
+
+    def _apply_compact_icons(self, palette: Palette) -> None:
+        for field_key, icon_label in self._compact_icons.items():
+            icon_label.setPixmap(
+                qta.icon(FIELD_ICONS[field_key], color=palette.text).pixmap(
+                    COMPACT_ICON_SIZE, COMPACT_ICON_SIZE
+                )
+            )
+
+    def set_compact(self, compact: bool) -> None:
+        self._normal_widget.setVisible(not compact)
+        self._compact_widget.setVisible(compact)
+        if compact:
+            self._outer.setContentsMargins(8, 2, 8, 4)
+            # Feste Breite aufheben: die Kompaktzeile schmiegt sich an ihren
+            # Inhalt an, statt 220px zu belegen.
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(_WIDGET_SIZE_MAX)
+        else:
+            # Zurueck auf die Style-Defaults (nicht auf im Konstruktor
+            # abgefragte Werte -- die stimmen vor dem Polish noch nicht mit
+            # den spaeter wirksamen ueberein).
+            self._outer.unsetContentsMargins()
+            self.setFixedWidth(PANEL_WIDTH)
 
     def set_label(self, label: str) -> None:
         self._title_label.setText(label)
+        self._compact_title.setText(label)
 
     def set_value(self, field_key: str, text: str) -> None:
         self._value_labels[field_key].setText(text)
+        unit = FIELD_DEFS[field_key][1]
+        self._compact_values[field_key].setText(f"{text} {unit}" if unit else text)
 
     def clear_values(self) -> None:
         for value_label in self._value_labels.values():
+            value_label.setText("--")
+        for value_label in self._compact_values.values():
             value_label.setText("--")
 
     def _on_rename_clicked(self) -> None:
@@ -119,22 +201,11 @@ class _DevicePanel(QGroupBox):
 
 class DashboardWidget(QGroupBox):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
-    all_off_requested = Signal()  # Panic-Button: alle Ausgaenge sofort aus
 
     def __init__(self) -> None:
         super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
-
-        header = QHBoxLayout()
-        header.addStretch()
-        self._all_off_button = QPushButton()
-        self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
-        self._all_off_button.clicked.connect(self.all_off_requested)
-        header.addWidget(self._all_off_button)
-        outer.addLayout(header)
-        ThemeManager.instance().changed.connect(self._style_all_off_button)
-        self._style_all_off_button(current_palette())
 
         self._container = QWidget()
         self._panel_layout = QHBoxLayout(self._container)
@@ -143,28 +214,43 @@ class DashboardWidget(QGroupBox):
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setWidget(self._container)
+        # Waechst/schrumpft der Panel-Inhalt nachtraeglich (laengere Messwert-
+        # Texte, Theme-/Sprachwechsel, Ansichtsumschaltung), loest das ein
+        # LayoutRequest im Container aus -- die feste Hoehe der ScrollArea
+        # muss dann nachgezogen werden, sonst bleibt sie veraltet und
+        # schneidet Panels ab.
+        self._container.installEventFilter(self)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         outer.addWidget(self._scroll_area)
 
         self._panels: dict[str, _DevicePanel] = {}
+        self._compact = False
         self._update_scroll_height()
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
 
     def _retranslate(self) -> None:
-        self.setTitle(tr("Dashboard"))
-        self._all_off_button.setText(tr("ALLE AUS"))
-        self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
+        # In der Kompaktansicht entfaellt der GroupBox-Titel -- er wuerde nur
+        # vertikale Hoehe kosten, die diese Ansicht gerade einsparen soll.
+        self.setTitle("" if self._compact else tr("Dashboard"))
 
-    def _style_all_off_button(self, palette: Palette | None = None) -> None:
-        pal = palette if palette is not None else current_palette()
-        self._all_off_button.setStyleSheet(
-            f"background-color: {pal.danger}; color: #ffffff; font-weight: bold; "
-            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: 5px 12px;"
-        )
+    @Slot(bool)
+    def set_compact(self, compact: bool) -> None:
+        if compact == self._compact:
+            return
+        self._compact = compact
+        for panel in self._panels.values():
+            panel.set_compact(compact)
+        self._retranslate()
+        self._update_scroll_height()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if obj is self._container and event.type() == QEvent.Type.LayoutRequest:
+            self._update_scroll_height()
+        return super().eventFilter(obj, event)
 
     def _update_scroll_height(self) -> None:
         # Die Panel-Hoehe ergibt sich aus dem tatsaechlichen Inhalt (Schrift,
@@ -183,6 +269,8 @@ class DashboardWidget(QGroupBox):
         if panel is None:
             field_keys = LOAD_FIELD_KEYS if kind == "load" else PSU_FIELD_KEYS
             panel = _DevicePanel(kind, device_id, label, field_keys)
+            if self._compact:
+                panel.set_compact(True)
             panel.rename_requested.connect(self.rename_requested)
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)

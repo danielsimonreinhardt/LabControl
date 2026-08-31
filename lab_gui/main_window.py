@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QMetaObject, QThread, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QSize, QThread, QUrl, Q_ARG, Qt, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -19,7 +20,9 @@ from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
 from i18n import Translator, tr
+from icons import IconButton
 from recording import Recorder
+from run_record import RunRecorder
 from safety import SafetyMonitor
 from settings import Settings
 from settings_tab import SettingsTab
@@ -90,6 +93,7 @@ class MainWindow(QMainWindow):
         self._safety_status_label = QLabel()
         self._status_layout.addWidget(self._safety_status_label)
         self.statusBar().addPermanentWidget(self._status_container)
+
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
@@ -98,6 +102,7 @@ class MainWindow(QMainWindow):
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
         self._recorder = Recorder()
+        self._run_recorder = RunRecorder()
         self._safety = SafetyMonitor(self._settings.safety_limits)
 
         self._setup_worker()
@@ -107,8 +112,16 @@ class MainWindow(QMainWindow):
         self._wire_testcase_tab()
         self._wire_recording()
         self._wire_settings_tab()
+        self._wire_dashboard_view()
 
-        self.dashboard.all_off_requested.connect(lambda: self._safe_stop("manual all-off"))
+        # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
+        # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
+        # eigene Permanent-Widgets ergaenzen (addPermanentWidget ordnet in
+        # Aufrufreihenfolge von links nach rechts an).
+        self._all_off_button = QPushButton()
+        self._all_off_button.clicked.connect(lambda: self._safe_stop("manual all-off"))
+        self.statusBar().addPermanentWidget(self._all_off_button)
+        self._style_all_off_button()
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
@@ -124,6 +137,9 @@ class MainWindow(QMainWindow):
             self._render_status_label(device_id)
         self._safety_ack_button.setText(tr("Quittieren"))
         self._render_safety_status(self._safety.current_state())
+        self._update_view_toggle_tooltip()
+        self._all_off_button.setText(tr("ALLE AUS"))
+        self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
@@ -201,12 +217,20 @@ class MainWindow(QMainWindow):
         )
         self._safety_banner_label.setStyleSheet("color: #ffffff; font-weight: bold;")
 
+    def _style_all_off_button(self) -> None:
+        pal = ThemeManager.instance().palette
+        self._all_off_button.setStyleSheet(
+            f"background-color: {pal.danger}; color: #ffffff; font-weight: bold; "
+            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: 2px 10px;"
+        )
+
     def _wire_registry(self) -> None:
         self._registry.device_known.connect(self.dashboard.on_device_known)
         self._registry.device_known.connect(self.control_tab.on_device_known)
         self._registry.device_known.connect(self.testcase_tab.on_device_known)
         self._registry.device_known.connect(self.timeline_tab.on_device_known)
         self._registry.device_known.connect(self._recorder.on_device_known)
+        self._registry.device_known.connect(self._run_recorder.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
 
         self._registry.label_changed.connect(self.dashboard.on_label_changed)
@@ -214,6 +238,7 @@ class MainWindow(QMainWindow):
         self._registry.label_changed.connect(self.testcase_tab.on_label_changed)
         self._registry.label_changed.connect(self.timeline_tab.on_label_changed)
         self._registry.label_changed.connect(self._recorder.on_label_changed)
+        self._registry.label_changed.connect(self._run_recorder.on_label_changed)
         self._registry.label_changed.connect(self._on_label_changed_status)
 
         self.dashboard.rename_requested.connect(self._registry.rename)
@@ -265,6 +290,37 @@ class MainWindow(QMainWindow):
             return
         self.timeline_tab.show_export_success(path)
 
+    def _on_open_report(self) -> None:
+        record = self._run_recorder.record()
+        if record is None:
+            return
+        import run_report
+
+        try:
+            path = run_report.write_html_report(record)
+        except OSError as exc:
+            self.statusBar().showMessage(
+                tr("Report konnte nicht erstellt werden: {error}", error=str(exc)), 8000
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        self.statusBar().showMessage(tr("Report erstellt: {path}", path=str(path)), 8000)
+
+    def _on_export_report_pdf(self, path) -> None:
+        record = self._run_recorder.record()
+        if record is None:
+            return
+        import run_report
+
+        try:
+            run_report.export_pdf(record, path)
+        except OSError as exc:
+            self.statusBar().showMessage(
+                tr("Report konnte nicht erstellt werden: {error}", error=str(exc)), 8000
+            )
+            return
+        self.statusBar().showMessage(tr("PDF exportiert: {path}", path=str(path)), 8000)
+
     def _wire_settings_tab(self) -> None:
         self.settings_tab.set_simulation_mode(self._settings.simulation_mode)
         self.settings_tab.simulation_mode_toggled.connect(self._settings.set_simulation_mode)
@@ -281,6 +337,33 @@ class MainWindow(QMainWindow):
         self.settings_tab.set_safety_limits(self._settings.safety_limits)
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
 
+    def _wire_dashboard_view(self) -> None:
+        # Umschalter Normal-/Kompaktansicht des Dashboards, rechts in der
+        # Statusleiste (vor dem ALLE-AUS-Button, der ganz rechts bleibt --
+        # Index 1: nach dem _status_container von Index 0); der Zustand wird
+        # wie die uebrigen Einstellungen persistiert und beim Start
+        # wiederhergestellt.
+        self._view_toggle_button = IconButton("mdi.arrow-collapse-vertical", "")
+        self._view_toggle_button.setFixedSize(QSize(32, 24))
+        self._view_toggle_button.clicked.connect(
+            lambda: self._settings.set_dashboard_compact(not self._settings.dashboard_compact)
+        )
+        self.statusBar().insertPermanentWidget(1, self._view_toggle_button)
+        self._settings.dashboard_compact_changed.connect(self._apply_dashboard_compact)
+        self._apply_dashboard_compact(self._settings.dashboard_compact)
+
+    def _apply_dashboard_compact(self, compact: bool) -> None:
+        self.dashboard.set_compact(compact)
+        self._view_toggle_button.set_icon(
+            "mdi.arrow-expand-vertical" if compact else "mdi.arrow-collapse-vertical"
+        )
+        self._update_view_toggle_tooltip()
+
+    def _update_view_toggle_tooltip(self) -> None:
+        self._view_toggle_button.setToolTip(
+            tr("Normale Ansicht") if self._settings.dashboard_compact else tr("Kompakte Ansicht")
+        )
+
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()
         self._test_runner.execute_action.connect(self._on_test_execute_action)
@@ -295,6 +378,24 @@ class MainWindow(QMainWindow):
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
+
+        # Nachlauf-Report: passiver Mitschnitt des Laufs (siehe run_record.py),
+        # unabhaengig vom manuellen Recorder des Verlauf-Tabs.
+        self._test_runner.step_started.connect(self._run_recorder.on_step_started)
+        self._test_runner.step_result.connect(self._run_recorder.on_step_result)
+        self._test_runner.step_failed.connect(self._run_recorder.on_step_failed)
+        self._test_runner.run_finished.connect(self._run_recorder.on_run_finished)
+        self._test_runner.run_stopped.connect(self._run_recorder.on_run_stopped)
+        self._test_runner.iteration_changed.connect(self._run_recorder.on_iteration_changed)
+        self._worker.load_measurement.connect(self._run_recorder.on_load_measurement)
+        self._worker.psu_measurement.connect(self._run_recorder.on_psu_measurement)
+        for sig in (self._test_runner.run_finished, self._test_runner.run_stopped):
+            sig.connect(lambda: self.testcase_tab.set_report_available(True))
+        self._test_runner.step_failed.connect(
+            lambda *_args: self.testcase_tab.set_report_available(True)
+        )
+        self.testcase_tab.open_report_requested.connect(self._on_open_report)
+        self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)
 
         # Watchdog-Ueberwachung endet mit dem Testlauf (egal ob normal beendet,
         # gestoppt oder fehlgeschlagen) -- sonst wuerde der Stale-Timer nach
@@ -325,6 +426,7 @@ class MainWindow(QMainWindow):
             )
             return
         self.testcase_tab.on_run_started()
+        self._run_recorder.begin(steps, self.testcase_tab.current_testcase_name())
         self._safety.begin_run_supervision(self._resolve_step_device_ids(steps))
         self._test_runner.start(steps)
 
@@ -434,6 +536,7 @@ class MainWindow(QMainWindow):
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
         self._style_safety_banner()
+        self._style_all_off_button()
 
     def closeEvent(self, event) -> None:
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit

@@ -9,4 +9,5 @@ lab_gui/device_labels.json
 lab_gui/settings.json
 lab_gui/timeline_layout.json
 lab_gui/recordings/
+lab_gui/reports/
 lab_gui/labdash.log

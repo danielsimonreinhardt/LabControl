@@ -4,6 +4,36 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [Unreleased]
+
+### Hinzugefügt
+- **Nachlauf-Report**: Nach einem Testlauf (auch nach Stop oder Fehlerabbruch)
+  erzeugt der neue „Report"-Button im Testablauf-Reiter einen selbst-
+  enthaltenen HTML-Report (`lab_gui/reports/`, per Browser geöffnet) mit
+  Gesamtverdikt, einer Ergebnistabelle der Pass/Fail-Prüfungen je Schritt,
+  einem chronologischen Zeitverlauf des Laufs und Messwert-Diagrammen
+  (Spannung/Strom/Leistung über die Laufzeit, QPainter-gerendert und als
+  PNG eingebettet — keine neue Abhängigkeit). Optionaler PDF-Export über
+  denselben Button (Qt-Bordmittel: `QTextDocument` + `QPdfWriter`). Neue
+  Module `lab_gui/run_record.py`, `lab_gui/report_chart.py`,
+  `lab_gui/run_report.py`. Der Testablauf-Editor merkt sich außerdem die
+  zuletzt geladene/gespeicherte Datei; ihr Name erscheint im Report (sonst
+  „Unbenannt").
+- **Kompakte Dashboard-Ansicht**: umschaltbar über einen Icon-Button in der
+  Statusleiste (links neben „ALLE AUS“), Zustand wird in `settings.json`
+  persistiert. Im Kompaktmodus zeigt jedes Geräte-Panel eine einzige Zeile:
+  Gerätename plus Messwerte mit Einheit, beschriftet nur durch Icons
+  (Blitz = Spannung, DC-Symbol = Strom, Tacho = Leistung, Pfeile = CC/CV-Modus;
+  voller Name als Tooltip). Der GroupBox-Titel „Dashboard“ entfällt in dieser
+  Ansicht — insgesamt gut die Hälfte weniger vertikale Höhe, mehr Platz für
+  die Tabs darunter (`lab_gui/dashboard.py`, `Settings.dashboard_compact`).
+
+### Behoben
+- Die feste Höhe der Dashboard-ScrollArea wird jetzt bei jedem LayoutRequest
+  des Panel-Containers nachgezogen. Bisher blieb sie veraltet, wenn der
+  Panel-Inhalt nach der Berechnung noch wuchs (z.B. erste Messwerte nach dem
+  Verbinden) — die Panels konnten dadurch unten leicht abgeschnitten werden.
+
 ## [0.6.1]
 
 ### Geändert

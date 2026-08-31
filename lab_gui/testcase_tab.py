@@ -136,10 +136,18 @@ def _parse_device_key(key: str | None) -> tuple[str, str]:
 class TestcaseTab(QWidget):
     run_requested = Signal()
     stop_requested = Signal()
+    open_report_requested = Signal()
+    export_report_pdf_to = Signal(object)  # Path
 
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
+
+        # Zuletzt geladene/gespeicherte Testablauf-Datei, fuer den Testablauf-
+        # Namen im Nachlauf-Report (siehe run_report.py) -- ohne Datei
+        # (neu erstellter, ungespeicherter Ablauf) zeigt der Report "Unbenannt".
+        self._current_path: Path | None = None
+        self._report_available = False
 
         # device_id -> (kind, label) fuer alle in dieser Session bekannten Geraete;
         # gespeist von DeviceRegistry ueber on_device_known()/on_label_changed().
@@ -245,6 +253,16 @@ class TestcaseTab(QWidget):
         run_row.addWidget(self._stop_button)
         run_row.addWidget(self._status_label)
         run_row.addStretch()
+
+        self._report_button = IconButton("mdi.file-chart-outline", "")
+        self._report_button.setEnabled(False)
+        self._report_menu = QMenu(self._report_button)
+        self._action_report_html = self._report_menu.addAction("")
+        self._action_report_pdf = self._report_menu.addAction("")
+        self._action_report_html.triggered.connect(self.open_report_requested.emit)
+        self._action_report_pdf.triggered.connect(self._pick_pdf_path)
+        self._report_button.setMenu(self._report_menu)
+        run_row.addWidget(self._report_button)
         layout.addLayout(run_row)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -274,6 +292,9 @@ class TestcaseTab(QWidget):
         self._run_button.setText(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
         self._stop_button.setText(tr("Stop"))
+        self._report_button.setToolTip(tr("Report…"))
+        self._action_report_html.setText(tr("Report öffnen (HTML)"))
+        self._action_report_pdf.setText(tr("Als PDF exportieren…"))
         self._set_status(self._status_key, kind=self._status_kind, **self._status_key_kwargs)
         for row in range(self._table.rowCount()):
             self._retranslate_row(row)
@@ -933,6 +954,8 @@ class TestcaseTab(QWidget):
             save_steps(self.steps(), path)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
+            return
+        self._current_path = path
 
     def _load_from_file(self) -> None:
         DEFAULT_DIR.mkdir(exist_ok=True)
@@ -946,6 +969,7 @@ class TestcaseTab(QWidget):
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return
+        self._current_path = Path(path_str)
 
         self._table.setRowCount(0)
         for step in steps:
@@ -953,6 +977,27 @@ class TestcaseTab(QWidget):
         if not steps:
             self._add_row_clicked()
         self._revalidate_structure()
+
+    def current_testcase_name(self) -> str:
+        return self._current_path.stem if self._current_path else tr("Unbenannt")
+
+    def _pick_pdf_path(self) -> None:
+        from run_report import REPORTS_DIR  # lokal: vermeidet Modul-Ladezeit-Kopplung beim Tab-Import
+
+        REPORTS_DIR.mkdir(exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, tr("Report als PDF exportieren"), str(REPORTS_DIR), tr("PDF (*.pdf)")
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".pdf":
+            path = path.with_suffix(".pdf")
+        self.export_report_pdf_to.emit(path)
+
+    def set_report_available(self, available: bool) -> None:
+        self._report_available = available
+        self._report_button.setEnabled(available and not self._is_running)
 
     # -- Struktur-Validierung (Schleifen/If/While-Verschachtelung) --------------
     #
@@ -1017,11 +1062,13 @@ class TestcaseTab(QWidget):
             self._save_button,
         ):
             button.setEnabled(not running)
+        self._report_button.setEnabled(self._report_available and not running)
         self._update_run_enabled()
 
     def on_run_started(self) -> None:
         self._clear_all_row_colors()
         self._iteration_text = ""
+        self._report_available = False
         self.set_running(True)
         self._set_status("Läuft…")
 

@@ -21,6 +21,7 @@ SETTINGS_PATH = app_dir() / "settings.json"
 class Settings(QObject):
     simulation_mode_changed = Signal(bool)
     dark_mode_changed = Signal(bool)
+    dashboard_compact_changed = Signal(bool)
     language_changed = Signal(str)
     safety_limits_changed = Signal(dict)
 
@@ -62,6 +63,17 @@ class Settings(QObject):
         self._data["dark_mode"] = enabled
         self._save()
         self.dark_mode_changed.emit(enabled)
+
+    @property
+    def dashboard_compact(self) -> bool:
+        return bool(self._data.get("dashboard_compact", False))
+
+    def set_dashboard_compact(self, enabled: bool) -> None:
+        if enabled == self.dashboard_compact:
+            return
+        self._data["dashboard_compact"] = enabled
+        self._save()
+        self.dashboard_compact_changed.emit(enabled)
 
     @property
     def language(self) -> str:
