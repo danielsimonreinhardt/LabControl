@@ -27,14 +27,17 @@ sind, existieren ihre SignalSeries zu dem Zeitpunkt noch nicht; die
 Zuordnung wird deshalb als "pending" gemerkt und erst aufgeloest, sobald
 on_device_known fuer das jeweilige Geraet feuert (siehe _resolve_pending).
 
-Oberhalb der Diagramme sitzt der Aufzeichnung-Bereich (Start/Stop/Export):
-bewusst hier statt in einem eigenen Reiter, weil Aufzeichnung und Live-Ansicht
-dieselben Messwerte betreffen und der Nutzer sie meist gemeinsam im Blick hat.
-Die eigentliche Sammlung uebernimmt Recorder (recording.py), an den dieser
-Tab nur Start/Stop/Zuruecksetzen und die Statusanzeige anbindet (siehe
-main_window.py: _wire_recording) -- getrennt von den hiesigen Ringpuffern
-(SignalSeries.data), die weiterhin nur der Live-Oszilloskop-Anzeige dienen
-und unabhaengig von einer laufenden Aufzeichnung ueber das Zeitfenster
+Unterhalb der Diagramme (aber ausserhalb von deren QScrollArea, siehe unten)
+sitzt der Aufzeichnung-Bereich (Start/Stop/Export): bewusst hier statt in
+einem eigenen Reiter, weil Aufzeichnung und Live-Ansicht dieselben Messwerte
+betreffen und der Nutzer sie meist gemeinsam im Blick hat. Ausserhalb der
+Scroll-Area platziert, damit er bei mehreren Diagrammen (Scrollen noetig)
+trotzdem immer sichtbar bleibt. Die eigentliche Sammlung uebernimmt Recorder
+(recording.py), an den dieser Tab nur Start/Stop/Zuruecksetzen und die
+Statusanzeige anbindet (siehe main_window.py: _wire_recording) -- getrennt
+von den hiesigen Ringpuffern (SignalSeries.data), die weiterhin nur der
+Live-Oszilloskop-Anzeige dienen und unabhaengig von einer laufenden
+Aufzeichnung ueber das Zeitfenster
 gedeckelt bleiben.
 """
 from __future__ import annotations
@@ -463,41 +466,37 @@ class TimelineTab(QWidget):
 
         outer = QVBoxLayout(self)
 
+        # Kompakt: alles in einer Zeile -- Start/Stop/Zuruecksetzen als reine
+        # Icon-Buttons (selbsterklaerend, voller Name im Tooltip), die beiden
+        # Export-Buttons mit Kurzlabel (die Icons allein unterscheiden die
+        # Formate nicht), rechts daneben die Statuszeile. Der erklaerende
+        # Hinweistext lebt als Tooltip auf der GroupBox statt als eigene Zeile.
         self._recording_group = QGroupBox()
-        recording_layout = QVBoxLayout(self._recording_group)
+        recording_layout = QHBoxLayout(self._recording_group)
 
-        self._recording_status_label = QLabel()
-        self._recording_status_label.setStyleSheet("font-weight: bold;")
-        recording_layout.addWidget(self._recording_status_label)
-
-        self._recording_hint_label = QLabel()
-        self._recording_hint_label.setStyleSheet(f"color: {current_palette().text_muted};")
-        recording_layout.addWidget(self._recording_hint_label)
-
-        recording_button_row = QHBoxLayout()
-        self._recording_start_button = IconButton("mdi.record-circle-outline", "", text=tr("Aufnahme starten"))
-        self._recording_stop_button = IconButton("mdi.stop-circle-outline", "", text=tr("Aufnahme stoppen"))
-        self._recording_clear_button = IconButton("mdi.delete-sweep-outline", "", text=tr("Zurücksetzen"))
+        self._recording_start_button = IconButton("mdi.record-circle-outline", "")
+        self._recording_stop_button = IconButton("mdi.stop-circle-outline", "")
+        self._recording_clear_button = IconButton("mdi.delete-sweep-outline", "")
         self._recording_start_button.clicked.connect(self.start_requested.emit)
         self._recording_stop_button.clicked.connect(self.stop_requested.emit)
         self._recording_clear_button.clicked.connect(self._on_recording_clear_clicked)
-        recording_button_row.addWidget(self._recording_start_button)
-        recording_button_row.addWidget(self._recording_stop_button)
-        recording_button_row.addWidget(self._recording_clear_button)
-        recording_button_row.addStretch()
-        recording_layout.addLayout(recording_button_row)
+        recording_layout.addWidget(self._recording_start_button)
+        recording_layout.addWidget(self._recording_stop_button)
+        recording_layout.addWidget(self._recording_clear_button)
+        recording_layout.addSpacing(12)
 
-        recording_export_row = QHBoxLayout()
-        self._export_csv_button = IconButton("mdi.file-delimited-outline", "", text=tr("Als CSV exportieren…"))
-        self._export_mf4_button = IconButton("mdi.file-chart-outline", "", text=tr("Als MF4 exportieren…"))
+        # "CSV…"/"MF4…" sind Formatnamen, keine uebersetzbaren Texte.
+        self._export_csv_button = IconButton("mdi.file-delimited-outline", "", text="CSV…")
+        self._export_mf4_button = IconButton("mdi.file-chart-outline", "", text="MF4…")
         self._export_csv_button.clicked.connect(self._on_export_csv_clicked)
         self._export_mf4_button.clicked.connect(self._on_export_mf4_clicked)
-        recording_export_row.addWidget(self._export_csv_button)
-        recording_export_row.addWidget(self._export_mf4_button)
-        recording_export_row.addStretch()
-        recording_layout.addLayout(recording_export_row)
+        recording_layout.addWidget(self._export_csv_button)
+        recording_layout.addWidget(self._export_mf4_button)
+        recording_layout.addSpacing(12)
 
-        outer.addWidget(self._recording_group)
+        self._recording_status_label = QLabel()
+        self._recording_status_label.setStyleSheet("font-weight: bold;")
+        recording_layout.addWidget(self._recording_status_label, 1)
 
         self._recording_duration_timer = QTimer(self)
         self._recording_duration_timer.timeout.connect(self._refresh_recording_status_text)
@@ -536,6 +535,10 @@ class TimelineTab(QWidget):
         charts_scroll.setWidget(charts_container)
         outer.addWidget(charts_scroll, 1)
 
+        # Ausserhalb der QScrollArea (siehe oben): bleibt immer sichtbar am
+        # unteren Rand des Tabs, auch wenn die Diagramme selbst scrollen.
+        outer.addWidget(self._recording_group)
+
         self._restore_layout()
 
         self._repaint_timer = QTimer(self)
@@ -548,22 +551,17 @@ class TimelineTab(QWidget):
 
     def _retranslate(self) -> None:
         self._recording_group.setTitle(tr("Aufzeichnung"))
-        self._recording_hint_label.setText(
+        self._recording_group.setToolTip(
             tr(
                 "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\n"
                 "Aufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand)."
             )
         )
         self._recording_start_button.setToolTip(tr("Aufnahme starten"))
-        self._recording_start_button.setText(tr("Aufnahme starten"))
         self._recording_stop_button.setToolTip(tr("Aufnahme stoppen"))
-        self._recording_stop_button.setText(tr("Aufnahme stoppen"))
         self._recording_clear_button.setToolTip(tr("Zurücksetzen"))
-        self._recording_clear_button.setText(tr("Zurücksetzen"))
         self._export_csv_button.setToolTip(tr("Als CSV exportieren…"))
-        self._export_csv_button.setText(tr("Als CSV exportieren…"))
         self._export_mf4_button.setToolTip(tr("Als MF4 exportieren…"))
-        self._export_mf4_button.setText(tr("Als MF4 exportieren…"))
         self._refresh_recording_status_text()
 
         self._window_label.setText(tr("Zeitfenster:"))
@@ -816,7 +814,9 @@ class TimelineTab(QWidget):
     # (siehe main_window.py: _wire_recording).
 
     def _on_theme_changed(self, palette: Palette) -> None:
-        self._recording_hint_label.setStyleSheet(f"color: {palette.text_muted};")
+        # Die Statuszeile faerbt sich nach Palette (danger/text/text_muted) --
+        # beim Theme-Wechsel neu rendern statt auf das naechste Update zu warten.
+        self._refresh_recording_status_text()
 
     def on_recording_changed(self, active: bool) -> None:
         self._is_recording = active

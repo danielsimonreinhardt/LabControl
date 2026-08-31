@@ -19,16 +19,40 @@ Semantic Versioning (`lab_gui/version.py`).
   `lab_gui/run_report.py`. Der Testablauf-Editor merkt sich außerdem die
   zuletzt geladene/gespeicherte Datei; ihr Name erscheint im Report (sonst
   „Unbenannt").
-- **Kompakte Dashboard-Ansicht**: umschaltbar über einen Icon-Button in der
-  Statusleiste (links neben „ALLE AUS“), Zustand wird in `settings.json`
-  persistiert. Im Kompaktmodus zeigt jedes Geräte-Panel eine einzige Zeile:
-  Gerätename plus Messwerte mit Einheit, beschriftet nur durch Icons
-  (Blitz = Spannung, DC-Symbol = Strom, Tacho = Leistung, Pfeile = CC/CV-Modus;
-  voller Name als Tooltip). Der GroupBox-Titel „Dashboard“ entfällt in dieser
-  Ansicht — insgesamt gut die Hälfte weniger vertikale Höhe, mehr Platz für
-  die Tabs darunter (`lab_gui/dashboard.py`, `Settings.dashboard_compact`).
+- **Kompakte Dashboard-Ansicht**: umschaltbar über einen Icon-Button unten
+  rechts im Dashboard-Bereich, Zustand wird in `settings.json` persistiert.
+  Im Kompaktmodus zeigt jedes Geräte-Panel eine einzige Zeile: Gerätename
+  plus Messwerte mit Einheit, beschriftet nur durch Icons (Blitz = Spannung,
+  DC-Symbol = Strom, Tacho = Leistung, Pfeile = CC/CV-Modus; voller Name als
+  Tooltip). Der „Dashboard“-Titel bleibt in beiden Ansichten sichtbar —
+  insgesamt gut die Hälfte weniger vertikale Höhe, mehr Platz für die Tabs
+  darunter (`lab_gui/dashboard.py`, `Settings.dashboard_compact`).
+
+### Geändert
+- **Control-Panels vereinheitlicht**: alle Geräte-Panels im Steuerung-Tab
+  sind jetzt gleich groß (Höhe und Breite des größten Panels; erscheint die
+  OVP/OCP-Warnung, darf das Netzteil-Panel weiterhin wachsen). Die
+  EIN/AUS-Schalter für den Ausgang sitzen in allen Panels ganz unten, und
+  bei der elektronischen Last steht der Übernehmen-Button jetzt direkt
+  rechts neben dem Sollwert-Feld statt in einer eigenen Zeile
+  (`lab_gui/control_tab.py`).
+- **Aufnahme-Bereich im Verlauf-Tab kompakter und nach unten verschoben**:
+  statt vier Zeilen (Status, Hinweistext, zwei Button-Reihen) jetzt eine
+  einzige Zeile — Start/Stop/Zurücksetzen als reine Material-Design-Icon-
+  Buttons (voller Name im Tooltip), die Export-Buttons mit Kurzlabel
+  „CSV…“/„MF4…“ und die Statusanzeige rechts daneben. Der erklärende
+  Hinweistext ist in den Tooltip der GroupBox gewandert. Sitzt jetzt unter
+  statt über den Diagrammen, aber bewusst außerhalb von deren QScrollArea —
+  bleibt dadurch immer sichtbar am unteren Tab-Rand, auch wenn mehrere
+  Diagramme Scrollen nötig machen (`lab_gui/timeline_tab.py`).
 
 ### Behoben
+- Bei hohen Fenstern verteilte das Hauptlayout überschüssige Höhe je zur
+  Hälfte auf Dashboard und Tabs — das Dashboard wurde dadurch weit über
+  seinen Inhalt hinaus gestreckt (besonders auffällig in der Kompaktansicht,
+  wo die Panel-Zeile dann mittig in einem leeren Rahmen schwebte). Das
+  Dashboard ist jetzt vertikal fixiert und die Tabs bekommen den gesamten
+  Überschuss (`lab_gui/dashboard.py`, `lab_gui/main_window.py`).
 - Die feste Höhe der Dashboard-ScrollArea wird jetzt bei jedem LayoutRequest
   des Panel-Containers nachgezogen. Bisher blieb sie veraltet, wenn der
   Panel-Inhalt nach der Berechnung noch wuchs (z.B. erste Messwerte nach dem

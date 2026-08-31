@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QMetaObject, QSize, QThread, QUrl, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QThread, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -20,7 +20,6 @@ from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
 from i18n import Translator, tr
-from icons import IconButton
 from recording import Recorder
 from run_record import RunRecorder
 from safety import SafetyMonitor
@@ -83,7 +82,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
         self.tabs.addTab(self.settings_tab, "")
-        layout.addWidget(self.tabs)
+        # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
+        # nie an Dashboard oder Sicherheitsbanner darueber.
+        layout.addWidget(self.tabs, 1)
 
         self.setCentralWidget(central)
 
@@ -137,7 +138,6 @@ class MainWindow(QMainWindow):
             self._render_status_label(device_id)
         self._safety_ack_button.setText(tr("Quittieren"))
         self._render_safety_status(self._safety.current_state())
-        self._update_view_toggle_tooltip()
         self._all_off_button.setText(tr("ALLE AUS"))
         self._all_off_button.setToolTip(tr("Alle Ausgänge sofort abschalten"))
 
@@ -338,31 +338,14 @@ class MainWindow(QMainWindow):
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
 
     def _wire_dashboard_view(self) -> None:
-        # Umschalter Normal-/Kompaktansicht des Dashboards, rechts in der
-        # Statusleiste (vor dem ALLE-AUS-Button, der ganz rechts bleibt --
-        # Index 1: nach dem _status_container von Index 0); der Zustand wird
-        # wie die uebrigen Einstellungen persistiert und beim Start
-        # wiederhergestellt.
-        self._view_toggle_button = IconButton("mdi.arrow-collapse-vertical", "")
-        self._view_toggle_button.setFixedSize(QSize(32, 24))
-        self._view_toggle_button.clicked.connect(
+        # Der Ansicht-Umschalter sitzt unten rechts im Dashboard selbst (siehe
+        # DashboardWidget) -- hier nur die Verkabelung mit der persistierten
+        # Einstellung, die beim Start wiederhergestellt wird.
+        self.dashboard.compact_toggle_requested.connect(
             lambda: self._settings.set_dashboard_compact(not self._settings.dashboard_compact)
         )
-        self.statusBar().insertPermanentWidget(1, self._view_toggle_button)
-        self._settings.dashboard_compact_changed.connect(self._apply_dashboard_compact)
-        self._apply_dashboard_compact(self._settings.dashboard_compact)
-
-    def _apply_dashboard_compact(self, compact: bool) -> None:
-        self.dashboard.set_compact(compact)
-        self._view_toggle_button.set_icon(
-            "mdi.arrow-expand-vertical" if compact else "mdi.arrow-collapse-vertical"
-        )
-        self._update_view_toggle_tooltip()
-
-    def _update_view_toggle_tooltip(self) -> None:
-        self._view_toggle_button.setToolTip(
-            tr("Normale Ansicht") if self._settings.dashboard_compact else tr("Kompakte Ansicht")
-        )
+        self._settings.dashboard_compact_changed.connect(self.dashboard.set_compact)
+        self.dashboard.set_compact(self._settings.dashboard_compact)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()

@@ -49,6 +49,17 @@ LOAD_MODE_UNITS = {
 }
 
 
+def _row(*widgets: QWidget) -> QWidget:
+    """Reiht Widgets (z.B. Eingabefeld + Setzen-Button) in einer Zeile auf."""
+    container = QWidget()
+    row_layout = QHBoxLayout(container)
+    row_layout.setContentsMargins(0, 0, 0, 0)
+    for widget in widgets:
+        row_layout.addWidget(widget)
+    row_layout.addStretch()
+    return container
+
+
 def _style_toggle_buttons(
     on_button: QPushButton, off_button: QPushButton, state: bool | None, pal: Palette
 ) -> None:
@@ -90,13 +101,17 @@ class LoadControlGroup(QGroupBox):
         self._setpoint_spin = QDoubleSpinBox()
         self._setpoint_spin.setDecimals(3)
         self._setpoint_spin.setMaximumWidth(150)
-        self._form.addRow(" ", self._setpoint_spin)
-        self._on_mode_index_changed(self._mode_combo.currentIndex())
-
         self._apply_button = IconButton("mdi.check-bold", "")
         self._apply_button.clicked.connect(self._on_apply)
-        self._form.addRow(self._apply_button)
+        self._setpoint_row = _row(self._setpoint_spin, self._apply_button)
+        self._form.addRow(" ", self._setpoint_row)
+        self._on_mode_index_changed(self._mode_combo.currentIndex())
 
+        # Ausgang-Schalter sitzen ganz unten im Panel -- der Stretch drueckt
+        # sie an den unteren Rand, auch wenn das Panel (siehe ControlTab.
+        # _equalize_sections) auf die Hoehe des groessten Panels gebracht wird.
+        outer.addStretch(1)
+        self._output_form = QFormLayout()
         self._input_layout = input_layout = QHBoxLayout()
         self._on_button = QPushButton()
         self._off_button = QPushButton()
@@ -110,7 +125,8 @@ class LoadControlGroup(QGroupBox):
         self._off_button.clicked.connect(lambda: self.set_input.emit(self._device_id, False))
         input_layout.addWidget(self._on_button)
         input_layout.addWidget(self._off_button)
-        self._form.addRow(" ", input_layout)
+        self._output_form.addRow(" ", input_layout)
+        outer.addLayout(self._output_form)
 
         # Solange noch keine Hardware-Rueckfrage eingetroffen ist (siehe
         # set_input_state, gespeist vom DeviceWorker-Polling), ist der
@@ -136,11 +152,11 @@ class LoadControlGroup(QGroupBox):
         self._subtitle.setText(tr("Elektronische Last (KEL102)"))
         self._populate_mode_combo()
         self._form.labelForField(self._mode_combo).setText(tr("Modus:"))
-        self._form.labelForField(self._setpoint_spin).setText(tr("Sollwert:"))
+        self._form.labelForField(self._setpoint_row).setText(tr("Sollwert:"))
         self._apply_button.setToolTip(tr("Übernehmen"))
         self._on_button.setText(tr("EIN"))
         self._off_button.setText(tr("AUS"))
-        self._form.labelForField(self._input_layout).setText(tr("Ausgang:"))
+        self._output_form.labelForField(self._input_layout).setText(tr("Ausgang:"))
 
     def set_input_state(self, on: bool) -> None:
         self._input_on = on
@@ -202,7 +218,7 @@ class PsuControlGroup(QGroupBox):
         self._voltage_button.clicked.connect(
             lambda: self.set_voltage.emit(self._device_id, self._voltage_spin.value())
         )
-        self._voltage_row = self._row(self._voltage_spin, self._voltage_button)
+        self._voltage_row = _row(self._voltage_spin, self._voltage_button)
         self._form.addRow(" ", self._voltage_row)
 
         self._current_spin = QDoubleSpinBox()
@@ -214,28 +230,8 @@ class PsuControlGroup(QGroupBox):
         self._current_button.clicked.connect(
             lambda: self.set_current.emit(self._device_id, self._current_spin.value())
         )
-        self._current_row = self._row(self._current_spin, self._current_button)
+        self._current_row = _row(self._current_spin, self._current_button)
         self._form.addRow(" ", self._current_row)
-
-        self._output_layout = QHBoxLayout()
-        self._output_on_button = QPushButton()
-        self._output_off_button = QPushButton()
-        self._output_on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._output_off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._output_on_button.clicked.connect(self._on_output_on)
-        self._output_off_button.clicked.connect(self._on_output_off)
-        self._output_layout.addWidget(self._output_on_button)
-        self._output_layout.addWidget(self._output_off_button)
-        self._form.addRow(" ", self._output_layout)
-
-        # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
-        # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
-        # indem der Strom auf 0 gesetzt wird. Deshalb kein "unbekannter"
-        # Startzustand wie bei der Last: ein frisch verbundenes/simuliertes
-        # Netzteil hat Strom 0, gilt also standardmaessig als AUS, bis hier
-        # geklickt wird.
-        self._output_on: bool | None = False
-        self._update_output_buttons()
 
         self._ovp_spin = QDoubleSpinBox()
         self._ovp_spin.setDecimals(1)
@@ -244,7 +240,7 @@ class PsuControlGroup(QGroupBox):
         self._ovp_spin.setMaximumWidth(120)
         self._ovp_button = IconButton("mdi.check", "")
         self._ovp_button.clicked.connect(lambda: self.set_ovp.emit(self._device_id, self._ovp_spin.value()))
-        self._ovp_row = self._row(self._ovp_spin, self._ovp_button)
+        self._ovp_row = _row(self._ovp_spin, self._ovp_button)
         self._form.addRow(" ", self._ovp_row)
 
         self._ocp_spin = QDoubleSpinBox()
@@ -254,7 +250,7 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.setMaximumWidth(120)
         self._ocp_button = IconButton("mdi.check", "")
         self._ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._device_id, self._ocp_spin.value()))
-        self._ocp_row = self._row(self._ocp_spin, self._ocp_button)
+        self._ocp_row = _row(self._ocp_spin, self._ocp_button)
         self._form.addRow(" ", self._ocp_row)
 
         # Das Geraet ignoriert Spannungs-/Stromwerte oberhalb der aktuell
@@ -272,6 +268,32 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.valueChanged.connect(self._update_limit_warning)
         self._update_limit_warning()
 
+        # Ausgang-Schalter ganz unten im Panel (siehe LoadControlGroup) -- der
+        # Stretch drueckt sie an den unteren Rand, auch bei angeglichener
+        # Panel-Hoehe (ControlTab._equalize_sections).
+        outer.addStretch(1)
+        self._output_form = QFormLayout()
+        self._output_layout = QHBoxLayout()
+        self._output_on_button = QPushButton()
+        self._output_off_button = QPushButton()
+        self._output_on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._output_off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._output_on_button.clicked.connect(self._on_output_on)
+        self._output_off_button.clicked.connect(self._on_output_off)
+        self._output_layout.addWidget(self._output_on_button)
+        self._output_layout.addWidget(self._output_off_button)
+        self._output_form.addRow(" ", self._output_layout)
+        outer.addLayout(self._output_form)
+
+        # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
+        # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
+        # indem der Strom auf 0 gesetzt wird. Deshalb kein "unbekannter"
+        # Startzustand wie bei der Last: ein frisch verbundenes/simuliertes
+        # Netzteil hat Strom 0, gilt also standardmaessig als AUS, bis hier
+        # geklickt wird.
+        self._output_on: bool | None = False
+        self._update_output_buttons()
+
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
 
@@ -279,7 +301,7 @@ class PsuControlGroup(QGroupBox):
         self._subtitle.setText(tr("Labornetzteil (HCS-34xx)"))
         self._form.labelForField(self._voltage_row).setText(tr("Spannung:"))
         self._form.labelForField(self._current_row).setText(tr("Strom:"))
-        self._form.labelForField(self._output_layout).setText(tr("Ausgang:"))
+        self._output_form.labelForField(self._output_layout).setText(tr("Ausgang:"))
         self._form.labelForField(self._ovp_row).setText(tr("OVP:"))
         self._form.labelForField(self._ocp_row).setText(tr("OCP:"))
         for button in (self._voltage_button, self._current_button, self._ovp_button, self._ocp_button):
@@ -345,16 +367,6 @@ class PsuControlGroup(QGroupBox):
     def _update_output_buttons(self) -> None:
         _style_toggle_buttons(self._output_on_button, self._output_off_button, self._output_on, current_palette())
 
-    @staticmethod
-    def _row(*widgets: QWidget) -> QWidget:
-        container = QWidget()
-        row_layout = QHBoxLayout(container)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        for widget in widgets:
-            row_layout.addWidget(widget)
-        row_layout.addStretch()
-        return container
-
 
 class ControlTab(QWidget):
     """Scrollbar, damit auf kleinen/hochskalierten Bildschirmen nichts unerreichbar wird."""
@@ -378,6 +390,10 @@ class ControlTab(QWidget):
 
         self._sections: dict[str, QWidget] = {}
 
+        # Nach einem Sprachwechsel aendern sich Label-Breiten/-Hoehen -- die
+        # Panel-Groessen muessen dann neu angeglichen werden.
+        Translator.instance().language_changed.connect(self._equalize_sections)
+
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         section = self._sections.get(device_id)
         if section is not None:
@@ -390,7 +406,24 @@ class ControlTab(QWidget):
         section.hide()
         self._content_layout.addWidget(section)
         self._sections[device_id] = section
+        self._equalize_sections()
         self.section_created.emit(kind, device_id, section)
+
+    def _equalize_sections(self) -> None:
+        """Bringt alle Panels auf Hoehe und Breite des groessten Panels.
+
+        Ueber die Mindestgroesse statt einer festen Groesse: erscheint z.B. die
+        OVP/OCP-Warnung im Netzteil-Panel, darf dieses eine Panel noch
+        wachsen, statt den Warntext abzuschneiden.
+        """
+        if not self._sections:
+            return
+        for section in self._sections.values():
+            section.setMinimumSize(0, 0)
+        max_width = max(s.sizeHint().width() for s in self._sections.values())
+        max_height = max(s.sizeHint().height() for s in self._sections.values())
+        for section in self._sections.values():
+            section.setMinimumSize(max_width, max_height)
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         section = self._sections.get(device_id)

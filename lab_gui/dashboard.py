@@ -10,7 +10,7 @@ sein eigenes Panel mit eindeutigem, umbenennbarem Label.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -201,9 +201,19 @@ class _DevicePanel(QGroupBox):
 
 class DashboardWidget(QGroupBox):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    # Klick auf den Ansicht-Umschalter unten rechts; MainWindow verdrahtet ihn
+    # mit der persistierten Einstellung, die dann set_compact zurueckruft.
+    compact_toggle_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
+        # Vertikal Fixed: die Hoehe ergibt sich vollstaendig aus der fest
+        # gesetzten ScrollArea-Hoehe (_update_scroll_height). Ohne das verteilt
+        # das Eltern-Layout ueberschuessige Fensterhoehe auch auf das Dashboard
+        # (Preferred darf wachsen) -- die fixierte Scroll-Flaeche schwebt dann
+        # mittig in einem viel zu hohen Rahmen, besonders sichtbar in der
+        # Kompaktansicht.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
 
@@ -223,7 +233,20 @@ class DashboardWidget(QGroupBox):
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        outer.addWidget(self._scroll_area)
+
+        # ScrollArea und Ansicht-Umschalter teilen sich eine Zeile: der Button
+        # sitzt unten rechts im Dashboard-Bereich, ohne eigene Zeile und damit
+        # ohne zusaetzliche vertikale Hoehe.
+        body = QHBoxLayout()
+        body.addWidget(self._scroll_area, 1)
+        corner = QVBoxLayout()
+        corner.addStretch()
+        self._view_toggle_button = IconButton("mdi.arrow-collapse-vertical", "")
+        self._view_toggle_button.setFixedSize(QSize(28, 24))
+        self._view_toggle_button.clicked.connect(self.compact_toggle_requested)
+        corner.addWidget(self._view_toggle_button)
+        body.addLayout(corner)
+        outer.addLayout(body)
 
         self._panels: dict[str, _DevicePanel] = {}
         self._compact = False
@@ -233,9 +256,16 @@ class DashboardWidget(QGroupBox):
         self._retranslate()
 
     def _retranslate(self) -> None:
-        # In der Kompaktansicht entfaellt der GroupBox-Titel -- er wuerde nur
-        # vertikale Hoehe kosten, die diese Ansicht gerade einsparen soll.
-        self.setTitle("" if self._compact else tr("Dashboard"))
+        self.setTitle(tr("Dashboard"))
+        self._update_toggle_button()
+
+    def _update_toggle_button(self) -> None:
+        self._view_toggle_button.set_icon(
+            "mdi.arrow-expand-vertical" if self._compact else "mdi.arrow-collapse-vertical"
+        )
+        self._view_toggle_button.setToolTip(
+            tr("Normale Ansicht") if self._compact else tr("Kompakte Ansicht")
+        )
 
     @Slot(bool)
     def set_compact(self, compact: bool) -> None:
@@ -244,7 +274,7 @@ class DashboardWidget(QGroupBox):
         self._compact = compact
         for panel in self._panels.values():
             panel.set_compact(compact)
-        self._retranslate()
+        self._update_toggle_button()
         self._update_scroll_height()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
