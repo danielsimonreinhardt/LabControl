@@ -164,6 +164,7 @@ class MainWindow(QMainWindow):
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
         self._worker.psu_measurement.connect(self._recorder.on_psu_measurement)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
+        self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)

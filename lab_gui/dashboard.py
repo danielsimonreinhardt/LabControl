@@ -46,8 +46,20 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "power": ("Leistung", "W"),
     "mode": ("Modus", ""),
 }
-LOAD_FIELD_KEYS = ["voltage", "current", "power"]
+LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
+# Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
+# Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md
+# "Bekannte Eigenheiten"), MockKoradKEL102 dagegen den SET-Code aus
+# korad_kel102.driver.FUNCTIONS (CURR/VOLT/RES/POW) -- beide Formate werden
+# hier auf dieselbe Anzeige gemappt.
+LOAD_MODE_SHORT: dict[str, str] = {
+    "CURR": "CC", "CC": "CC",
+    "VOLT": "CV", "CV": "CV",
+    "RES": "CR", "CR": "CR",
+    "POW": "CW", "CW": "CW",
+    "SHORT": "SHORT",
+}
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
@@ -481,3 +493,11 @@ class DashboardWidget(QGroupBox):
         panel.set_value("voltage", f"{voltage:.2f}")
         panel.set_value("current", f"{current:.2f}")
         panel.set_value("mode", "CC" if constant_current else "CV")
+
+    @Slot(str, str)
+    def set_load_mode(self, device_id: str, function_code: str) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        code = function_code.upper()
+        panel.set_value("mode", LOAD_MODE_SHORT.get(code, code))

@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
 # zugrundeliegenden Messwerte weiterhin nur alle 500ms neu eintreffen.
 # 100ms (10Hz) ist ein klarer Sprung (5x), bleibt aber bewusst konservativ
 # statt die Repaint-Rate voll zu erreichen: pro Zyklus werden ALLE Geraete
-# sequentiell (nicht parallel) abgefragt, eine Last macht dabei bereits 4
-# Kommandos hintereinander (measure_voltage/current/power + get_input, siehe
-# _poll unten). Das HCS-34xx haengt an einem CP210x-USB-UART-Wandler (9600
+# sequentiell (nicht parallel) abgefragt, eine Last macht dabei bereits 5
+# Kommandos hintereinander (measure_voltage/current/power + get_input +
+# get_function, siehe _poll unten). Das HCS-34xx haengt an einem CP210x-USB-UART-Wandler (9600
 # Baud) -- solche VCP-Treiber haben unter Windows oft einen Default-
 # Latenz-Timer von ~16ms PRO Read-Aufruf, und die Geraete-Firmware selbst ist
 # nicht als schnelles Interface dokumentiert. Eine deutlich hoehere Rate
@@ -81,6 +81,7 @@ class DeviceWorker(QObject):
     load_measurement = Signal(str, float, float, float)  # device_id, voltage, current, power
     psu_measurement = Signal(str, float, float, bool)     # device_id, voltage, current, constant_current
     load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
+    load_function_state = Signal(str, str)   # device_id, aktiver SCPI-Funktionscode (siehe korad_kel102.driver.FUNCTIONS)
     # device_id, Ausgang ein/aus. Anders als load_input_state KEINE echte
     # Hardware-Rueckfrage (das HCS-34xx-Protokoll kennt keine, siehe
     # hcs34xx/driver.py) -- wird nur emittiert, wenn der Worker den Ausgang
@@ -146,10 +147,12 @@ class DeviceWorker(QObject):
     def _add_mock_load(self) -> None:
         if SIM_LOAD_ID in self._loads:
             return
-        self._loads[SIM_LOAD_ID] = MockKoradKEL102()
+        load = MockKoradKEL102()
+        self._loads[SIM_LOAD_ID] = load
         self.device_added.emit("load", SIM_LOAD_ID)
         self.load_connected.emit(SIM_LOAD_ID, True)
         self.load_input_state.emit(SIM_LOAD_ID, False)
+        self.load_function_state.emit(SIM_LOAD_ID, load.get_function())
 
     def _remove_mock_load(self) -> None:
         load = self._loads.pop(SIM_LOAD_ID, None)
@@ -191,6 +194,7 @@ class DeviceWorker(QObject):
             # Control-Tab soll den echten Zustand so frueh wie moeglich zeigen.
             try:
                 self.load_input_state.emit(device_id, candidate.get_input())
+                self.load_function_state.emit(device_id, candidate.get_function())
             except LoadError:
                 pass  # naechster Poll-Zyklus liefert den Status ohnehin nach
 
@@ -250,6 +254,7 @@ class DeviceWorker(QObject):
                 m = load.measure()
                 self.load_measurement.emit(device_id, m.voltage, m.current, m.power)
                 self.load_input_state.emit(device_id, load.get_input())
+                self.load_function_state.emit(device_id, load.get_function())
             except LoadError as exc:
                 logger.warning("Last %s getrennt: %s", device_id, exc)
                 load.close()

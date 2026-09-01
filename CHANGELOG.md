@@ -7,6 +7,15 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Last-Modus im Dashboard-Panel**: Das Dashboard-Panel der elektronischen
+  Last zeigt jetzt zusätzlich zu Spannung/Strom/Leistung den aktuell aktiven
+  Betriebsmodus an (CC/CV/CR/CW/SHORT), analog zur bestehenden CC/CV-Anzeige
+  beim Netzteil. Neues `DeviceWorker`-Signal `load_function_state`
+  (`device_worker.py`, fragt `KoradKEL102.get_function()` pro Poll-Zyklus
+  sowie sofort nach dem Verbinden ab) → `DashboardWidget.set_load_mode`
+  (`dashboard.py`), inkl. Mapping der SET-Codes (`CURR/VOLT/RES/POW`) und der
+  von echter Hardware zurückgelieferten Kurzform (`CC/CV/CR/CW`) auf dieselbe
+  Anzeige (`LOAD_MODE_SHORT`).
 - **Individuelle Panel-Hintergrundfarben (Dashboard/Control)**: Jedes
   Geräte-Panel kann über einen neuen Paletten-Button im Panel-Header eine von
   7 Akzentfarben bekommen (Blau/Türkis/Grün/Orange/Violett/Pink/Grau, je
