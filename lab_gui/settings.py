@@ -1,5 +1,6 @@
 """Persistente App-Einstellungen (Simulationsmodus, Dark Mode, Sprache,
-geraete-individuelle Sicherheits-Grenzwerte).
+geraete-individuelle Sicherheits-Grenzwerte, Desktop-Benachrichtigungen,
+geraete-individuelle Panel-Hintergrundfarben).
 
 Analog zu device_registry.py lokal als JSON-Datei gespeichert, damit die
 Einstellung Neustarts uebersteht.
@@ -25,6 +26,8 @@ class Settings(QObject):
     language_changed = Signal(str)
     safety_limits_changed = Signal(dict)
     notifications_enabled_changed = Signal(bool)
+    panel_colors_enabled_changed = Signal(bool)
+    panel_color_changed = Signal(str, object)  # device_id, color_key (str | None)
 
     def __init__(self) -> None:
         super().__init__()
@@ -86,6 +89,37 @@ class Settings(QObject):
         self._data["notifications_enabled"] = enabled
         self._save()
         self.notifications_enabled_changed.emit(enabled)
+
+    @property
+    def panel_colors_enabled(self) -> bool:
+        return bool(self._data.get("panel_colors_enabled", False))
+
+    def set_panel_colors_enabled(self, enabled: bool) -> None:
+        if enabled == self.panel_colors_enabled:
+            return
+        self._data["panel_colors_enabled"] = enabled
+        self._save()
+        self.panel_colors_enabled_changed.emit(enabled)
+
+    def panel_color(self, device_id: str) -> str | None:
+        """Gespeicherte Panel-Farbe EINES Geraets (device_id), unabhaengig
+        vom An/Aus-Schalter panel_colors_enabled -- siehe panel_color.py."""
+        stored = self._data.get("panel_colors")
+        value = stored.get(device_id) if isinstance(stored, dict) else None
+        return value if isinstance(value, str) else None
+
+    def set_panel_color(self, device_id: str, color_key: str | None) -> None:
+        if color_key == self.panel_color(device_id):
+            return
+        stored = self._data.get("panel_colors")
+        colors = dict(stored) if isinstance(stored, dict) else {}
+        if color_key is None:
+            colors.pop(device_id, None)
+        else:
+            colors[device_id] = color_key
+        self._data["panel_colors"] = colors
+        self._save()
+        self.panel_color_changed.emit(device_id, color_key)
 
     @property
     def language(self) -> str:

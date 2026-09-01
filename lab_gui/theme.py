@@ -10,23 +10,38 @@ stylesheet() und wird als ein Stueck auf die QApplication angewendet.
 """
 from __future__ import annotations
 
-import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
+import qtawesome as qta
+from PySide6.QtCore import QObject, QSize, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
-# Absolute Pfade (QSS-url() wird sonst relativ zum aktuellen Arbeitsverzeichnis
-# aufgeloest, was unzuverlaessig ist). Im PyInstaller-Onefile-Build liegt
-# __file__ nicht am realen Ort der mitgelieferten Daten -- dort werden sie zur
-# Laufzeit nach sys._MEIPASS entpackt (siehe PyInstaller-Doku); die icons/
-# muessen beim Bauen per --add-data mitgegeben werden, sonst fehlen sie im .exe
-# (Icons fehlen dann nur optisch, kein Absturz). Qt erwartet in url() immer
-# Vorwaertsslashes, auch unter Windows.
-_ICONS_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent) / "icons"
-_SPIN_UP_ICON = (_ICONS_DIR / "spin_up.png").as_posix()
-_SPIN_DOWN_ICON = (_ICONS_DIR / "spin_down.png").as_posix()
+# Pfeile fuer die Spin-Buttons (QAbstractSpinBox::up-arrow/down-arrow, siehe
+# stylesheet() unten) werden aus qtawesome erzeugt -- wie alle anderen Icons
+# im Programm (icons.py) -- statt als statische PNG-Dateien gepflegt zu
+# werden. Das macht sie automatisch themefaehig (Farbe folgt pal.text) und
+# vermeidet zwei Extra-Assets im Repo/.spec. QSS-url() kann kein QIcon live
+# binden, daher wird pro Palette einmalig eine PNG-Datei ins Temp-Verzeichnis
+# geschrieben (fluechtige Ableitung, kein Nutzerdaten-Persistenzbedarf wie bei
+# settings.json/device_labels.json) und ihr Pfad im QSS referenziert. Qt
+# erwartet in url() immer Vorwaertsslashes, auch unter Windows.
+_SPIN_ARROW_CACHE: dict[tuple[str, str], str] = {}  # (Palettenname, Richtung) -> Dateipfad
+_SPIN_ARROW_SIZE = QSize(28, 28)
+_SPIN_ARROW_ICON_NAME = {"up": "mdi.chevron-up", "down": "mdi.chevron-down"}
+
+
+def _spin_arrow_icon_path(direction: str, pal: "Palette") -> str:
+    key = (pal.name, direction)
+    cached = _SPIN_ARROW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    path = Path(tempfile.gettempdir()) / f"labcontrol_spin_{direction}_{pal.name.replace(' ', '_')}.png"
+    qta.icon(_SPIN_ARROW_ICON_NAME[direction], color=pal.text).pixmap(_SPIN_ARROW_SIZE).save(str(path), "PNG")
+    result = path.as_posix()
+    _SPIN_ARROW_CACHE[key] = result
+    return result
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,27 @@ class Palette:
     plot_grid: str
     plot_signal: str
     plot_ref: str
+    # Individuelle Geraete-Panel-Hintergruende (Dashboard/Control-Tab, siehe
+    # panel_color.py) -- PANEL_COLOR_ORDER-Schluessel -> Hex-Farbe, je Theme
+    # eigens abgestimmt (helle Toenung in Light, gedeckte Toenung in Dark).
+    panel_tints: dict[str, str]
+
+
+# Interner Farbschluessel -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
+# Reihenfolge bestimmt die Anzeigereihenfolge im Panel-Farbmenue (siehe
+# panel_color.PanelColorButton). Bewusst ohne reines Rot/Ampel-Gruen/Amber-Gelb
+# -- Verwechslungsgefahr mit Fail/Pass-Zeilen, Sicherheits-Banner bzw. dem
+# Amber-Industrial-Theme-Akzent selbst.
+PANEL_COLOR_ORDER = ["blue", "teal", "green", "orange", "violet", "pink", "gray"]
+PANEL_COLOR_LABELS = {
+    "blue": "Blau",
+    "teal": "Türkis",
+    "green": "Grün",
+    "orange": "Orange",
+    "violet": "Violett",
+    "pink": "Pink",
+    "gray": "Grau",
+}
 
 
 LIGHT = Palette(
@@ -77,6 +113,15 @@ LIGHT = Palette(
     plot_grid="#d8dee6",
     plot_signal="#22c55e",
     plot_ref="#f59e0b",
+    panel_tints={
+        "blue": "#dbeafe",
+        "teal": "#cffafe",
+        "green": "#d1fae5",
+        "orange": "#ffedd5",
+        "violet": "#ede9fe",
+        "pink": "#fce7f3",
+        "gray": "#e5e7eb",
+    },
 )
 
 AMBER_DARK = Palette(
@@ -102,6 +147,21 @@ AMBER_DARK = Palette(
     plot_grid="#2c313a",
     plot_signal="#ff9f1c",
     plot_ref="#ffcc00",
+    # Deutlich kraeftiger/heller als surface (#1e2229, Leuchtdichte ~34) statt
+    # nur einer abgeschwaechten Variante der Light-Werte -- die urspruengliche
+    # erste Fassung lag mit Leuchtdichte ~34-45 so nah an surface, dass die
+    # Faerbung im Dark-Theme praktisch nicht auffiel (BUGS.md #10d). Ziel
+    # bewusst ~65-83 (deutlich abgesetzt, aber noch kein Neon-/Akzent-Ton, der
+    # mit `accent`/`success`/`warning`/`danger` verwechselt werden koennte).
+    panel_tints={
+        "blue": "#2a4a75",
+        "teal": "#1f5f57",
+        "green": "#2c6138",
+        "orange": "#7a4a1a",
+        "violet": "#4f3878",
+        "pink": "#7a3559",
+        "gray": "#4a5058",
+    },
 )
 
 
@@ -217,15 +277,15 @@ def stylesheet(pal: Palette) -> str:
         background-color: {pal.accent_hover};
     }}
     QAbstractSpinBox::up-arrow {{
-        image: url({_SPIN_UP_ICON});
-        width: 10px;
-        height: 10px;
+        image: url({_spin_arrow_icon_path("up", pal)});
+        width: 14px;
+        height: 14px;
         subcontrol-position: center;
     }}
     QAbstractSpinBox::down-arrow {{
-        image: url({_SPIN_DOWN_ICON});
-        width: 10px;
-        height: 10px;
+        image: url({_spin_arrow_icon_path("down", pal)});
+        width: 14px;
+        height: 14px;
         subcontrol-position: center;
     }}
     QCheckBox::indicator {{

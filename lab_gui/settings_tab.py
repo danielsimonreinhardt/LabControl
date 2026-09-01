@@ -41,6 +41,11 @@ class _DeviceSafetyGroup(QGroupBox):
         self._kind = kind
         self.setTitle(label)
         form = QFormLayout(self)
+        # Default-Policy (AllNonFixedFieldsGrow) laesst die Feld-Spalte
+        # (Checkbox+Spinbox) auf die volle verfuegbare Breite wachsen --
+        # dadurch spannte sich das ganze Panel unnoetig ueber die komplette
+        # Tab-Breite auf (BUGS.md #11), obwohl der Inhalt viel schmaler waere.
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
 
         # field -> (Checkbox, Spinbox, Zeilen-Label) fuer
         # set_limits()/_on_field_changed().
@@ -95,6 +100,7 @@ class SettingsTab(QWidget):
     language_selected = Signal(str)
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
+    panel_colors_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -115,6 +121,10 @@ class SettingsTab(QWidget):
         self._notify_checkbox = QCheckBox()
         self._notify_checkbox.toggled.connect(self.notifications_toggled)
         layout.addWidget(self._notify_checkbox)
+
+        self._panel_colors_checkbox = QCheckBox()
+        self._panel_colors_checkbox.toggled.connect(self.panel_colors_toggled)
+        layout.addWidget(self._panel_colors_checkbox)
 
         language_row = QHBoxLayout()
         self._language_label = QLabel()
@@ -157,6 +167,7 @@ class SettingsTab(QWidget):
         )
         self._dark_checkbox.setText(tr("Dark Mode (Amber Industrial statt Modern Light)"))
         self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
+        self._panel_colors_checkbox.setText(tr("Individuelle Panel-Hintergrundfarben (Dashboard/Control)"))
         self._language_label.setText(tr("Sprache:"))
         self._safety_hint.setText(
             tr(
@@ -182,6 +193,11 @@ class SettingsTab(QWidget):
         self._notify_checkbox.setChecked(enabled)
         self._notify_checkbox.blockSignals(False)
 
+    def set_panel_colors_enabled(self, enabled: bool) -> None:
+        self._panel_colors_checkbox.blockSignals(True)
+        self._panel_colors_checkbox.setChecked(enabled)
+        self._panel_colors_checkbox.blockSignals(False)
+
     def set_language(self, language: str) -> None:
         index = self._language_combo.findData(language)
         if index < 0:
@@ -201,7 +217,14 @@ class SettingsTab(QWidget):
         section.limit_changed.connect(
             lambda field, enabled, value, d=device_id: self.safety_limit_changed.emit(d, field, enabled, value)
         )
-        self._safety_sections_layout.addWidget(section)
+        # Zeile mit Stretch statt direktem addWidget() (siehe BUGS.md #11):
+        # ein QGroupBox-Kind einer QVBoxLayout wird sonst auf die volle
+        # verfuegbare Breite gestreckt, auch wenn form.setFieldGrowthPolicy
+        # oben die Feld-Spalte selbst schon kompakt haelt.
+        row = QHBoxLayout()
+        row.addWidget(section)
+        row.addStretch(1)
+        self._safety_sections_layout.addLayout(row)
         self._safety_sections[device_id] = section
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:

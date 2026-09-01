@@ -25,9 +25,6 @@ PSU_ACTIONS = {
     "PSU_CURR": "Strom setzen",
     "PSU_OUT_ON": "Ausgang EIN",
     "PSU_OUT_OFF": "Ausgang AUS",
-    "PSU_P1": "Preset P1 abrufen",
-    "PSU_P2": "Preset P2 abrufen",
-    "PSU_P3": "Preset P3 abrufen",
     "PSU_ARB": "Arbiträrsignal",
 }
 
@@ -73,7 +70,7 @@ _LEGACY_DEVICE_KIND = {"Last": "load", "Netzteil": "psu"}
 # ihre Parameter (Signalform, Amplitude, ...) kommen aus dem Definieren-Dialog
 # (siehe signal_dialog.py) und liegen in den arb_*-Feldern von TestStep.
 VALUELESS_ACTIONS = {
-    "OUT_ON", "OUT_OFF", "PSU_OUT_OFF", "PSU_P1", "PSU_P2", "PSU_P3",
+    "OUT_ON", "OUT_OFF", "PSU_OUT_OFF",
     "ARB", "PSU_ARB",
 }
 
@@ -94,9 +91,6 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "PSU_CURR": ("A", 0, 10),
     "PSU_OUT_ON": ("V", 1, 60),
     "PSU_OUT_OFF": ("", 0, 0),
-    "PSU_P1": ("", 0, 0),
-    "PSU_P2": ("", 0, 0),
-    "PSU_P3": ("", 0, 0),
     "ARB": ("", 0, 0),
     "PSU_ARB": ("", 0, 0),
 }

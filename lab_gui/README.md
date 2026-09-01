@@ -12,27 +12,34 @@ python main.py
 ## Version
 
 Die Versionsnummer steht zentral in `lab_gui/version.py` (`__version__`) und
-wird im Fenstertitel angezeigt. Bei jedem Release dort hochzählen und beim
-.exe-Bau unten im `--name` mit übernehmen.
+wird im Fenstertitel UND im Namen der gebauten .exe verwendet. Bei jedem
+Release dort hochzählen -- `LabControl.spec` und der GitHub-Actions-Workflow
+(`.github/workflows/build-exe.yml`) lesen sie automatisch von dort, nirgends
+mehr hart verdrahtet.
 
 ## Als .exe bauen (Windows)
 
 ```
 pip install -r ../requirements.txt
 cd ..
-pyinstaller --name LaborSteuerung-0.2.0 --paths . --add-data "lab_gui/icons;lab_gui/icons" --onefile --windowed lab_gui/main.py
+pyinstaller LabControl.spec
 ```
 
-Wichtig: Der Befehl muss aus `labor-dashboard/` (nicht aus `lab_gui/`) laufen, da
-`--paths .` PyInstaller sagt, wo es die Pakete `korad_kel102` und `hcs34xx`
-findet. `--add-data "lab_gui/icons;lab_gui/icons"` bündelt die Spinbox-Pfeil-
-Icons (theme.py) mit ins .exe -- ohne das fehlen sie im Onefile-Build (kein
-Absturz, nur optisch). Ergebnis liegt danach in `dist/LaborSteuerung-0.2.0.exe`
-(einzelne Datei, kein Konsolenfenster). Gespeicherte Testabläufe landen
-automatisch neben der .exe in `dist/testcases/` (nicht im flüchtigen
+Wichtig: Der Befehl muss aus `labor-dashboard/` (nicht aus `lab_gui/`) laufen
+(`LabControl.spec` erwartet das, u.a. wegen `pathex=['.']` für die Pakete
+`korad_kel102`/`hcs34xx`). Ergebnis liegt danach in
+`dist/LabControl_v<version>.exe` (einzelne Datei, kein Konsolenfenster,
+Bootloader-Splash beim Start). Gespeicherte Testabläufe landen automatisch
+neben der .exe in `dist/testcases/` (nicht im flüchtigen
 PyInstaller-Temp-Verzeichnis).
 
-`build/`, `dist/` und `*.spec` sind in `.gitignore` – bei Bedarf neu bauen
+`LabControl.spec` bündelt Icons/Übersetzungen als Daten, blendet ungenutzte
+PySide6-Submodule (WebEngine/Qml/3D/...) aus und deklariert den Splash --
+siehe die Kommentare direkt in der Datei für den Hintergrund. Dieselbe Datei
+baut auch der CI-Workflow; lokal per Hand angelegte `*.spec`-Dateien anderer
+Namen bleiben über `.gitignore` unversioniert, `LabControl.spec` selbst ist
+davon per Ausnahme-Regel ausgenommen (die CI braucht sie beim Checkout).
+`build/` und `dist/` sind weiterhin in `.gitignore` -- bei Bedarf neu bauen
 statt die .exe zu versionieren.
 
 ## Aufbau

@@ -7,6 +7,16 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Individuelle Panel-Hintergrundfarben (Dashboard/Control)**: Jedes
+  Geräte-Panel kann über einen neuen Paletten-Button im Panel-Header eine von
+  7 Akzentfarben bekommen (Blau/Türkis/Grün/Orange/Violett/Pink/Grau, je
+  Theme eigens abgestimmt) oder „Kein (Standard)". Die Farbe gilt pro
+  Geräte-ID und wird in Dashboard und Control-Tab synchron angezeigt, damit
+  ein Gerät überall an derselben Farbe erkennbar bleibt. Global
+  ein-/ausschaltbar im Einstellungen-Tab (Standard: aus); die Auswahl bleibt
+  beim Ausschalten gespeichert. Neues Modul `lab_gui/panel_color.py`
+  (`PanelColorButton`, `apply_panel_tint`), Farbwerte in
+  `theme.Palette.panel_tints`.
 - **Testablauf: Plus- und Menü-Klick am „Zeile hinzufügen"-Button getrennt**:
   Ein Klick auf das Plus-Icon fügt jetzt direkt eine neue Aktionsschritt-Zeile
   ein, ohne das Dropdown-Menü zu öffnen; ein Klick auf den Menü-Pfeil öffnet
@@ -49,7 +59,99 @@ Semantic Versioning (`lab_gui/version.py`).
   `_ScopeChart.set_y_mode`/`set_fixed_range`, neuer `_YAxisDialog`) — gilt
   bewusst nur für die laufende Session, keine Persistenz über
   `timeline_layout.json`.
-- Version auf 0.7.0 angehoben.
+- Version auf 0.8.0 angehoben.
+- **Bootloader-Splash beim .exe-Start**: Die Onefile-.exe entpackt sich bei
+  jedem Start komplett in ein Temp-Verzeichnis, bevor Python überhaupt läuft
+  — bisher ohne jede Rückmeldung, fühlte sich wie ein Hänger an. Ein
+  PyInstaller-`Splash` (`LabControl.spec`, Bild aus
+  `tools/generate_splash.py`) erscheint jetzt bereits während dieser Phase
+  und wird von `lab_gui/main.py` (`pyi_splash.close()`) geschlossen, sobald
+  das Hauptfenster steht. Im Dev-Betrieb ohne Onefile-Build ein No-Op.
+- **.exe-Größe von 258 MB auf ~92 MB reduziert**: Der PySide6-PyInstaller-Hook
+  bündelte bisher ungenutzte Qt-Submodule mit — allein `Qt6WebEngineCore.dll`
+  war 205 MB groß, dazu QtQml/QtQuick/Qt3D/QtCharts/QtLocation/virtuelle
+  Tastatur, obwohl nichts davon im Programm verwendet wird (reines
+  QtWidgets-Programm). Jetzt explizit über `excludes` in
+  `LabControl.spec` ausgeschlossen — das reduziert nebenbei auch die
+  Onefile-Entpackzeit bei jedem Start spürbar. `pandas`/`numexpr` bewusst
+  NICHT ausgeschlossen: `asammdf` importiert `pandas` fest auf Modulebene
+  (`asammdf/blocks/mdf_v4.py`), ein Ausschluss hätte den MF4-Export
+  gebrochen.
+- **GitHub-Actions-Build nutzt jetzt dieselbe `.spec`-Datei wie der lokale
+  Build**: Der Workflow (`.github/workflows/build-exe.yml`) rief PyInstaller
+  bisher direkt per CLI-Flags auf, komplett unabhängig von den lokalen
+  `.spec`-Dateien — Splash und die Qt-Submodul-`excludes` (siehe oben)
+  hätten sich dadurch NICHT auf die automatisch veröffentlichten Releases
+  ausgewirkt. Neue, versionsdynamische `LabControl.spec` (liest die
+  Versionsnummer zur Baubauzeit aus `lab_gui/version.py`, statt sie wie
+  bisher im Dateinamen und `name=` hart zu verdrahten) ersetzt sowohl die
+  alten, pro Version manuell angelegten `.spec`-Dateien als auch die
+  CLI-Flags im Workflow (`pyinstaller LabControl.spec`). Einzige `.spec`-
+  Datei, die nicht mehr über `*.spec` in `.gitignore` ausgeschlossen ist
+  (die CI braucht sie beim Checkout).
+- **Pfeil-Icons an Zahlenfeldern besser erkennbar**: Die Auf/Ab-Pfeile an
+  Eingabefeldern (z.B. Sollwerte) waren mit 10×10px auf dem Touch-Kiosk kaum
+  als Pfeil erkennbar und nicht themefähig (feste PNG-Datei, keine Bindung an
+  die Textfarbe der aktiven Palette). Werden jetzt aus `qtawesome` erzeugt
+  (`mdi.chevron-up`/`mdi.chevron-down`, wie alle anderen Icons im Programm)
+  statt als statische Datei gepflegt — dadurch größer (14×14px) und
+  automatisch farblich zur aktiven Palette passend (`lab_gui/theme.py`).
+- **Software-Presets im Control-Tab (Last + Netzteil)**: Ersetzt die
+  frühere, rein geräteseitige PSU-Preset-Funktion (P1/P2/P3 auf dem
+  HCS-34xx selbst) durch benannte Sollwert-Kombinationen, die lokal als JSON
+  gespeichert werden (`lab_gui/presets.py`, `PresetStore`) und für Last UND
+  Netzteil nutzbar sind (bisher nur Netzteil). Neue Preset-Zeile in beiden
+  Geräte-Panels im Control-Tab: Laden/Speichern/Löschen. „Laden" füllt nur
+  die Eingabefelder, ein Hardware-Schreibvorgang erfolgt weiterhin erst über
+  den bestehenden „Setzen"-Button. Presets speichern bewusst nur Sollwerte
+  (Spannung+Strom bzw. Modus+Sollwert), keine Schutzgrenzen (OVP/OCP).
+- Version auf 0.9.0 angehoben.
+
+### Entfernt
+- **Testablauf-Aktion „Preset P1/P2/P3 abrufen"**: Griff auf die
+  geräteseitigen HCS-34xx-Presets zu (`hcs34xx/driver.py: recall_memory`);
+  im Control-Tab gab es dafür schon länger keinen Button mehr, nur noch diese
+  Aktion im Testablauf-Editor. Durch die neuen Software-Presets (siehe oben)
+  ersetzt — die sind bewusst nicht im Testablauf-Editor nutzbar, nur im
+  Control-Tab. Bestehende Testablauf-Dateien mit dieser Aktion lassen sich
+  weiterhin öffnen (unbekannter Aktionscode fällt beim Bearbeiten der Zeile
+  auf die erste verfügbare Aktion zurück, kein Absturz).
+
+### Behoben
+- **[Sicherheitskritisch] Setzen von Strom/Spannung schaltete den
+  PSU-Ausgang real ein, obwohl der Schalter auf „Aus" stand** (an echter
+  HCS-34xx-Hardware reproduziert): Die Spannung/Strom-„Setzen"-Buttons im
+  Control-Tab griffen unabhängig vom Ausgang-Schalter direkt durch und hoben
+  damit den emulierten „Aus"-Zustand (Strom=0A) unbemerkt auf. Die Buttons
+  sind jetzt gesperrt, solange der Ausgang nicht aktiv über „EIN"
+  eingeschaltet wurde (`lab_gui/control_tab.py`). Das HCS-34xx hat laut
+  eigener Treiber-Doku kein echtes Ausgang-AUS-Kommando — dieser Fix schließt
+  nur den GUI-Pfad, nicht automatisierte Testablauf-Aktionen, die
+  PSU_VOLT/PSU_CURR unabhängig von PSU_OUT_ON/OFF verwenden.
+- **Dashboard-Panels ohne erkennbare Trennung beim ersten Start**:
+  Nebenwirkung des Bug-8-Fixes (Container-Hintergrund jetzt `pal.surface`,
+  identisch zur Panel-Fläche) — der sehr helle Standard-Rahmen reichte allein
+  nicht mehr als Trennung. Panels haben jetzt immer einen deutlich
+  sichtbaren Rahmen (`pal.text_muted`), unabhängig von einer individuellen
+  Farbe (`lab_gui/dashboard.py`).
+- **Panel-Farbwahl und Umbenennen-Button jetzt nur noch im Control-Tab**:
+  Beide Bedienelemente aus dem reinen Anzeige-Dashboard entfernt; der
+  Umbenennen-Button existierte im Control-Tab bisher gar nicht und wurde dort
+  neu ergänzt (`lab_gui/dashboard.py`, `lab_gui/control_tab.py`,
+  `lab_gui/main_window.py`).
+- **Individuelle Panel-Farben im Dark Mode kaum sichtbar**: Die Tönungswerte
+  lagen mit einer Leuchtdichte von ~34-45 fast auf demselben Niveau wie die
+  Panel-Fläche selbst (~34) — praktisch unsichtbar. Neue Werte liegen bei
+  ~65-83, deutlich abgesetzt (`lab_gui/theme.py`).
+- **Panel-Farben werden jetzt automatisch vergeben**: Beim Aktivieren der
+  Option „Individuelle Panel-Hintergrundfarben" im Einstellungen-Tab bekommt
+  jedes bereits bekannte Gerät automatisch eine unterschiedliche Farbe, statt
+  dass jedes Panel manuell eingefärbt werden muss; bereits gesetzte Farben
+  bleiben beim Aus-/Wiedereinschalten erhalten (`lab_gui/main_window.py`).
+- **Einstellungen-Tab: Sicherheits-Grenzwerte-Panels unnötig über die volle
+  Breite gestreckt**: `QFormLayout`s Default-Wachstumspolicy ließ die
+  Feld-Spalte auf volle Breite wachsen; Panels sind jetzt kompakt, nur so
+  breit wie der Inhalt braucht (`lab_gui/settings_tab.py`).
 
 ## [0.6.2]
 

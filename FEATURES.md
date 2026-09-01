@@ -3,41 +3,12 @@
 Keine feste Priorität — nach Bedarf auswählen. Jeder Eintrag kann unabhängig
 in einer eigenen Session umgesetzt werden.
 
-## 1. Hinzufügen-Button im Testablauf-Reiter: Plus vs. Menü-Pfeil unterscheiden
+**Stand 2026-09-01:** Punkte 1, 2, 3, 4, 8, 9, 11 der ursprünglichen Liste
+sind umgesetzt (siehe „Bereits umgesetzte Vorschläge" unten) und daher aus
+der offenen Liste entfernt; die verbleibenden Punkte sind neu von 1-4
+durchnummeriert.
 
-Der Hinzufügen-Button im Testablauf-Reiter soll erkennen, ob auf das
-Plus-Symbol oder auf den Menü-Öffnen-Pfeil geklickt wird:
-- Klick auf **Plus**: direkt eine neue Aktionsschritt-Zeile hinzufügen, ohne
-  das Dropdown-Menü zu öffnen.
-- Klick auf **Pfeil**: Verhalten wie bisher (Dropdown-Menü mit Auswahl öffnen).
-
-
-## 2. Individuelle Panel-Hintergrundfarben (Dashboard + Control)
-
-Die Geräte-Panels im Dashboard- und Control-Tab sollen jeweils eine
-individuelle Hintergrundfarbe bekommen können, um sie optisch besser
-unterscheiden zu können.
-
-**Aktivierung:** Als Option im Einstellungs-Tab (an/aus schaltbar).
-
-
-## 3. Aufnahme-Start/Stopp zu einem Button vereinen
-
-Die getrennten "Aufnahme starten" und "Aufnahme stoppen" Buttons sollen zu
-einem einzigen Button zusammengeführt werden:
-- Keine Aufnahme läuft: Button statisch **rot** eingefärbt, mit passendem
-  Icon (z.B. Record-Symbol).
-- Aufnahme läuft: Button **blinkt rot**.
-
-
-## 4. Aufnahme zeichnet nur aktivierte Diagramm-Signale auf
-
-Aktuell zeichnet die Aufnahmefunktion (CSV-Export, `lab_gui/recording.py`)
-vermutlich alle verfügbaren Signale auf. Gewünscht: nur die Signale
-aufzeichnen, die aktuell in den Diagrammen aktiviert/sichtbar sind.
-
-
-## 5. Statistik/Auswertung nach Testlauf
+## 1. Statistik/Auswertung nach Testlauf
 
 Nach einem Testcase-Lauf sollen aus den geloggten Daten berechnet werden:
 - Min/Max/Mittelwert pro Signal
@@ -51,7 +22,7 @@ Lauf-weiten Summary-Statistiken. Würde sich gut in den bereits vorhandenen
 Nachlauf-Report (`lab_gui/run_report.py`) integrieren lassen.
 
 
-## 6. Weitere Gerätetreiber
+## 2. Weitere Gerätetreiber
 
 Zusätzliche Gerätetreiber über hcs34xx (PSU) und korad_kel102 (Last) hinaus,
 z.B.:
@@ -64,7 +35,7 @@ Passt zum "vendor-agnostic"-Anspruch aus der README.
 Treiber, kein `pyvisa` oder generischer SCPI-Layer.
 
 
-## 7. Wiederverwendbare Testcase-Bausteine
+## 3. Wiederverwendbare Testcase-Bausteine
 
 Häufige Schrittfolgen (z.B. ein Entladeprofil) sollen als Vorlage/Baustein
 gespeichert und in andere Testcases eingefügt werden können, statt sie jedes
@@ -75,25 +46,7 @@ Mal neu aufzubauen.
 Test-Schrittfolgen/Templates.
 
 
-## 8. Desktop-Benachrichtigung bei Lauf-Ende/Fehler
-
-Eine Desktop-Benachrichtigung (z.B. via System-Tray/Toast) beim Ende oder bei
-einem Fehler eines Testlaufs — praktisch bei langen unbeaufsichtigten Läufen
-(z.B. Akku-Zyklen über Nacht).
-
-**Status:** Noch nicht umgesetzt — kein `QSystemTrayIcon` oder
-Notification-Mechanismus im Code vorhanden.
-
-
-## 9. Arbiträrsignal-Generator: neue Signalformen
-
-Der Arbiträrsignal-Generator soll erweitert werden um:
-- Dreieck-Signalform
-- Sägezahn-Signalform
-- Beim Rechtecksignal: einstellbarer Duty-Cycle (echtes PWM statt festem 50%)
-
-
-## 10. [Toolchain/Build] Simulationsmodus nur im Dev-Build
+## 4. [Toolchain/Build] Simulationsmodus nur im Dev-Build
 
 Der Simulationsmodus soll nur im Entwicklungspfad verfügbar sein. Alles, was
 released wird, soll die Option nicht mehr anbieten (in Release-Builds
@@ -102,10 +55,6 @@ komplett ausgeblendet/nicht anwählbar).
 **Zu klären bei Umsetzung:** Wie wird Dev- vs. Release-Build unterschieden
 (Build-Flag, Environment-Variable, PyInstaller-Spec-Unterscheidung)?
 
-## 11. Diagramm-Anzeige Erweiterungen
-
-Die Diagramm-Anzeige soll anstatt nur horizontale Rasterlinien auch vertikale Rasterlinien bekommen.
-Die y-Achsenskalierung soll umschaltbar von automatisch auf feste WErtebereiche möglich sein
 
 ---
 
@@ -127,5 +76,51 @@ in dieser Liste stehen:
   `if`, `else`, `end` mit `loop_count` in `testcase_model.py` /
   `testcase_runner.py` (geht sogar über einfache Schleifen hinaus)
 - **Software-Watchdog / Sicherheitsabbruch** — `lab_gui/safety.py`
-  (`SafetyMonitor`), global (siehe [BUGS.md](BUGS.md) Punkt 2 — soll
-  geräte-individuell werden)
+  (`SafetyMonitor`), inzwischen geräte-individuell statt global (siehe
+  [BUGS.md](BUGS.md) Punkt 2 — dort inzwischen ebenfalls erledigt)
+
+Umgesetzt in der Session vom 2026-09-01 (v0.7.0/v0.8.0):
+
+- **Hinzufügen-Button: Plus vs. Menü-Pfeil getrennt** — `SplitIconButton`
+  (`lab_gui/icons.py`), verwendet im Testablauf-Reiter (`lab_gui/testcase_tab.py`)
+- **Individuelle Panel-Hintergrundfarben (Dashboard + Control)** — neues Modul
+  `lab_gui/panel_color.py` (`PanelColorButton`, `apply_panel_tint`),
+  Farbwerte in `theme.Palette.panel_tints`, an/aus schaltbar im
+  Einstellungen-Tab
+- **Aufnahme-Start/Stopp zu einem Button vereint** (statisch/blinkend rot) —
+  `lab_gui/timeline_tab.py` (`_recording_toggle_button`), dafür
+  `IconButton.set_color_override` in `lab_gui/icons.py`
+- **Aufnahme zeichnet nur aktivierte Diagramm-Signale auf** —
+  `Recorder.set_active_signals` (`lab_gui/recording.py`),
+  `TimelineTab.active_signals_changed`/`active_signal_keys`
+- **Desktop-Benachrichtigung bei Lauf-Ende/Fehler** — `QSystemTrayIcon` in
+  `lab_gui/main_window.py`, an/aus schaltbar im Einstellungen-Tab
+- **Arbiträrsignal-Generator: Dreieck-/Sägezahn-Form, Tastgrad bei Rechteck** —
+  `lab_gui/testcase_model.py::arb_value`, neues Feld `TestStep.arb_duty`
+- **Diagramm-Anzeige: vertikale Gitterlinien + feste Y-Achsen-Skalierung** —
+  `lab_gui/timeline_tab.py` (`_ScopeChart.set_y_mode`/`set_fixed_range`,
+  neuer `_YAxisDialog`)
+
+Umgesetzt in der Session vom 2026-09-01 (v0.9.0):
+
+- **Startzeit der .exe + Bootloader-Splash** — PyInstaller-`Splash` in
+  `LabControl.spec` (Bild aus `tools/generate_splash.py`), geschlossen
+  in `lab_gui/main.py` per `pyi_splash.close()`. Zusätzlich: nicht genutzte
+  Qt-Submodule (u.a. `QtWebEngineCore`, 205 MB) über `excludes` im `.spec`
+  ausgeschlossen — .exe-Größe von 258 MB auf ~92 MB reduziert, das senkt
+  auch die Onefile-Entpackzeit bei jedem Start. `LabControl.spec` löst dabei
+  alle älteren, pro Version manuell angelegten `.spec`-Dateien ab (liest die
+  Versionsnummer dynamisch aus `lab_gui/version.py`) und wird jetzt auch vom
+  GitHub-Actions-Workflow verwendet (`pyinstaller LabControl.spec` statt
+  bisheriger CLI-Flags ohne Splash/Excludes) — einzige `.spec`-Datei, die
+  nicht mehr in `.gitignore` ausgeschlossen ist.
+- **Pfeil-Icons für Spin-Buttons** — aus `qtawesome` generiert
+  (`mdi.chevron-up`/`-down`) statt statischer PNG-Datei, dadurch größer
+  (14×14 statt 10×10px) und themefähig (`lab_gui/theme.py`).
+- **Software-Presets im Control-Tab** — neues Modul `lab_gui/presets.py`
+  (`PresetStore`, JSON-Persistenz), neue Preset-Zeile (Laden/Speichern/
+  Löschen) in `lab_gui/control_tab.py` für Last UND Netzteil. Ersetzt die
+  frühere Testablauf-Editor-Aktion "Preset P1/P2/P3 abrufen"
+  (`lab_gui/testcase_model.py`, `lab_gui/device_worker.py`) — die alten
+  geräteseitigen HCS-34xx-Methoden (`recall_memory` u.a.) bleiben
+  unangetastet im Treiber, nur ungenutzt.

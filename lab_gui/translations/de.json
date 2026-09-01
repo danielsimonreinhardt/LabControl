@@ -260,5 +260,15 @@
   "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\nDiagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\nzugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\nAufnahme möglich (Zwischenstand).": "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\nDiagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\nzugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\nAufnahme möglich (Zwischenstand).",
   "Desktop-Benachrichtigung bei Lauf-Ende/Fehler": "Desktop-Benachrichtigung bei Lauf-Ende/Fehler",
   "Testlauf beendet": "Testlauf beendet",
-  "Testlauf-Fehler": "Testlauf-Fehler"
+  "Testlauf-Fehler": "Testlauf-Fehler",
+  "Individuelle Panel-Hintergrundfarben (Dashboard/Control)": "Individuelle Panel-Hintergrundfarben (Dashboard/Control)",
+  "Panel-Farbe wählen…": "Panel-Farbe wählen…",
+  "Kein (Standard)": "Kein (Standard)",
+  "Blau": "Blau",
+  "Türkis": "Türkis",
+  "Grün": "Grün",
+  "Orange": "Orange",
+  "Violett": "Violett",
+  "Pink": "Pink",
+  "Grau": "Grau"
 }

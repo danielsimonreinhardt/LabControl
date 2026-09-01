@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -71,13 +70,12 @@ def _field_display(field_key: str) -> str:
 
 
 class _DevicePanel(QGroupBox):
-    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
-
     def __init__(self, kind: str, device_id: str, label: str, field_keys: list[str]) -> None:
         super().__init__()
         self._kind = kind
         self._device_id = device_id
         self._field_keys = field_keys
+        self._color_key: str | None = None
         # Feste Breite wird nicht hier, sondern zentral von DashboardWidget
         # gesetzt (siehe _relayout_panels) -- Last- und Netzteil-Panels
         # brauchen unterschiedlich viel Platz (z.B. 3 statt 2 Nachkommastellen),
@@ -101,8 +99,6 @@ class _DevicePanel(QGroupBox):
         normal.setContentsMargins(0, 0, 0, 0)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
-        self._rename_button = IconButton("mdi.pencil-outline", "")
-        self._rename_button.clicked.connect(self._on_rename_clicked)
         self._kind_icon = QLabel()
         self._kind_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._apply_kind_icon(current_palette())
@@ -120,11 +116,6 @@ class _DevicePanel(QGroupBox):
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.addWidget(value_label)
             row_layout.addStretch()
-            if i == 0:
-                # Umbenennen-Button oben rechts, neben der ersten Werteanzeige
-                # -- spart die eigene Kopfzeile, die er vorher belegt hat.
-                row_layout.addSpacing(6)
-                row_layout.addWidget(self._rename_button)
             if i == len(field_keys) - 1:
                 # Geraeteart-Icon unten rechts, neben der letzten Werteanzeige
                 # -- spart die eigene Fusszeile.
@@ -165,10 +156,10 @@ class _DevicePanel(QGroupBox):
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
+        self._apply_style(current_palette())
 
     def _retranslate(self) -> None:
         self._kind_icon.setToolTip(tr(KIND_TITLE.get(self._kind, self._kind)))
-        self._rename_button.setToolTip(tr("Gerät umbenennen"))
         for field_key in self._field_keys:
             self._form.labelForField(self._value_rows[field_key]).setText(_field_display(field_key) + ":")
             tooltip = _field_display(field_key)
@@ -178,6 +169,36 @@ class _DevicePanel(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_compact_icons(palette)
         self._apply_kind_icon(palette)
+        self._apply_style(palette)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        """Wird von aussen aufgerufen, um eine (im Control-Tab gewaehlte)
+        Panel-Farbe hier nur ANZUZEIGEN -- die Auswahl selbst findet gemaess
+        BUGS.md #10b nur noch im Control-Tab statt (siehe control_tab.py:
+        LoadControlGroup/PsuControlGroup)."""
+        self._color_key = color_key
+        self._apply_style(current_palette())
+
+    def _apply_style(self, palette: Palette) -> None:
+        """Wie panel_color.apply_panel_tint (individuelle Panel-Farbe als
+        Instanz-Stylesheet), ERGAENZT hier aber immer um einen sichtbaren
+        Rahmen -- unabhaengig davon, ob eine individuelle Farbe gesetzt ist.
+
+        Grund: DashboardWidget._container hat seit dem Bug-8-Fix (siehe
+        theme.no_own_background) dieselbe Flaechenfarbe (pal.surface) wie
+        dieses Panel selbst -- ohne Farbunterschied faellt der normale, sehr
+        helle QGroupBox-Rahmen (pal.border, siehe theme.stylesheet) zwischen
+        Panels kaum noch auf (BUGS.md #10a). pal.text_muted ist deutlich
+        praesenter und dient bereits andernorts als "gedaempfter, aber gut
+        lesbarer" Grauton (Subtitle-Labels etc.), daher hier wiederverwendet
+        statt eines neuen Palettenwerts."""
+        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
+        if self._color_key is None:
+            self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
+            return
+        hex_color = palette.panel_tints.get(self._color_key)
+        bg_rule = f"background-color: {hex_color};" if hex_color else ""
+        self.setStyleSheet(f"QGroupBox {{ {border_rule} {bg_rule} }}")
 
     def _apply_compact_icons(self, palette: Palette) -> None:
         for field_key, icon_label in self._compact_icons.items():
@@ -226,16 +247,8 @@ class _DevicePanel(QGroupBox):
         for value_label in self._compact_values.values():
             value_label.setText("--")
 
-    def _on_rename_clicked(self) -> None:
-        new_label, ok = QInputDialog.getText(
-            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
-        )
-        if ok and new_label.strip():
-            self.rename_requested.emit(self._kind, self._device_id, new_label.strip())
-
 
 class DashboardWidget(QGroupBox):
-    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
     # Klick auf den Ansicht-Umschalter unten rechts; MainWindow verdrahtet ihn
     # mit der persistierten Einstellung, die dann set_compact zurueckruft.
     compact_toggle_requested = Signal()
@@ -286,6 +299,11 @@ class DashboardWidget(QGroupBox):
         outer.addLayout(body)
 
         self._panels: dict[str, _DevicePanel] = {}
+        # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
+        # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
+        # deaktivierte Auswahl beim Wieder-Aktivieren erhalten bleibt.
+        self._panel_colors: dict[str, str | None] = {}
+        self._colors_enabled = False
         self._compact = False
         # Aktuell angeglichene Panel-Breite (0 = noch keine gesetzt) -- als
         # Ratsche gefuehrt, siehe _relayout_panels. In der Kompaktansicht
@@ -403,13 +421,23 @@ class DashboardWidget(QGroupBox):
             panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
-            panel.rename_requested.connect(self.rename_requested)
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
             self._panels[device_id] = panel
             self._relayout_panels()
         else:
             panel.set_label(label)
+
+    def set_panel_color(self, device_id: str, color_key: str | None) -> None:
+        self._panel_colors[device_id] = color_key
+        panel = self._panels.get(device_id)
+        if panel is not None:
+            panel.set_panel_color(color_key if self._colors_enabled else None)
+
+    def set_panel_colors_enabled(self, enabled: bool) -> None:
+        self._colors_enabled = enabled
+        for device_id, panel in self._panels.items():
+            panel.set_panel_color(self._panel_colors.get(device_id) if enabled else None)
 
     @Slot(str, str, str)
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:

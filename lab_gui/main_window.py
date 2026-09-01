@@ -22,6 +22,7 @@ from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
 from device_worker import DeviceWorker
 from i18n import Translator, tr
+from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
 from safety import SafetyMonitor
@@ -30,7 +31,7 @@ from settings_tab import SettingsTab
 from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
-from theme import Palette, ThemeManager, no_own_background
+from theme import PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
 from version import __version__
 
@@ -75,8 +76,10 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardWidget()
         layout.addWidget(self.dashboard)
 
+        self._presets = PresetStore()
+
         self.tabs = QTabWidget()
-        self.control_tab = ControlTab()
+        self.control_tab = ControlTab(self._presets)
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
         self.settings_tab = SettingsTab()
@@ -117,6 +120,7 @@ class MainWindow(QMainWindow):
         self._wire_settings_tab()
         self._wire_dashboard_view()
         self._wire_notifications()
+        self._wire_panel_colors()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
         # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
@@ -248,7 +252,9 @@ class MainWindow(QMainWindow):
         self._registry.label_changed.connect(self._on_label_changed_status)
         self._registry.label_changed.connect(self.settings_tab.on_label_changed)
 
-        self.dashboard.rename_requested.connect(self._registry.rename)
+        # Umbenennen-Button sitzt seit BUGS.md #10c nur noch im Control-Tab
+        # (dort aus dem Dashboard-Panel entfernt).
+        self.control_tab.rename_requested.connect(self._registry.rename)
 
     def _on_device_known_safety_limits(self, kind: str, device_id: str, _label: str) -> None:
         # Initialbefuellung der pro Geraet erzeugten Grenzwert-Sektion (siehe
@@ -394,6 +400,61 @@ class MainWindow(QMainWindow):
         if self._tray_icon is None or not self._settings.notifications_enabled:
             return
         self._tray_icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 8000)
+
+    def _wire_panel_colors(self) -> None:
+        # Individuelle Panel-Hintergrundfarben (FEATURES.md Punkt 2): eine
+        # Farbe pro Geraete-ID, geteilt zwischen Dashboard und Control-Tab
+        # (siehe panel_color.py), global an/ausschaltbar im Einstellungen-Tab.
+        self.settings_tab.set_panel_colors_enabled(self._settings.panel_colors_enabled)
+        self.settings_tab.panel_colors_toggled.connect(self._settings.set_panel_colors_enabled)
+        self._settings.panel_colors_enabled_changed.connect(self.dashboard.set_panel_colors_enabled)
+        self._settings.panel_colors_enabled_changed.connect(self.control_tab.set_panel_colors_enabled)
+        self.dashboard.set_panel_colors_enabled(self._settings.panel_colors_enabled)
+        self.control_tab.set_panel_colors_enabled(self._settings.panel_colors_enabled)
+
+        # Farbauswahl selbst nur noch im Control-Tab (siehe BUGS.md #10b) --
+        # Dashboard zeigt die Farbe weiterhin an (set_panel_color unten bleibt
+        # verdrahtet), kann sie aber nicht mehr selbst auswaehlen.
+        self.control_tab.panel_color_requested.connect(self._settings.set_panel_color)
+        self._settings.panel_color_changed.connect(self.dashboard.set_panel_color)
+        self._settings.panel_color_changed.connect(self.control_tab.set_panel_color)
+
+        # Neu erzeugte Panels/Sektionen (siehe dashboard.on_device_known/
+        # control_tab.on_device_known, beide bereits ueber _wire_registry an
+        # device_known angebunden) kennen ihre gespeicherte Farbe noch nicht --
+        # hier mit dem persistierten Stand nachziehen. Setzt voraus, dass diese
+        # Verbindung NACH den beiden on_device_known-Verbindungen aus
+        # _wire_registry hergestellt wird (Qt feuert Slots in Verbindungs-
+        # reihenfolge), was durch den Aufruf von _wire_panel_colors() nach
+        # _wire_registry() im Konstruktor sichergestellt ist.
+        self._registry.device_known.connect(self._on_device_known_panel_color)
+
+        # BUGS.md #10e: beim Aktivieren der Option soll jedes bereits bekannte
+        # Geraet automatisch eine (unterschiedliche) Farbe bekommen, statt
+        # dass der Nutzer jedes Panel manuell einfaerben muss. Nur beim
+        # Einschalten (nicht beim Ausschalten) und nur fuer Geraete ohne
+        # bereits gespeicherte Farbe -- eine einmal manuell/automatisch
+        # vergebene Farbe bleibt beim erneuten Ein-/Ausschalten erhalten.
+        self._settings.panel_colors_enabled_changed.connect(self._on_panel_colors_enabled_changed)
+
+    def _on_panel_colors_enabled_changed(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        unassigned = [
+            device_id for device_id in self._device_labels
+            if self._settings.panel_color(device_id) is None
+        ]
+        if not unassigned:
+            return
+        used = {self._settings.panel_color(d) for d in self._device_labels} - {None}
+        free = [c for c in PANEL_COLOR_ORDER if c not in used] or list(PANEL_COLOR_ORDER)
+        for i, device_id in enumerate(unassigned):
+            self._settings.set_panel_color(device_id, free[i % len(free)])
+
+    def _on_device_known_panel_color(self, kind: str, device_id: str, label: str) -> None:
+        color_key = self._settings.panel_color(device_id)
+        self.dashboard.set_panel_color(device_id, color_key)
+        self.control_tab.set_panel_color(device_id, color_key)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()

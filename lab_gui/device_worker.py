@@ -484,9 +484,6 @@ class DeviceWorker(QObject):
                 return self._guard_psu(device_id, _output_on)
             if action == "PSU_OUT_OFF":
                 return self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
-            if action in ("PSU_P1", "PSU_P2", "PSU_P3"):
-                index = {"PSU_P1": 0, "PSU_P2": 1, "PSU_P3": 2}[action]
-                return self._guard_psu(device_id, lambda psu: psu.recall_memory(index))
             return False, f"Unbekannte Aktion '{action}' fuer Netzteil"
 
         return False, f"Unbekanntes Geraet '{kind}'"
