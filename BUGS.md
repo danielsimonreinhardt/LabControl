@@ -416,22 +416,18 @@ ein `QHBoxLayout`/`QVBoxLayout` mit Stretch-Faktor oder fehlendem
 
 ## 13. Splash-Screen zeigt veraltete Versionsnummer
 
-> **Status: Sicher gefixt (fürs Symptom), Root Cause bleibt bestehen.**
-> `lab_gui/icons/splash.png` ist ein statisches, in Git getracktes Bild, das
-> nur durch manuelles Ausführen von `tools/generate_splash.py` (liest
-> `lab_gui/version.py`) neu erzeugt wird — beim v0.9.0→v0.9.3-Bump (Commit
-> `99f0c7d`) wurde das vergessen, wodurch die v0.9.3-.exe noch das v0.9.0-Bild
-> zeigte. Für diesen Release durch erneutes Ausführen des Skripts behoben.
-> **Root Cause nicht behoben:** Jeder künftige Versions-Bump kann denselben
-> Fehler wieder verursachen, solange das Neu-Generieren ein separater,
-> leicht vergessbarer manueller Schritt bleibt statt Teil von
-> `LabControl.spec`/dem Build-Vorgang.
+> **Status: Sicher gefixt, inkl. Root Cause.** `lab_gui/icons/splash.png` war
+> ein statisches, in Git getracktes Bild, das nur durch manuelles Ausführen
+> von `tools/generate_splash.py` (liest `lab_gui/version.py`) neu erzeugt
+> wurde — beim v0.9.0→v0.9.3-Bump (Commit `99f0c7d`) wurde das vergessen,
+> wodurch die v0.9.3-.exe noch das v0.9.0-Bild zeigte. `LabControl.spec`
+> importiert `tools/generate_splash.py` jetzt und ruft dessen `main()` vor
+> jedem Build automatisch auf, bevor `Splash(...)` das PNG einliest — das
+> Bild kann dadurch nicht mehr von `version.py` abweichen, unabhängig davon,
+> ob jemand das Skript manuell ausführt. Das Skript bleibt zusätzlich direkt
+> ausführbar (z.B. um das Bild-Design isoliert zu prüfen). Per Neu-Build
+> verifiziert: Splash zeigt die aktuelle Versionsnummer.
 
 Gemeldet vom Nutzer nach dem v0.9.3-Build: Splash-Screen beim Start zeigte
 "v0.9.0", obwohl `lab_gui/version.py` bereits auf "0.9.3" stand.
-
-**Zu prüfen bei dauerhafter Behebung:** `tools/generate_splash.py` als
-Pre-Build-Schritt automatisch aus `LabControl.spec` heraus aufrufen (oder
-zumindest ein Versions-Mismatch zwischen `splash.png`-Inhalt und
-`version.py` beim Bauen erkennen und abbrechen), statt sich auf manuelles
 Ausführen zu verlassen.

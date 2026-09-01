@@ -22,6 +22,16 @@ from version import __version__  # noqa: E402
 
 EXE_NAME = f"LabControl_v{__version__}"
 
+# Splash-Bild vor jedem Build frisch aus der aktuellen version.py erzeugen
+# (siehe tools/generate_splash.py) statt sich auf ein manuell aktuell
+# gehaltenes, in Git getracktes PNG zu verlassen -- genau das ging beim
+# v0.9.0->v0.9.3-Bump schief (BUGS.md #13: Splash zeigte noch "v0.9.0" in
+# der v0.9.3-.exe, weil das Regenerier-Skript vergessen wurde). Damit kann
+# splash.png nie mehr von version.py abweichen.
+sys.path.insert(0, str(Path(SPECPATH) / "tools"))
+import generate_splash  # noqa: E402
+generate_splash.main()
+
 a = Analysis(
     ['lab_gui/main.py'],
     pathex=['.'],

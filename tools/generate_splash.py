@@ -1,8 +1,13 @@
-"""Einmal-Skript: erzeugt lab_gui/icons/splash.png fuer den PyInstaller-
-Bootloader-Splash (siehe LabControl_v0.8.0.spec: Splash(...)).
+"""Erzeugt lab_gui/icons/splash.png fuer den PyInstaller-Bootloader-Splash
+(siehe LabControl.spec: Splash(...)).
 
-Nicht Teil der laufenden App -- nur beim Bauen/Aendern des Splash-Bilds
-manuell ausfuehren:
+Nicht Teil der laufenden App. Wird von LabControl.spec vor jedem Build
+automatisch aufgerufen (main() importiert und ausgefuehrt), damit das
+Splash-Bild nie von der in version.py eingetragenen Versionsnummer
+abweichen kann (siehe BUGS.md #13 -- vorher ein rein manueller Schritt, der
+beim v0.9.0->v0.9.3-Bump vergessen wurde und eine veraltete Versionsnummer
+im Splash zeigte). Laesst sich weiterhin auch direkt ausfuehren, z.B. um das
+Bild-Design isoliert zu pruefen, ohne einen kompletten Build anzustossen:
 
     python tools/generate_splash.py
 
