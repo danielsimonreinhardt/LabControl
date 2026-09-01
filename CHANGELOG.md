@@ -21,14 +21,32 @@ Semantic Versioning (`lab_gui/version.py`).
   „Unbenannt").
 - **Kompakte Dashboard-Ansicht**: umschaltbar über einen Icon-Button unten
   rechts im Dashboard-Bereich, Zustand wird in `settings.json` persistiert.
-  Im Kompaktmodus zeigt jedes Geräte-Panel eine einzige Zeile: Gerätename
-  plus Messwerte mit Einheit, beschriftet nur durch Icons (Blitz = Spannung,
-  DC-Symbol = Strom, Tacho = Leistung, Pfeile = CC/CV-Modus; voller Name als
-  Tooltip). Der „Dashboard“-Titel bleibt in beiden Ansichten sichtbar —
-  insgesamt gut die Hälfte weniger vertikale Höhe, mehr Platz für die Tabs
-  darunter (`lab_gui/dashboard.py`, `Settings.dashboard_compact`).
+  Im Kompaktmodus zeigt jedes Geräte-Panel eine einzige Zeile mit den
+  Messwerten, beschriftet nur durch Icons (Blitz = Spannung, DC-Symbol =
+  Strom, Tacho = Leistung, Pfeile = CC/CV-Modus; voller Name als Tooltip) —
+  der Gerätename steht bereits im Rahmentitel des Panels und braucht daher
+  keine eigene Zeile. Insgesamt gut die Hälfte weniger vertikale Höhe, mehr
+  Platz für die Tabs darunter (`lab_gui/dashboard.py`,
+  `Settings.dashboard_compact`).
 
 ### Geändert
+- **Gerätename als Rahmentitel**: Alle Geräte-Panels (Dashboard und
+  Steuerung-Tab) zeigen den Namen jetzt als natives QGroupBox-„title“ auf dem
+  oberen Rahmen, genau wie der „Dashboard“-Titel selbst — statt als eigenes
+  QLabel im Panel-Inneren. Folgt damit automatisch Theme-Wechseln (Farbe,
+  Fettdruck), ohne eigene Stylesheet-Pflege (`lab_gui/dashboard.py`,
+  `lab_gui/control_tab.py`).
+- **Dashboard-Panels kompakter**: Umbenennen-Button und Geräteart-Icon
+  (Stecker-Symbol fürs Netzteil, Widerstand-Symbol für die Last — ersetzt die
+  bisherige Textzeile „Labornetzteil“/„Elektronische Last“, voller Name
+  weiterhin als Tooltip) haben keine eigene Zeile mehr, sondern sitzen direkt
+  in der ersten bzw. letzten Werte-Zeile (oben/unten rechts) — spart zwei
+  Zeilen Höhe pro Panel. Die feste Panel-Breite (bisher 220px) wird jetzt
+  dynamisch aus dem tatsächlichen Inhalt aller Panels berechnet und
+  angeglichen (`DashboardWidget._relayout_panels`, analog zu
+  `ControlTab._equalize_sections`) statt fest verdrahtet zu sein — sonst
+  wären längere Werte (z.B. die dritte Nachkommastelle bei der Last) oder
+  längere Übersetzungen abgeschnitten worden (`lab_gui/dashboard.py`).
 - **Control-Panels vereinheitlicht**: alle Geräte-Panels im Steuerung-Tab
   sind jetzt gleich groß (Höhe und Breite des größten Panels; erscheint die
   OVP/OCP-Warnung, darf das Netzteil-Panel weiterhin wachsen). Die
@@ -47,6 +65,23 @@ Semantic Versioning (`lab_gui/version.py`).
   Diagramme Scrollen nötig machen (`lab_gui/timeline_tab.py`).
 
 ### Behoben
+- **Dashboard-Panels sprangen sichtbar hin und her**: Die dynamische
+  Breitenangleichung hob bei jedem Messwert-Update erst die Fixierung aller
+  Panels auf und fixierte danach nur bei abweichender *Geometrie* neu —
+  Zurücksetzen und Neu-Fixieren wechselten sich über die selbst ausgelösten
+  LayoutRequests endlos ab, die Panels pendelten zwischen natürlicher und
+  angeglichener Breite. Zusätzlich schwankt die natürliche Inhaltsbreite mit
+  jedem Messwert um einige Pixel (Ziffern sind in der Proportionalschrift
+  unterschiedlich breit), was die Panels permanent zittern ließ. Die Breite
+  wird jetzt als Ratsche geführt (wächst nur auf die breiteste je gesehene
+  Anforderung; in der Kompaktansicht je Panel, in der Normalansicht
+  gemeinsam) und nur neu gesetzt, wenn die gesetzte Beschränkung tatsächlich
+  abweicht; zurückgesetzt wird sie nur beim Ansichtswechsel
+  (`lab_gui/dashboard.py`: `_relayout_panels`).
+- Icon-only-Buttons mit angehängtem Menü (z.B. der Report-Button) quetschten
+  das Icon sichtbar an den linken Rand, weil die knappe Standardbreite den
+  von Qt zusätzlich gezeichneten Dropdown-Pfeil nicht einrechnete — solche
+  Buttons werden jetzt automatisch breiter (`lab_gui/icons.py`).
 - Bei hohen Fenstern verteilte das Hauptlayout überschüssige Höhe je zur
   Hälfte auf Dashboard und Tabs — das Dashboard wurde dadurch weit über
   seinen Inhalt hinaus gestreckt (besonders auffällig in der Kompaktansicht,
@@ -114,7 +149,8 @@ Semantic Versioning (`lab_gui/version.py`).
   fehl (fail-fast wie bei Bedingungen).
 - Ergebnisanzeige: bestandene Schritte werden dauerhaft grün, fehlgeschlagene
   rot markiert (in Schleifen „sticky": einmal rot bleibt rot); der Messwert
-  steht als Tooltip an der Prüfzelle. Die Statuszeile zeigt am Ende
+  steht als Tooltip an der Prüfzelle. Bestanden ist auch im Dark-Theme grün
+  (neuer Palettenwert `check_pass`, da `success` dort bewusst amber ist). Die Statuszeile zeigt am Ende
   „Fertig – BESTANDEN (n Prüfungen)" bzw. „Fertig – NICHT bestanden (k/n
   Prüfungen fehlgeschlagen)"; die Farben bleiben zur Inspektion stehen, bis
   der nächste Lauf startet. Pro Schritt wählbar: „Bei Verletzung abbrechen"
@@ -123,11 +159,26 @@ Semantic Versioning (`lab_gui/version.py`).
 - Deaktivierte Schritte werden weiterhin übersprungen und zählen nicht als
   Prüfung; die Prüfungszähler zählen jede Ausführung (ein Prüfschritt in
   einer 10er-Schleife = 10 Prüfungen).
+- An echter Hardware verifiziert: HCS-Netzteil (U-/I-Prüfungen, Fail ohne
+  Abbruch, Abbruchpfad inkl. Safe-Stop-Auslösung, automatische
+  Geräteauflösung) und Korad-Last (U-/I-/P-Prüfungen ohne Quelle an den
+  Klemmen, Fail-/Abbruchpfad, Eingang-aus-Wiederherstellung). Hinweis aus
+  der Netzteil-Verifikation: Die Dauer-Spalte muss die reale Einschwingzeit
+  abdecken — ohne Last fällt die Ausgangsspannung nach einem niedrigeren
+  Sollwert nur langsam (Bleeder), siehe `lab_gui/README.md`.
 
 ### Geändert
 - Version auf 0.5.0 angehoben. Testablauf-Dateiformat bleibt v2; Dateien ohne
   Prüfungen sind unverändert kompatibel, die neuen `check_*`-Felder werden
   beim Laden älterer Dateien mit Defaults aufgefüllt.
+
+### Behoben
+- Gesperrte Eingabefelder (`setEnabled(False)`) sahen app-weit exakt wie
+  aktive aus, weil das globale Stylesheet keine `:disabled`-Regeln hatte und
+  damit die native Ausgrau-Darstellung von Qt überschrieb — aufgefallen im
+  „Prüfung definieren"-Dialog, dessen Felder bei inaktiver Prüfung gesperrt
+  sind. Jetzt werden Eingabefelder und Checkboxen in beiden Themes sichtbar
+  ausgegraut (betrifft z.B. auch das Wert-Feld bei Aktionen ohne Zahlenwert).
 
 ## [0.4.0]
 

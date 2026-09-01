@@ -30,8 +30,8 @@ from theme import current as current_palette
 
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
 COMPACT_VALUE_STYLE = "font-size: 16px; font-weight: bold;"
-PANEL_WIDTH = 220
 COMPACT_ICON_SIZE = 18
+KIND_ICON_SIZE = 26
 # Qt-Konstante QWIDGETSIZE_MAX (in PySide6 nicht exportiert) -- hebt das
 # setFixedWidth der Normalansicht im Kompaktmodus wieder auf.
 _WIDGET_SIZE_MAX = 16777215
@@ -50,6 +50,10 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
 LOAD_FIELD_KEYS = ["voltage", "current", "power"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
+# Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
+# Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
+# Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
+KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline"}
 
 # Icons fuer die Kompaktansicht: dort ersetzen sie die Text-Beschriftung der
 # Messgroessen komplett (der volle Name bleibt als Tooltip erreichbar).
@@ -74,52 +78,72 @@ class _DevicePanel(QGroupBox):
         self._kind = kind
         self._device_id = device_id
         self._field_keys = field_keys
-        self.setFixedWidth(PANEL_WIDTH)
+        # Feste Breite wird nicht hier, sondern zentral von DashboardWidget
+        # gesetzt (siehe _relayout_panels) -- Last- und Netzteil-Panels
+        # brauchen unterschiedlich viel Platz (z.B. 3 statt 2 Nachkommastellen),
+        # ein hier fest verdrahteter Wert wuerde bei laengeren Werten/Labels
+        # (andere Sprache, groessere Schrift) abgeschnitten.
+        # Geraetename als natives QGroupBox-Title (wie DashboardWidget selbst
+        # -- "Dashboard" sitzt genauso auf dem oberen Rahmen), statt als
+        # eigenes QLabel im Panel-Inneren.
+        self.setTitle(label)
 
         outer = QVBoxLayout(self)
         self._outer = outer
 
-        # Normalansicht: Kopfzeile (Name + Umbenennen), Untertitel, Formular
-        # mit beschrifteten Messwerten -- als ein Widget gebuendelt, damit die
-        # Kompaktansicht sie mit einem einzigen hide() ausblenden kann.
+        # Normalansicht: nur noch das Formular mit den Messwerten -- Name
+        # steht im Rahmentitel (siehe oben), Umbenennen-Button und Geraeteart-
+        # Icon sitzen platzsparend IN der ersten/letzten Werte-Zeile statt in
+        # eigenen Zeilen (siehe Schleife unten). Als eigenes Widget gebuendelt,
+        # damit die Kompaktansicht es mit einem einzigen hide() ausblenden kann.
         self._normal_widget = QWidget()
         normal = QVBoxLayout(self._normal_widget)
         normal.setContentsMargins(0, 0, 0, 0)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
 
-        header = QHBoxLayout()
-        self._title_label = QLabel(label)
-        self._title_label.setStyleSheet("font-weight: bold;")
         self._rename_button = IconButton("mdi.pencil-outline", "")
         self._rename_button.clicked.connect(self._on_rename_clicked)
-        header.addWidget(self._title_label, 1)
-        header.addWidget(self._rename_button)
-        normal.addLayout(header)
-
-        self._subtitle = QLabel()
-        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
-        normal.addWidget(self._subtitle)
-        ThemeManager.instance().changed.connect(self._on_theme_changed)
+        self._kind_icon = QLabel()
+        self._kind_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._apply_kind_icon(current_palette())
 
         self._form = QFormLayout()
         self._value_labels: dict[str, QLabel] = {}
-        for field_key in field_keys:
+        self._value_rows: dict[str, QWidget] = {}
+        for i, field_key in enumerate(field_keys):
             value_label = QLabel("--")
             value_label.setStyleSheet(VALUE_STYLE)
             self._value_labels[field_key] = value_label
-            self._form.addRow(" ", value_label)
+
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(value_label)
+            row_layout.addStretch()
+            if i == 0:
+                # Umbenennen-Button oben rechts, neben der ersten Werteanzeige
+                # -- spart die eigene Kopfzeile, die er vorher belegt hat.
+                row_layout.addSpacing(6)
+                row_layout.addWidget(self._rename_button)
+            if i == len(field_keys) - 1:
+                # Geraeteart-Icon unten rechts, neben der letzten Werteanzeige
+                # -- spart die eigene Fusszeile.
+                row_layout.addSpacing(6)
+                row_layout.addWidget(self._kind_icon)
+            self._value_rows[field_key] = row_widget
+            self._form.addRow(" ", row_widget)
         normal.addLayout(self._form)
+
         outer.addWidget(self._normal_widget)
 
-        # Kompaktansicht: eine einzige Zeile -- Geraetename, dann je Messgroesse
-        # Icon + Wert (mit Einheit) statt Text-Beschriftung. Der Name der
-        # Messgroesse bleibt als Tooltip auf Icon und Wert erreichbar.
+        # Kompaktansicht: eine einzige Zeile -- je Messgroesse Icon + Wert (mit
+        # Einheit) statt Text-Beschriftung; der Geraetename steht bereits im
+        # Rahmentitel (siehe oben), braucht hier also keine eigene Zeile mehr.
+        # Der Name der Messgroesse bleibt als Tooltip auf Icon und Wert
+        # erreichbar.
         self._compact_widget = QWidget()
         compact = QHBoxLayout(self._compact_widget)
         compact.setContentsMargins(0, 0, 0, 0)
-        self._compact_title = QLabel(label)
-        self._compact_title.setStyleSheet("font-weight: bold;")
-        compact.addWidget(self._compact_title)
-        compact.addSpacing(8)
         self._compact_icons: dict[str, QLabel] = {}
         self._compact_values: dict[str, QLabel] = {}
         for field_key in field_keys:
@@ -132,6 +156,9 @@ class _DevicePanel(QGroupBox):
             compact.addWidget(icon_label)
             compact.addWidget(value_label)
             compact.addSpacing(10)
+        # Haelt den Inhalt links gepackt, wenn das Panel (per Breiten-Ratsche,
+        # siehe DashboardWidget._relayout_panels) breiter ist als sein Inhalt.
+        compact.addStretch()
         outer.addWidget(self._compact_widget)
         self._compact_widget.hide()
         self._apply_compact_icons(current_palette())
@@ -140,17 +167,17 @@ class _DevicePanel(QGroupBox):
         self._retranslate()
 
     def _retranslate(self) -> None:
-        self._subtitle.setText(tr(KIND_TITLE.get(self._kind, self._kind)))
+        self._kind_icon.setToolTip(tr(KIND_TITLE.get(self._kind, self._kind)))
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         for field_key in self._field_keys:
-            self._form.labelForField(self._value_labels[field_key]).setText(_field_display(field_key) + ":")
+            self._form.labelForField(self._value_rows[field_key]).setText(_field_display(field_key) + ":")
             tooltip = _field_display(field_key)
             self._compact_icons[field_key].setToolTip(tooltip)
             self._compact_values[field_key].setToolTip(tooltip)
 
     def _on_theme_changed(self, palette: Palette) -> None:
-        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
         self._apply_compact_icons(palette)
+        self._apply_kind_icon(palette)
 
     def _apply_compact_icons(self, palette: Palette) -> None:
         for field_key, icon_label in self._compact_icons.items():
@@ -160,25 +187,33 @@ class _DevicePanel(QGroupBox):
                 )
             )
 
+    def _apply_kind_icon(self, palette: Palette) -> None:
+        icon_name = KIND_ICON.get(self._kind)
+        if icon_name is None:
+            return
+        self._kind_icon.setPixmap(
+            qta.icon(icon_name, color=palette.text_muted).pixmap(KIND_ICON_SIZE, KIND_ICON_SIZE)
+        )
+
     def set_compact(self, compact: bool) -> None:
         self._normal_widget.setVisible(not compact)
         self._compact_widget.setVisible(compact)
         if compact:
             self._outer.setContentsMargins(8, 2, 8, 4)
             # Feste Breite aufheben: die Kompaktzeile schmiegt sich an ihren
-            # Inhalt an, statt 220px zu belegen.
+            # eigenen Inhalt an, statt die (fuer die Normalansicht gedachte)
+            # angeglichene Breite zu behalten.
             self.setMinimumWidth(0)
             self.setMaximumWidth(_WIDGET_SIZE_MAX)
         else:
-            # Zurueck auf die Style-Defaults (nicht auf im Konstruktor
-            # abgefragte Werte -- die stimmen vor dem Polish noch nicht mit
-            # den spaeter wirksamen ueberein).
+            # Feste Breite wird nicht hier gesetzt, sondern gleich danach von
+            # DashboardWidget.set_compact() ueber _relayout_panels() -- die
+            # kennt (anders als ein einzelnes Panel) die Breitenanforderung
+            # aller Panels und kann sie angleichen.
             self._outer.unsetContentsMargins()
-            self.setFixedWidth(PANEL_WIDTH)
 
     def set_label(self, label: str) -> None:
-        self._title_label.setText(label)
-        self._compact_title.setText(label)
+        self.setTitle(label)
 
     def set_value(self, field_key: str, text: str) -> None:
         self._value_labels[field_key].setText(text)
@@ -193,7 +228,7 @@ class _DevicePanel(QGroupBox):
 
     def _on_rename_clicked(self) -> None:
         new_label, ok = QInputDialog.getText(
-            self, tr("Gerät umbenennen"), tr("Name:"), text=self._title_label.text()
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
         )
         if ok and new_label.strip():
             self.rename_requested.emit(self._kind, self._device_id, new_label.strip())
@@ -208,7 +243,7 @@ class DashboardWidget(QGroupBox):
     def __init__(self) -> None:
         super().__init__()
         # Vertikal Fixed: die Hoehe ergibt sich vollstaendig aus der fest
-        # gesetzten ScrollArea-Hoehe (_update_scroll_height). Ohne das verteilt
+        # gesetzten ScrollArea-Hoehe (_relayout_panels). Ohne das verteilt
         # das Eltern-Layout ueberschuessige Fensterhoehe auch auf das Dashboard
         # (Preferred darf wachsen) -- die fixierte Scroll-Flaeche schwebt dann
         # mittig in einem viel zu hohen Rahmen, besonders sichtbar in der
@@ -226,9 +261,9 @@ class DashboardWidget(QGroupBox):
         self._scroll_area.setWidget(self._container)
         # Waechst/schrumpft der Panel-Inhalt nachtraeglich (laengere Messwert-
         # Texte, Theme-/Sprachwechsel, Ansichtsumschaltung), loest das ein
-        # LayoutRequest im Container aus -- die feste Hoehe der ScrollArea
-        # muss dann nachgezogen werden, sonst bleibt sie veraltet und
-        # schneidet Panels ab.
+        # LayoutRequest im Container aus -- Panel-Breiten und die feste Hoehe
+        # der ScrollArea muessen dann nachgezogen werden, sonst bleiben sie
+        # veraltet und schneiden Panels ab (siehe _relayout_panels).
         self._container.installEventFilter(self)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -250,7 +285,13 @@ class DashboardWidget(QGroupBox):
 
         self._panels: dict[str, _DevicePanel] = {}
         self._compact = False
-        self._update_scroll_height()
+        # Aktuell angeglichene Panel-Breite (0 = noch keine gesetzt) -- als
+        # Ratsche gefuehrt, siehe _relayout_panels. In der Kompaktansicht
+        # stattdessen eine Ratsche je Panel (device_id -> Breite), weil die
+        # Panels dort bewusst unterschiedlich breit sind.
+        self._panel_width = 0
+        self._compact_widths: dict[str, int] = {}
+        self._relayout_panels()
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -275,19 +316,63 @@ class DashboardWidget(QGroupBox):
         for panel in self._panels.values():
             panel.set_compact(compact)
         self._update_toggle_button()
-        self._update_scroll_height()
+        self._relayout_panels(reset_width=True)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
         if obj is self._container and event.type() == QEvent.Type.LayoutRequest:
-            self._update_scroll_height()
+            self._relayout_panels()
         return super().eventFilter(obj, event)
 
-    def _update_scroll_height(self) -> None:
-        # Die Panel-Hoehe ergibt sich aus dem tatsaechlichen Inhalt (Schrift,
-        # Uebersetzung, DPI, ...), nicht aus einer festen Konstante -- sonst
-        # wird bei laengeren Texten/anderen Schriftarten der untere Teil der
-        # Panels abgeschnitten. Etwas Rand fuer eine ggf. sichtbare
-        # horizontale Scrollleiste einrechnen.
+    def _relayout_panels(self, reset_width: bool = False) -> None:
+        # Panel-Breite/-Hoehe ergeben sich aus dem tatsaechlichen Inhalt
+        # (Schrift, Uebersetzung, DPI, ...), nicht aus festen Konstanten --
+        # sonst werden bei laengeren Texten/anderen Schriftarten Werte oder
+        # der untere Teil der Panels abgeschnitten.
+        #
+        # Breite (nur Normalansicht): alle Panels auf die breiteste
+        # Anforderung angleichen (analog zu ControlTab._equalize_sections) --
+        # Last- und Netzteil-Panels brauchen unterschiedlich viel Platz (z.B.
+        # 3 statt 2 Nachkommastellen), aber sollen optisch gleich breit
+        # bleiben. Zwei Regeln halten die Panels dabei ruhig, statt sie bei
+        # jedem Messwert huepfen zu lassen:
+        #
+        # 1. sizeHint() liefert die natuerliche Inhaltsbreite unabhaengig von
+        #    einer bestehenden setFixedWidth-Beschraenkung -- die Fixierung
+        #    wird also nie zwischendurch aufgehoben, und neu fixiert wird nur,
+        #    wenn die gesetzte Beschraenkung (minimum-/maximumWidth) abweicht.
+        #    (Ein Vergleich gegen die momentane Geometrie (width()) wuerde
+        #    sich mit den selbst ausgeloesten LayoutRequests endlos
+        #    abwechselnd zuruecksetzen/neu fixieren.)
+        # 2. Die angeglichene Breite ist eine Ratsche: Ziffern sind in der
+        #    Proportionalschrift unterschiedlich breit, die natuerliche
+        #    Breite schwankt deshalb mit jedem Messwert um einige Pixel.
+        #    Die Panels wachsen daher nur (auf die breiteste je gesehene
+        #    Anforderung) und folgen nicht jeder Schwankung nach unten.
+        #    Zurueckgesetzt wird die Ratsche nur bei strukturellen Wechseln
+        #    (Ansicht-Umschaltung, siehe set_compact).
+        if self._panels:
+            if reset_width:
+                self._panel_width = 0
+                self._compact_widths.clear()
+            if self._compact:
+                # Kompaktansicht: jedes Panel behaelt seine eigene, an den
+                # Inhalt geschmiegte Breite -- aber ebenfalls als Ratsche,
+                # sonst schieben die schwankenden Wertetexte alle rechts
+                # daneben liegenden Panels staendig hin und her.
+                for device_id, panel in self._panels.items():
+                    width = max(self._compact_widths.get(device_id, 0), panel.sizeHint().width())
+                    self._compact_widths[device_id] = width
+                    if panel.minimumWidth() != width or panel.maximumWidth() != width:
+                        panel.setFixedWidth(width)
+            else:
+                max_width = max(panel.sizeHint().width() for panel in self._panels.values())
+                self._panel_width = max(self._panel_width, max_width)
+                for panel in self._panels.values():
+                    if panel.minimumWidth() != self._panel_width or panel.maximumWidth() != self._panel_width:
+                        panel.setFixedWidth(self._panel_width)
+
+        # Hoehe: etwas Rand fuer eine ggf. sichtbare horizontale Scrollleiste
+        # einrechnen.
         content_height = self._container.sizeHint().height()
         self._scroll_area.setFixedHeight(content_height + SCROLL_AREA_MARGIN)
 
@@ -305,7 +390,7 @@ class DashboardWidget(QGroupBox):
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
             self._panels[device_id] = panel
-            self._update_scroll_height()
+            self._relayout_panels()
         else:
             panel.set_label(label)
 
@@ -330,7 +415,7 @@ class DashboardWidget(QGroupBox):
         panel.setVisible(online)
         if not online:
             panel.clear_values()
-        self._update_scroll_height()
+        self._relayout_panels()
 
     # -- Messwerte -----------------------------------------------------------
 

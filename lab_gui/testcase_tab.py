@@ -1202,8 +1202,10 @@ class TestcaseTab(QWidget):
         # unter Fehler/Blinken (die gerade laufende Zeile soll sichtbar
         # blinken, auch wenn sie in einer frueheren Schleifeniteration schon
         # ein Ergebnis hat), aber ueber der dezenteren Auswahlfarbe.
+        # check_pass statt success, damit "bestanden" auch im Dark-Theme
+        # gruen ist (dort ist success amber, siehe theme.Palette.check_pass).
         if row in self._check_results:
-            return pal.success if self._check_results[row] else pal.danger
+            return pal.check_pass if self._check_results[row] else pal.danger
         if row == self._selected_row:
             return pal.selection
         return None

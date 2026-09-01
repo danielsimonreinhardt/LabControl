@@ -75,6 +75,11 @@ statt die .exe zu versionieren.
     Lauf ab (wie ein Gerätefehler) oder der Test läuft durch und die
     Statuszeile meldet am Ende „BESTANDEN“/„NICHT bestanden“ mit Zähler.
     Bleibt die Messung aus (Gerät tot/getrennt), schlägt der Schritt fehl.
+    Die Wartezeit (Dauer-Spalte) muss die physikalische Einschwingzeit
+    abdecken: am realen HCS-34xx ohne Last fällt die Ausgangsspannung nach
+    einem niedrigeren Sollwert nur langsam über den internen Bleeder (bei
+    der Hardware-Verifikation: 2 s nach „5 V setzen“ noch 8,7 V gemessen) —
+    für Abwärtssprünge ohne Last also großzügige Wartezeiten wählen.
   - Testablauf-Dateien liegen seit v0.4.0 im Format v2 vor (JSON-Objekt mit
     `version`-Feld statt eines nackten Arrays); ältere v1-Dateien werden
     weiterhin geladen, v2-Dateien lassen sich aber nicht mit älteren

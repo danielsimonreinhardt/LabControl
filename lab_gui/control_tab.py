@@ -80,13 +80,13 @@ class LoadControlGroup(QGroupBox):
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
+        # Geraetename als natives QGroupBox-Title (wie DashboardWidget/
+        # _DevicePanel), statt als eigenes QLabel im Panel-Inneren.
+        self.setTitle(label)
 
         outer = QVBoxLayout(self)
-        self._title_label = QLabel(label)
-        self._title_label.setStyleSheet("font-weight: bold;")
         self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
-        outer.addWidget(self._title_label)
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
@@ -170,7 +170,7 @@ class LoadControlGroup(QGroupBox):
         self._update_input_buttons()
 
     def set_label(self, label: str) -> None:
-        self._title_label.setText(label)
+        self.setTitle(label)
 
     def _on_mode_index_changed(self, index: int) -> None:
         code = self._mode_combo.itemData(index)
@@ -196,13 +196,13 @@ class PsuControlGroup(QGroupBox):
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
+        # Geraetename als natives QGroupBox-Title (wie DashboardWidget/
+        # _DevicePanel), statt als eigenes QLabel im Panel-Inneren.
+        self.setTitle(label)
 
         outer = QVBoxLayout(self)
-        self._title_label = QLabel(label)
-        self._title_label.setStyleSheet("font-weight: bold;")
         self._subtitle = QLabel()
         self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
-        outer.addWidget(self._title_label)
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
@@ -351,7 +351,7 @@ class PsuControlGroup(QGroupBox):
         self._update_output_buttons()
 
     def set_label(self, label: str) -> None:
-        self._title_label.setText(label)
+        self.setTitle(label)
 
     def _on_output_on(self) -> None:
         self.set_voltage.emit(self._device_id, self._voltage_spin.value())

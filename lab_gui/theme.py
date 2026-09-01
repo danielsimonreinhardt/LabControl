@@ -41,6 +41,11 @@ class Palette:
     accent: str
     accent_hover: str
     success: str
+    # Zeilenhintergrund fuer bestandene Pass/Fail-Pruefungen im Testcase-Tab.
+    # Eigener Wert statt success, weil success im Amber-Industrial-Theme
+    # bewusst amber ist (Theme-Akzent) -- ein Pruefergebnis soll aber in
+    # beiden Themes intuitiv gruen (bestanden) vs. rot (fehlgeschlagen) sein.
+    check_pass: str
     warning: str
     danger: str
     selection: str
@@ -61,6 +66,7 @@ LIGHT = Palette(
     accent="#4f46e5",
     accent_hover="#6366f1",
     success="#16a34a",
+    check_pass="#16a34a",
     warning="#d97706",
     danger="#dc2626",
     selection="#e0e7ff",
@@ -81,6 +87,9 @@ AMBER_DARK = Palette(
     accent="#ff9f1c",
     accent_hover="#ffb347",
     success="#ff9f1c",
+    # Dunkleres Gruen als im Light-Theme, damit der helle Text (#e8e6e1)
+    # auf dem Zeilenhintergrund lesbar bleibt.
+    check_pass="#15803d",
     warning="#ffcc00",
     danger="#ef4444",
     selection="#3a2f1d",
@@ -166,6 +175,14 @@ def stylesheet(pal: Palette) -> str:
         border-radius: 4px;
         padding: 3px 6px;
     }}
+    /* Ohne explizite :disabled-Regeln wuerden gesperrte Eingabefelder exakt
+       wie aktive aussehen -- das Stylesheet oben ueberschreibt die native
+       Ausgrau-Darstellung von Qt (aufgefallen im "Pruefung definieren"-Dialog,
+       dessen Felder bei inaktiver Pruefung gesperrt sind). */
+    QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled, QComboBox:disabled {{
+        background-color: {pal.surface_alt};
+        color: {pal.text_muted};
+    }}
     QComboBox::drop-down {{
         border: none;
     }}
@@ -216,6 +233,16 @@ def stylesheet(pal: Palette) -> str:
     QCheckBox::indicator:checked {{
         background-color: {pal.accent};
         border-color: {pal.accent};
+    }}
+    QCheckBox:disabled {{
+        color: {pal.text_muted};
+    }}
+    QCheckBox::indicator:disabled {{
+        background-color: {pal.surface_alt};
+    }}
+    QCheckBox::indicator:checked:disabled {{
+        background-color: {pal.text_muted};
+        border-color: {pal.text_muted};
     }}
     QTableWidget {{
         background-color: {pal.surface};
