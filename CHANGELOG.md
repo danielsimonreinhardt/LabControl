@@ -198,6 +198,15 @@ Semantic Versioning (`lab_gui/version.py`).
   `QToolButton`-Regeln (identisch zu `QPushButton`) plus
   `QToolButton::menu-button` (Trennlinie zur Menü-Pfeil-Klickzone) in
   `theme.form_control_qss()` ergänzt.
+- **"Zeile hinzufügen"-Button: "+"-Icon nicht zentriert, Dropdown-Pfeil zu
+  groß**: Nachbesserung zum vorherigen Punkt. Qt zentriert das Icon eines
+  `QToolButton` standardmäßig über die gesamte Button-Breite inkl. der
+  reservierten Menü-Pfeil-Zone statt nur über die eigentliche
+  Icon-Klickfläche — zusätzliches `padding-right` gleicht das aus. Der
+  native (grobe) Pfeil wurde durch dasselbe schlanke qtawesome-Chevron wie
+  bei den Spinbox-Pfeilen ersetzt (`QToolButton::menu-arrow` — das
+  zuständige Subcontrol bei `MenuButtonPopup`, weder `down-arrow` noch
+  `menu-indicator` griffen hier) (`lab_gui/theme.py`).
 
 ## [0.6.2]
 

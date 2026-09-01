@@ -221,6 +221,13 @@ def form_control_qss(pal: Palette) -> str:
         border: 1px solid {pal.border};
         border-radius: 4px;
         padding: 5px 8px;
+        /* Rechtes Padding um die Breite von ::menu-button erweitert (siehe
+           dort): Qt zentriert das Icon sonst im GESAMTEN Button inkl.
+           Menue-Pfeil-Zone, wodurch es sichtbar aus der Mitte der eigenen
+           (linken) Klickflaeche rutscht -- das zusaetzliche Padding gleicht
+           das aus, sodass das Icon in seinem eigenen Bereich zentriert
+           bleibt (per Screenshot-Vergleich austariert). */
+        padding-right: 22px;
     }}
     QToolButton:hover {{
         background-color: {pal.accent};
@@ -237,10 +244,27 @@ def form_control_qss(pal: Palette) -> str:
     }}
     /* Trennlinie zwischen Icon- und Menue-Pfeil-Klickzone (MenuButtonPopup) --
        ohne das wirkt der Pfeilbereich wie ein nahtloser Teil des Icons statt
-       einer eigenen Klickflaeche. */
+       einer eigenen Klickflaeche. Schmaler als der native Default, passend
+       zum kleineren Pfeil unten. */
     QToolButton::menu-button {{
         border-left: 1px solid {pal.border};
-        width: 16px;
+        width: 14px;
+    }}
+    /* Ersetzt Qt's natives (recht grobes Dreieck-)Pfeilsymbol durch dasselbe
+       schlanke Chevron wie bei den Spinbox-Pfeilen (siehe
+       QAbstractSpinBox::down-arrow unten) -- fuegt sich damit optisch in den
+       Rest des Programms ein, statt aus dem Rahmen zu fallen. Bei
+       QToolButton (MenuButtonPopup) heisst das zustaendige Subcontrol
+       "menu-arrow", NICHT "down-arrow" wie bei QComboBox/QAbstractSpinBox --
+       per gezieltem Test einzeln ermittelt ("down-arrow"/"menu-indicator"
+       blieben wirkungslos, nur "menu-arrow" traf). subcontrol-origin/
+       -position muessen explizit gesetzt sein, sonst bleibt das Bild leer. */
+    QToolButton::menu-arrow {{
+        image: url({_spin_arrow_icon_path("down", pal)});
+        width: 10px;
+        height: 10px;
+        subcontrol-origin: padding;
+        subcontrol-position: center;
     }}
     QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
         background-color: {pal.surface};

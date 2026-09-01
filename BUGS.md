@@ -382,6 +382,10 @@ geräte-individuellen) Sicherheits-Grenzwerte im Einstellungen-Tab
 **Gewünscht:** Panels kompakter darstellen — nur so breit wie für den Inhalt
 nötig, statt die volle Fensterbreite auszufüllen.
 
+**Zu prüfen:** Layout der Grenzwert-Sektionen in `settings_tab.py` — vermutlich
+ein `QHBoxLayout`/`QVBoxLayout` mit Stretch-Faktor oder fehlendem
+`setSizePolicy`/`addStretch`, das die Panels horizontal aufbläht.
+
 
 ## 12. Testablauf-Reiter: "Zeile hinzufügen"-Button sieht anders aus als übrige Buttons
 
@@ -409,9 +413,28 @@ statt `QPushButton` — vermutlich fehlt dafür eine eigene Regel im globalen
 Stylesheet (`theme.stylesheet()`), sodass der Button auf natives Styling
 zurückfällt.
 
-**Zu prüfen:** Layout der Grenzwert-Sektionen in `settings_tab.py` — vermutlich
-ein `QHBoxLayout`/`QVBoxLayout` mit Stretch-Faktor oder fehlendem
-`setSizePolicy`/`addStretch`, das die Panels horizontal aufbläht.
+**b) Nachbesserung: "+"-Icon soll zentriert in seiner eigenen (linken)
+Klickzone sitzen, Dropdown-Pfeil kleiner**
+Nach dem Fix oben saß das "+"-Icon sichtbar näher an der Trennlinie zur
+Menü-Pfeil-Zone statt mittig in seiner eigenen Fläche, und der Dropdown-Pfeil
+wirkte im Vergleich zu den übrigen (schlanken) Pfeil-Icons im Programm zu
+grob/groß.
+
+> **Status: Sicher gefixt, per Screenshot verifiziert (Light + Dark, inkl.
+> Hover, 2026-09-01).** Zwei Teilursachen: (1) Qt zentriert das Icon eines
+> `QToolButton` standardmäßig über die GESAMTE Button-Breite inkl. der
+> reservierten `::menu-button`-Zone, nicht nur über die eigentliche
+> Icon-Klickfläche — durch zusätzliches `padding-right` (in Höhe der
+> `::menu-button`-Breite) auf `QToolButton` zentriert sich das Icon jetzt
+> korrekt in seiner eigenen Zone. (2) Der native Pfeil wurde durch dasselbe
+> schlanke qtawesome-Chevron ersetzt, das schon die Spinbox-Pfeile nutzen
+> (`theme._spin_arrow_icon_path`), plus schmalere `::menu-button`-Breite
+> (16px → 14px). Stolperstein dabei: Das zuständige QSS-Subcontrol für den
+> Pfeil bei `QToolButton` im `MenuButtonPopup`-Modus heißt `menu-arrow` —
+> weder `down-arrow` (wie bei `QComboBox`/`QAbstractSpinBox`) noch
+> `menu-indicator` (das ist für `InstantPopup`/`DelayedPopup` ohne
+> getrennte Pfeil-Zone) hatten irgendeine Wirkung, per gezieltem
+> Einzeltest der drei Kandidaten ermittelt (`lab_gui/theme.py`).
 
 
 ## 13. Splash-Screen zeigt veraltete Versionsnummer
