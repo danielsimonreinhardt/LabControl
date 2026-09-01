@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
-from icons import IconButton
+from icons import IconButton, SplitIconButton
 from paths import app_dir
 from signal_dialog import SignalDialog
 from theme import Palette, ThemeManager
@@ -48,6 +48,7 @@ from testcase_model import (
     VALUELESS_ACTIONS,
     TestStep,
     action_label,
+    arb_shape_label,
     check_summary,
     condition_summary,
     is_arb_action,
@@ -99,14 +100,18 @@ def _check_params_to_step(params: dict) -> TestStep:
 # Deutsche Basis-Anzeigenamen (Uebersetzungsschluessel) der Spaltenkoepfe.
 # "#" ist sprachunabhaengig.
 BASE_COLUMNS = ["#", "Gerät", "Aktion", "Wert", "Dauer (s)", "Prüfung", "Aktiv"]
-# Default-Spaltenbreiten (Pixel) fuer die Standard-Fenstergroesse (1000x700
-# Hauptfenster -> ca. 958px Tabellenbreite). Aus einem vom Nutzer vorgegebenen
-# Referenz-Screenshot als Anteile ermittelt und auf diese Breite umgerechnet --
-# absolute Pixelwerte 1:1 aus dem (viel breiteren) Screenshot zu uebernehmen
-# liess der Aktion-Spalte bei der Standardgroesse kaum Platz. Aktion (Index 2)
-# bleibt Stretch und nimmt sich den Rest; alle Spalten bleiben per Drag&Drop
-# veraenderbar (Interactive-Resize).
-DEFAULT_COLUMN_WIDTHS = {0: 49, 1: 167, 3: 119, 4: 94, 5: 150, 6: 77}
+# Default-Spaltenbreiten (Pixel) fuer die drei Spalten mit fester Breite
+# (siehe FIXED_COLUMNS) bei der Standard-Fenstergroesse (1000x700 Hauptfenster
+# -> ca. 958px Tabellenbreite). Alle uebrigen Spalten (Geraet/Aktion/Wert/
+# Pruefung) teilen sich den verbleibenden Platz gleichmaessig per Stretch-
+# Resize-Modus (siehe __init__) -- kein fester Wert noetig/sinnvoll.
+DEFAULT_COLUMN_WIDTHS = {0: 49, 4: 94, 6: 77}
+
+# Spalten mit fester Breite (Zeilennummer/Dauer/Aktiv) -- bleiben beim
+# Skalieren des Hauptfensters unveraendert. Alle anderen Spalten (inkl.
+# "Aktion") sind Stretch und teilen sich den Rest gleichmaessig, statt dass
+# "Aktion" allein den kompletten uebrigen Platz einnimmt.
+FIXED_COLUMNS = {COL_NUM, COL_DURATION, COL_ENABLED}
 
 DEFAULT_DIR = app_dir() / "testcases"
 
@@ -138,6 +143,7 @@ class TestcaseTab(QWidget):
     stop_requested = Signal()
     open_report_requested = Signal()
     export_report_pdf_to = Signal(object)  # Path
+    notify_requested = Signal(str, str)  # title, message -- siehe main_window._show_notification
 
     def __init__(self) -> None:
         super().__init__()
@@ -191,7 +197,7 @@ class TestcaseTab(QWidget):
         self._is_running = False
 
         button_row = QHBoxLayout()
-        self._add_button = IconButton("mdi.plus", "")
+        self._add_button = SplitIconButton("mdi.plus", "")
         self._remove_button = IconButton("mdi.minus", "")
         self._up_button = IconButton("mdi.arrow-up", "")
         self._down_button = IconButton("mdi.arrow-down", "")
@@ -215,6 +221,7 @@ class TestcaseTab(QWidget):
         self._action_add_set_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="set_var")))
         self._action_add_inc_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="inc_var")))
         self._add_button.setMenu(self._add_menu)
+        self._add_button.clicked.connect(self._add_row_clicked)
         self._remove_button.clicked.connect(self._remove_selected_row)
         self._up_button.clicked.connect(lambda: self._move_selected_row(-1))
         self._down_button.clicked.connect(lambda: self._move_selected_row(1))
@@ -229,11 +236,19 @@ class TestcaseTab(QWidget):
 
         self._table = QTableWidget(0, len(BASE_COLUMNS))
         header = self._table.horizontalHeader()
+        # Feste Spalten (FIXED_COLUMNS) bekommen ihre Default-Breite und bleiben
+        # beim Skalieren des Fensters unveraendert (Fixed); alle uebrigen
+        # Spalten (inkl. "Aktion") sind Stretch und teilen sich den
+        # verbleibenden Platz automatisch zu gleichen Teilen -- die initiale
+        # Interactive-Breite vor dem Umschalten auf Fixed/Stretch wird
+        # zunaechst gesetzt, damit resizeSection() ueberhaupt greift.
         for col in range(len(BASE_COLUMNS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         for col, width in DEFAULT_COLUMN_WIDTHS.items():
             header.resizeSection(col, width)
-        header.setSectionResizeMode(COL_ACTION, QHeaderView.ResizeMode.Stretch)
+        for col in range(len(BASE_COLUMNS)):
+            mode = QHeaderView.ResizeMode.Fixed if col in FIXED_COLUMNS else QHeaderView.ResizeMode.Stretch
+            header.setSectionResizeMode(col, mode)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -558,6 +573,7 @@ class TestcaseTab(QWidget):
             offset=step.arb_offset,
             frequency=step.arb_frequency,
             interval_ms=step.arb_interval_ms,
+            duty=step.arb_duty,
         )
 
         value_stack = QStackedWidget()
@@ -665,7 +681,7 @@ class TestcaseTab(QWidget):
         def refresh_arb_summary() -> None:
             kind = current_kind()
             params = arb_page._params
-            shape_label = tr("Sinus") if params["shape"] != "square" else tr("Rechteck")
+            shape_label = arb_shape_label(params["shape"])
             target_label = action_label(kind, params["target"]) if params["target"] else "?"
             arb_summary_label.setText(
                 f"{shape_label}: {target_label}, {params['offset']:g}±{params['amplitude']:g}, "
@@ -884,6 +900,7 @@ class TestcaseTab(QWidget):
             arb_offset=params["offset"],
             arb_frequency=params["frequency"],
             arb_interval_ms=params["interval_ms"],
+            arb_duty=params.get("duty", 0.5),
             check_enabled=check_params["enabled"],
             check_field=check_params["field"],
             check_min=check_params["min"],
@@ -1095,7 +1112,7 @@ class TestcaseTab(QWidget):
         label = action_label(step.device_kind, step.action)
         device_display = self._device_display(step.device_kind, step.device_id)
         if is_arb_action(step.action):
-            shape = tr("Sinus") if step.arb_shape != "square" else tr("Rechteck")
+            shape = arb_shape_label(step.arb_shape)
             target_label = action_label(step.device_kind, step.arb_target)
             detail = tr(
                 "{shape} auf {target}, {offset:g}±{amplitude:g}, {frequency:g} Hz, {duration:g} s",
@@ -1149,6 +1166,7 @@ class TestcaseTab(QWidget):
                 )
         else:
             self._set_status("Fertig")
+        self.notify_requested.emit(tr("Testlauf beendet"), self._status_label.text())
 
     def on_run_stopped(self) -> None:
         self._stop_blink()
@@ -1172,6 +1190,7 @@ class TestcaseTab(QWidget):
             total=total,
             message=message,
         )
+        self.notify_requested.emit(tr("Testlauf-Fehler"), self._status_label.text())
 
     def _on_stop_clicked(self) -> None:
         self.stop_requested.emit()

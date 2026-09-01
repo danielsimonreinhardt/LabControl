@@ -7,6 +7,53 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Testablauf: Plus- und Menü-Klick am „Zeile hinzufügen"-Button getrennt**:
+  Ein Klick auf das Plus-Icon fügt jetzt direkt eine neue Aktionsschritt-Zeile
+  ein, ohne das Dropdown-Menü zu öffnen; ein Klick auf den Menü-Pfeil öffnet
+  wie bisher das Auswahlmenü (Schleife/Solange/Wenn/…). Neue Klasse
+  `SplitIconButton` (`lab_gui/icons.py`, `QToolButton` mit
+  `MenuButtonPopup`-Modus statt `IconButton`/`QPushButton`, das Icon- und
+  Menü-Klick nicht unterscheiden kann) — nur für diesen Button verwendet
+  (`lab_gui/testcase_tab.py`).
+- **Aufnahme-Start/Stopp zu einem Button vereint**: Statt getrennter
+  „Aufnahme starten"/„Aufnahme stoppen"-Buttons gibt es im Verlauf-Reiter
+  jetzt einen einzigen Button — statisch rot, solange keine Aufnahme läuft,
+  blinkt rot während der Aufnahme (`lab_gui/timeline_tab.py`). Dafür bekam
+  `IconButton` eine `set_color_override()`-Methode für eine vom Theme
+  unabhängige Icon-Farbe (`lab_gui/icons.py`).
+- **Aufnahme zeichnet nur noch Diagramm-zugeordnete Signale auf**: Bisher
+  zeichnete `Recorder` Messwerte aller bekannten Geräte auf, unabhängig
+  davon, ob sie einem Diagramm im Verlauf-Reiter zugeordnet sind. Jetzt
+  werden nur Signale aufgezeichnet, die aktuell mindestens einem Diagramm
+  zugeordnet sind (`Recorder.set_active_signals`,
+  `TimelineTab.active_signals_changed`/`active_signal_keys`). **Achtung**:
+  Solange kein Signal einem Diagramm zugeordnet ist (Startzustand mit leerem
+  Diagramm), zeichnet eine gestartete Aufnahme zunächst nichts auf.
+- **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: Über
+  `QSystemTrayIcon.showMessage` (nur wenn ein System-Tray verfügbar ist —
+  auf dem Kiosk-Pi ohne Taskleiste bleibt die Funktion ein stilles No-Op),
+  ein-/ausschaltbar im Einstellungen-Tab (Standard: an). Praktisch bei
+  langen unbeaufsichtigten Läufen (z.B. Akku-Zyklen über Nacht).
+- **Arbiträrsignal-Generator: Dreieck- und Sägezahn-Signalform, einstellbarer
+  Tastgrad beim Rechtecksignal**: Zusätzlich zu Sinus/Rechteck stehen jetzt
+  Dreieck- und Sägezahn-Kurven zur Verfügung; beim Rechtecksignal lässt sich
+  der Tastgrad (Anteil High-Phase) statt des bisher fest verdrahteten 50/50
+  einstellen (`TestStep.arb_duty`, `lab_gui/testcase_model.py::arb_value`,
+  neues Tastgrad-Feld in `lab_gui/signal_dialog.py`, nur bei Rechteck
+  sichtbar).
+- **Verlauf-Diagramme: vertikale Gitterlinien + feste Y-Achsen-Skalierung**:
+  Diagramme zeigen jetzt zusätzlich zu horizontalen auch vertikale
+  Gitterlinien. Die Y-Achsen-Skalierung lässt sich je Diagramm per neuem
+  Button im Diagramm-Header von automatisch (bisheriges Verhalten) auf feste,
+  selbst gesetzte Wertebereiche umschalten (`lab_gui/timeline_tab.py`,
+  `_ScopeChart.set_y_mode`/`set_fixed_range`, neuer `_YAxisDialog`) — gilt
+  bewusst nur für die laufende Session, keine Persistenz über
+  `timeline_layout.json`.
+- Version auf 0.7.0 angehoben.
+
+## [0.6.2]
+
+### Hinzugefügt
 - **Nachlauf-Report**: Nach einem Testlauf (auch nach Stop oder Fehlerabbruch)
   erzeugt der neue „Report"-Button im Testablauf-Reiter einen selbst-
   enthaltenen HTML-Report (`lab_gui/reports/`, per Browser geöffnet) mit
@@ -63,6 +110,7 @@ Semantic Versioning (`lab_gui/version.py`).
   statt über den Diagrammen, aber bewusst außerhalb von deren QScrollArea —
   bleibt dadurch immer sichtbar am unteren Tab-Rand, auch wenn mehrere
   Diagramme Scrollen nötig machen (`lab_gui/timeline_tab.py`).
+- Version auf 0.6.2 angehoben.
 
 ### Behoben
 - **Dashboard-Panels sprangen sichtbar hin und her**: Die dynamische
@@ -92,6 +140,106 @@ Semantic Versioning (`lab_gui/version.py`).
   des Panel-Containers nachgezogen. Bisher blieb sie veraltet, wenn der
   Panel-Inhalt nach der Berechnung noch wuchs (z.B. erste Messwerte nach dem
   Verbinden) — die Panels konnten dadurch unten leicht abgeschnitten werden.
+- **[Sicherheitskritisch] Netzteil startete mit eingeschaltetem Ausgang**: Das
+  HCS-34xx-Protokoll kennt kein echtes Ausgang-AUS-Kommando (nur Emulation
+  über Stromsollwert 0 A) — beim (Wieder-)Verbinden wurde bislang nie aktiv
+  auf 0 A gesetzt, sodass ein von einer früheren Sitzung oder manuell
+  eingeschalteter Ausgang real eingeschaltet blieb, während die GUI
+  standardmäßig „Aus" anzeigte (realer Hardware-Zustand wich von der Anzeige
+  ab). Jetzt wird beim Verbindungsaufbau explizit auf 0 A gesetzt, bevor das
+  Gerät als verbunden gilt (`lab_gui/device_worker.py`).
+- **[Sicherheitskritisch] Sicherheits-Grenzwerte sind jetzt geräte-individuell
+  statt geräteartweit global**: Der Software-Watchdog (`lab_gui/safety.py`)
+  prüfte Last-/Netzteil-Grenzwerte bisher gemeinsam für alle Geräte einer Art
+  — bei zwei baugleichen Netzteilen ließen sich also keine unterschiedlichen
+  Schwellen setzen. Grenzwerte sind jetzt pro Geräte-ID konfigurierbar; der
+  Einstellungen-Tab erzeugt dafür dynamisch eine eigene Grenzwert-Sektion je
+  bekanntem Gerät, analog zu den Steuerung-Panels (`lab_gui/settings.py`,
+  `lab_gui/settings_tab.py`). **Achtung**: Das Speicherformat für
+  `safety_limits` in `settings.json` hat sich geändert (Schlüssel jetzt
+  Geräte-ID statt Geräteart) — zuvor gespeicherte globale Grenzwerte werden
+  beim Update nicht automatisch übernommen und müssen neu gesetzt werden.
+- **Dark Mode: EIN-Buttons im Control-Panel jetzt grün**: `success` ist im
+  Amber-Industrial-Theme bewusst amber (Theme-Akzent) statt grün — dadurch
+  war der aktive Ausgang-Zustand im Dark Mode farblich kaum von anderen
+  Buttons zu unterscheiden. Die EIN/AUS-Anzeige nutzt jetzt `check_pass`
+  (immer grün/rot in beiden Themes, wie schon bei den Pass/Fail-Ergebnissen)
+  statt `success` (`lab_gui/control_tab.py`).
+- **Last-Panel flackerte beim Übernehmen im Control-Tab**: Der
+  Sollwert-Übernehmen-Button rief die Worker-Setter bislang direkt als
+  Python-Methode auf statt über eine Qt-Signal/Slot-Verbindung — das umging
+  Qt's Thread-Routing und führte die blockierende Serial-I/O synchron im
+  GUI-Thread statt im Worker-Thread aus (kurzes Einfrieren/Neuzeichnen).
+  Jetzt korrekt über eine neue `DeviceWorker.set_load_setpoint`-Slot-Methode
+  verbunden, wie bereits beim Netzteil-Pfad (`lab_gui/main_window.py`,
+  `lab_gui/device_worker.py`).
+- **Verlaufs-Diagramme aktualisierten nur mit ~2 Hz**: `_ScopeChart.
+  paintEvent` berechnet das angezeigte Zeitfenster bei jedem Aufruf live über
+  die aktuelle Uhrzeit — bei nur 2 Hz Repaint-Rate wirkte das Scrollen
+  sichtbar ruckelig. Repaint-Intervall von 500 ms auf 33 ms (~30 Hz)
+  reduziert (`lab_gui/timeline_tab.py`). Schnelleres Neuzeichnen allein
+  brachte aber nichts, solange die zugrundeliegenden Messwerte selbst nur
+  alle 500 ms (2 Hz) neu abgefragt wurden — `device_worker.POLL_INTERVAL_MS`
+  daher zusätzlich auf 100 ms (10 Hz) gesenkt (5×), bewusst konservativ statt
+  auf die vollen 30 Hz: pro Zyklus werden alle Geräte sequentiell abgefragt
+  (eine Last macht bereits 4 Kommandos pro Zyklus), das HCS-34xx hängt an
+  einem CP210x-USB-UART-Wandler (9600 Baud, oft ~16 ms Windows-VCP-
+  Latenz-Timer pro Leseaufruf) — ein zu aggressiver Wert könnte ein Gerät mit
+  Kommandos überfordern und Timeouts als (fälschliche) Verbindungsabbrüche
+  auslösen (`lab_gui/device_worker.py`). **Noch nicht an echter Hardware
+  verifiziert** (aktuell kein Gerät angeschlossen) — bei häufigeren
+  „getrennt"-Log-Einträgen nach dem Update den Wert wieder erhöhen.
+- **Testschritt-Tabelle: Spaltenbreiten skalierten nicht sinnvoll**: Beim
+  Skalieren des Hauptfensters wuchs bisher nur die „Aktion"-Spalte (einzige
+  Stretch-Spalte) übermäßig. „#", „Dauer" und „Aktiv" sind jetzt fest
+  (`Fixed`), alle übrigen Spalten (inkl. „Aktion") teilen sich den
+  verbleibenden Platz gleichmäßig (`Stretch`) (`lab_gui/testcase_tab.py`).
+- **Control-Tab: Außenabstand zum Fensterrand ergänzt**: Die Geräte-Panels
+  stießen links/oben direkt an den Fensterrand. `FlowLayout` (eigene
+  Layout-Implementierung, `lab_gui/flow_layout.py`) berücksichtigte
+  `contentsMargins()` nur in `minimumSize()` (der Container forderte dadurch
+  zwar mehr Platz an), nicht aber in `setGeometry()`/`_do_layout()` — Panels
+  wurden weiterhin relativ zum vollen, nicht margin-reduzierten Rect
+  platziert, ein zunächst versuchter Fix allein in `control_tab.py` (Margin
+  setzen) blieb daher wirkungslos. `setGeometry()`/`heightForWidth()` ziehen
+  die Margins jetzt korrekt ab (`rect.marginsRemoved(...)`), Panels haben
+  denselben Außenabstand wie den Innenabstand zueinander
+  (`lab_gui/flow_layout.py`, `lab_gui/control_tab.py`).
+- **Grauer Rand/graue Flecken um verschachtelte Panels — betraf mehr als nur
+  das Dashboard**: Ursprünglich am Dashboard bemerkt (ScrollArea/Container
+  zeigten den allgemeinen Seiten-Hintergrund `pal.bg` statt der Fläche der
+  umschließenden GroupBox `pal.surface`, sichtbar als grauer Rand z.B. um das
+  „Last 150W"-Panel), aber derselbe Effekt trat unabhängig davon an
+  mehreren weiteren Stellen auf: reine Layout-Wrapper-`QWidget`s (Zeilen im
+  Control-Tab-Formular, die Diagramm-Legende im Verlauf-Tab, der
+  Status-Container in der Statusleiste) sowie `QLabel`s, die direkt (ohne
+  Wrapper) im Layout einer `QGroupBox` hängen (Untertitel, Grenzwert-Warnung,
+  Diagramm-Titel) malten ebenfalls opak den Seiten- statt den
+  GroupBox-/Statusleisten-Hintergrund — sichtbar als graue Streifen/Flecken
+  z.B. hinter jeder Eingabezeile im Steuerung-Tab oder unter dem
+  Diagramm-Titel im Verlauf-Tab. Neue Hilfsfunktion `theme.no_own_background()`
+  (Instanz-Stylesheet statt einer riskanten globalen `QGroupBox QWidget`-Regel,
+  die wegen höherer Selektor-Spezifität versehentlich auch Buttons/Eingabefelder
+  überschreiben würde) an allen gefundenen Stellen angewendet
+  (`lab_gui/theme.py`, `lab_gui/dashboard.py`, `lab_gui/control_tab.py`,
+  `lab_gui/timeline_tab.py`, `lab_gui/main_window.py`). In Light- und
+  Dark-Theme verifiziert.
+- **Diagramm-Hintergrund war immer schwarz**: `plot_bg`/`plot_grid` waren in
+  beiden Paletten fest auf ein dunkles Oszilloskop-Schwarz gesetzt. Im
+  Light-Theme jetzt hell (passend zur restlichen UI); im
+  Amber-Industrial-Theme bewusst unverändert dunkel (`lab_gui/theme.py`).
+- **Netzteil-Schalter im Control-Tab blieben nach „Alle Aus" auf EIN
+  stehen**: Anders als bei der Last (Zustand kommt per echter
+  Hardware-Rückfrage aus dem Poll-Zyklus) ist der EIN/AUS-Schalter eines
+  Netzteil-Panels rein lokaler GUI-Zustand (das HCS-34xx-Protokoll kennt
+  keine Abfrage des tatsächlichen Ausgangszustands). Schaltete der Worker den
+  Ausgang selbst ab — „Alle Aus"-Button, Safety-Watchdog-Trip, Fenster
+  schließen —, erfuhr das Panel davon nichts und zeigte weiter „EIN", obwohl
+  der Ausgang real bereits aus war. Neues `DeviceWorker`-Signal
+  `psu_output_state` informiert das Control-Tab-Panel jetzt explizit, sowohl
+  beim Abschalten (`all_outputs_off`/`_kill_psu`) als auch beim
+  (Wieder-)Verbinden (`lab_gui/device_worker.py`, `lab_gui/control_tab.py`,
+  `lab_gui/main_window.py`).
 
 ## [0.6.1]
 

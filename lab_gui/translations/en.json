@@ -246,5 +246,19 @@
   "… {n} weitere Ereignisse ausgelassen": "… {n} more events omitted",
   "Report konnte nicht erstellt werden: {error}": "Could not create report: {error}",
   "Report erstellt: {path}": "Report created: {path}",
-  "PDF exportiert: {path}": "PDF exported: {path}"
+  "PDF exportiert: {path}": "PDF exported: {path}",
+  "Dreieck": "Triangle",
+  "Sägezahn": "Sawtooth",
+  "Tastgrad:": "Duty cycle:",
+  "Y-Achse einstellen…": "Set Y-axis…",
+  "Y-Achse einstellen": "Set Y-axis",
+  "Automatisch": "Automatic",
+  "Links Min:": "Left min:",
+  "Links Max:": "Left max:",
+  "Rechts Min:": "Right min:",
+  "Rechts Max:": "Right max:",
+  "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\nDiagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\nzugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\nAufnahme möglich (Zwischenstand).": "Records timestamp, device, and value for all signals currently assigned to a\nchart below, as long as the recording is running (signals not yet assigned to\nany chart are not recorded). Export is also possible while a recording is\nstill running (partial data).",
+  "Desktop-Benachrichtigung bei Lauf-Ende/Fehler": "Desktop notification on run end/error",
+  "Testlauf beendet": "Test run finished",
+  "Testlauf-Fehler": "Test run error"
 }

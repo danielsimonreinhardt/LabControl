@@ -73,9 +73,10 @@ from testcase_model import (
 )
 
 # Eine Messung, die aelter als dieser Wert ist, gilt als "keine aktuelle
-# Messung" (siehe _eval_condition) -- das 4-fache des Poll-Intervalls
-# (device_worker.POLL_INTERVAL_MS = 500ms) toleriert einzelne verpasste
-# Zyklen, ohne eine tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
+# Messung" (siehe _eval_condition) -- bewusst als absoluter Wert (deutlich
+# groesser als device_worker.POLL_INTERVAL_MS) statt an das Poll-Intervall
+# gekoppelt, toleriert einzelne verpasste/verzoegerte Zyklen, ohne eine
+# tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
 MEASUREMENT_STALE_S = 2.0
 
 

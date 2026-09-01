@@ -44,11 +44,20 @@ class FlowLayout(QLayout):
         return True
 
     def heightForWidth(self, width: int) -> int:
-        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+        margins = self.contentsMargins()
+        content_width = width - margins.left() - margins.right()
+        content_height = self._do_layout(QRect(0, 0, content_width, 0), test_only=True)
+        return content_height + margins.top() + margins.bottom()
 
     def setGeometry(self, rect: QRect) -> None:
         super().setGeometry(rect)
-        self._do_layout(rect, test_only=False)
+        # _do_layout() platziert Items relativ zum uebergebenen Rect (x/y als
+        # Startpunkt, right() als Umbruchgrenze) -- ohne marginsRemoved() hier
+        # wuerden contentsMargins() zwar in minimumSize() eingerechnet (der
+        # Container fordert dadurch mehr Platz an), aber beim tatsaechlichen
+        # Positionieren ignoriert: die Items klebten dann trotzdem buendig am
+        # Rand des vollen Rects statt einen Aussenabstand einzuhalten.
+        self._do_layout(rect.marginsRemoved(self.contentsMargins()), test_only=False)
 
     def sizeHint(self) -> QSize:
         return self.minimumSize()

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
-from theme import Palette, ThemeManager
+from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
@@ -96,7 +96,7 @@ class _DevicePanel(QGroupBox):
         # Icon sitzen platzsparend IN der ersten/letzten Werte-Zeile statt in
         # eigenen Zeilen (siehe Schleife unten). Als eigenes Widget gebuendelt,
         # damit die Kompaktansicht es mit einem einzigen hide() ausblenden kann.
-        self._normal_widget = QWidget()
+        self._normal_widget = no_own_background(QWidget())
         normal = QVBoxLayout(self._normal_widget)
         normal.setContentsMargins(0, 0, 0, 0)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -115,7 +115,7 @@ class _DevicePanel(QGroupBox):
             value_label.setStyleSheet(VALUE_STYLE)
             self._value_labels[field_key] = value_label
 
-            row_widget = QWidget()
+            row_widget = no_own_background(QWidget())
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.addWidget(value_label)
@@ -141,7 +141,7 @@ class _DevicePanel(QGroupBox):
         # Rahmentitel (siehe oben), braucht hier also keine eigene Zeile mehr.
         # Der Name der Messgroesse bleibt als Tooltip auf Icon und Wert
         # erreichbar.
-        self._compact_widget = QWidget()
+        self._compact_widget = no_own_background(QWidget())
         compact = QHBoxLayout(self._compact_widget)
         compact.setContentsMargins(0, 0, 0, 0)
         self._compact_icons: dict[str, QLabel] = {}
@@ -259,6 +259,8 @@ class DashboardWidget(QGroupBox):
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setWidget(self._container)
+        ThemeManager.instance().changed.connect(self._style_scroll_area)
+        self._style_scroll_area(current_palette())
         # Waechst/schrumpft der Panel-Inhalt nachtraeglich (laengere Messwert-
         # Texte, Theme-/Sprachwechsel, Ansichtsumschaltung), loest das ein
         # LayoutRequest im Container aus -- Panel-Breiten und die feste Hoehe
@@ -299,6 +301,21 @@ class DashboardWidget(QGroupBox):
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
         self._update_toggle_button()
+
+    def _style_scroll_area(self, palette: Palette) -> None:
+        """Faerbt ScrollArea/Container auf die Flaeche der umschliessenden
+        QGroupBox (pal.surface) statt des allgemeinen Seitenhintergrunds
+        (pal.bg), den QScrollArea/QWidget sonst ueber die globale
+        QWidget-Regel in theme.stylesheet() bekaemen -- ohne das entsteht ein
+        sichtbarer (im Light-Theme grauer) Rand zwischen dem Dashboard-Rahmen
+        und den Geraete-Panels darin (siehe BUGS.md #8). viewport() wird
+        separat gesetzt, da QScrollArea::setStyleSheet nicht zuverlaessig auf
+        das interne Viewport-Widget durchschlaegt.
+        """
+        style = f"background-color: {palette.surface}; border: none;"
+        self._scroll_area.setStyleSheet(f"QScrollArea {{ {style} }}")
+        self._scroll_area.viewport().setStyleSheet(style)
+        self._container.setStyleSheet(f"background-color: {palette.surface};")
 
     def _update_toggle_button(self) -> None:
         self._view_toggle_button.set_icon(

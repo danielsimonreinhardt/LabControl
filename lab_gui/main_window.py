@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+import qtawesome as qta
 from PySide6.QtCore import QMetaObject, QThread, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -28,7 +30,7 @@ from settings_tab import SettingsTab
 from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
-from theme import Palette, ThemeManager
+from theme import Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
 from version import __version__
 
@@ -88,7 +90,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        self._status_container = QWidget()
+        self._status_container = no_own_background(QWidget())
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
         self._safety_status_label = QLabel()
@@ -114,6 +116,7 @@ class MainWindow(QMainWindow):
         self._wire_recording()
         self._wire_settings_tab()
         self._wire_dashboard_view()
+        self._wire_notifications()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
         # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
@@ -157,6 +160,7 @@ class MainWindow(QMainWindow):
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
         self._worker.psu_measurement.connect(self._recorder.on_psu_measurement)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
+        self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
 
@@ -232,6 +236,8 @@ class MainWindow(QMainWindow):
         self._registry.device_known.connect(self._recorder.on_device_known)
         self._registry.device_known.connect(self._run_recorder.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
+        self._registry.device_known.connect(self.settings_tab.on_device_known)
+        self._registry.device_known.connect(self._on_device_known_safety_limits)
 
         self._registry.label_changed.connect(self.dashboard.on_label_changed)
         self._registry.label_changed.connect(self.control_tab.on_label_changed)
@@ -240,8 +246,18 @@ class MainWindow(QMainWindow):
         self._registry.label_changed.connect(self._recorder.on_label_changed)
         self._registry.label_changed.connect(self._run_recorder.on_label_changed)
         self._registry.label_changed.connect(self._on_label_changed_status)
+        self._registry.label_changed.connect(self.settings_tab.on_label_changed)
 
         self.dashboard.rename_requested.connect(self._registry.rename)
+
+    def _on_device_known_safety_limits(self, kind: str, device_id: str, _label: str) -> None:
+        # Initialbefuellung der pro Geraet erzeugten Grenzwert-Sektion (siehe
+        # settings_tab._DeviceSafetyGroup) mit dem persistierten Stand --
+        # settings_tab.on_device_known selbst kennt nur kind/device_id/label,
+        # nicht die gespeicherten Werte.
+        self.settings_tab.set_device_safety_limits(
+            device_id, self._settings.device_safety_limits(device_id, kind)
+        )
 
     def _wire_control_tab(self) -> None:
         self.control_tab.section_created.connect(self._on_control_section_created)
@@ -249,7 +265,12 @@ class MainWindow(QMainWindow):
     def _on_control_section_created(self, kind: str, device_id: str, section) -> None:
         if kind == "load":
             section.apply_function.connect(self._worker.set_load_function)
-            section.apply_setpoint.connect(self._apply_load_setpoint)
+            # Direkt verbunden (wie bei der PSU-Sektion unten) statt ueber eine
+            # eigene MainWindow-Methode, die den Worker per Python-Methodenaufruf
+            # anspricht -- ein solcher Direktaufruf wuerde Qt's Thread-Routing
+            # umgehen und die blockierende Seriell-I/O synchron im GUI-Thread
+            # ausfuehren (kurzes Einfrieren/Flackern des Panels beim "Übernehmen").
+            section.apply_setpoint.connect(self._worker.set_load_setpoint)
             section.set_input.connect(self._worker.set_load_input)
         else:
             section.set_voltage.connect(self._worker.set_psu_voltage)
@@ -268,6 +289,13 @@ class MainWindow(QMainWindow):
         self._recorder.stats_changed.connect(self.timeline_tab.on_stats_changed)
         self.timeline_tab.export_csv_to.connect(self._on_export_csv)
         self.timeline_tab.export_mf4_to.connect(self._on_export_mf4)
+
+        # Nur Signale aufzeichnen, die aktuell einem Diagramm im Verlauf-Tab
+        # zugeordnet sind (FEATURES.md Punkt 4) -- initial synchronisieren,
+        # da active_signals_changed erst bei der naechsten Zuordnungsaenderung
+        # feuert.
+        self.timeline_tab.active_signals_changed.connect(self._recorder.set_active_signals)
+        self._recorder.set_active_signals(self.timeline_tab.active_signal_keys())
 
     def _on_export_csv(self, path) -> None:
         try:
@@ -334,7 +362,9 @@ class MainWindow(QMainWindow):
         self.settings_tab.language_selected.connect(self._settings.set_language)
         self._settings.language_changed.connect(Translator.instance().set_language)
 
-        self.settings_tab.set_safety_limits(self._settings.safety_limits)
+        self.settings_tab.set_notifications_enabled(self._settings.notifications_enabled)
+        self.settings_tab.notifications_toggled.connect(self._settings.set_notifications_enabled)
+
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
 
     def _wire_dashboard_view(self) -> None:
@@ -346,6 +376,24 @@ class MainWindow(QMainWindow):
         )
         self._settings.dashboard_compact_changed.connect(self.dashboard.set_compact)
         self.dashboard.set_compact(self._settings.dashboard_compact)
+
+    def _wire_notifications(self) -> None:
+        # Desktop-Benachrichtigung bei Lauf-Ende/Fehler (FEATURES.md Punkt 8),
+        # praktisch bei langen unbeaufsichtigten Laeufen. QSystemTrayIcon ist
+        # auf dem Kiosk-Pi (Vollbild, keine Taskleiste) i.d.R. nicht verfuegbar
+        # -- in dem Fall bleibt _tray_icon None und _show_notification wird
+        # zum stillen No-Op, statt zu crashen.
+        self._tray_icon: QSystemTrayIcon | None = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray_icon = QSystemTrayIcon(qta.icon("mdi.flask-outline"), self)
+            self._tray_icon.setToolTip(f"LAB CONTROL v{__version__}")
+            self._tray_icon.show()
+        self.testcase_tab.notify_requested.connect(self._show_notification)
+
+    def _show_notification(self, title: str, message: str) -> None:
+        if self._tray_icon is None or not self._settings.notifications_enabled:
+            return
+        self._tray_icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 8000)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()
@@ -456,17 +504,6 @@ class MainWindow(QMainWindow):
             "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
             label=label,
         )
-
-    def _apply_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
-        setters = {
-            "CURR": self._worker.set_load_current,
-            "VOLT": self._worker.set_load_voltage,
-            "RES": self._worker.set_load_resistance,
-            "POW": self._worker.set_load_power,
-        }
-        setter = setters.get(mode_code)
-        if setter is not None:
-            setter(device_id, value)
 
     @Slot(str, bool)
     def _on_load_connected(self, device_id: str, online: bool) -> None:

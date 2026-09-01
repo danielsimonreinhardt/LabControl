@@ -52,8 +52,13 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -69,7 +74,7 @@ from PySide6.QtWidgets import (
 from i18n import Translator, tr
 from icons import IconButton
 from paths import app_dir
-from theme import Palette, ThemeManager
+from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
 # Diagramme, die der Nutzer umbenannt hat, werden hier persistiert (Name +
@@ -112,13 +117,23 @@ WINDOW_CHOICES = [
 ]
 DEFAULT_WINDOW_INDEX = 1
 MAX_WINDOW_S = WINDOW_CHOICES[-1][1]
-REPAINT_INTERVAL_MS = 500
+# _ScopeChart.paintEvent() legt das Zeitfenster bei JEDEM Aufruf live ueber
+# time.time() (t_hi = jetzt) fest -- das Diagramm scrollt also bereits bei
+# unveraenderten Messwerten weiter, sobald neu gezeichnet wird. Bei 500ms
+# (2Hz) wirkte das sichtbar ruckelig; 33ms (~30Hz) liefert eine fluessige
+# Darstellung, unabhaengig vom (langsameren) Poll-Intervall der Messwerte
+# selbst (siehe device_worker.POLL_INTERVAL_MS).
+REPAINT_INTERVAL_MS = 33
 
 # Aufzeichnung-Bereich (siehe Klassen-Docstring): eigener Export-Zielordner,
 # eigenes Timer-Intervall fuer die Dauer-Anzeige -- unabhaengig vom
 # REPAINT_INTERVAL_MS der Diagramme.
 RECORDING_DEFAULT_DIR = app_dir() / "recordings"
 RECORDING_DURATION_REFRESH_MS = 500
+# Blink-Takt des zusammengefuehrten Aufnahme-Buttons waehrend eine Aufnahme
+# laeuft (FEATURES.md Punkt 3) -- eigener Timer, unabhaengig vom
+# Dauer-Anzeige-Timer oben, da beide unterschiedliche Zwecke haben.
+RECORDING_BLINK_INTERVAL_MS = 500
 
 
 def _format_duration(seconds: float) -> str:
@@ -161,6 +176,15 @@ class _ScopeChart(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._series: list[SignalSeries] = []
         self._window_s = WINDOW_CHOICES[DEFAULT_WINDOW_INDEX][1]
+        # Y-Achsen-Skalierung (FEATURES.md Punkt 11): "auto" berechnet den
+        # sichtbaren Wertebereich laufend aus den aktuell sichtbaren Werten
+        # (siehe _value_range, bisheriges Verhalten); "fixed" nutzt stattdessen
+        # die hier gespeicherten, vom Nutzer gesetzten Grenzen. Nur fuer die
+        # laufende Session gueltig (keine Persistenz, siehe Modul-Docstring-
+        # Erweiterung unten).
+        self._y_mode = "auto"  # "auto" | "fixed"
+        self._fixed_left = (0.0, 1.0)
+        self._fixed_right = (0.0, 1.0)
         ThemeManager.instance().changed.connect(lambda _pal: self.update())
         Translator.instance().language_changed.connect(lambda _lang: self.update())
 
@@ -171,6 +195,23 @@ class _ScopeChart(QWidget):
     def set_window(self, seconds: float) -> None:
         self._window_s = seconds
         self.update()
+
+    def set_y_mode(self, mode: str) -> None:
+        self._y_mode = mode
+        self.update()
+
+    def y_mode(self) -> str:
+        return self._y_mode
+
+    def set_fixed_range(self, axis: str, lo: float, hi: float) -> None:
+        if axis == "left":
+            self._fixed_left = (lo, hi)
+        else:
+            self._fixed_right = (lo, hi)
+        self.update()
+
+    def fixed_range(self, axis: str) -> tuple[float, float]:
+        return self._fixed_left if axis == "left" else self._fixed_right
 
     def _axis_units(self) -> tuple[str | None, str | None]:
         seen: list[str] = []
@@ -217,12 +258,15 @@ class _ScopeChart(QWidget):
         if rect.width() <= 0 or rect.height() <= 0:
             return
 
-        # Gitter
+        # Gitter (horizontal + vertikal, siehe FEATURES.md Punkt 11)
         grid_pen = QPen(QColor(pal.plot_grid))
         painter.setPen(grid_pen)
         for i in range(5):
             y = rect.top() + i * rect.height() / 4
             painter.drawLine(rect.left(), int(y), rect.right(), int(y))
+        for i in range(5):
+            x = rect.left() + i * rect.width() / 4
+            painter.drawLine(int(x), rect.top(), int(x), rect.bottom())
 
         if not self._series:
             painter.setPen(QPen(QColor(pal.text_muted)))
@@ -233,8 +277,12 @@ class _ScopeChart(QWidget):
         t_lo = now - self._window_s
         t_hi = now
 
-        left_lo, left_hi = self._value_range("left", left_unit, t_lo, t_hi)
-        right_lo, right_hi = self._value_range("right", left_unit, t_lo, t_hi) if right_unit else (0.0, 1.0)
+        if self._y_mode == "fixed":
+            left_lo, left_hi = self._fixed_left
+            right_lo, right_hi = self._fixed_right
+        else:
+            left_lo, left_hi = self._value_range("left", left_unit, t_lo, t_hi)
+            right_lo, right_hi = self._value_range("right", left_unit, t_lo, t_hi) if right_unit else (0.0, 1.0)
 
         def x_of(t: float) -> float:
             return rect.left() + (t - t_lo) / (t_hi - t_lo) * rect.width()
@@ -317,6 +365,87 @@ class _SignalChip(QWidget):
         self._text_label.setText(f"{label} ({unit})")
 
 
+class _YAxisDialog(QDialog):
+    """Kleiner Dialog zum Umschalten der Y-Achsen-Skalierung EINES Diagramms
+    zwischen automatisch (bisheriges Verhalten, staendig aus den sichtbaren
+    Werten neu berechnet) und festen, vom Nutzer gesetzten Wertebereichen
+    (FEATURES.md Punkt 11). Rechte-Achse-Felder bleiben deaktiviert, wenn das
+    Diagramm aktuell keine zweite Einheit/Achse verwendet."""
+
+    def __init__(
+        self,
+        mode: str,
+        left_range: tuple[float, float],
+        right_range: tuple[float, float],
+        has_right_axis: bool,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._has_right_axis = has_right_axis
+        layout = QVBoxLayout(self)
+
+        self._auto_check = QCheckBox()
+        self._auto_check.setChecked(mode != "fixed")
+        self._auto_check.toggled.connect(self._on_auto_toggled)
+        layout.addWidget(self._auto_check)
+
+        form = QFormLayout()
+        self._left_min = QDoubleSpinBox()
+        self._left_max = QDoubleSpinBox()
+        self._right_min = QDoubleSpinBox()
+        self._right_max = QDoubleSpinBox()
+        for spin in (self._left_min, self._left_max, self._right_min, self._right_max):
+            spin.setRange(-1_000_000.0, 1_000_000.0)
+            spin.setDecimals(3)
+        self._left_min.setValue(left_range[0])
+        self._left_max.setValue(left_range[1])
+        self._right_min.setValue(right_range[0])
+        self._right_max.setValue(right_range[1])
+
+        self._left_min_label = QLabel()
+        self._left_max_label = QLabel()
+        self._right_min_label = QLabel()
+        self._right_max_label = QLabel()
+        form.addRow(self._left_min_label, self._left_min)
+        form.addRow(self._left_max_label, self._left_max)
+        form.addRow(self._right_min_label, self._right_min)
+        form.addRow(self._right_max_label, self._right_max)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._on_auto_toggled(self._auto_check.isChecked())
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(tr("Y-Achse einstellen"))
+        self._auto_check.setText(tr("Automatisch"))
+        self._left_min_label.setText(tr("Links Min:"))
+        self._left_max_label.setText(tr("Links Max:"))
+        self._right_min_label.setText(tr("Rechts Min:"))
+        self._right_max_label.setText(tr("Rechts Max:"))
+
+    def _on_auto_toggled(self, auto: bool) -> None:
+        self._left_min.setEnabled(not auto)
+        self._left_max.setEnabled(not auto)
+        self._right_min.setEnabled(not auto and self._has_right_axis)
+        self._right_max.setEnabled(not auto and self._has_right_axis)
+
+    def mode(self) -> str:
+        return "auto" if self._auto_check.isChecked() else "fixed"
+
+    def left_range(self) -> tuple[float, float]:
+        return self._left_min.value(), self._left_max.value()
+
+    def right_range(self) -> tuple[float, float]:
+        return self._right_min.value(), self._right_max.value()
+
+
 class _ChartRow(QGroupBox):
     """Ein Diagramm: Header mit Titel + "Signal hinzufuegen"-Menue + Entfernen-Button,
     darunter die Chips der zugeordneten Signale und das eigentliche Diagramm."""
@@ -340,7 +469,10 @@ class _ChartRow(QGroupBox):
 
         header = QHBoxLayout()
         self._title_label = QLabel()
-        self._title_label.setStyleSheet("font-weight: bold;")
+        # background: transparent -- sonst zeigt dieses direkt im GroupBox-
+        # Layout haengende QLabel opak den allgemeinen Seitenhintergrund statt
+        # der GroupBox-Flaeche (siehe theme.no_own_background).
+        self._title_label.setStyleSheet("font-weight: bold; background: transparent;")
         header.addWidget(self._title_label, 1)
         self._rename_button = IconButton("mdi.pencil-outline", "")
         self._rename_button.clicked.connect(self._on_rename_clicked)
@@ -348,12 +480,15 @@ class _ChartRow(QGroupBox):
         self._add_button = IconButton("mdi.playlist-plus", "")
         self._add_button.clicked.connect(self._open_add_menu)
         header.addWidget(self._add_button)
+        self._yaxis_button = IconButton("mdi.arrow-expand-vertical", "")
+        self._yaxis_button.clicked.connect(self._open_yaxis_dialog)
+        header.addWidget(self._yaxis_button)
         self._remove_button = IconButton("mdi.trash-can-outline", "")
         self._remove_button.clicked.connect(self.remove_clicked)
         header.addWidget(self._remove_button)
         outer.addLayout(header)
 
-        self._legend_widget = QWidget()
+        self._legend_widget = no_own_background(QWidget())
         self._legend_layout = QHBoxLayout(self._legend_widget)
         self._legend_layout.setContentsMargins(0, 0, 0, 0)
         self._legend_layout.setSpacing(6)
@@ -370,6 +505,7 @@ class _ChartRow(QGroupBox):
         self._title_label.setText(self.title())
         self._rename_button.setToolTip(tr("Diagramm umbenennen"))
         self._add_button.setToolTip(tr("Signal hinzufügen"))
+        self._yaxis_button.setToolTip(tr("Y-Achse einstellen…"))
         self._remove_button.setToolTip(tr("Diagramm entfernen"))
 
     def title(self) -> str:
@@ -410,6 +546,28 @@ class _ChartRow(QGroupBox):
                     action.triggered.connect(lambda checked=False, s=series: self.add_signal_requested.emit(s))
         menu.exec(self._add_button.mapToGlobal(self._add_button.rect().bottomLeft()))
 
+    def _open_yaxis_dialog(self) -> None:
+        _left_unit, right_unit = self.chart._axis_units()
+        dialog = _YAxisDialog(
+            self.chart.y_mode(),
+            self.chart.fixed_range("left"),
+            self.chart.fixed_range("right"),
+            has_right_axis=right_unit is not None,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.chart.set_y_mode(dialog.mode())
+            if dialog.mode() == "fixed":
+                lo, hi = dialog.left_range()
+                self.chart.set_fixed_range("left", lo, hi)
+                lo, hi = dialog.right_range()
+                self.chart.set_fixed_range("right", lo, hi)
+            self._update_yaxis_icon()
+
+    def _update_yaxis_icon(self) -> None:
+        icon = "mdi.lock-outline" if self.chart.y_mode() == "fixed" else "mdi.arrow-expand-vertical"
+        self._yaxis_button.set_icon(icon)
+
     # -- Legende (zugeordnete Signale) -----------------------------------------
 
     def add_chip(self, series: SignalSeries) -> None:
@@ -445,6 +603,11 @@ class TimelineTab(QWidget):
     clear_requested = Signal()
     export_csv_to = Signal(object)  # Path
     export_mf4_to = Signal(object)  # Path
+    # (device_id, field)-Paare aller aktuell einem Diagramm zugeordneten
+    # Signale -- an Recorder.set_active_signals durchgereicht (siehe
+    # main_window._wire_recording), damit nur sichtbare Signale aufgezeichnet
+    # werden (FEATURES.md Punkt 4).
+    active_signals_changed = Signal(object)  # set[tuple[str, str]]
 
     def __init__(self) -> None:
         super().__init__()
@@ -474,14 +637,18 @@ class TimelineTab(QWidget):
         self._recording_group = QGroupBox()
         recording_layout = QHBoxLayout(self._recording_group)
 
-        self._recording_start_button = IconButton("mdi.record-circle-outline", "")
-        self._recording_stop_button = IconButton("mdi.stop-circle-outline", "")
+        # Ein Button statt getrennter Start/Stop-Buttons (FEATURES.md Punkt 3):
+        # statisch rot im Ruhezustand, blinkt rot waehrend die Aufnahme laeuft
+        # (siehe _on_recording_blink_tick). Klick loest je nach Zustand
+        # start_requested/stop_requested aus.
+        self._recording_toggle_button = IconButton("mdi.record", "")
+        self._recording_toggle_button.clicked.connect(self._on_recording_toggle_clicked)
+        self._recording_blink_timer = QTimer(self)
+        self._recording_blink_timer.timeout.connect(self._on_recording_blink_tick)
+        self._recording_blink_on = False
         self._recording_clear_button = IconButton("mdi.delete-sweep-outline", "")
-        self._recording_start_button.clicked.connect(self.start_requested.emit)
-        self._recording_stop_button.clicked.connect(self.stop_requested.emit)
         self._recording_clear_button.clicked.connect(self._on_recording_clear_clicked)
-        recording_layout.addWidget(self._recording_start_button)
-        recording_layout.addWidget(self._recording_stop_button)
+        recording_layout.addWidget(self._recording_toggle_button)
         recording_layout.addWidget(self._recording_clear_button)
         recording_layout.addSpacing(12)
 
@@ -501,6 +668,7 @@ class TimelineTab(QWidget):
         self._recording_duration_timer = QTimer(self)
         self._recording_duration_timer.timeout.connect(self._refresh_recording_status_text)
         self._update_recording_button_states()
+        self._refresh_recording_toggle_color()
 
         controls = QHBoxLayout()
         self._window_label = QLabel()
@@ -553,12 +721,13 @@ class TimelineTab(QWidget):
         self._recording_group.setTitle(tr("Aufzeichnung"))
         self._recording_group.setToolTip(
             tr(
-                "Zeichnet Zeitstempel, Gerät und Messwert für alle bekannten Geräte auf, solange die\n"
-                "Aufnahme läuft. Export ist auch bei laufender Aufnahme möglich (Zwischenstand)."
+                "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\n"
+                "Diagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\n"
+                "zugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\n"
+                "Aufnahme möglich (Zwischenstand)."
             )
         )
-        self._recording_start_button.setToolTip(tr("Aufnahme starten"))
-        self._recording_stop_button.setToolTip(tr("Aufnahme stoppen"))
+        self._update_recording_toggle_tooltip()
         self._recording_clear_button.setToolTip(tr("Zurücksetzen"))
         self._export_csv_button.setToolTip(tr("Als CSV exportieren…"))
         self._export_mf4_button.setToolTip(tr("Als MF4 exportieren…"))
@@ -633,6 +802,14 @@ class TimelineTab(QWidget):
     def _available_signals(self) -> list[SignalSeries]:
         return [s for s in self._series.values() if s.chart_id is None]
 
+    def active_signal_keys(self) -> set[tuple[str, str]]:
+        """(device_id, field)-Paare aller Signale, die aktuell einem Diagramm
+        zugeordnet sind -- siehe active_signals_changed/Recorder.set_active_signals."""
+        return {(s.device_id, s.field) for s in self._series.values() if s.chart_id is not None}
+
+    def _emit_active_signals(self) -> None:
+        self.active_signals_changed.emit(self.active_signal_keys())
+
     def _add_chart_row(self, title: str | None = None, custom_name: bool = False) -> _ChartRow:
         chart_id = self._next_chart_id
         self._next_chart_id += 1
@@ -683,6 +860,7 @@ class TimelineTab(QWidget):
         self._renumber_charts()
         self._update_removable_state()
         self._save_layout()
+        self._emit_active_signals()
 
     def _on_rename_chart(self, row: _ChartRow, name: str) -> None:
         row.set_title(name)
@@ -707,6 +885,7 @@ class TimelineTab(QWidget):
         row.add_chip(series)
         row.chart.set_series([s for s in self._series.values() if s.chart_id == row.chart_id])
         self._save_layout()
+        self._emit_active_signals()
 
     def _on_remove_signal(self, row: _ChartRow, series: SignalSeries) -> None:
         series.chart_id = None
@@ -714,6 +893,7 @@ class TimelineTab(QWidget):
         row.remove_chip(key)
         row.chart.set_series([s for s in self._series.values() if s.chart_id == row.chart_id])
         self._save_layout()
+        self._emit_active_signals()
 
     # -- Persistenz: Name + Signalzuordnung umbenannter Diagramme --------------
 
@@ -730,6 +910,7 @@ class TimelineTab(QWidget):
         series.chart_id = chart_id
         row.add_chip(series)
         row.chart.set_series([s for s in self._series.values() if s.chart_id == chart_id])
+        self._emit_active_signals()
 
     def _save_layout(self) -> None:
         data = []
@@ -817,13 +998,18 @@ class TimelineTab(QWidget):
         # Die Statuszeile faerbt sich nach Palette (danger/text/text_muted) --
         # beim Theme-Wechsel neu rendern statt auf das naechste Update zu warten.
         self._refresh_recording_status_text()
+        self._refresh_recording_toggle_color()
 
     def on_recording_changed(self, active: bool) -> None:
         self._is_recording = active
         if active:
             self._recording_duration_timer.start(RECORDING_DURATION_REFRESH_MS)
+            self._recording_blink_on = True
+            self._recording_blink_timer.start(RECORDING_BLINK_INTERVAL_MS)
         else:
             self._recording_duration_timer.stop()
+            self._recording_blink_timer.stop()
+            self._refresh_recording_toggle_color()
         self._update_recording_button_states()
         self._refresh_recording_status_text()
 
@@ -856,12 +1042,37 @@ class TimelineTab(QWidget):
         self._recording_status_label.setText(text)
 
     def _update_recording_button_states(self) -> None:
-        self._recording_start_button.setEnabled(not self._is_recording)
-        self._recording_stop_button.setEnabled(self._is_recording)
         self._recording_clear_button.setEnabled(not self._is_recording and self._recording_sample_count > 0)
         has_samples = self._recording_sample_count > 0
         self._export_csv_button.setEnabled(has_samples)
         self._export_mf4_button.setEnabled(has_samples)
+        self._update_recording_toggle_tooltip()
+
+    def _update_recording_toggle_tooltip(self) -> None:
+        self._recording_toggle_button.setToolTip(
+            tr("Aufnahme stoppen") if self._is_recording else tr("Aufnahme starten")
+        )
+
+    def _on_recording_toggle_clicked(self) -> None:
+        if self._is_recording:
+            self.stop_requested.emit()
+        else:
+            self.start_requested.emit()
+
+    def _on_recording_blink_tick(self) -> None:
+        self._recording_blink_on = not self._recording_blink_on
+        self._refresh_recording_toggle_color()
+
+    def _refresh_recording_toggle_color(self) -> None:
+        # Statisch rot im Ruhezustand; waehrend der Aufnahme abwechselnd rot/
+        # gedaempft (siehe _on_recording_blink_tick) -- beides theme-abhaengig,
+        # deshalb hier zentral statt an jeder Aufrufstelle einzeln berechnet.
+        pal = current_palette()
+        if self._is_recording:
+            color = pal.danger if self._recording_blink_on else pal.text_muted
+        else:
+            color = pal.danger
+        self._recording_toggle_button.set_color_override(color)
 
     def _on_recording_clear_clicked(self) -> None:
         if self._recording_sample_count and QMessageBox.question(

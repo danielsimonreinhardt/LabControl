@@ -52,6 +52,11 @@ class Recorder(QObject):
         self._start_time: float | None = None
         self._stats_timer = QTimer(self)
         self._stats_timer.timeout.connect(self._emit_stats)
+        # None = alle Signale aufzeichnen (Default/Abwaertskompatibilitaet);
+        # sonst nur (device_id, field)-Paare, die aktuell einem Diagramm im
+        # Verlauf-Tab zugeordnet sind (siehe TimelineTab.active_signal_keys,
+        # main_window._wire_recording) -- FEATURES.md Punkt 4.
+        self._active_keys: set[tuple[str, str]] | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -101,6 +106,9 @@ class Recorder(QObject):
         self._start_time = None
         self._emit_stats()
 
+    def set_active_signals(self, keys: set[tuple[str, str]] | None) -> None:
+        self._active_keys = keys
+
     # -- Messwerte -----------------------------------------------------------
 
     @Slot(str, float, float, float)
@@ -116,6 +124,8 @@ class Recorder(QObject):
 
     def _append(self, device_id: str, field: str, value: float) -> None:
         if not self._active:
+            return
+        if self._active_keys is not None and (device_id, field) not in self._active_keys:
             return
         self._samples.append(Sample(time.time(), device_id, field, value))
 

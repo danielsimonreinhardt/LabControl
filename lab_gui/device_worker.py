@@ -25,7 +25,24 @@ from hcs34xx.mock import MockHCS34xx
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_MS = 500
+# War 500ms (2Hz) -- sichtbar grob fuer die Verlaufs-Diagramme, deren
+# Repaint-Rate (siehe timeline_tab.REPAINT_INTERVAL_MS) inzwischen auf ~30Hz
+# angehoben wurde: schnelleres Neuzeichnen allein bringt nichts, wenn die
+# zugrundeliegenden Messwerte weiterhin nur alle 500ms neu eintreffen.
+# 100ms (10Hz) ist ein klarer Sprung (5x), bleibt aber bewusst konservativ
+# statt die Repaint-Rate voll zu erreichen: pro Zyklus werden ALLE Geraete
+# sequentiell (nicht parallel) abgefragt, eine Last macht dabei bereits 4
+# Kommandos hintereinander (measure_voltage/current/power + get_input, siehe
+# _poll unten). Das HCS-34xx haengt an einem CP210x-USB-UART-Wandler (9600
+# Baud) -- solche VCP-Treiber haben unter Windows oft einen Default-
+# Latenz-Timer von ~16ms PRO Read-Aufruf, und die Geraete-Firmware selbst ist
+# nicht als schnelles Interface dokumentiert. Eine deutlich hoehere Rate
+# (z.B. die vollen 30Hz) waere ungetestetes Neuland und riskiert, dass ein
+# Geraet Kommandos nicht mehr rechtzeitig verarbeitet (Timeouts, die faelsch-
+# lich als Verbindungsabbruch gewertet werden). Nach einem Wechsel hier: an
+# echter Hardware auf haeufigere "getrennt"-Log-Eintraege pruefen und im
+# Zweifel wieder erhoehen.
+POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
 # Feste Device-IDs fuer die simulierten Geraete (siehe set_simulation_mode) --
@@ -64,6 +81,16 @@ class DeviceWorker(QObject):
     load_measurement = Signal(str, float, float, float)  # device_id, voltage, current, power
     psu_measurement = Signal(str, float, float, bool)     # device_id, voltage, current, constant_current
     load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
+    # device_id, Ausgang ein/aus. Anders als load_input_state KEINE echte
+    # Hardware-Rueckfrage (das HCS-34xx-Protokoll kennt keine, siehe
+    # hcs34xx/driver.py) -- wird nur emittiert, wenn der Worker den Ausgang
+    # SELBST (ausserhalb eines direkten GUI-Klicks in PsuControlGroup) auf
+    # AUS setzt: beim (Wieder-)Verbinden (Sicherheits-Fix, siehe
+    # _reconnect_psus) und bei all_outputs_off (Alle-Aus-Button, Safety-
+    # Watchdog-Trip, Fensterschliessen) -- sonst bliebe der EIN/AUS-Schalter
+    # im Control-Tab faelschlich auf "EIN" stehen, obwohl der Ausgang laengst
+    # abgeschaltet wurde.
+    psu_output_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
     action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
@@ -176,6 +203,15 @@ class DeviceWorker(QObject):
             try:
                 candidate = HCS34xx(info.device)
                 candidate.get_display()
+                # SICHERHEITSKRITISCH: Das Geraet kennt kein echtes Ausgang-
+                # AUS-Kommando (siehe hcs34xx/driver.py) -- "AUS" wird ueber
+                # Strom 0A emuliert. Ohne diesen expliziten Befehl bliebe ein
+                # von einer frueheren Sitzung/manuell eingeschalteter Ausgang
+                # nach dem Verbinden real eingeschaltet, waehrend die GUI
+                # (Standardzustand "Aus") das Gegenteil anzeigt. Deshalb hier
+                # aktiv auf 0A setzen, BEVOR das Geraet als verbunden gilt --
+                # so ist der reale Zustand garantiert mit der Anzeige synchron.
+                candidate.set_current(0.0)
             except PowerSupplyError:
                 if candidate is not None:
                     candidate.close()
@@ -184,6 +220,7 @@ class DeviceWorker(QObject):
             logger.info("Netzteil verbunden: %s", device_id)
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
+            self.psu_output_state.emit(device_id, False)
             self._emit_psu_limits(device_id)
 
     def _emit_psu_limits(self, device_id: str) -> None:
@@ -321,6 +358,7 @@ class DeviceWorker(QObject):
             try:
                 psu.set_current(0.0)
                 logger.info("ALL OFF: Netzteil %s -> Strom 0A", device_id)
+                self.psu_output_state.emit(device_id, False)
                 return True
             except PowerSupplyValueError as exc:
                 # Wert abgelehnt, keine Verbindungsstoerung -- Retry hilft nicht.
@@ -362,6 +400,18 @@ class DeviceWorker(QObject):
     @Slot(str, bool)
     def set_load_input(self, device_id: str, on: bool) -> None:
         self._guard_load(device_id, lambda load: load.set_input(on))
+
+    @Slot(str, str, float)
+    def set_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
+        setters = {
+            "CURR": self.set_load_current,
+            "VOLT": self.set_load_voltage,
+            "RES": self.set_load_resistance,
+            "POW": self.set_load_power,
+        }
+        setter = setters.get(mode_code)
+        if setter is not None:
+            setter(device_id, value)
 
     # -- Netzteil: Steuerbefehle ---------------------------------------------
 

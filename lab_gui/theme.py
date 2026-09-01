@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 # Absolute Pfade (QSS-url() wird sonst relativ zum aktuellen Arbeitsverzeichnis
 # aufgeloest, was unzuverlaessig ist). Im PyInstaller-Onefile-Build liegt
@@ -70,8 +70,11 @@ LIGHT = Palette(
     warning="#d97706",
     danger="#dc2626",
     selection="#e0e7ff",
-    plot_bg="#10131a",
-    plot_grid="#2a3040",
+    # Anders als im Amber-Industrial-Theme (siehe unten, bewusst dunkles
+    # Oszilloskop-Schwarz) folgt der Diagramm-Hintergrund hier der restlichen
+    # hellen UI (surface/border) statt fest schwarz zu sein (siehe BUGS.md #9).
+    plot_bg="#ffffff",
+    plot_grid="#d8dee6",
     plot_signal="#22c55e",
     plot_ref="#f59e0b",
 )
@@ -93,6 +96,8 @@ AMBER_DARK = Palette(
     warning="#ffcc00",
     danger="#ef4444",
     selection="#3a2f1d",
+    # Bewusst dunkles Oszilloskop-Schwarz, passend zum ohnehin dunklen
+    # Amber-Industrial-Theme (siehe LIGHT oben fuer den Kontrast dazu).
     plot_bg="#0c0e11",
     plot_grid="#2c313a",
     plot_signal="#ff9f1c",
@@ -308,3 +313,31 @@ class ThemeManager(QObject):
 
 def current() -> Palette:
     return ThemeManager.instance().palette
+
+
+def no_own_background(widget: QWidget) -> QWidget:
+    """Verhindert, dass ein reines Layout-Wrapper-QWidget (z.B. eine Zeile
+    innerhalb eines QFormLayout, ein Legende-/Status-Container -- ueberall
+    dort, wo mehrere Widgets nur fuers Anordnen in ein zusaetzliches QWidget
+    gebuendelt werden) opak den allgemeinen Seitenhintergrund malt (globale
+    "QWidget { background-color: ... }"-Regel in stylesheet()).
+
+    Ohne das faerbt sich jeder ungenutzte Rest-Platz im Wrapper (z.B. hinter
+    einem abschliessenden addStretch()) sichtbar in der Seiten- statt der
+    Flaechenfarbe des tatsaechlich umschliessenden, farbig gestylten Widgets
+    (QGroupBox/QStatusBar/...) -- daher als grauer Fleck/Streifen sichtbar
+    (aufgetreten in control_tab._row(), timeline_tab._ChartRow, dashboard.
+    _DevicePanel, main_window._status_container; siehe BUGS.md #8). Eine
+    globale QSS-Regel wie "QGroupBox QWidget { background: transparent; }"
+    waere zwar an einer Stelle, aber ihre Deszendenten-Selektor-Spezifitaet
+    ist hoeher als z.B. "QPushButton { ... }" und würde damit auch die
+    Farbe von Buttons/Eingabefeldern INNERHALB von GroupBoxen ueberschreiben
+    -- deshalb hier bewusst als Instanz-Stylesheet (gewinnt immer, ganz ohne
+    Seiteneffekte auf andere Widget-Typen) statt als globale Regel.
+
+    Betrifft NICHT Widgets, die als QTableWidget-Zellwidget gesetzt werden --
+    die zeigen bereits korrekt den Zeilen-/Auswahl-Hintergrund der Tabelle
+    (siehe testcase_tab.py: WA_StyledBackground dort, separate Ursache).
+    """
+    widget.setStyleSheet("background: transparent;")
+    return widget

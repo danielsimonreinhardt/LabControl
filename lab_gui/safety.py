@@ -1,14 +1,17 @@
-"""Software-Watchdog: geraeteartweite Sicherheits-Grenzwerte, unabhaengig vom
-Testcase-Schritt.
+"""Software-Watchdog: geraete-individuelle Sicherheits-Grenzwerte, unabhaengig
+vom Testcase-Schritt.
 
 Ergaenzt die Pass/Fail-Pruefungen aus testcase_runner.py (die nur einzelne
 Aktionsschritte betreffen) um eine durchgehende Ueberwachung: sobald eine
-Last- oder Netzteil-Messung einen aktivierten Grenzwert (Spannung/Strom/
-Leistung) ueberschreitet, werden ALLE Ausgaenge sofort abgeschaltet --
-unabhaengig davon, welcher Testschritt (falls ueberhaupt einer) gerade
-laeuft. Waehrend eines Testlaufs wird zusaetzlich der Verbindungsstatus der
-beteiligten Geraete ueberwacht (Stale-Data/Disconnect), siehe
-begin_run_supervision().
+Last- oder Netzteil-Messung einen fuer GENAU DIESES Geraet aktivierten
+Grenzwert (Spannung/Strom/Leistung) ueberschreitet, werden ALLE Ausgaenge
+sofort abgeschaltet -- unabhaengig davon, welcher Testschritt (falls
+ueberhaupt einer) gerade laeuft. Die Grenzwerte selbst sind pro Geraete-ID
+konfigurierbar (siehe device_safety_limits()/set_safety_limit() in
+settings.py) statt geraeteartweit gemeinsam, damit z.B. zwei baugleiche
+Netzteile unterschiedliche Schwellen bekommen koennen. Waehrend eines
+Testlaufs wird zusaetzlich der Verbindungsstatus der beteiligten Geraete
+ueberwacht (Stale-Data/Disconnect), siehe begin_run_supervision().
 
 Der Monitor selbst loest nur aus (tripped/all_off_requested) -- das
 tatsaechliche Abschalten uebernimmt DeviceWorker.all_outputs_off() im
@@ -49,9 +52,12 @@ SAFETY_LIMIT_FIELDS: dict[str, list[tuple[str, str, float, float, float]]] = {
     ],
 }
 
-# Wie testcase_runner.MEASUREMENT_STALE_S: das 4-fache des Poll-Intervalls
-# (device_worker.POLL_INTERVAL_MS = 500ms) toleriert einzelne verpasste
-# Zyklen, ohne eine tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
+# Wie testcase_runner.MEASUREMENT_STALE_S: bewusst als absoluter Wert
+# (deutlich groesser als device_worker.POLL_INTERVAL_MS, auch nach dessen
+# Absenkung auf 100ms) statt an das Poll-Intervall gekoppelt -- toleriert
+# einzelne verpasste/verzoegerte Zyklen (z.B. wenn ein Poll wegen mehrerer
+# Geraete laenger braucht als das Timer-Intervall), ohne eine tatsaechlich
+# getrennte/eingefrorene Quelle zu uebersehen.
 STALE_TIMEOUT_S = 2.0
 STALE_CHECK_MS = 500
 
@@ -61,11 +67,19 @@ STALE_CHECK_MS = 500
 _FIELD_TO_MEASURE = {"max_voltage": "voltage", "max_current": "current", "max_power": "power"}
 
 
-def default_safety_limits() -> dict:
-    """Frisches Grenzwert-Dict mit allen Feldern deaktiviert (Default-Werte)."""
+def device_kind(device_id: str) -> str:
+    """Leitet die Geraeteart aus einer Device-ID ab (Praefix vor dem ':',
+    siehe device_worker._resolve_device_ids)."""
+    kind, _, _ = device_id.partition(":")
+    return kind
+
+
+def default_device_limits(kind: str) -> dict:
+    """Frisches Grenzwert-Dict fuer EIN Geraet dieser Art, alle Felder
+    deaktiviert (Default-Werte)."""
     return {
-        kind: {field: {"enabled": False, "value": default} for field, _unit, _lo, _hi, default in entries}
-        for kind, entries in SAFETY_LIMIT_FIELDS.items()
+        field: {"enabled": False, "value": default}
+        for field, _unit, _lo, _hi, default in SAFETY_LIMIT_FIELDS.get(kind, [])
     }
 
 
@@ -77,7 +91,9 @@ class SafetyMonitor(QObject):
 
     def __init__(self, limits: dict | None = None) -> None:
         super().__init__()
-        self._limits = limits if limits is not None else default_safety_limits()
+        # device_id -> {field: {"enabled": bool, "value": float}} -- pro
+        # Geraete-ID statt geraeteartweit (siehe Modul-Docstring).
+        self._limits: dict[str, dict] = limits if limits is not None else {}
         self._tripped = False
         self._last_seen: dict[str, float] = {}
         self._supervised: set[str] = set()
@@ -131,7 +147,7 @@ class SafetyMonitor(QObject):
     def _check(self, kind: str, device_id: str, values: dict[str, float]) -> None:
         if self._tripped:
             return
-        limits = self._limits.get(kind, {})
+        limits = self._limits.get(device_id, {})
         for field, measure_key in _FIELD_TO_MEASURE.items():
             entry = limits.get(field)
             if entry is None or not entry.get("enabled"):

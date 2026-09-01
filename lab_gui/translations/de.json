@@ -246,5 +246,19 @@
   "… {n} weitere Ereignisse ausgelassen": "… {n} weitere Ereignisse ausgelassen",
   "Report konnte nicht erstellt werden: {error}": "Report konnte nicht erstellt werden: {error}",
   "Report erstellt: {path}": "Report erstellt: {path}",
-  "PDF exportiert: {path}": "PDF exportiert: {path}"
+  "PDF exportiert: {path}": "PDF exportiert: {path}",
+  "Dreieck": "Dreieck",
+  "Sägezahn": "Sägezahn",
+  "Tastgrad:": "Tastgrad:",
+  "Y-Achse einstellen…": "Y-Achse einstellen…",
+  "Y-Achse einstellen": "Y-Achse einstellen",
+  "Automatisch": "Automatisch",
+  "Links Min:": "Links Min:",
+  "Links Max:": "Links Max:",
+  "Rechts Min:": "Rechts Min:",
+  "Rechts Max:": "Rechts Max:",
+  "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\nDiagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\nzugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\nAufnahme möglich (Zwischenstand).": "Zeichnet Zeitstempel, Gerät und Messwert für alle Signale auf, die aktuell einem\nDiagramm unten zugeordnet sind, solange die Aufnahme läuft (noch keinem Diagramm\nzugeordnete Signale werden nicht aufgezeichnet). Export ist auch bei laufender\nAufnahme möglich (Zwischenstand).",
+  "Desktop-Benachrichtigung bei Lauf-Ende/Fehler": "Desktop-Benachrichtigung bei Lauf-Ende/Fehler",
+  "Testlauf beendet": "Testlauf beendet",
+  "Testlauf-Fehler": "Testlauf-Fehler"
 }

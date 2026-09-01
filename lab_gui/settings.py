@@ -1,5 +1,5 @@
 """Persistente App-Einstellungen (Simulationsmodus, Dark Mode, Sprache,
-globale Sicherheits-Grenzwerte).
+geraete-individuelle Sicherheits-Grenzwerte).
 
 Analog zu device_registry.py lokal als JSON-Datei gespeichert, damit die
 Einstellung Neustarts uebersteht.
@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal
 
 from i18n import DEFAULT_LANGUAGE
 from paths import app_dir
-from safety import default_safety_limits
+from safety import SAFETY_LIMIT_FIELDS, default_device_limits, device_kind
 
 SETTINGS_PATH = app_dir() / "settings.json"
 
@@ -24,6 +24,7 @@ class Settings(QObject):
     dashboard_compact_changed = Signal(bool)
     language_changed = Signal(str)
     safety_limits_changed = Signal(dict)
+    notifications_enabled_changed = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -76,6 +77,17 @@ class Settings(QObject):
         self.dashboard_compact_changed.emit(enabled)
 
     @property
+    def notifications_enabled(self) -> bool:
+        return bool(self._data.get("notifications_enabled", True))
+
+    def set_notifications_enabled(self, enabled: bool) -> None:
+        if enabled == self.notifications_enabled:
+            return
+        self._data["notifications_enabled"] = enabled
+        self._save()
+        self.notifications_enabled_changed.emit(enabled)
+
+    @property
     def language(self) -> str:
         return str(self._data.get("language", DEFAULT_LANGUAGE))
 
@@ -88,38 +100,55 @@ class Settings(QObject):
 
     @property
     def safety_limits(self) -> dict:
-        """Globale Sicherheits-Grenzwerte je Geraeteart (siehe safety.py).
+        """Rohe, geraete-individuelle Sicherheits-Grenzwerte: device_id ->
+        {field: {"enabled": bool, "value": float}} (siehe safety.py).
+
+        Anders als bei den anderen Settings-Properties kein Deep-Merge ueber
+        Defaults -- welche device_ids ueberhaupt existieren, ist erst zur
+        Laufzeit bekannt (siehe device_safety_limits() fuer den Zugriff auf
+        EIN konkretes, ggf. noch unbekanntes Geraet mit Default-Fallback).
+        Wird unveraendert an SafetyMonitor durchgereicht.
+        """
+        stored = self._data.get("safety_limits")
+        return copy.deepcopy(stored) if isinstance(stored, dict) else {}
+
+    def device_safety_limits(self, device_id: str, kind: str) -> dict:
+        """Grenzwerte fuer EIN Geraet, ueber die Kind-Defaults gemergt.
 
         Deep-Merge des gespeicherten Stands ueber die Defaults, damit
-        fehlende/kaputte Eintraege (aeltere settings.json, von Hand editiert)
-        auf einen gueltigen Default zurueckfallen statt einen KeyError beim
-        Zugriff ueber safety.SAFETY_LIMIT_FIELDS auszuloesen.
+        fehlende/kaputte Eintraege (aeltere settings.json, von Hand editiert,
+        oder ein Geraet ohne bisherige eigene Konfiguration) auf einen
+        gueltigen Default zurueckfallen statt einen KeyError auszuloesen.
         """
-        merged = default_safety_limits()
-        stored = self._data.get("safety_limits")
-        if isinstance(stored, dict):
-            for kind, fields in stored.items():
-                if kind not in merged or not isinstance(fields, dict):
+        merged = default_device_limits(kind)
+        stored = self._data.get("safety_limits", {})
+        entry_map = stored.get(device_id) if isinstance(stored, dict) else None
+        if isinstance(entry_map, dict):
+            for field, entry in entry_map.items():
+                if field not in merged or not isinstance(entry, dict):
                     continue
-                for field, entry in fields.items():
-                    if field not in merged[kind] or not isinstance(entry, dict):
-                        continue
-                    if "enabled" in entry:
-                        merged[kind][field]["enabled"] = bool(entry["enabled"])
-                    if "value" in entry:
-                        try:
-                            merged[kind][field]["value"] = float(entry["value"])
-                        except (TypeError, ValueError):
-                            pass
+                if "enabled" in entry:
+                    merged[field]["enabled"] = bool(entry["enabled"])
+                if "value" in entry:
+                    try:
+                        merged[field]["value"] = float(entry["value"])
+                    except (TypeError, ValueError):
+                        pass
         return merged
 
-    def set_safety_limit(self, kind: str, field: str, enabled: bool, value: float) -> None:
-        current = self.safety_limits
-        if kind not in current or field not in current[kind]:
+    def set_safety_limit(self, device_id: str, field: str, enabled: bool, value: float) -> None:
+        kind = device_kind(device_id)
+        valid_fields = {f for f, *_ in SAFETY_LIMIT_FIELDS.get(kind, [])}
+        if field not in valid_fields:
             return
-        if current[kind][field]["enabled"] == enabled and current[kind][field]["value"] == value:
+        current = self.device_safety_limits(device_id, kind)
+        if current[field]["enabled"] == enabled and current[field]["value"] == value:
             return
-        current[kind][field] = {"enabled": enabled, "value": value}
-        self._data["safety_limits"] = current
+        current[field] = {"enabled": enabled, "value": value}
+        all_limits = self._data.get("safety_limits")
+        if not isinstance(all_limits, dict):
+            all_limits = {}
+        all_limits[device_id] = current
+        self._data["safety_limits"] = all_limits
         self._save()
-        self.safety_limits_changed.emit(copy.deepcopy(current))
+        self.safety_limits_changed.emit(copy.deepcopy(all_limits))

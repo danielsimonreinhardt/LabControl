@@ -1,5 +1,8 @@
 """Settings-Reiter: Simulationsmodus fuer Debugging ohne Hardware, Dark Mode,
-Sprache, globale Sicherheits-Grenzwerte (Watchdog, siehe safety.py)."""
+Sprache, geraete-individuelle Sicherheits-Grenzwerte (Watchdog, siehe
+safety.py). Jedes verbundene/bekannte Geraet bekommt eine eigene
+Grenzwert-Sektion (analog zu control_tab.py: eine Sektion pro Geraete-ID),
+statt einer gemeinsamen Einstellung je Geraeteart."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -17,7 +20,6 @@ from PySide6.QtWidgets import (
 
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from safety import SAFETY_LIMIT_FIELDS
-from testcase_model import DEVICE_KIND_LABELS
 from theme import current as current_palette
 
 # field -> deutscher Basis-Anzeigename (Uebersetzungsschluessel), analog zu
@@ -29,11 +31,70 @@ _FIELD_LABELS = {
 }
 
 
+class _DeviceSafetyGroup(QGroupBox):
+    """Grenzwert-Sektion fuer EIN Geraet (siehe SettingsTab.on_device_known)."""
+
+    limit_changed = Signal(str, bool, float)  # field, enabled, value
+
+    def __init__(self, kind: str, label: str) -> None:
+        super().__init__()
+        self._kind = kind
+        self.setTitle(label)
+        form = QFormLayout(self)
+
+        # field -> (Checkbox, Spinbox, Zeilen-Label) fuer
+        # set_limits()/_on_field_changed().
+        self._widgets: dict[str, tuple[QCheckBox, QDoubleSpinBox]] = {}
+        self._row_labels: dict[str, QLabel] = {}
+        for field, unit, lo, hi, _default in SAFETY_LIMIT_FIELDS.get(kind, []):
+            checkbox = QCheckBox()
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setDecimals(2)
+            spin.setSuffix(f" {unit}" if unit else "")
+            spin.setEnabled(False)
+            checkbox.toggled.connect(spin.setEnabled)
+            checkbox.toggled.connect(lambda _enabled, f=field: self._on_field_changed(f))
+            spin.valueChanged.connect(lambda _value, f=field: self._on_field_changed(f))
+            row = QHBoxLayout()
+            row.addWidget(checkbox)
+            row.addWidget(spin)
+            row_label = QLabel()
+            form.addRow(row_label, row)
+            self._widgets[field] = (checkbox, spin)
+            self._row_labels[field] = row_label
+
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        for field, row_label in self._row_labels.items():
+            row_label.setText(tr(_FIELD_LABELS.get(field, field)))
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def set_limits(self, limits: dict) -> None:
+        for field, (checkbox, spin) in self._widgets.items():
+            entry = limits.get(field, {"enabled": False, "value": spin.value()})
+            checkbox.blockSignals(True)
+            spin.blockSignals(True)
+            checkbox.setChecked(entry["enabled"])
+            spin.setValue(entry["value"])
+            spin.setEnabled(entry["enabled"])
+            checkbox.blockSignals(False)
+            spin.blockSignals(False)
+
+    def _on_field_changed(self, field: str) -> None:
+        checkbox, spin = self._widgets[field]
+        self.limit_changed.emit(field, checkbox.isChecked(), spin.value())
+
+
 class SettingsTab(QWidget):
     simulation_mode_toggled = Signal(bool)
     dark_mode_toggled = Signal(bool)
     language_selected = Signal(str)
-    safety_limit_changed = Signal(str, str, bool, float)  # kind, field, enabled, value
+    safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
+    notifications_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -51,6 +112,10 @@ class SettingsTab(QWidget):
         self._dark_checkbox.toggled.connect(self.dark_mode_toggled)
         layout.addWidget(self._dark_checkbox)
 
+        self._notify_checkbox = QCheckBox()
+        self._notify_checkbox.toggled.connect(self.notifications_toggled)
+        layout.addWidget(self._notify_checkbox)
+
         language_row = QHBoxLayout()
         self._language_label = QLabel()
         language_row.addWidget(self._language_label)
@@ -64,38 +129,17 @@ class SettingsTab(QWidget):
         language_row.addStretch()
         layout.addLayout(language_row)
 
-        self._safety_group = QGroupBox()
-        safety_layout = QFormLayout(self._safety_group)
         self._safety_hint = QLabel()
         self._safety_hint.setWordWrap(True)
         self._safety_hint.setStyleSheet(f"color: {current_palette().text_muted};")
-        safety_layout.addRow(self._safety_hint)
+        layout.addWidget(self._safety_hint)
 
-        # (kind, field) -> (Checkbox, Spinbox, Zeilen-Label) fuer
-        # set_safety_limits()/_on_safety_field_changed().
-        self._safety_widgets: dict[tuple[str, str], tuple[QCheckBox, QDoubleSpinBox]] = {}
-        self._safety_row_labels: dict[tuple[str, str], QLabel] = {}
-        for kind, entries in SAFETY_LIMIT_FIELDS.items():
-            for field, unit, lo, hi, _default in entries:
-                checkbox = QCheckBox()
-                spin = QDoubleSpinBox()
-                spin.setRange(lo, hi)
-                spin.setDecimals(2)
-                spin.setSuffix(f" {unit}" if unit else "")
-                spin.setEnabled(False)
-                checkbox.toggled.connect(spin.setEnabled)
-                checkbox.toggled.connect(
-                    lambda enabled, k=kind, f=field: self._on_safety_field_changed(k, f)
-                )
-                spin.valueChanged.connect(lambda _value, k=kind, f=field: self._on_safety_field_changed(k, f))
-                row = QHBoxLayout()
-                row.addWidget(checkbox)
-                row.addWidget(spin)
-                row_label = QLabel()
-                safety_layout.addRow(row_label, row)
-                self._safety_widgets[(kind, field)] = (checkbox, spin)
-                self._safety_row_labels[(kind, field)] = row_label
-        layout.addWidget(self._safety_group)
+        # Ein eigenes Layout fuer die dynamisch je Geraet erzeugten
+        # _DeviceSafetyGroup-Sektionen (siehe on_device_known), damit sie sich
+        # gemeinsam vor dem abschliessenden addStretch() einreihen.
+        self._safety_sections_layout = QVBoxLayout()
+        layout.addLayout(self._safety_sections_layout)
+        self._safety_sections: dict[str, _DeviceSafetyGroup] = {}
 
         layout.addStretch()
 
@@ -112,18 +156,16 @@ class SettingsTab(QWidget):
             )
         )
         self._dark_checkbox.setText(tr("Dark Mode (Amber Industrial statt Modern Light)"))
+        self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
         self._language_label.setText(tr("Sprache:"))
-        self._safety_group.setTitle(tr("Globale Grenzwerte (Sicherheitsabschaltung)"))
         self._safety_hint.setText(
             tr(
-                "Bei Überschreitung werden alle Ausgänge sofort abgeschaltet "
-                "(Netzteil: Strom auf 0 A)."
+                "Grenzwerte (Sicherheitsabschaltung) je Gerät -- bei Überschreitung werden "
+                "alle Ausgänge sofort abgeschaltet (Netzteil: Strom auf 0 A)."
             )
         )
-        for (kind, field), row_label in self._safety_row_labels.items():
-            kind_text = tr(DEVICE_KIND_LABELS.get(kind, kind))
-            field_text = tr(_FIELD_LABELS.get(field, field))
-            row_label.setText(f"{kind_text}: {field_text}")
+        for section in self._safety_sections.values():
+            section.retranslate()
 
     def set_simulation_mode(self, enabled: bool) -> None:
         self._sim_checkbox.blockSignals(True)
@@ -135,6 +177,11 @@ class SettingsTab(QWidget):
         self._dark_checkbox.setChecked(enabled)
         self._dark_checkbox.blockSignals(False)
 
+    def set_notifications_enabled(self, enabled: bool) -> None:
+        self._notify_checkbox.blockSignals(True)
+        self._notify_checkbox.setChecked(enabled)
+        self._notify_checkbox.blockSignals(False)
+
     def set_language(self, language: str) -> None:
         index = self._language_combo.findData(language)
         if index < 0:
@@ -143,17 +190,26 @@ class SettingsTab(QWidget):
         self._language_combo.setCurrentIndex(index)
         self._language_combo.blockSignals(False)
 
-    def set_safety_limits(self, limits: dict) -> None:
-        for (kind, field), (checkbox, spin) in self._safety_widgets.items():
-            entry = limits.get(kind, {}).get(field, {"enabled": False, "value": spin.value()})
-            checkbox.blockSignals(True)
-            spin.blockSignals(True)
-            checkbox.setChecked(entry["enabled"])
-            spin.setValue(entry["value"])
-            spin.setEnabled(entry["enabled"])
-            checkbox.blockSignals(False)
-            spin.blockSignals(False)
+    # -- geraete-individuelle Sicherheits-Grenzwerte -------------------------
 
-    def _on_safety_field_changed(self, kind: str, field: str) -> None:
-        checkbox, spin = self._safety_widgets[(kind, field)]
-        self.safety_limit_changed.emit(kind, field, checkbox.isChecked(), spin.value())
+    def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        section = self._safety_sections.get(device_id)
+        if section is not None:
+            section.set_label(label)
+            return
+        section = _DeviceSafetyGroup(kind, label)
+        section.limit_changed.connect(
+            lambda field, enabled, value, d=device_id: self.safety_limit_changed.emit(d, field, enabled, value)
+        )
+        self._safety_sections_layout.addWidget(section)
+        self._safety_sections[device_id] = section
+
+    def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        section = self._safety_sections.get(device_id)
+        if section is not None:
+            section.set_label(label)
+
+    def set_device_safety_limits(self, device_id: str, limits: dict) -> None:
+        section = self._safety_sections.get(device_id)
+        if section is not None:
+            section.set_limits(limits)

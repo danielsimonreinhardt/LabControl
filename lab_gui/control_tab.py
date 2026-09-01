@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
-from theme import Palette, ThemeManager
+from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
 # Interner SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS) ->
@@ -51,7 +51,7 @@ LOAD_MODE_UNITS = {
 
 def _row(*widgets: QWidget) -> QWidget:
     """Reiht Widgets (z.B. Eingabefeld + Setzen-Button) in einer Zeile auf."""
-    container = QWidget()
+    container = no_own_background(QWidget())
     row_layout = QHBoxLayout(container)
     row_layout.setContentsMargins(0, 0, 0, 0)
     for widget in widgets:
@@ -66,9 +66,16 @@ def _style_toggle_buttons(
     """Hebt den Button des aktiven Zustands farbig hervor (gruen=ein, rot=aus).
 
     state=None (Zustand noch unbekannt, z.B. vor der ersten Hardware-Rueckfrage
-    bei der Last) laesst beide Buttons im neutralen Standard-Look."""
+    bei der Last) laesst beide Buttons im neutralen Standard-Look.
+
+    Nutzt bewusst pal.check_pass statt pal.success: success ist im Amber-
+    Industrial-Theme absichtlich amber (Theme-Akzent, siehe theme.Palette),
+    aber die EIN/AUS-Anzeige eines Ausgangs ist eine sicherheitsrelevante
+    Information (auf einen Blick erkennbar, ob Spannung/Strom anliegt) und
+    muss deshalb in beiden Themes gruen bleiben -- check_pass ist genau dafuer
+    vorgesehen (siehe dessen Docstring in theme.py)."""
     active_style = "background-color: {color}; color: {text}; font-weight: bold;"
-    on_button.setStyleSheet(active_style.format(color=pal.success, text=pal.surface) if state is True else "")
+    on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.surface) if state is True else "")
     off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
 
 
@@ -86,7 +93,10 @@ class LoadControlGroup(QGroupBox):
 
         outer = QVBoxLayout(self)
         self._subtitle = QLabel()
-        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
+        # background: transparent -- sonst zeigt dieses direkt im GroupBox-
+        # Layout haengende QLabel opak den allgemeinen Seitenhintergrund statt
+        # der GroupBox-Flaeche (siehe theme.no_own_background).
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
@@ -166,7 +176,7 @@ class LoadControlGroup(QGroupBox):
         _style_toggle_buttons(self._on_button, self._off_button, self._input_on, current_palette())
 
     def _on_theme_changed(self, palette: Palette) -> None:
-        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._update_input_buttons()
 
     def set_label(self, label: str) -> None:
@@ -202,7 +212,10 @@ class PsuControlGroup(QGroupBox):
 
         outer = QVBoxLayout(self)
         self._subtitle = QLabel()
-        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted};")
+        # background: transparent -- sonst zeigt dieses direkt im GroupBox-
+        # Layout haengende QLabel opak den allgemeinen Seitenhintergrund statt
+        # der GroupBox-Flaeche (siehe theme.no_own_background).
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
         outer.addWidget(self._subtitle)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
@@ -259,7 +272,7 @@ class PsuControlGroup(QGroupBox):
         # Nutzer erst beim Klick auf "Setzen" scheitern zu lassen.
         self._limit_warning = QLabel("")
         self._limit_warning.setWordWrap(True)
-        self._limit_warning.setStyleSheet(f"color: {current_palette().warning};")
+        self._limit_warning.setStyleSheet(f"color: {current_palette().warning}; background: transparent;")
         outer.addWidget(self._limit_warning)
 
         self._voltage_spin.valueChanged.connect(self._update_limit_warning)
@@ -346,8 +359,8 @@ class PsuControlGroup(QGroupBox):
         self._limit_warning.setText(" ".join(messages))
 
     def _on_theme_changed(self, palette: Palette) -> None:
-        self._subtitle.setStyleSheet(f"color: {palette.text_muted};")
-        self._limit_warning.setStyleSheet(f"color: {palette.warning};")
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
         self._update_output_buttons()
 
     def set_label(self, label: str) -> None:
@@ -362,6 +375,15 @@ class PsuControlGroup(QGroupBox):
     def _on_output_off(self) -> None:
         self.set_current.emit(self._device_id, 0.0)
         self._output_on = False
+        self._update_output_buttons()
+
+    def set_output_state(self, on: bool) -> None:
+        """Wird vom Worker aufgerufen, wenn ER den Ausgang setzt (Alle-Aus,
+        Safety-Trip, Verbindungsaufbau) statt eines direkten Klicks hier im
+        Panel -- siehe device_worker.psu_output_state. Ohne das bliebe der
+        Schalter faelschlich auf "EIN" stehen, obwohl der Ausgang laengst
+        abgeschaltet wurde."""
+        self._output_on = on
         self._update_output_buttons()
 
     def _update_output_buttons(self) -> None:
@@ -382,6 +404,12 @@ class ControlTab(QWidget):
 
         content = QWidget()
         self._content_layout = FlowLayout(content)
+        # FlowLayout zeroet standardmaessig seine Aussenraender (siehe
+        # flow_layout.py), damit die Geraete-Panels hier nicht direkt am
+        # Fensterrand anstossen: gleicher Aussenabstand wie der Innenabstand
+        # (spacing) zwischen den einzelnen Panels.
+        spacing = self._content_layout.spacing()
+        self._content_layout.setContentsMargins(spacing, spacing, spacing, spacing)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -450,3 +478,8 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, LoadControlGroup):
             section.set_input_state(on)
+
+    def set_psu_output_state(self, device_id: str, on: bool) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_output_state(on)

@@ -24,11 +24,9 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import Translator, tr
-from testcase_model import ACTION_VALUE_RANGE, ARB_TARGETS, action_label, arb_value
+from testcase_model import ACTION_VALUE_RANGE, ARB_SHAPE_LABELS, ARB_TARGETS, action_label, arb_value
 from theme import current as current_palette
 
-# Interner Signalform-Code -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
-SHAPE_BASE_LABELS = {"sine": "Sinus", "square": "Rechteck"}
 PREVIEW_PERIODS = 3.0
 MIN_SAMPLES_PER_PERIOD_WARN = 8
 
@@ -41,10 +39,13 @@ class _ScopePreview(QWidget):
         self.setMinimumHeight(140)
         self._params: dict = {}
 
-    def set_params(self, shape: str, target: str, amplitude: float, offset: float, frequency: float, interval_ms: int) -> None:
+    def set_params(
+        self, shape: str, target: str, amplitude: float, offset: float,
+        frequency: float, interval_ms: int, duty: float,
+    ) -> None:
         self._params = dict(
-            shape=shape, target=target, amplitude=amplitude,
-            offset=offset, frequency=frequency, interval_ms=interval_ms,
+            shape=shape, target=target, amplitude=amplitude, offset=offset,
+            frequency=frequency, interval_ms=interval_ms, duty=duty,
         )
         self.update()
 
@@ -100,6 +101,7 @@ class _ScopePreview(QWidget):
             arb_amplitude = amplitude
             arb_offset = offset
             arb_frequency = frequency
+            arb_duty = self._params["duty"]
 
         points = []
         for i in range(sample_count):
@@ -173,12 +175,20 @@ class SignalDialog(QDialog):
         self._interval_spin.setSuffix(" ms")
         self._interval_spin.setValue(200)
 
+        # Nur fuer shape == "square" relevant (siehe _on_shape_changed).
+        self._duty_spin = QDoubleSpinBox()
+        self._duty_spin.setDecimals(0)
+        self._duty_spin.setRange(1, 99)
+        self._duty_spin.setSuffix(" %")
+        self._duty_spin.setValue(50)
+
         self._form.addRow(" ", self._shape_combo)
         self._form.addRow(" ", self._target_combo)
         self._form.addRow(" ", self._amplitude_spin)
         self._form.addRow(" ", self._offset_spin)
         self._form.addRow(" ", self._frequency_spin)
         self._form.addRow(" ", self._interval_spin)
+        self._form.addRow(" ", self._duty_spin)
         layout.addLayout(self._form)
 
         self._duration_label = QLabel()
@@ -200,12 +210,13 @@ class SignalDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self._shape_combo.currentIndexChanged.connect(self._update_preview)
+        self._shape_combo.currentIndexChanged.connect(self._on_shape_changed)
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         self._amplitude_spin.valueChanged.connect(self._update_preview)
         self._offset_spin.valueChanged.connect(self._update_preview)
         self._frequency_spin.valueChanged.connect(self._update_preview)
         self._interval_spin.valueChanged.connect(self._update_preview)
+        self._duty_spin.valueChanged.connect(self._update_preview)
 
         self._load_params(params)
         self._on_target_changed()
@@ -217,7 +228,7 @@ class SignalDialog(QDialog):
         current_code = self._shape_combo.currentData() if self._shape_combo.count() else None
         self._shape_combo.blockSignals(True)
         self._shape_combo.clear()
-        for code, base_label in SHAPE_BASE_LABELS.items():
+        for code, base_label in ARB_SHAPE_LABELS.items():
             self._shape_combo.addItem(tr(base_label), code)
         index = self._shape_combo.findData(current_code) if current_code else 0
         self._shape_combo.setCurrentIndex(max(index, 0))
@@ -243,6 +254,7 @@ class SignalDialog(QDialog):
         self._form.labelForField(self._offset_spin).setText(tr("Offset (Mitte):"))
         self._form.labelForField(self._frequency_spin).setText(tr("Frequenz:"))
         self._form.labelForField(self._interval_spin).setText(tr("Update-Intervall:"))
+        self._form.labelForField(self._duty_spin).setText(tr("Tastgrad:"))
         self._interval_spin.setToolTip(
             tr(
                 "Abstand zwischen zwei Sollwert-Updates. Die Geräte sind keine echten\n"
@@ -269,6 +281,16 @@ class SignalDialog(QDialog):
         self._target_combo.setCurrentIndex(max(target_index, 0))
         self._frequency_spin.setValue(params.get("frequency", 1.0))
         self._interval_spin.setValue(int(params.get("interval_ms", 200)))
+        self._duty_spin.setValue(params.get("duty", 0.5) * 100.0)
+        self._on_shape_changed()
+
+    def _on_shape_changed(self) -> None:
+        is_square = self._shape_combo.currentData() == "square"
+        self._duty_spin.setVisible(is_square)
+        duty_label = self._form.labelForField(self._duty_spin)
+        if duty_label is not None:
+            duty_label.setVisible(is_square)
+        self._update_preview()
 
     def _on_target_changed(self) -> None:
         code = self._target_combo.currentData()
@@ -298,7 +320,8 @@ class SignalDialog(QDialog):
         offset = self._offset_spin.value()
         frequency = self._frequency_spin.value()
         interval_ms = self._interval_spin.value()
-        self._preview.set_params(shape, target, amplitude, offset, frequency, interval_ms)
+        duty = self._duty_spin.value() / 100.0
+        self._preview.set_params(shape, target, amplitude, offset, frequency, interval_ms, duty)
 
         warnings = []
         samples_per_period = (1000.0 / interval_ms) / frequency
@@ -337,4 +360,5 @@ class SignalDialog(QDialog):
             offset=self._offset_spin.value(),
             frequency=self._frequency_spin.value(),
             interval_ms=self._interval_spin.value(),
+            duty=self._duty_spin.value() / 100.0,
         )

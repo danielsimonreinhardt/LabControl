@@ -42,6 +42,15 @@ ARB_TARGETS: dict[str, list[str]] = {
     "psu": ["PSU_VOLT", "PSU_CURR"],
 }
 
+# Interner Signalform-Code -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
+# fuer i18n.tr, siehe arb_shape_label()). Zentral hier statt dupliziert in
+# signal_dialog.py/testcase_tab.py, da beide dieselbe Zuordnung brauchen.
+ARB_SHAPE_LABELS = {"sine": "Sinus", "square": "Rechteck", "triangle": "Dreieck", "sawtooth": "Sägezahn"}
+
+
+def arb_shape_label(shape: str) -> str:
+    return tr(ARB_SHAPE_LABELS.get(shape, shape))
+
 DEVICE_ACTIONS = {
     "load": LOAD_ACTIONS,
     "psu": PSU_ACTIONS,
@@ -154,12 +163,13 @@ class TestStep:
     duration: float = 0.0
     enabled: bool = True
     # -- Arbiträrsignal-Parameter (nur relevant wenn action in ARB_ACTIONS) --
-    arb_shape: str = "sine"       # "sine" | "square"
+    arb_shape: str = "sine"       # "sine" | "square" | "triangle" | "sawtooth"
     arb_target: str = ""          # tatsaechlich gesendeter Aktionscode, z.B. "VOLT"/"PSU_CURR"
     arb_amplitude: float = 0.0    # Signal schwingt zwischen offset-amplitude und offset+amplitude
     arb_offset: float = 0.0
     arb_frequency: float = 1.0    # Hz
     arb_interval_ms: int = 200    # Abstand zwischen zwei Sollwert-Updates
+    arb_duty: float = 0.5         # nur "square": Tastgrad (Anteil High-Phase), 0..1
 
     # -- Ablaufsteuerung: Schritttyp-Diskriminator ------------------------
     # "action" (Standard, s.o.) | "loop" | "while" | "if" | "else" | "end"
@@ -193,8 +203,21 @@ class TestStep:
 
 def arb_value(step: "TestStep", t: float) -> float:
     """Momentanwert des Arbiträrsignals von `step` zum Zeitpunkt t (Sekunden)."""
-    phase = 2.0 * math.pi * step.arb_frequency * t
-    raw = math.sin(phase) if step.arb_shape != "square" else (1.0 if math.sin(phase) >= 0 else -1.0)
+    period = 1.0 / max(step.arb_frequency, 1e-9)
+    # Phasenanteil innerhalb der aktuellen Periode, 0..1 -- Grundlage fuer
+    # square/triangle/sawtooth, die alle stueckweise-lineare bzw. stufige
+    # Kurven ueber genau diesen Anteil beschreiben.
+    phase_frac = (t % period) / period
+    if step.arb_shape == "square":
+        raw = 1.0 if phase_frac < step.arb_duty else -1.0
+    elif step.arb_shape == "triangle":
+        # 0 -> 1 (erste Haelfte), 1 -> 0 (zweite Haelfte) linear, auf -1..1 skaliert.
+        raw = (4.0 * phase_frac - 1.0) if phase_frac < 0.5 else (3.0 - 4.0 * phase_frac)
+    elif step.arb_shape == "sawtooth":
+        # Linearer Anstieg -1..1 ueber die Periode, danach Sprung zurueck auf -1.
+        raw = 2.0 * phase_frac - 1.0
+    else:
+        raw = math.sin(2.0 * math.pi * phase_frac)
     value = step.arb_offset + step.arb_amplitude * raw
     unit, lo, hi = ACTION_VALUE_RANGE.get(step.arb_target, ("", value, value))
     if lo < hi:
