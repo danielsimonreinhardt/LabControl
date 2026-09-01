@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QMenu, QWidget
 
 from i18n import tr
 from icons import IconButton
-from theme import PANEL_COLOR_LABELS, PANEL_COLOR_ORDER
+from theme import PANEL_COLOR_LABELS, PANEL_COLOR_ORDER, form_control_qss
 from theme import current as current_palette
 
 _SWATCH_SIZE = 14
@@ -36,15 +36,38 @@ def _swatch_icon(hex_color: str) -> QIcon:
 
 def apply_panel_tint(widget: QWidget, color_key: str | None) -> None:
     """Setzt (oder entfernt) die individuelle Hintergrundfarbe EINES
-    QGroupBox-Panels als Instanz-Stylesheet -- analog zu theme.
-    no_own_background: eine reine Eigenschaft ohne Selektor gewinnt fuer
-    dieses eine Widget, laesst Rahmen/Titel-Farbe/Radius aber unangetastet
-    aus dem globalen stylesheet() (siehe dessen QGroupBox-Regel)."""
+    QGroupBox-Panels als Instanz-Stylesheet, laesst Rahmen/Titel-Farbe/Radius
+    aber unangetastet aus dem globalen stylesheet() (siehe dessen
+    QGroupBox-Regel).
+
+    Haengt zusaetzlich theme.form_control_qss() an dasselbe Stylesheet an, um
+    zu verhindern, dass die Panel-Farbe auf Buttons/Eingabefelder im Panel
+    durchschlaegt (siehe dortigen Docstring sowie BUGS.md #10f) -- ohne das
+    wuerden z.B. der Sollwert-Spinbox oder die EIN/AUS-Buttons statt ihrer
+    normalen Theme-Farbe die Panel-Tönung annehmen.
+
+    WICHTIG: Die eigene Hintergrundfarbe MUSS als "QGroupBox { ... }"-Regel
+    mit explizitem Typ-Selektor geschrieben werden, NICHT als nackte
+    Eigenschaft ohne Selektor (z.B. "background-color: X;" allein) -- ein
+    erster Versuch genau so ist an echter Hardware gescheitert (BUGS.md
+    #10f, zweiter Anlauf): sobald im selben Instanz-Stylesheet zusaetzlich
+    Selektor-Regeln (hier form_control_qss()) folgen, wird die fuehrende
+    selektorlose Eigenschaft von Qt nicht mehr zuverlaessig nur auf dieses
+    eine Widget beschraenkt und schlaegt trotz der spezifischeren
+    QPushButton-Regel weiterhin auf Kind-Widgets durch (per minimalem
+    Repro-Test bestaetigt). Mit explizitem "QGroupBox { ... }"-Selektor
+    gewinnt die spezifischere "QPushButton { ... }"-Regel innerhalb
+    desselben Stylesheets zuverlaessig, wie normale QSS-Spezifitaet es
+    erwarten laesst."""
     if color_key is None:
         widget.setStyleSheet("")
         return
-    hex_color = current_palette().panel_tints.get(color_key)
-    widget.setStyleSheet(f"background-color: {hex_color};" if hex_color else "")
+    pal = current_palette()
+    hex_color = pal.panel_tints.get(color_key)
+    if not hex_color:
+        widget.setStyleSheet("")
+        return
+    widget.setStyleSheet(f"QGroupBox {{ background-color: {hex_color}; }}\n{form_control_qss(pal)}")
 
 
 class PanelColorButton(IconButton):

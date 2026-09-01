@@ -9,7 +9,7 @@ keine eingestellten Werte verloren gehen.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -30,8 +29,8 @@ from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
 from panel_color import PanelColorButton, apply_panel_tint
-from presets import PresetStore
-from theme import Palette, ThemeManager, no_own_background
+from presets import PresetStore, SLOT_COUNT
+from theme import Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
 
 # Interner SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS) ->
@@ -53,15 +52,53 @@ LOAD_MODE_UNITS = {
 }
 
 
+def _row_stylesheet(pal: Palette) -> str:
+    """Stylesheet fuer den _row()-Wrapper: transparent (siehe theme.
+    no_own_background) DAMIT ZUSAETZLICH theme.form_control_qss(), sonst
+    schlaegt eine individuelle Panel-Faerbung (panel_color.apply_panel_tint)
+    auf die in der Zeile enthaltenen Buttons/Eingabefelder durch (BUGS.md
+    #10f, an echter Hardware reproduziert).
+
+    WICHTIG: "background: transparent" MUSS hier als "QWidget { ... }"-Regel
+    mit explizitem Typ-Selektor stehen, NICHT als nackte Eigenschaft ohne
+    Selektor -- siehe ausfuehrliche Begruendung in panel_color.
+    apply_panel_tint(). Ein QWidget-Typ-Selektor matcht zwar technisch auch
+    die enthaltenen QPushButton/QDoubleSpinBox (Qt-QSS-Typselektoren matchen
+    Subklassen), die nachfolgende spezifischere "QPushButton { ... }"-Regel
+    aus form_control_qss() gewinnt dort aber zuverlaessig (normale
+    QSS-Spezifitaet innerhalb ein und desselben Stylesheets, per Test
+    bestaetigt) -- nur der ungenutzte Rest-Platz in der Zeile bleibt
+    transparent und zeigt die (ggf. getoente) GroupBox-Flaeche durch."""
+    return f"QWidget {{ background: transparent; }}\n{form_control_qss(pal)}"
+
+
 def _row(*widgets: QWidget) -> QWidget:
     """Reiht Widgets (z.B. Eingabefeld + Setzen-Button) in einer Zeile auf."""
-    container = no_own_background(QWidget())
+    container = QWidget()
+    container.setStyleSheet(_row_stylesheet(current_palette()))
     row_layout = QHBoxLayout(container)
     row_layout.setContentsMargins(0, 0, 0, 0)
     for widget in widgets:
         row_layout.addWidget(widget)
     row_layout.addStretch()
     return container
+
+
+def _detint_label(form: QFormLayout, field: QWidget | QHBoxLayout) -> None:
+    """Laesst die von QFormLayout automatisch erzeugte Zeilen-Beschriftung
+    (z.B. "Sollwert:") die individuelle Panel-Faerbung durchscheinen, statt
+    opak die allgemeine Seitenhintergrundfarbe zu zeigen -- anders als
+    _row_stylesheet() betrifft das NUR reinen Text (color bleibt unberuehrt),
+    keine Buttons/Eingabefelder, die sollen weiterhin die normale
+    Theme-Farbe behalten (siehe BUGS.md #10f). Eine reine "background:
+    transparent"-Eigenschaft ohne weitere Selektor-Regeln im selben String
+    ist hier -- anders als bei _row_stylesheet()/apply_panel_tint() -- sicher
+    (siehe deren Docstrings zur Ursache), da nichts anderes damit gemischt
+    wird; deshalb auch ohne Theme-Wechsel-Refresh, die Eigenschaft ist
+    farbunabhaengig."""
+    label = form.labelForField(field)
+    if label is not None:
+        label.setStyleSheet("background: transparent;")
 
 
 def _style_toggle_buttons(
@@ -90,11 +127,10 @@ class LoadControlGroup(QGroupBox):
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
-    def __init__(self, device_id: str, label: str, presets: PresetStore) -> None:
+    def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
         self._color_key: str | None = None
-        self._presets = presets
         # Geraetename als natives QGroupBox-Title (wie DashboardWidget/
         # _DevicePanel), statt als eigenes QLabel im Panel-Inneren.
         self.setTitle(label)
@@ -127,6 +163,7 @@ class LoadControlGroup(QGroupBox):
         self._populate_mode_combo()
         self._mode_combo.currentIndexChanged.connect(self._on_mode_index_changed)
         self._form.addRow(" ", self._mode_combo)
+        _detint_label(self._form, self._mode_combo)
 
         self._setpoint_spin = QDoubleSpinBox()
         self._setpoint_spin.setDecimals(3)
@@ -135,26 +172,8 @@ class LoadControlGroup(QGroupBox):
         self._apply_button.clicked.connect(self._on_apply)
         self._setpoint_row = _row(self._setpoint_spin, self._apply_button)
         self._form.addRow(" ", self._setpoint_row)
+        _detint_label(self._form, self._setpoint_row)
         self._on_mode_index_changed(self._mode_combo.currentIndex())
-
-        # Software-Presets (siehe presets.py) -- ersetzen die frueheren
-        # geraeteseitigen PSU-Presets, hier geraetetyp-uebergreifend fuer
-        # Last UND Netzteil nutzbar. "Laden" fuellt nur die Eingabefelder
-        # (kein Hardware-Schreibvorgang), Uebernehmen bleibt bewusst ein
-        # separater Klick auf den bestehenden "Setzen"-Button (_on_apply).
-        self._preset_combo = QComboBox()
-        self._preset_load_button = IconButton("mdi.check-bold", "")
-        self._preset_load_button.clicked.connect(self._on_preset_load)
-        self._preset_save_button = IconButton("mdi.content-save-outline", "")
-        self._preset_save_button.clicked.connect(self._on_preset_save)
-        self._preset_delete_button = IconButton("mdi.trash-can-outline", "")
-        self._preset_delete_button.clicked.connect(self._on_preset_delete)
-        self._preset_row = _row(
-            self._preset_combo, self._preset_load_button, self._preset_save_button, self._preset_delete_button
-        )
-        self._form.addRow(" ", self._preset_row)
-        self._presets.presets_changed.connect(self._on_presets_changed)
-        self._refresh_presets()
 
         # Ausgang-Schalter sitzen ganz unten im Panel -- der Stretch drueckt
         # sie an den unteren Rand, auch wenn das Panel (siehe ControlTab.
@@ -175,6 +194,7 @@ class LoadControlGroup(QGroupBox):
         input_layout.addWidget(self._on_button)
         input_layout.addWidget(self._off_button)
         self._output_form.addRow(" ", input_layout)
+        _detint_label(self._output_form, input_layout)
         outer.addLayout(self._output_form)
 
         # Solange noch keine Hardware-Rueckfrage eingetroffen ist (siehe
@@ -205,10 +225,6 @@ class LoadControlGroup(QGroupBox):
         self._form.labelForField(self._mode_combo).setText(tr("Modus:"))
         self._form.labelForField(self._setpoint_row).setText(tr("Sollwert:"))
         self._apply_button.setToolTip(tr("Übernehmen"))
-        self._form.labelForField(self._preset_row).setText(tr("Preset:"))
-        self._preset_load_button.setToolTip(tr("Preset laden"))
-        self._preset_save_button.setToolTip(tr("Als Preset speichern…"))
-        self._preset_delete_button.setToolTip(tr("Preset löschen"))
         self._on_button.setText(tr("EIN"))
         self._off_button.setText(tr("AUS"))
         self._output_form.labelForField(self._input_layout).setText(tr("Ausgang:"))
@@ -222,6 +238,7 @@ class LoadControlGroup(QGroupBox):
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._setpoint_row.setStyleSheet(_row_stylesheet(palette))
         self._update_input_buttons()
         apply_panel_tint(self, self._color_key)
 
@@ -256,49 +273,34 @@ class LoadControlGroup(QGroupBox):
         if code != "SHORT":
             self.apply_setpoint.emit(self._device_id, code, self._setpoint_spin.value())
 
-    def _on_presets_changed(self, kind: str) -> None:
-        if kind == "load":
-            self._refresh_presets()
+    def capture_state(self) -> dict:
+        """Aktueller Zustand fuer die globale Preset-Leiste (siehe PresetBar).
 
-    def _refresh_presets(self) -> None:
-        current = self._preset_combo.currentText()
-        self._preset_combo.blockSignals(True)
-        self._preset_combo.clear()
-        for preset in self._presets.presets_for("load"):
-            self._preset_combo.addItem(preset["name"])
-        index = self._preset_combo.findText(current)
-        self._preset_combo.setCurrentIndex(max(index, 0))
-        self._preset_combo.blockSignals(False)
+        Schaltstatus nur enthalten, wenn er bereits per Hardware-Rueckfrage
+        bekannt ist (siehe set_input_state) -- sonst wuerde ein spaeteres
+        Laden dieses Presets einen ungeprueft geratenen Zustand erzwingen.
+        """
+        state = {"mode": self._mode_combo.currentData(), "value": self._setpoint_spin.value()}
+        if self._input_on is not None:
+            state["input_on"] = self._input_on
+        return state
 
-    def _on_preset_load(self) -> None:
-        name = self._preset_combo.currentText()
-        preset = next((p for p in self._presets.presets_for("load") if p.get("name") == name), None)
-        if preset is None:
-            return
-        index = self._mode_combo.findData(preset.get("mode"))
+    def apply_state(self, state: dict) -> None:
+        """Uebernimmt ein Preset (siehe PresetBar) -- fuellt die Felder UND
+        schreibt sofort auf die Hardware (Sollwert per _on_apply, Eingang per
+        set_input), da ein Schaltstatus anders als ein reiner Sollwert nicht
+        sinnvoll nur "vorbelegt, aber nicht angewendet" dargestellt werden
+        kann."""
+        index = self._mode_combo.findData(state.get("mode"))
         if index >= 0:
             self._mode_combo.setCurrentIndex(index)
         try:
-            self._setpoint_spin.setValue(float(preset.get("value", 0.0)))
+            self._setpoint_spin.setValue(float(state.get("value", 0.0)))
         except (TypeError, ValueError):
             pass
-
-    def _on_preset_save(self) -> None:
-        name, ok = QInputDialog.getText(self, tr("Als Preset speichern"), tr("Name:"))
-        if ok and name.strip():
-            self._presets.save_preset(
-                "load", name.strip(), {"mode": self._mode_combo.currentData(), "value": self._setpoint_spin.value()}
-            )
-
-    def _on_preset_delete(self) -> None:
-        name = self._preset_combo.currentText()
-        if not name:
-            return
-        answer = QMessageBox.question(
-            self, tr("Preset löschen"), tr("Preset '{name}' löschen?", name=name)
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._presets.delete_preset("load", name)
+        self._on_apply()
+        if "input_on" in state:
+            self.set_input.emit(self._device_id, bool(state["input_on"]))
 
 
 class PsuControlGroup(QGroupBox):
@@ -310,11 +312,10 @@ class PsuControlGroup(QGroupBox):
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
-    def __init__(self, device_id: str, label: str, presets: PresetStore) -> None:
+    def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
         self._color_key: str | None = None
-        self._presets = presets
         # Geraetename als natives QGroupBox-Title (wie DashboardWidget/
         # _DevicePanel), statt als eigenes QLabel im Panel-Inneren.
         self.setTitle(label)
@@ -354,6 +355,7 @@ class PsuControlGroup(QGroupBox):
         )
         self._voltage_row = _row(self._voltage_spin, self._voltage_button)
         self._form.addRow(" ", self._voltage_row)
+        _detint_label(self._form, self._voltage_row)
 
         self._current_spin = QDoubleSpinBox()
         self._current_spin.setDecimals(1)
@@ -366,24 +368,7 @@ class PsuControlGroup(QGroupBox):
         )
         self._current_row = _row(self._current_spin, self._current_button)
         self._form.addRow(" ", self._current_row)
-
-        # Software-Presets (siehe presets.py) -- decken bewusst nur Spannung+
-        # Strom ab (wie die frueheren geraeteseitigen PSU-Presets), nicht
-        # OVP/OCP. "Laden" fuellt nur die Eingabefelder, Uebernehmen bleibt
-        # ein separater Klick auf die bestehenden "Setzen"-Buttons.
-        self._preset_combo = QComboBox()
-        self._preset_load_button = IconButton("mdi.check-bold", "")
-        self._preset_load_button.clicked.connect(self._on_preset_load)
-        self._preset_save_button = IconButton("mdi.content-save-outline", "")
-        self._preset_save_button.clicked.connect(self._on_preset_save)
-        self._preset_delete_button = IconButton("mdi.trash-can-outline", "")
-        self._preset_delete_button.clicked.connect(self._on_preset_delete)
-        self._preset_row = _row(
-            self._preset_combo, self._preset_load_button, self._preset_save_button, self._preset_delete_button
-        )
-        self._form.addRow(" ", self._preset_row)
-        self._presets.presets_changed.connect(self._on_presets_changed)
-        self._refresh_presets()
+        _detint_label(self._form, self._current_row)
 
         self._ovp_spin = QDoubleSpinBox()
         self._ovp_spin.setDecimals(1)
@@ -394,6 +379,7 @@ class PsuControlGroup(QGroupBox):
         self._ovp_button.clicked.connect(lambda: self.set_ovp.emit(self._device_id, self._ovp_spin.value()))
         self._ovp_row = _row(self._ovp_spin, self._ovp_button)
         self._form.addRow(" ", self._ovp_row)
+        _detint_label(self._form, self._ovp_row)
 
         self._ocp_spin = QDoubleSpinBox()
         self._ocp_spin.setDecimals(1)
@@ -404,6 +390,7 @@ class PsuControlGroup(QGroupBox):
         self._ocp_button.clicked.connect(lambda: self.set_ocp.emit(self._device_id, self._ocp_spin.value()))
         self._ocp_row = _row(self._ocp_spin, self._ocp_button)
         self._form.addRow(" ", self._ocp_row)
+        _detint_label(self._form, self._ocp_row)
 
         # Das Geraet ignoriert Spannungs-/Stromwerte oberhalb der aktuell
         # eingestellten OVP/OCP-Schwelle kommentarlos (siehe hcs34xx/driver.py)
@@ -435,6 +422,7 @@ class PsuControlGroup(QGroupBox):
         self._output_layout.addWidget(self._output_on_button)
         self._output_layout.addWidget(self._output_off_button)
         self._output_form.addRow(" ", self._output_layout)
+        _detint_label(self._output_form, self._output_layout)
         outer.addLayout(self._output_form)
 
         # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
@@ -455,10 +443,6 @@ class PsuControlGroup(QGroupBox):
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         self._form.labelForField(self._voltage_row).setText(tr("Spannung:"))
         self._form.labelForField(self._current_row).setText(tr("Strom:"))
-        self._form.labelForField(self._preset_row).setText(tr("Preset:"))
-        self._preset_load_button.setToolTip(tr("Preset laden"))
-        self._preset_save_button.setToolTip(tr("Als Preset speichern…"))
-        self._preset_delete_button.setToolTip(tr("Preset löschen"))
         self._output_form.labelForField(self._output_layout).setText(tr("Ausgang:"))
         self._form.labelForField(self._ovp_row).setText(tr("OVP:"))
         self._form.labelForField(self._ocp_row).setText(tr("OCP:"))
@@ -506,6 +490,8 @@ class PsuControlGroup(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
+        for row in (self._voltage_row, self._current_row, self._ovp_row, self._ocp_row):
+            row.setStyleSheet(_row_stylesheet(palette))
         self._update_output_buttons()
         apply_panel_tint(self, self._color_key)
 
@@ -527,47 +513,28 @@ class PsuControlGroup(QGroupBox):
         if ok and new_label.strip():
             self.rename_requested.emit("psu", self._device_id, new_label.strip())
 
-    def _on_presets_changed(self, kind: str) -> None:
-        if kind == "psu":
-            self._refresh_presets()
+    def capture_state(self) -> dict:
+        """Aktueller Zustand fuer die globale Preset-Leiste (siehe PresetBar)."""
+        return {
+            "voltage": self._voltage_spin.value(),
+            "current": self._current_spin.value(),
+            "output_on": bool(self._output_on),
+        }
 
-    def _refresh_presets(self) -> None:
-        current = self._preset_combo.currentText()
-        self._preset_combo.blockSignals(True)
-        self._preset_combo.clear()
-        for preset in self._presets.presets_for("psu"):
-            self._preset_combo.addItem(preset["name"])
-        index = self._preset_combo.findText(current)
-        self._preset_combo.setCurrentIndex(max(index, 0))
-        self._preset_combo.blockSignals(False)
-
-    def _on_preset_load(self) -> None:
-        name = self._preset_combo.currentText()
-        preset = next((p for p in self._presets.presets_for("psu") if p.get("name") == name), None)
-        if preset is None:
-            return
+    def apply_state(self, state: dict) -> None:
+        """Uebernimmt ein Preset (siehe PresetBar) -- fuellt die Felder UND
+        schaltet den Ausgang sofort auf den gespeicherten Zustand (ueber
+        _on_output_on/_on_output_off, damit dieselbe Sicherheitslogik greift
+        wie bei einem manuellen EIN/AUS-Klick, siehe _update_output_buttons)."""
         try:
-            self._voltage_spin.setValue(float(preset.get("voltage", self._voltage_spin.value())))
-            self._current_spin.setValue(float(preset.get("current", self._current_spin.value())))
+            self._voltage_spin.setValue(float(state.get("voltage", self._voltage_spin.value())))
+            self._current_spin.setValue(float(state.get("current", self._current_spin.value())))
         except (TypeError, ValueError):
             pass
-
-    def _on_preset_save(self) -> None:
-        name, ok = QInputDialog.getText(self, tr("Als Preset speichern"), tr("Name:"))
-        if ok and name.strip():
-            self._presets.save_preset(
-                "psu", name.strip(), {"voltage": self._voltage_spin.value(), "current": self._current_spin.value()}
-            )
-
-    def _on_preset_delete(self) -> None:
-        name = self._preset_combo.currentText()
-        if not name:
-            return
-        answer = QMessageBox.question(
-            self, tr("Preset löschen"), tr("Preset '{name}' löschen?", name=name)
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._presets.delete_preset("psu", name)
+        if state.get("output_on"):
+            self._on_output_on()
+        else:
+            self._on_output_off()
 
     def _on_output_on(self) -> None:
         self.set_voltage.emit(self._device_id, self._voltage_spin.value())
@@ -607,6 +574,140 @@ class PsuControlGroup(QGroupBox):
         self._current_button.setEnabled(bool(self._output_on))
 
 
+PRESET_BUTTON_SIZE = QSize(132, 60)
+PRESET_SUB_BUTTON_SIZE = QSize(24, 22)
+PRESET_SUB_BUTTON_MARGIN = 3
+
+
+class _PresetSlotButton(QWidget):
+    """Ein einzelner Preset-Platz: ein grosser, deutlich hervorgehobener
+    Haupt-Button (Preset laden) mit den beiden Sub-Buttons Speichern und
+    Umbenennen als kleine Ecken-Buttons oben rechts bzw. unten rechts --
+    optisch Teil des Haupt-Buttons statt einer eigenen Reihe daneben. Die
+    Sub-Buttons sind eigene Kind-Widgets, ueber move()+raise_() auf dem
+    Haupt-Button platziert (Qt-Layouts kennen kein Ueberlappen von Kindern
+    mit unterschiedlicher Klickfaeche, daher hier bewusst absolute
+    Positionierung statt eines Layouts)."""
+
+    load_clicked = Signal()
+    save_clicked = Signal()
+    rename_clicked = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedSize(PRESET_BUTTON_SIZE)
+
+        self._main_button = QPushButton(self)
+        self._main_button.setGeometry(0, 0, PRESET_BUTTON_SIZE.width(), PRESET_BUTTON_SIZE.height())
+        self._main_button.clicked.connect(self.load_clicked)
+
+        self._save_button = self._make_sub_button("mdi.content-save-outline")
+        self._save_button.move(
+            PRESET_BUTTON_SIZE.width() - PRESET_SUB_BUTTON_SIZE.width() - PRESET_SUB_BUTTON_MARGIN,
+            PRESET_SUB_BUTTON_MARGIN,
+        )
+        self._save_button.clicked.connect(self.save_clicked)
+
+        self._rename_button = self._make_sub_button("mdi.pencil-outline")
+        self._rename_button.move(
+            PRESET_BUTTON_SIZE.width() - PRESET_SUB_BUTTON_SIZE.width() - PRESET_SUB_BUTTON_MARGIN,
+            PRESET_BUTTON_SIZE.height() - PRESET_SUB_BUTTON_SIZE.height() - PRESET_SUB_BUTTON_MARGIN,
+        )
+        self._rename_button.clicked.connect(self.rename_clicked)
+
+    def _make_sub_button(self, icon_name: str) -> IconButton:
+        button = IconButton(icon_name, "")
+        button.setParent(self)
+        button.setFixedSize(PRESET_SUB_BUTTON_SIZE)
+        button.setIconSize(QSize(14, 14))
+        button.raise_()  # ueber dem Haupt-Button, sonst schluckt der die Klicks
+        return button
+
+    def set_text(self, text: str) -> None:
+        self._main_button.setText(text)
+
+    def set_tooltips(self, load: str, save: str, rename: str) -> None:
+        self._main_button.setToolTip(load)
+        self._save_button.setToolTip(save)
+        self._rename_button.setToolTip(rename)
+
+    def apply_style(self, pal: Palette) -> None:
+        """Haupt-Button dezent hervorgehoben statt im neutralen Standard-
+        Button-Look -- ein Preset-Platz ist eine haeufig genutzte
+        Schnellzugriffs-Aktion und soll auf einen Blick auffindbar sein.
+
+        Nutzt bewusst denselben abgetoenten Farbton wie die individuellen
+        Geraete-Panel-Farben (pal.panel_tints, siehe panel_color.py) statt
+        des vollen Akzent-Tons (pal.accent) -- letzterer wirkte zu grell/
+        knallig als dauerhafte Flaeche. "blue" ist hier kein Bezug zu einem
+        bestimmten Geraet (Presets sind geraeteuebergreifend), sondern nur
+        als ruhiger, einheitlicher Ton fuer alle 5 Plaetze gewaehlt. Text in
+        pal.text statt pal.surface, da die Panel-Tints (anders als pal.accent)
+        bewusst nah an der normalen Oberflaechenhelligkeit liegen -- genau wie
+        beim GroupBox-Titel einer getoenten Geraete-Panel bleibt pal.text
+        darauf gut lesbar. Ein Rahmen in der Akzentfarbe bei Hover/Pressed
+        gibt weiterhin klares Klick-Feedback, ohne die Ruheflaeche zu grell
+        zu machen. Die Sub-Buttons bleiben bewusst im normalen IconButton-Look
+        (globales Stylesheet), damit sie sich als "kleinere Nebenaktion" vom
+        Haupt-Button abheben."""
+        tint = pal.panel_tints["blue"]
+        self._main_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {tint};
+                color: {pal.text};
+                border: 1px solid {pal.border};
+                border-radius: 8px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                border: 2px solid {pal.accent};
+            }}
+            QPushButton:pressed {{
+                border: 2px solid {pal.accent_hover};
+            }}
+        """)
+
+
+class PresetBar(QWidget):
+    """Leiste mit 5 festen, geraeteuebergreifenden Preset-Plaetzen (siehe
+    presets.py) ganz oben im Control-Tab."""
+
+    load_requested = Signal(int)    # slot index
+    save_requested = Signal(int)
+    rename_requested = Signal(int)  # slot index
+
+    def __init__(self, presets: PresetStore) -> None:
+        super().__init__()
+        self._presets = presets
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 4)
+
+        self._slot_buttons: list[_PresetSlotButton] = []
+        for slot in range(SLOT_COUNT):
+            slot_button = _PresetSlotButton()
+            slot_button.load_clicked.connect(lambda s=slot: self.load_requested.emit(s))
+            slot_button.save_clicked.connect(lambda s=slot: self.save_requested.emit(s))
+            slot_button.rename_clicked.connect(lambda s=slot: self.rename_requested.emit(s))
+            layout.addWidget(slot_button)
+            self._slot_buttons.append(slot_button)
+        layout.addStretch()
+
+        presets.preset_changed.connect(self._refresh_names)
+        Translator.instance().language_changed.connect(self._refresh_names)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+        self._on_theme_changed(current_palette())
+        self._refresh_names()
+
+    def _on_theme_changed(self, pal: Palette) -> None:
+        for button in self._slot_buttons:
+            button.apply_style(pal)
+
+    def _refresh_names(self, *_args) -> None:
+        for slot, button in enumerate(self._slot_buttons):
+            button.set_text(self._presets.name(slot))
+            button.set_tooltips(tr("Preset laden"), tr("Preset speichern"), tr("Preset umbenennen"))
+
+
 class ControlTab(QWidget):
     """Scrollbar, damit auf kleinen/hochskalierten Bildschirmen nichts unerreichbar wird."""
 
@@ -621,6 +722,12 @@ class ControlTab(QWidget):
         self._presets = presets
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._preset_bar = PresetBar(presets)
+        self._preset_bar.load_requested.connect(self._on_preset_load)
+        self._preset_bar.save_requested.connect(self._on_preset_save)
+        self._preset_bar.rename_requested.connect(self._on_preset_rename)
+        outer_layout.addWidget(self._preset_bar)
 
         content = QWidget()
         self._content_layout = FlowLayout(content)
@@ -653,9 +760,9 @@ class ControlTab(QWidget):
             section.set_label(label)
             return
         if kind == "load":
-            section = LoadControlGroup(device_id, label, self._presets)
+            section = LoadControlGroup(device_id, label)
         else:
-            section = PsuControlGroup(device_id, label, self._presets)
+            section = PsuControlGroup(device_id, label)
         section.hide()
         section.panel_color_requested.connect(self.panel_color_requested)
         section.rename_requested.connect(self.rename_requested)
@@ -721,3 +828,24 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, PsuControlGroup):
             section.set_output_state(on)
+
+    def _on_preset_save(self, slot: int) -> None:
+        devices = {
+            device_id: section.capture_state()
+            for device_id, section in self._sections.items()
+            if section.isVisible()
+        }
+        self._presets.save(slot, devices)
+
+    def _on_preset_load(self, slot: int) -> None:
+        for device_id, state in self._presets.devices(slot).items():
+            section = self._sections.get(device_id)
+            if section is not None and section.isVisible():
+                section.apply_state(state)
+
+    def _on_preset_rename(self, slot: int) -> None:
+        name, ok = QInputDialog.getText(
+            self, tr("Preset umbenennen"), tr("Name:"), text=self._presets.name(slot)
+        )
+        if ok and name.strip():
+            self._presets.rename(slot, name.strip())

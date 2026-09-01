@@ -165,6 +165,101 @@ AMBER_DARK = Palette(
 )
 
 
+def form_control_qss(pal: Palette) -> str:
+    """QPushButton-/QLineEdit-/QDoubleSpinBox-/QSpinBox-/QComboBox-Regeln,
+    geteilt zwischen dem globalen stylesheet() und panel_color.apply_panel_tint.
+
+    Grund fuer die Auslagerung: Qt liest Style-Sheet-Eigenschaften wie
+    background-color entlang der Ancestor-Kette (eigenes Stylesheet des
+    Widgets > naechstgelegenes Vorfahren-Stylesheet > qApp-Stylesheet) --
+    ein Kind-Widget OHNE eigenes Stylesheet erbt die background-color eines
+    Vorfahren-Widgets, SELBST WENN qApp fuer den Kind-Widget-Typ (z.B.
+    QPushButton) bereits eine eigene Regel definiert, weil die Ancestor-Ebene
+    Vorrang vor der qApp-Ebene hat. Das betraf bislang QGroupBox.
+    panel_color.apply_panel_tint(): dessen individuelle Panel-Hintergrundfarbe
+    (Instanz-Stylesheet auf der GroupBox) schlug dadurch unbeabsichtigt auf
+    Buttons/Eingabefelder im Panel durch (siehe BUGS.md #10f) -- die
+    Ausnahme waren die Inkrement-/Dekrement-Pfeile von QAbstractSpinBox, da
+    das reine Subcontrols des Spinbox-Styles sind, keine eigenen
+    Kind-Widgets, und deshalb von diesem Vererbungsmechanismus nicht
+    betroffen sind. Fix: apply_panel_tint setzt dieselben Regeln zusaetzlich
+    als eigenes (staerker priorisiertes) Stylesheet auf die Buttons/
+    Eingabefelder, sodass sie nicht mehr beim Vorfahren (der GroupBox)
+    nachschauen muessen."""
+    return f"""
+    QPushButton {{
+        background-color: {pal.surface_alt};
+        color: {pal.text};
+        border: 1px solid {pal.border};
+        border-radius: 4px;
+        padding: 5px 12px;
+    }}
+    QPushButton:hover {{
+        background-color: {pal.accent};
+        color: {pal.surface};
+        border-color: {pal.accent};
+    }}
+    QPushButton:pressed {{
+        background-color: {pal.accent_hover};
+    }}
+    QPushButton:disabled {{
+        color: {pal.text_muted};
+        background-color: {pal.surface_alt};
+        border-color: {pal.border};
+    }}
+    /* QToolButton fehlte hier bisher komplett -- betraf nur SplitIconButton
+       (icons.py, Testablauf-Reiter "Zeile hinzufuegen"-Button), der als
+       einziger Button im Programm ein QToolButton statt QPushButton ist
+       (fuer Qt's MenuButtonPopup-Modus, siehe dortigen Docstring). Ohne
+       eigene Regel fiel er komplett auf den nativen Stil zurueck --
+       andere Hintergrund-/Rahmenfarbe UND andere (native) Hover-
+       Hervorhebung statt pal.accent. Dieselben Werte wie QPushButton, damit
+       er sich nicht von den uebrigen Buttons abhebt. */
+    QToolButton {{
+        background-color: {pal.surface_alt};
+        color: {pal.text};
+        border: 1px solid {pal.border};
+        border-radius: 4px;
+        padding: 5px 8px;
+    }}
+    QToolButton:hover {{
+        background-color: {pal.accent};
+        color: {pal.surface};
+        border-color: {pal.accent};
+    }}
+    QToolButton:pressed {{
+        background-color: {pal.accent_hover};
+    }}
+    QToolButton:disabled {{
+        color: {pal.text_muted};
+        background-color: {pal.surface_alt};
+        border-color: {pal.border};
+    }}
+    /* Trennlinie zwischen Icon- und Menue-Pfeil-Klickzone (MenuButtonPopup) --
+       ohne das wirkt der Pfeilbereich wie ein nahtloser Teil des Icons statt
+       einer eigenen Klickflaeche. */
+    QToolButton::menu-button {{
+        border-left: 1px solid {pal.border};
+        width: 16px;
+    }}
+    QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
+        background-color: {pal.surface};
+        color: {pal.text};
+        border: 1px solid {pal.border};
+        border-radius: 4px;
+        padding: 3px 6px;
+    }}
+    /* Ohne explizite :disabled-Regeln wuerden gesperrte Eingabefelder exakt
+       wie aktive aussehen -- das Stylesheet oben ueberschreibt die native
+       Ausgrau-Darstellung von Qt (aufgefallen im "Pruefung definieren"-Dialog,
+       dessen Felder bei inaktiver Pruefung gesperrt sind). */
+    QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled, QComboBox:disabled {{
+        background-color: {pal.surface_alt};
+        color: {pal.text_muted};
+    }}
+    """
+
+
 def stylesheet(pal: Palette) -> str:
     return f"""
     QWidget {{
@@ -213,41 +308,7 @@ def stylesheet(pal: Palette) -> str:
     QTabBar::tab:hover {{
         color: {pal.text};
     }}
-    QPushButton {{
-        background-color: {pal.surface_alt};
-        color: {pal.text};
-        border: 1px solid {pal.border};
-        border-radius: 4px;
-        padding: 5px 12px;
-    }}
-    QPushButton:hover {{
-        background-color: {pal.accent};
-        color: {pal.surface};
-        border-color: {pal.accent};
-    }}
-    QPushButton:pressed {{
-        background-color: {pal.accent_hover};
-    }}
-    QPushButton:disabled {{
-        color: {pal.text_muted};
-        background-color: {pal.surface_alt};
-        border-color: {pal.border};
-    }}
-    QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
-        background-color: {pal.surface};
-        color: {pal.text};
-        border: 1px solid {pal.border};
-        border-radius: 4px;
-        padding: 3px 6px;
-    }}
-    /* Ohne explizite :disabled-Regeln wuerden gesperrte Eingabefelder exakt
-       wie aktive aussehen -- das Stylesheet oben ueberschreibt die native
-       Ausgrau-Darstellung von Qt (aufgefallen im "Pruefung definieren"-Dialog,
-       dessen Felder bei inaktiver Pruefung gesperrt sind). */
-    QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled, QComboBox:disabled {{
-        background-color: {pal.surface_alt};
-        color: {pal.text_muted};
-    }}
+    {form_control_qss(pal)}
     QComboBox::drop-down {{
         border: none;
     }}

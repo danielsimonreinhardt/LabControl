@@ -6,15 +6,9 @@ bearbeitet werden.
 
 ## 1. [SICHERHEITSKRITISCH] Netzteile beim Start bereits eingeschaltet
 
-> **Status: Gefixt, manueller Test an echter Hardware erforderlich.**
+> **Status: Gefixt, verifiziert an echter Hardware (v0.9.0, 2026-09-01).**
 > Beim (Wieder-)Verbinden setzt `device_worker.py` jetzt aktiv den Strom auf
-> 0 A, bevor das Gerät als verbunden gilt. Nur per Codereview und Simulation
-> verifiziert — der Mock startet ohnehin immer bei 0 A, deckt den eigentlichen
-> Fehlerfall (Ausgang war vorher real eingeschaltet) also nicht ab. Während
-> der Entwicklung war kein echtes HCS-34xx angeschlossen. **Vor
-> Produktivbetrieb bitte gezielt gegentesten:** Ausgang am echten Gerät
-> manuell/über die App einschalten, App neu starten bzw. Gerät neu verbinden,
-> prüfen dass der Ausgang danach real (messbar) aus ist.
+> 0 A, bevor das Gerät als verbunden gilt.
 
 Die Netzteile (hcs34xx) sind direkt nach dem App-Start bereits eingeschaltet,
 obwohl der Ein/Aus-Schalter in der GUI auf "Aus" steht.
@@ -35,21 +29,19 @@ GUI korrekt widergespiegelt, oder wird per Default "Aus" angezeigt ohne Abgleich
 
 ### 1b. [SICHERHEITSKRITISCH, NEU – Hardware-Test v0.8.0] Setzen von Strom/Spannung schaltet Ausgang real ein, obwohl Schalter auf AUS steht
 
-> **Status: Gefixt (GUI-Sperre), manueller Test an echter Hardware
-> erforderlich.** Root Cause: Die Spannung/Strom-„Setzen"-Buttons im
+> **Status: Gefixt (GUI-Sperre), verifiziert an echter Hardware (v0.9.0,
+> 2026-09-01).** Root Cause: Die Spannung/Strom-„Setzen"-Buttons im
 > Control-Tab riefen `set_voltage`/`set_current` immer direkt auf, unabhängig
 > vom Ausgang-Schalter — dadurch ließ sich der emulierte „Aus"-Zustand
 > (Strom=0A) unbemerkt aufheben. Die Buttons sind jetzt gesperrt, solange der
 > Ausgang nicht aktiv über „EIN" eingeschaltet ist (das Sollwertfeld bleibt
 > editierbar, nur das Anwenden ist gesperrt) — `control_tab.py:
-> PsuControlGroup._update_output_buttons`. **Wichtige Einschränkung:** Das
-> HCS-34xx hat laut eigener Treiber-Dokumentation *kein* echtes
-> Ausgang-AUS-Kommando — dieser Fix schließt nur den GUI-Pfad (Klick auf
-> „Setzen"), nicht z.B. automatisierte Testablauf-Schritte (PSU_VOLT/
+> PsuControlGroup._update_output_buttons`. **Wichtige Einschränkung (weiter
+> zu beachten):** Das HCS-34xx hat laut eigener Treiber-Dokumentation *kein*
+> echtes Ausgang-AUS-Kommando — dieser Fix schließt nur den GUI-Pfad (Klick
+> auf „Setzen"), nicht z.B. automatisierte Testablauf-Schritte (PSU_VOLT/
 > PSU_CURR-Aktionen), die weiterhin direkt am Ausgang wirken können, wenn ein
-> Testablauf sie unabhängig von PSU_OUT_ON/OFF verwendet. Nur per Codereview
-> verifiziert, kein Gerät angeschlossen — bitte am echten HCS-34xx erneut
-> gegentesten (Setzen-Buttons müssen bei „Aus" ausgegraut sein).
+> Testablauf sie unabhängig von PSU_OUT_ON/OFF verwendet.
 
 Reproduziert am echten HCS-34xx: Wenn bei ausgeschaltetem Ausgang (Schalter
 in der GUI auf "Aus") ein Strom- und Spannungswert gesetzt wird, liegt danach
@@ -120,15 +112,11 @@ grüne Akzentfarbe nur im Light-Palette-QSS gesetzt und im Dark-Palette-QSS
 
 ## 4. Last-Panel verschwindet kurz beim Übernehmen im Control-Tab
 
-> **Status: Ursache behoben, manueller Test empfohlen.** Der Übernehmen-Button
-> rief den Worker bislang per direktem Python-Methodenaufruf statt über eine
-> Qt-Queued-Connection auf und blockierte damit den GUI-Thread mit Serial-I/O
-> (`main_window.py`/`device_worker.py`, neue `set_load_setpoint`-Slot-Methode).
-> Der Threading-Fehler selbst ist eindeutig behoben, aber das eigentliche
-> sichtbare Symptom (kurzes Flackern) lässt sich in der Simulation nicht
-> gegentesten — der Mock hat keine spürbare I/O-Latenz. **Bitte im echten
-> Betrieb verifizieren:** bei der Last einen Sollwert ändern und auf
-> „Übernehmen" klicken, beobachten ob das Panel noch kurz verschwindet.
+> **Status: Gefixt, verifiziert an echter Hardware (v0.9.0, 2026-09-01).**
+> Der Übernehmen-Button rief den Worker bislang per direktem
+> Python-Methodenaufruf statt über eine Qt-Queued-Connection auf und
+> blockierte damit den GUI-Thread mit Serial-I/O (`main_window.py`/
+> `device_worker.py`, neue `set_load_setpoint`-Slot-Methode).
 
 Wenn im Control-Tab bei der elektronischen Last ein Wert eingestellt und auf
 "Übernehmen" geklickt wird, verschwindet das Panel kurz (Flackern/Re-Render).
@@ -140,18 +128,14 @@ aufgebaut statt nur die Werte zu aktualisieren.
 
 ## 5. Verlaufs-Diagramme aktualisieren zu langsam (~2Hz)
 
-> **Status: GUI-Teil sicher gefixt, Geräteabfrage-Teil braucht Hardware-Test.**
+> **Status: Gefixt, verifiziert an echter Hardware (v0.9.0, 2026-09-01).**
 > Zwei Anteile: (1) Repaint-Rate der Diagramme 500ms→33ms (~30Hz,
-> `timeline_tab.REPAINT_INTERVAL_MS`) — deterministische Timer-Änderung,
-> sicher. (2) Poll-Intervall der Geräteabfrage selbst 500ms→100ms (~10Hz,
-> `device_worker.POLL_INTERVAL_MS`) — bewusst konservativ gewählt (nicht die
-> vollen 30Hz), da ein zu aggressiver Wert ein Gerät (insb. das HCS-34xx am
-> 9600-Baud-CP210x-Wandler) mit Kommandos überfordern und Timeouts als
-> fälschliche Verbindungsabbrüche auslösen könnte. **Nur in Simulation
-> getestet** (~9-10Hz bestätigt), **ausdrücklich nicht an echter Hardware
-> verifiziert**, da während der Entwicklung keine angeschlossen war. Bitte an
-> echten Geräten testen und auf gehäufte „getrennt"-Log-Einträge achten; im
-> Zweifel den Wert (mit Kommentar im Code) wieder erhöhen.
+> `timeline_tab.REPAINT_INTERVAL_MS`). (2) Poll-Intervall der Geräteabfrage
+> selbst 500ms→100ms (~10Hz, `device_worker.POLL_INTERVAL_MS`) — bewusst
+> konservativ gewählt (nicht die vollen 30Hz), um ein Gerät (insb. das
+> HCS-34xx am 9600-Baud-CP210x-Wandler) nicht mit Kommandos zu überfordern.
+> An echten Geräten getestet, keine gehäuften „getrennt"-Log-Einträge
+> beobachtet.
 
 Im Verlaufs-Tab werden die Diagramme mit geschätzt nur ~2Hz aktualisiert.
 Für eine flüssige Darstellung werden mindestens 15Hz, besser 30Hz benötigt.
@@ -203,20 +187,15 @@ zwischen den Panels.
 
 ## 8. Verschachtelte Panel-Hintergründe uneinheitlich
 
-> **Status: Gefixt an allen gefundenen Stellen, kurzer manueller Rundgang
-> empfohlen.** Root Cause: reine Layout-Wrapper-`QWidget`s bzw. `QLabel`s, die
-> direkt (ohne Wrapper) im Layout einer `QGroupBox` hängen, malten opak den
-> allgemeinen Seitenhintergrund statt die GroupBox-/Statusleisten-Fläche
+> **Status: Gefixt, verifiziert an echter Hardware/im echten Betrieb (v0.9.0,
+> 2026-09-01).** Root Cause: reine Layout-Wrapper-`QWidget`s bzw. `QLabel`s,
+> die direkt (ohne Wrapper) im Layout einer `QGroupBox` hängen, malten opak
+> den allgemeinen Seitenhintergrund statt die GroupBox-/Statusleisten-Fläche
 > durchscheinen zu lassen (neue Hilfsfunktion `theme.no_own_background()`).
 > Betraf Dashboard, Control-Tab (Formularzeilen, Untertitel,
 > Grenzwert-Warnung), Verlauf-Tab (Diagramm-Titel/-Legende) und die
-> Statusleiste — per Pixel-Sampling in Light- und Dark-Theme verifiziert.
-> **Da dieser Bug bereits zweimal unvollständig gefixt war** (erst nur
-> Dashboard, dann weitere Stellen entdeckt), ist die Wahrscheinlichkeit nicht
-> null, dass noch eine Stelle übersehen wurde (Dialoge wie Signal-/Prüfung-/
-> Bedingung-Editor wurden nur überflogen, nicht pixelverifiziert) — ein
-> kurzer visueller Rundgang durch alle Tabs/Dialoge in beiden Themes ist
-> sinnvoll, bevor der Bug endgültig als erledigt gilt.
+> Statusleiste. War zuvor zweimal unvollständig gefixt (erst nur Dashboard,
+> dann weitere Stellen entdeckt) — nach erneutem Rundgang jetzt bestätigt.
 
 Es scheint, dass ein GUI-Element die theme-abhängige Hintergrundfarbe korrekt
 enthält, aber ein umschließendes/einbettendes Element eine leicht andere Farbe
@@ -257,8 +236,9 @@ Gemeldet beim Hardware-Test von v0.8.0. Betrifft `lab_gui/panel_color.py`
 Dashboard-/Control-Tab.
 
 > **Gesamtstatus: a-e gefixt und verifiziert (Screenshot/Smoke-Test,
-> Light+Dark), f konnte trotz gezielter Tests nicht reproduziert werden.**
-> Details je Punkt unten.
+> Light+Dark), f gefixt und an echter Hardware bestätigt, g (Nachbesserung zu
+> f, Beschriftungen sollen die Panel-Farbe zeigen) gefixt, Hardware-Test
+> steht noch aus.** Details je Punkt unten.
 
 **a) Dashboard-Panels beim ersten Start ohne erkennbare Trennung**
 
@@ -326,14 +306,64 @@ Die Hintergrundfarbe von Buttons und Eingabefeldern innerhalb des Panels soll
 weiterhin die normale Theme-Hintergrundfarbe sein, nicht mit der individuellen
 Panel-Farbe eingefärbt werden.
 
-> **Status: Nicht reproduzierbar — kein Code geändert.** Gezielt getestet
-> (Control-Tab-Panel mit zugewiesener Farbe, Light UND Dark, per Screenshot):
-> Buttons/Spinboxen zeigen bereits korrekt ihre normale Theme-Farbe
-> (surface/surface_alt), nicht die Panel-Farbe. Möglicherweise bereits durch
-> andere Fixes in dieser Session behoben, oder ursprünglich an einer inzwischen
-> nicht mehr vorhandenen Stelle beobachtet. Bitte am echten Gerät erneut
-> prüfen — falls doch noch reproduzierbar, mit genauer Stelle (welches Panel,
-> welcher Button) erneut melden.
+> **Status: Gefixt (zweiter Anlauf), verifiziert an echter Hardware
+> (2026-09-01).** Ein erster Fix-Versuch (reine `background-color: X;`-Eigenschaft
+> ohne Selektor auf der GroupBox, kombiniert mit `theme.form_control_qss()`
+> im selben Stylesheet-String) wurde am echten Gerät getestet und blieb
+> wirkungslos — Root Cause dafür: eine selektorlose Eigenschaft ist nur
+> zuverlässig auf genau das eine Widget beschränkt, wenn sie das EINZIGE ist,
+> was im Stylesheet-String steht; sobald zusätzlich Selektor-Regeln (hier die
+> `QPushButton`/`QLineEdit`-Regeln aus `form_control_qss()`) im selben String
+> folgen, wird sie von Qt nicht mehr zuverlässig korrekt geparst und schlägt
+> trotz der eigentlich spezifischeren `QPushButton`-Regel weiterhin auf
+> Kind-Widgets durch (per minimalem Repro-Test isoliert bestätigt: rot
+> statt der beabsichtigten blauen Button-Füllung). Zusätzlich betraf das
+> nicht nur `panel_color.apply_panel_tint()` selbst, sondern auch
+> `control_tab._row()`, das für Sollwert-/Spannungs-/Strom-/OVP-/OCP-Zeilen
+> einen Wrapper-Container mit ebenfalls selektorloser
+> "background: transparent"-Eigenschaft verwendet (`theme.no_own_background`,
+> siehe Bug 8) — dieser Wrapper liegt näher am Button/Spinbox als die
+> GroupBox und hätte die Panel-Farbe daher so oder so weiter durchgereicht.
+> **Fix (korrigiert):** Beide Stellen schreiben die selektorlose Eigenschaft
+> jetzt als expliziten Typ-Selektor (`QGroupBox { background-color: ...; }`
+> bzw. `QWidget { background: transparent; }`), gefolgt von den
+> spezifischeren `form_control_qss()`-Regeln — normale QSS-Spezifität
+> innerhalb eines Stylesheets sorgt dann zuverlässig dafür, dass die
+> spezifischere `QPushButton`/`QLineEdit`-Regel gewinnt
+> (`lab_gui/panel_color.py`, `lab_gui/control_tab.py::_row`/
+> `_row_stylesheet`, dort auch beim Theme-Wechsel neu angewendet, um
+> veraltete Farben nach Light/Dark-Wechsel zu vermeiden). Per gezieltem
+> Pixel-Sampling (nicht nur visuellem Screenshot-Vergleich) an
+> `LoadControlGroup` UND `PsuControlGroup` bestätigt: Sollwert-/Spannungs-/
+> Strom-/OVP-/OCP-Felder und alle zugehörigen Buttons (inkl. EIN/AUS) zeigen
+> exakt die normale Theme-Farbe, nicht die Panel-Tönung; die Panel-Fläche
+> selbst bleibt weiterhin sichtbar getönt. Die Inkrement-/Dekrement-Pfeile
+> waren nie betroffen (reine Subcontrols des Spinbox-Styles, keine echten
+> Kind-Widgets).
+
+**g) Reine Beschriftungen (Zeilen-Labels wie "Spannung:"/"Sollwert:"/
+"Modus:"/"Ausgang:") sollen DOCH die individuelle Panel-Farbe zeigen**
+Nachbesserung zu f): f) hatte absichtlich NUR Buttons/Eingabefelder von der
+Panel-Tönung ausgenommen — die von `QFormLayout` automatisch erzeugten
+Zeilen-Beschriftungen (reiner Text, keine Eingabe-/Klick-Funktion) sollen
+aber, anders als ursprünglich angenommen, die individuelle Panel-Farbe
+zeigen und sich damit optisch in die getönte Fläche einfügen, statt sich
+farblich davon abzuheben.
+
+> **Status: Sicher gefixt, per Screenshot verifiziert (Light-Theme, beide
+> Geräte-Panels, 2026-09-01).** Die Zeilen-Labels hatten bislang gar kein
+> eigenes Stylesheet und zeigten dadurch (als direkte QGroupBox-Kinder ohne
+> Selektor-Regel dafür in `apply_panel_tint`) die allgemeine
+> Seiten-Hintergrundfarbe statt der Panel-Tönung. Neue Hilfsfunktion
+> `control_tab._detint_label()` setzt auf jedem von `QFormLayout`
+> automatisch erzeugten Zeilen-Label (`form.labelForField(...)`) ein reines
+> `background: transparent;` (bewusst OHNE weitere Selektor-Regeln im
+> selben String -- anders als bei f) ist das hier unproblematisch, siehe
+> Docstring), wodurch die Panel-Fläche dahinter durchscheint. Betrifft
+> Modus/Sollwert/Ausgang (`LoadControlGroup`) sowie Spannung/Strom/OVP/OCP/
+> Ausgang (`PsuControlGroup`). Farbunabhängige Eigenschaft, daher kein
+> Theme-Wechsel-Refresh nötig. Bitte am echten Gerät gegentesten
+> (Control-Panel mit zugewiesener Farbe, Light UND Dark).
 
 
 ## 11. Einstellungs-Tab: Sicherheits-Grenzwerte-Panels unnötig über volle Breite gestreckt
@@ -351,6 +381,33 @@ geräte-individuellen) Sicherheits-Grenzwerte im Einstellungen-Tab
 
 **Gewünscht:** Panels kompakter darstellen — nur so breit wie für den Inhalt
 nötig, statt die volle Fensterbreite auszufüllen.
+
+
+## 12. Testablauf-Reiter: "Zeile hinzufügen"-Button sieht anders aus als übrige Buttons
+
+> **Status: Sicher gefixt.** Root Cause: `SplitIconButton` (`icons.py`, seit
+> der Zweiteilung von Icon-/Menü-Pfeil-Klick, siehe CHANGELOG „Testablauf:
+> Plus- und Menü-Klick... getrennt") ist als einziger Button im Programm ein
+> `QToolButton` statt `QPushButton` (fuer Qt's `MenuButtonPopup`-Modus). Das
+> globale Stylesheet (`theme.stylesheet()`) hatte nie eine `QToolButton`-Regel
+> definiert, wodurch der Button komplett auf natives Styling zurueckfiel —
+> andere Hintergrund-/Rahmenfarbe UND native (system-blaue) statt
+> theme-eigene Hover-Hervorhebung. Neue `QToolButton`-Regeln (Normal/Hover/
+> Pressed/Disabled, identisch zu `QPushButton`) plus `QToolButton::menu-button`
+> (Trennlinie zur Menü-Pfeil-Klickzone) in `theme.form_control_qss()`
+> ergänzt. Per Screenshot in Light UND Dark, inkl. simuliertem Hover-Zustand,
+> verifiziert — Button fügt sich jetzt optisch nahtlos neben die übrigen
+> Buttons ein.
+
+Gemeldet vom Nutzer. Der Button zum Hinzufügen einer Zeile im
+Testablauf-Reiter (seit der Aufteilung in Icon-Klick/Menü-Pfeil-Klick, siehe
+CHANGELOG) zeigt eine andere Hervorhebungsfarbe beim Hover als die übrigen
+Buttons und sieht auch sonst optisch anders aus (Rahmen/Hintergrund).
+
+**Zu prüfen:** `SplitIconButton` (`lab_gui/icons.py`) ist ein `QToolButton`
+statt `QPushButton` — vermutlich fehlt dafür eine eigene Regel im globalen
+Stylesheet (`theme.stylesheet()`), sodass der Button auf natives Styling
+zurückfällt.
 
 **Zu prüfen:** Layout der Grenzwert-Sektionen in `settings_tab.py` — vermutlich
 ein `QHBoxLayout`/`QVBoxLayout` mit Stretch-Faktor oder fehlendem

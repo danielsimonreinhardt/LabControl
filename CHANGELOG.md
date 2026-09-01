@@ -96,16 +96,29 @@ Semantic Versioning (`lab_gui/version.py`).
   (`mdi.chevron-up`/`mdi.chevron-down`, wie alle anderen Icons im Programm)
   statt als statische Datei gepflegt — dadurch größer (14×14px) und
   automatisch farblich zur aktiven Palette passend (`lab_gui/theme.py`).
-- **Software-Presets im Control-Tab (Last + Netzteil)**: Ersetzt die
-  frühere, rein geräteseitige PSU-Preset-Funktion (P1/P2/P3 auf dem
-  HCS-34xx selbst) durch benannte Sollwert-Kombinationen, die lokal als JSON
-  gespeichert werden (`lab_gui/presets.py`, `PresetStore`) und für Last UND
-  Netzteil nutzbar sind (bisher nur Netzteil). Neue Preset-Zeile in beiden
-  Geräte-Panels im Control-Tab: Laden/Speichern/Löschen. „Laden" füllt nur
-  die Eingabefelder, ein Hardware-Schreibvorgang erfolgt weiterhin erst über
-  den bestehenden „Setzen"-Button. Presets speichern bewusst nur Sollwerte
-  (Spannung+Strom bzw. Modus+Sollwert), keine Schutzgrenzen (OVP/OCP).
+- **Software-Presets: 5 feste, geräteübergreifende Preset-Plätze**: Ersetzt
+  die frühere, rein geräteseitige PSU-Preset-Funktion (P1/P2/P3 auf dem
+  HCS-34xx selbst) durch eine neue Preset-Leiste ganz oben im Control-Tab
+  (`lab_gui/presets.py`: `PresetStore`, `lab_gui/control_tab.py`:
+  `PresetBar`). 5 Plätze, lokal als JSON gespeichert; jeder Platz speichert
+  je aktuell sichtbarem Gerät (Last und/oder Netzteil, auch mehrere
+  gleichzeitig) Sollwerte UND Schaltstatus (Last-Eingang/PSU-Ausgang)
+  gemeinsam. Jeder Platz ist ein größerer (`lab_gui/control_tab.py`:
+  `_PresetSlotButton`), dezent hervorgehobener Haupt-Button (Preset laden)
+  mit zwei kleinen Sub-Buttons Speichern (übernimmt den
+  aktuellen Zustand aller sichtbaren Geräte-Panels) und Umbenennen, die als
+  Ecken-Buttons oben rechts bzw. unten rechts optisch zum Haupt-Button
+  gehören statt in einer eigenen Reihe daneben zu stehen. „Laden" schreibt
+  sofort auf die Hardware (inkl. Ein-/Ausschalten) statt nur die
+  Eingabefelder vorzubelegen — ein gespeicherter Schaltstatus lässt sich
+  nicht sinnvoll nur anzeigen, ohne ihn auch anzuwenden. Es gibt dafür keine
+  separate Preset-Zeile mehr in den einzelnen Geräte-Panels (Last/Netzteil).
+  Die Hervorhebung nutzt bewusst denselben abgetönten Farbton wie die
+  individuellen Geräte-Panel-Farben (`Palette.panel_tints`, fix "blue") statt
+  des vollen Theme-Akzenttons — letzterer wirkte als Dauerfläche zu grell.
 - Version auf 0.9.0 angehoben.
+- Version auf 0.9.3 angehoben (bündelt u.a. mehrere an echter Hardware
+  verifizierte Fixes, siehe [BUGS.md](BUGS.md)).
 
 ### Entfernt
 - **Testablauf-Aktion „Preset P1/P2/P3 abrufen"**: Griff auf die
@@ -152,6 +165,39 @@ Semantic Versioning (`lab_gui/version.py`).
   Breite gestreckt**: `QFormLayout`s Default-Wachstumspolicy ließ die
   Feld-Spalte auf volle Breite wachsen; Panels sind jetzt kompakt, nur so
   breit wie der Inhalt braucht (`lab_gui/settings_tab.py`).
+- **Individuelle Panel-Farbe färbte auch Buttons/Eingabefelder im Panel ein**
+  (an echter Hardware reproduziert, erster Fix-Versuch am echten Gerät noch
+  wirkungslos): Root Cause war eine selektorlose `background-color: X;`-
+  Eigenschaft auf der GroupBox bzw. den Sollwert-Zeilen-Wrappern
+  (`control_tab._row`) — sobald im selben Instanz-Stylesheet zusätzlich
+  Selektor-Regeln (die neuen Button-/Eingabefeld-Regeln) folgen, wird eine
+  führende selektorlose Eigenschaft von Qt nicht mehr zuverlässig nur auf
+  das eine Widget beschränkt und schlägt weiter auf Kind-Widgets durch. Die
+  Button-/Eingabefeld-Regeln wurden in eine geteilte Funktion
+  `theme.form_control_qss()` ausgelagert; die eigene Hintergrundfarbe wird
+  jetzt mit explizitem Typ-Selektor geschrieben (`QGroupBox { ... }` /
+  `QWidget { ... }`), wodurch normale QSS-Spezifität dafür sorgt, dass die
+  spezifischere Button-/Eingabefeld-Regel zuverlässig gewinnt
+  (`lab_gui/theme.py`, `lab_gui/panel_color.py`, `lab_gui/control_tab.py`).
+- **Zeilen-Beschriftungen (Sollwert/Spannung/Modus/Ausgang usw.) zeigen jetzt
+  die individuelle Panel-Farbe**: Anders als Buttons/Eingabefelder (siehe
+  vorheriger Punkt) sollen reine Text-Beschriftungen sich optisch in die
+  getönte Panel-Fläche einfügen statt sich davon abzuheben. Die von
+  `QFormLayout` automatisch erzeugten Zeilen-Labels hatten bisher kein
+  eigenes Stylesheet und zeigten dadurch die allgemeine Seiten-
+  Hintergrundfarbe statt der Panel-Tönung. Neue Hilfsfunktion
+  `control_tab._detint_label()` setzt „background: transparent;" auf jedes
+  Zeilen-Label, damit die Panel-Fläche dahinter durchscheint
+  (`lab_gui/control_tab.py`).
+- **Testablauf-Reiter: "Zeile hinzufügen"-Button sah anders aus als übrige
+  Buttons**: `SplitIconButton` (`icons.py`) ist als einziger Button im
+  Programm ein `QToolButton` statt `QPushButton` (für Qt's
+  `MenuButtonPopup`-Modus) — dem globalen Stylesheet fehlte dafür jede
+  Regel, wodurch der Button komplett auf natives Styling zurückfiel (andere
+  Farbe, native statt theme-eigene Hover-Hervorhebung). Neue
+  `QToolButton`-Regeln (identisch zu `QPushButton`) plus
+  `QToolButton::menu-button` (Trennlinie zur Menü-Pfeil-Klickzone) in
+  `theme.form_control_qss()` ergänzt.
 
 ## [0.6.2]
 

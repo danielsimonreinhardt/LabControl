@@ -117,10 +117,12 @@ Umgesetzt in der Session vom 2026-09-01 (v0.9.0):
 - **Pfeil-Icons für Spin-Buttons** — aus `qtawesome` generiert
   (`mdi.chevron-up`/`-down`) statt statischer PNG-Datei, dadurch größer
   (14×14 statt 10×10px) und themefähig (`lab_gui/theme.py`).
-- **Software-Presets im Control-Tab** — neues Modul `lab_gui/presets.py`
-  (`PresetStore`, JSON-Persistenz), neue Preset-Zeile (Laden/Speichern/
-  Löschen) in `lab_gui/control_tab.py` für Last UND Netzteil. Ersetzt die
-  frühere Testablauf-Editor-Aktion "Preset P1/P2/P3 abrufen"
-  (`lab_gui/testcase_model.py`, `lab_gui/device_worker.py`) — die alten
-  geräteseitigen HCS-34xx-Methoden (`recall_memory` u.a.) bleiben
-  unangetastet im Treiber, nur ungenutzt.
+- **Software-Presets: 5 feste, geräteübergreifende Preset-Plätze** — neues
+  Modul `lab_gui/presets.py` (`PresetStore`, JSON-Persistenz), neue
+  `PresetBar` ganz oben im Control-Tab (`lab_gui/control_tab.py`) mit 5
+  Plätzen. Jeder Platz speichert je sichtbarem Geräte-Panel (Last und/oder
+  Netzteil) Sollwerte + Schaltstatus gemeinsam; Laden schreibt sofort auf
+  die Hardware. Ersetzt die frühere Testablauf-Editor-Aktion "Preset
+  P1/P2/P3 abrufen" (`lab_gui/testcase_model.py`, `lab_gui/device_worker.py`)
+  — die alten geräteseitigen HCS-34xx-Methoden (`recall_memory` u.a.)
+  bleiben unangetastet im Treiber, nur ungenutzt.
