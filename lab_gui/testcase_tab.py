@@ -77,7 +77,8 @@ COL_NUM, COL_DEVICE, COL_ACTION, COL_VALUE, COL_DURATION, COL_CHECK, COL_ENABLED
 #   while/if:        COL_VALUE = Bedingungs-Zusammenfassung,   COL_ENABLED = Aktiv (nur "while"/"if"-Zeile selbst)
 #   else/end:        keine weiteren Spalten
 #   set_var/inc_var: COL_ACTION = Variablenname, COL_VALUE = Wert, COL_DURATION = Dauer, COL_ENABLED = Aktiv
-CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var"}
+#   wait:            COL_DURATION = Wartezeit,                 COL_ENABLED = Aktiv
+CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait"}
 
 
 def _cond_params_to_step(params: dict) -> TestStep:
@@ -184,6 +185,44 @@ class _BlockGroup:
     count: int
     name: str
     collapsed: bool = True
+    # Schwebender Zusammenfassungs-Overlay ueber der Kopfzeile im
+    # eingeklappten Zustand (siehe _BlockHeaderOverlay/TestcaseTab.
+    # _sync_header_overlay) -- nur waehrend collapsed=True erzeugt/sichtbar,
+    # lazy statt beim Einfuegen, siehe dort.
+    overlay: _BlockHeaderOverlay | None = None
+
+
+class _BlockHeaderOverlay(QWidget):
+    """Rein visuelle Zusammenfassungsflaeche ueber der Kopfzeile eines
+    eingeklappten Bausteins (BUGS.md #18: "Gerät" -> "Baustein", "Aktion" ->
+    Bausteinname, "Wert" -> Schrittzahl). Schwebt als Kind von
+    QTableWidget.viewport() UEBER den echten Zellen-Widgets in COL_DEVICE/
+    COL_ACTION/COL_VALUE der Kopfzeile, ohne sie zu ersetzen -- die echten
+    Widgets bleiben unveraendert vorhanden und die alleinige Datenquelle fuer
+    steps()/_row_to_step, nur optisch verdeckt. Das haelt diesen rein
+    kosmetischen Bug von der Testschritt-Datenhaltung fern, die pro Zeile
+    direkt an die Zellen-Widgets gekoppelt ist (siehe _action_row_to_step).
+
+    Ein Klick auf die Flaeche waehlt trotzdem die Kopfzeile aus (wie ein
+    Klick auf eine normale Zelle), statt stumm zu verpuffen oder an die
+    verdeckten Widgets durchgereicht zu werden (was z.B. ungewollt ein
+    Dropdown darunter oeffnen wuerde)."""
+
+    def __init__(self, on_click) -> None:
+        super().__init__()
+        self._on_click = on_click
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 0, 6, 0)
+        self.device_label = QLabel()
+        self.action_label = QLabel()
+        self.value_label = QLabel()
+        for label in (self.device_label, self.action_label, self.value_label):
+            layout.addWidget(label, 1)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt-Override)
+        self._on_click()
+        super().mousePressEvent(event)
 
 
 class TestcaseTab(QWidget):
@@ -253,10 +292,14 @@ class TestcaseTab(QWidget):
         self._remove_button = IconButton("mdi.minus", "")
         self._up_button = IconButton("mdi.arrow-up", "")
         self._down_button = IconButton("mdi.arrow-down", "")
+        self._clear_all_button = IconButton("mdi.delete-sweep-outline", "")
         self._load_button = IconButton("mdi.folder-open-outline", "")
         self._save_button = IconButton("mdi.content-save-outline", "")
-        self._block_save_button = IconButton("mdi.puzzle-plus-outline", "")
-        self._block_insert_button = IconButton("mdi.puzzle-outline", "")
+        # Getauscht (BUGS.md #19): das Plus-Icon liest sich intuitiv als
+        # "Baustein hinzufuegen" (einfuegen), nicht als "speichern" -- der
+        # reine Puzzleteil-Umriss ohne Plus passt besser zu "speichern".
+        self._block_save_button = IconButton("mdi.puzzle-outline", "")
+        self._block_insert_button = IconButton("mdi.puzzle-plus-outline", "")
         self._add_menu = QMenu(self._add_button)
         self._action_add_action = self._add_menu.addAction("")
         self._action_add_loop = self._add_menu.addAction("")
@@ -266,6 +309,7 @@ class TestcaseTab(QWidget):
         self._action_add_end = self._add_menu.addAction("")
         self._action_add_set_var = self._add_menu.addAction("")
         self._action_add_inc_var = self._add_menu.addAction("")
+        self._action_add_wait = self._add_menu.addAction("")
         self._action_add_action.triggered.connect(lambda: self._insert_new_step(TestStep()))
         self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
         self._action_add_while.triggered.connect(lambda: self._insert_block("while"))
@@ -274,16 +318,21 @@ class TestcaseTab(QWidget):
         self._action_add_end.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="end")))
         self._action_add_set_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="set_var")))
         self._action_add_inc_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="inc_var")))
+        self._action_add_wait.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="wait")))
         self._add_button.setMenu(self._add_menu)
         self._add_button.clicked.connect(self._add_row_clicked)
         self._remove_button.clicked.connect(self._remove_selected_row)
         self._up_button.clicked.connect(lambda: self._move_selected_row(-1))
         self._down_button.clicked.connect(lambda: self._move_selected_row(1))
+        self._clear_all_button.clicked.connect(self._clear_all_rows)
         self._load_button.clicked.connect(self._load_from_file)
         self._save_button.clicked.connect(self._save_to_file)
         self._block_save_button.clicked.connect(self._save_block)
         self._block_insert_button.clicked.connect(self._insert_block_from_file)
-        for button in (self._add_button, self._remove_button, self._up_button, self._down_button):
+        for button in (
+            self._add_button, self._remove_button, self._up_button, self._down_button,
+            self._clear_all_button,
+        ):
             button_row.addWidget(button)
         button_row.addWidget(self._block_save_button)
         button_row.addWidget(self._block_insert_button)
@@ -312,6 +361,12 @@ class TestcaseTab(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellClicked.connect(self._on_table_cell_clicked)
+        # Baustein-Kopfzeilen-Overlay (siehe _sync_header_overlay) muss bei
+        # Spaltenbreiten-Aenderung (Stretch-Spalten beim Fenster-Resize) und
+        # beim vertikalen Scrollen neu positioniert werden, da es als freies
+        # Kind von viewport() haengt statt als Zellen-Widget mitzuwandern.
+        header.sectionResized.connect(lambda *_: self._sync_all_header_overlays())
+        self._table.verticalScrollBar().valueChanged.connect(lambda *_: self._sync_all_header_overlays())
         layout.addWidget(self._table)
 
         run_row = QHBoxLayout()
@@ -352,6 +407,7 @@ class TestcaseTab(QWidget):
         self._remove_button.setToolTip(tr("Zeile entfernen"))
         self._up_button.setToolTip(tr("Nach oben"))
         self._down_button.setToolTip(tr("Nach unten"))
+        self._clear_all_button.setToolTip(tr("Alle Zeilen löschen"))
         self._load_button.setToolTip(tr("Laden…"))
         self._save_button.setToolTip(tr("Speichern…"))
         self._block_save_button.setToolTip(tr("Baustein speichern…"))
@@ -364,6 +420,7 @@ class TestcaseTab(QWidget):
         self._action_add_end.setText(tr("Ende"))
         self._action_add_set_var.setText(tr("Variable setzen"))
         self._action_add_inc_var.setText(tr("Variable erhöhen"))
+        self._action_add_wait.setText(tr("Warten"))
         self._run_button.setToolTip(tr("Start"))
         self._run_button.setText(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
@@ -888,6 +945,14 @@ class TestcaseTab(QWidget):
             duration_spin.setValue(step.duration)
             self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
 
+        elif t == "wait":
+            duration_spin = QDoubleSpinBox()
+            duration_spin.setRange(0, 36000)
+            duration_spin.setDecimals(1)
+            duration_spin.setSuffix(" s")
+            duration_spin.setValue(step.duration)
+            self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+
         self._retranslate_control_row(row_index, t)
 
     def _remove_selected_row(self) -> None:
@@ -931,6 +996,23 @@ class TestcaseTab(QWidget):
         self._resync_selection()
         self._revalidate_structure()
 
+    def _clear_all_rows(self) -> None:
+        if self._table.rowCount() == 0:
+            return
+        if QMessageBox.question(
+            self,
+            tr("Alle Zeilen löschen"),
+            tr("Wirklich alle Zeilen dieses Testablaufs löschen? Das lässt sich nicht rückgängig machen."),
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.blockSignals(False)
+        self._clear_block_groups()
+        self._clear_all_row_colors()
+        self._resync_selection()
+        self._revalidate_structure()
+
     def _resync_selection(self) -> None:
         """Liest die tatsaechliche Tabellenauswahl neu ein und faerbt alle
         Zeilen einmalig konsistent neu -- als Abschluss einer Zeilenmutation
@@ -971,11 +1053,65 @@ class TestcaseTab(QWidget):
     def _apply_group_visibility(self, group: _BlockGroup) -> None:
         for row in range(group.start + 1, group.start + group.count):
             self._table.setRowHidden(row, group.collapsed)
+        self._sync_header_overlay(group)
 
     def _unhide_group_rows(self, group: _BlockGroup) -> None:
         for row in range(group.start, group.start + group.count):
             if 0 <= row < self._table.rowCount():
                 self._table.setRowHidden(row, False)
+
+    def _sync_header_overlay(self, group: _BlockGroup) -> None:
+        """Erzeugt/aktualisiert/positioniert den Kopfzeilen-Overlay (siehe
+        _BlockHeaderOverlay) im eingeklappten Zustand, oder blendet ihn aus,
+        wenn die Gruppe aufgeklappt ist. Muss nach jeder Aenderung, die Text
+        (group.name/count), Position (Zeile verschoben/Spalten resized) oder
+        Sichtbarkeit (collapsed) betreffen koennte, erneut aufgerufen werden
+        -- siehe _sync_all_header_overlays fuer den zentralen Sammel-Aufruf."""
+        row = group.start
+        if not group.collapsed or not (0 <= row < self._table.rowCount()):
+            if group.overlay is not None:
+                group.overlay.hide()
+            return
+        if group.overlay is None:
+            group.overlay = _BlockHeaderOverlay(lambda g=group: self._table.selectRow(g.start))
+            group.overlay.setParent(self._table.viewport())
+        overlay = group.overlay
+        overlay.device_label.setText(tr("Baustein"))
+        overlay.action_label.setText(group.name)
+        overlay.value_label.setText(str(group.count))
+        pal = current_palette()
+        color = self._row_style_color(row) or pal.surface
+        label_style = f"color: {pal.text}; font-style: italic;"
+        for label in (overlay.device_label, overlay.action_label, overlay.value_label):
+            label.setStyleSheet(label_style)
+        overlay.setStyleSheet(f"background-color: {color};")
+        self._position_header_overlay(group)
+        overlay.show()
+        overlay.raise_()
+
+    def _position_header_overlay(self, group: _BlockGroup) -> None:
+        if group.overlay is None:
+            return
+        row = group.start
+        x = self._table.columnViewportPosition(COL_DEVICE)
+        width = sum(self._table.columnWidth(c) for c in (COL_DEVICE, COL_ACTION, COL_VALUE))
+        y = self._table.rowViewportPosition(row)
+        height = self._table.rowHeight(row)
+        group.overlay.setGeometry(x, y, width, height)
+
+    def _sync_all_header_overlays(self) -> None:
+        for group in self._block_groups:
+            self._sync_header_overlay(group)
+
+    def _dissolve_group_overlay(self, group: _BlockGroup) -> None:
+        if group.overlay is not None:
+            group.overlay.deleteLater()
+            group.overlay = None
+
+    def _clear_block_groups(self) -> None:
+        for group in self._block_groups:
+            self._dissolve_group_overlay(group)
+        self._block_groups = []
 
     def _toggle_group(self, group: _BlockGroup) -> None:
         group.collapsed = not group.collapsed
@@ -1019,12 +1155,14 @@ class TestcaseTab(QWidget):
             elif row_index == group.start:
                 # Kopfzeile entfernt -- Gruppierung loest sich auf.
                 self._unhide_group_rows(group)
+                self._dissolve_group_overlay(group)
             elif group.start < row_index < group.start + group.count:
                 group.count -= 1
                 if group.count > 1:
                     remaining.append(group)
                 else:
                     self._unhide_group_rows(group)
+                    self._dissolve_group_overlay(group)
             else:
                 remaining.append(group)
         self._block_groups = remaining
@@ -1115,6 +1253,10 @@ class TestcaseTab(QWidget):
                 duration=duration_spin.value(),
             )
 
+        if step_type == "wait":
+            duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
+            return TestStep(step_type="wait", enabled=enabled, duration=duration_spin.value())
+
         # "else"/"end": keine weiteren Felder.
         return TestStep(step_type=step_type)
 
@@ -1155,7 +1297,7 @@ class TestcaseTab(QWidget):
         self._current_path = Path(path_str)
 
         self._table.setRowCount(0)
-        self._block_groups = []
+        self._clear_block_groups()
         for step in steps:
             self._insert_row(self._table.rowCount(), step)
         if not steps:
@@ -1326,6 +1468,8 @@ class TestcaseTab(QWidget):
                     else ""
                 )
 
+        self._sync_all_header_overlays()
+
         for row in range(self._table.rowCount()):
             self._apply_row_style(row)
 
@@ -1378,6 +1522,12 @@ class TestcaseTab(QWidget):
             self._set_status(
                 "Schritt {index}/{total}: {detail} {iter}",
                 index=index + 1, total=total, detail=detail, iter=self._iteration_text,
+            )
+            return
+        if step.step_type == "wait":
+            self._set_status(
+                "Schritt {index}/{total}: Warten ({duration:g} s) {iter}",
+                index=index + 1, total=total, duration=step.duration, iter=self._iteration_text,
             )
             return
         label = action_label(step.device_kind, step.action)
@@ -1530,6 +1680,13 @@ class TestcaseTab(QWidget):
         number_item = self._table.item(row, COL_NUM)
         if number_item is not None:
             number_item.setBackground(QBrush(QColor(color)) if color else QBrush())
+        # Baustein-Kopfzeilen-Overlay traegt seinen eigenen Hintergrund
+        # (haengt nicht als Zellen-Widget an der Schleife oben, siehe
+        # _BlockHeaderOverlay) -- separat nachziehen, damit Auswahl-/Blink-/
+        # Fehlerfarbe auch im eingeklappten Zustand sichtbar bleiben.
+        group = self._group_at_header(row)
+        if group is not None:
+            self._sync_header_overlay(group)
 
     def _combo_row_style(self, color: str | None, indent_px: int = 0, border: str = "") -> str:
         # QComboBox braucht einen eigenen Stylesheet-Zweig: eine einfache

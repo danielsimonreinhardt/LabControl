@@ -12,7 +12,7 @@ naechste Sample wird erst verschickt, nachdem der vorherige bestaetigt wurde
 (kein "totes" Nachlegen in die Warteschlange, falls ein Geraet langsamer
 antwortet als das konfigurierte Intervall).
 
-Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var, siehe
+Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, siehe
 testcase_model.CONTROL_STEP_TYPES) veraendern statt einer Geraete-Aktion nur
 den internen Ausfuehrungszustand: einen Stack offener Bloecke (_Frame) sowie
 einen einfachen Variablenspeicher. _advance() ist deshalb kein simpler
@@ -330,6 +330,15 @@ class TestRunner(QObject):
                 else:
                     self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value)
                 return
+
+            if t == "wait":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                if step.duration > 0:
+                    self._timer.start(max(0, round(step.duration * 1000)))
+                    return
+                continue
 
             if t in ("set_var", "inc_var"):
                 if not step.enabled:

@@ -12,7 +12,6 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -31,6 +30,7 @@ from icons import IconButton
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from presets import PresetStore, SLOT_COUNT
+from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
 
@@ -166,7 +166,7 @@ class LoadControlGroup(QGroupBox):
         self._form.addRow(" ", self._mode_combo)
         _detint_label(self._form, self._mode_combo)
 
-        self._setpoint_spin = QDoubleSpinBox()
+        self._setpoint_spin = SteppedDoubleSpinBox()
         self._setpoint_spin.setDecimals(3)
         self._setpoint_spin.setMaximumWidth(150)
         self._apply_button = IconButton("mdi.check-bold", "")
@@ -352,7 +352,7 @@ class PsuControlGroup(QGroupBox):
         self._form = QFormLayout()
         outer.addLayout(self._form)
 
-        self._voltage_spin = QDoubleSpinBox()
+        self._voltage_spin = SteppedDoubleSpinBox()
         self._voltage_spin.setDecimals(1)
         self._voltage_spin.setRange(1, 60)  # Geraet nimmt Werte unter 1V nicht an
         self._voltage_spin.setSuffix(" V")
@@ -365,7 +365,7 @@ class PsuControlGroup(QGroupBox):
         self._form.addRow(" ", self._voltage_row)
         _detint_label(self._form, self._voltage_row)
 
-        self._current_spin = QDoubleSpinBox()
+        self._current_spin = SteppedDoubleSpinBox()
         self._current_spin.setDecimals(1)
         self._current_spin.setRange(0, 10)
         self._current_spin.setSuffix(" A")
@@ -378,7 +378,7 @@ class PsuControlGroup(QGroupBox):
         self._form.addRow(" ", self._current_row)
         _detint_label(self._form, self._current_row)
 
-        self._ovp_spin = QDoubleSpinBox()
+        self._ovp_spin = SteppedDoubleSpinBox()
         self._ovp_spin.setDecimals(1)
         self._ovp_spin.setRange(1, 65)  # Geraet nimmt Werte unter 1V nicht an
         self._ovp_spin.setSuffix(" V")
@@ -389,7 +389,7 @@ class PsuControlGroup(QGroupBox):
         self._form.addRow(" ", self._ovp_row)
         _detint_label(self._form, self._ovp_row)
 
-        self._ocp_spin = QDoubleSpinBox()
+        self._ocp_spin = SteppedDoubleSpinBox()
         self._ocp_spin.setDecimals(1)
         self._ocp_spin.setRange(0, 11)
         self._ocp_spin.setSuffix(" A")
@@ -779,6 +779,13 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if section is not None:
             section.set_label(label)
+            # BUGS.md #16: dieser Pfad wird auch beim "Geraetezuordnung
+            # loeschen"-Reset fuer weiterhin verbundene Geraete durchlaufen
+            # (main_window._on_reset_devices_requested -> on_device_added),
+            # im selben Zug wie forget_device() fuer nicht mehr verbundene
+            # Geraete -- ohne diesen Aufruf blieb die Sichtbarkeit der
+            # "kein Geraet verbunden"-Kachel je nach Reihenfolge veraltet.
+            self._update_empty_tile()
             return
         if kind == "load":
             section = LoadControlGroup(device_id, label)

@@ -477,11 +477,11 @@ class DeviceWorker(QObject):
                 return self._guard_psu(device_id, lambda psu: psu.set_current(value))
             if action == "PSU_OUT_ON":
                 # Workaround (kein echtes Ausgang-Ein/Aus verfuegbar, siehe
-                # hcs34xx/README.md): Spannung setzen, Strom dabei auf
-                # mindestens 0.1A anheben statt einen bestehenden hoeheren
-                # Sollwert zu ueberschreiben.
+                # hcs34xx/README.md): reine Schaltaktion (siehe BUGS.md #17)
+                # -- laesst einen zuvor gesetzten Spannungs-Sollwert
+                # unangetastet und hebt nur den Strom auf mindestens 0.1A an,
+                # analog zu PSU_OUT_OFF (das nur den Strom auf 0A setzt).
                 def _output_on(psu: HCS34xx) -> None:
-                    psu.set_voltage(value)
                     _, current = psu.get_setpoint()
                     if current < 0.1:
                         psu.set_current(0.1)

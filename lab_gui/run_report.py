@@ -123,6 +123,8 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     if step.step_type in ("set_var", "inc_var"):
         op = "=" if step.step_type == "set_var" else "+="
         return tr("Schritt {n}: {var} {op} {value:g}", n=index + 1, var=step.var_name, op=op, value=step.value)
+    if step.step_type == "wait":
+        return tr("Schritt {n}: Warten ({duration:g} s)", n=index + 1, duration=step.duration)
     device = _device_display(record, step.device_kind, step.device_id)
     action = action_label(step.device_kind, step.action)
     detail = f"{step.value:g}" if step.value else "–"

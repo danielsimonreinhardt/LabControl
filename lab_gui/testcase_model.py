@@ -64,13 +64,16 @@ DEVICE_KIND_LABELS = {
 _LEGACY_DEVICE_KIND = {"Last": "load", "Netzteil": "psu"}
 
 # Aktionen, die keinen Zahlenwert benoetigen (Wert-Feld wird deaktiviert).
-# PSU_OUT_ON braucht den Wert als Spannung (Strom wird automatisch auf
-# mindestens 0.1A angehoben, siehe DeviceWorker._dispatch_action).
+# PSU_OUT_ON ist eine reine Schaltaktion (siehe BUGS.md #17): sie laesst einen
+# zuvor per PSU_VOLT gesetzten Spannungs-Sollwert unangetastet und hebt nur
+# den Strom auf mindestens 0.1A an, damit ueberhaupt Ausgangsleistung
+# fliesst (siehe DeviceWorker._dispatch_action) -- analog zu PSU_OUT_OFF, das
+# nur den Strom auf 0A setzt, ohne die Spannung anzufassen.
 # Arbiträrsignal-Aktionen brauchen ebenfalls keinen Wert im normalen Feld --
 # ihre Parameter (Signalform, Amplitude, ...) kommen aus dem Definieren-Dialog
 # (siehe signal_dialog.py) und liegen in den arb_*-Feldern von TestStep.
 VALUELESS_ACTIONS = {
-    "OUT_ON", "OUT_OFF", "PSU_OUT_OFF",
+    "OUT_ON", "OUT_OFF", "PSU_OUT_ON", "PSU_OUT_OFF",
     "ARB", "PSU_ARB",
 }
 
@@ -89,7 +92,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "OUT_OFF": ("", 0, 0),
     "PSU_VOLT": ("V", 1, 60),
     "PSU_CURR": ("A", 0, 10),
-    "PSU_OUT_ON": ("V", 1, 60),
+    "PSU_OUT_ON": ("", 0, 0),
     "PSU_OUT_OFF": ("", 0, 0),
     "ARB": ("", 0, 0),
     "PSU_ARB": ("", 0, 0),
@@ -101,8 +104,9 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
 # validate_structure()); "else" ist optional und nur innerhalb eines
 # "if"-Blocks gueltig. "set_var"/"inc_var" setzen bzw. erhoehen eine
 # Laufvariable, die in Bedingungen als cond_source=="variable" gelesen wird.
+# "wait" wartet nur die in duration angegebene Zeitspanne, ohne Geraeteaktion.
 STEP_TYPE_ACTION = "action"
-CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var"}
+CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait"}
 BLOCK_START_TYPES = {"loop", "while", "if"}
 CONDITION_STEP_TYPES = {"while", "if"}
 
@@ -116,6 +120,7 @@ CONTROL_STEP_LABELS = {
     "end": "Ende",
     "set_var": "Variable setzen",
     "inc_var": "Variable erhöhen",
+    "wait": "Warten",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -159,8 +164,9 @@ class TestStep:
     # Arbiträrsignal-Schritt (action in ARB_ACTIONS) ist es stattdessen die
     # Laufzeit des Signals selbst -- der Schritt ist also selbst "die Aktion".
     # Bei "set_var"/"inc_var" ist es weiterhin die Wartezeit NACH dem Schritt;
-    # bei allen anderen Kontrollfluss-Schritten (loop/while/if/else/end) wird
-    # sie ignoriert.
+    # bei "wait" ist es die gesamte Wartezeit des Schritts selbst (es gibt
+    # keine Aktion daneben); bei allen anderen Kontrollfluss-Schritten
+    # (loop/while/if/else/end) wird sie ignoriert.
     duration: float = 0.0
     enabled: bool = True
     # -- Arbiträrsignal-Parameter (nur relevant wenn action in ARB_ACTIONS) --

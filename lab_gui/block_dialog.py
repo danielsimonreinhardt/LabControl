@@ -53,6 +53,8 @@ def _step_line(step: TestStep) -> str:
         if step.step_type in ("set_var", "inc_var"):
             op = "=" if step.step_type == "set_var" else "+="
             return f"{tr(CONTROL_STEP_LABELS[step.step_type])}: {step.var_name} {op} {step.value:g}"
+        if step.step_type == "wait":
+            return f"{tr(CONTROL_STEP_LABELS['wait'])} ({step.duration:g} s)"
         return tr(CONTROL_STEP_LABELS.get(step.step_type, step.step_type))
     device = step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
     action = action_label(step.device_kind, step.action)

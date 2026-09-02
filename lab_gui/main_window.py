@@ -516,13 +516,13 @@ class MainWindow(QMainWindow):
         # vergebene Farbe bleibt beim erneuten Ein-/Ausschalten erhalten.
         self._settings.panel_colors_enabled_changed.connect(self._on_panel_colors_enabled_changed)
 
-    def _on_panel_colors_enabled_changed(self, enabled: bool) -> None:
-        if not enabled:
-            return
-        unassigned = [
-            device_id for device_id in self._device_labels
-            if self._settings.panel_color(device_id) is None
-        ]
+    def _assign_free_panel_colors(self, device_ids: list[str]) -> None:
+        """Vergibt an jedes device_id in device_ids (ohne bereits gespeicherte
+        Farbe) die naechste freie Farbe aus PANEL_COLOR_ORDER, unter allen
+        bekannten Geraeten bereits belegte Farben ausgenommen. Gemeinsame
+        Vergabe-Logik fuer _on_panel_colors_enabled_changed (10e) und
+        _on_device_known_panel_color (BUGS.md #15)."""
+        unassigned = [d for d in device_ids if self._settings.panel_color(d) is None]
         if not unassigned:
             return
         used = {self._settings.panel_color(d) for d in self._device_labels} - {None}
@@ -530,7 +530,19 @@ class MainWindow(QMainWindow):
         for i, device_id in enumerate(unassigned):
             self._settings.set_panel_color(device_id, free[i % len(free)])
 
+    def _on_panel_colors_enabled_changed(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        self._assign_free_panel_colors(list(self._device_labels))
+
     def _on_device_known_panel_color(self, kind: str, device_id: str, label: str) -> None:
+        # BUGS.md #15: 10e deckt nur das Einschalten der Option fuer bereits
+        # bekannte Geraete ab -- ein danach neu hinzukommendes Geraet bei
+        # bereits aktiver Option durchlaeuft nur diesen Handler hier, daher
+        # dieselbe Vergabe-Logik auch an dieser Stelle anstossen, bevor die
+        # (ggf. gerade erst vergebene) Farbe an Dashboard/Control-Tab geht.
+        if self._settings.panel_colors_enabled:
+            self._assign_free_panel_colors([device_id])
         color_key = self._settings.panel_color(device_id)
         self.dashboard.set_panel_color(device_id, color_key)
         self.control_tab.set_panel_color(device_id, color_key)

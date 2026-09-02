@@ -7,6 +7,27 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Eigenes Increment-Verhalten der Pfeil-Buttons an Sollwert-Eingabefeldern**:
+  Ein einfacher Klick auf Hoch/Runter an den Sollwert-Spinboxen im
+  Control-Tab (Last: Sollwert; Netzteil: Spannung/Strom/OVP/OCP) ändert den
+  Wert jetzt um 0,1, ein gehaltener Klick um 1,0 pro Schritt alle 0,2s,
+  statt wie zuvor Qts eingebautes Klick-/Halte-Verhalten zu verwenden
+  (siehe [FEATURES.md](FEATURES.md) Punkt 3). Neue Klasse
+  `lab_gui/step_spinbox.py::SteppedDoubleSpinBox` (ersetzt `QDoubleSpinBox`
+  in den betroffenen Feldern in `lab_gui/control_tab.py`), wertet die
+  Maus-Events auf den Pfeil-Subcontrols selbst aus statt Qts internes
+  Auto-Repeat zu nutzen; Tastatur-Pfeiltasten und Mausrad bleiben
+  unverändert (dort gilt weiterhin `singleStep`).
+- **Testablauf-Schritt „Warten“**: Neuer Kontrollfluss-Schritttyp im
+  Testablauf-Editor (Menü „Zeile hinzufügen“ → „Warten“), der den
+  Testablauf-Fortschritt beim Ausführen einfach um die angegebene
+  Zeitspanne pausiert, ohne eine Geräteaktion auszulösen -- z.B. um vor
+  einer Prüfung gezielt auf ein langsames Einschwingen zu warten. Zeile
+  besteht nur aus einem Dauer-Feld (Sekunden) und
+  Aktiv-Checkbox; Fortschrittsanzeige/Report zeigen „Warten (X s)“ wie bei
+  den anderen Kontrollfluss-Schritten (`testcase_model.py`:
+  `CONTROL_STEP_TYPES`/`CONTROL_STEP_LABELS`; `testcase_runner.py`:
+  `_advance()`; `testcase_tab.py`; `run_report.py`; `block_dialog.py`).
 - **Benutzerhandbuch / Hilfe**: Neuer Button „Hilfe“ im Einstellungen-Tab
   öffnet ein vollstaendiges Benutzerhandbuch, das Dashboard, alle vier
   Reiter (Steuerung/Testablauf/Verlauf/Einstellungen), den
@@ -378,6 +399,38 @@ Semantic Versioning (`lab_gui/version.py`).
   vom Theme. Ersetzt durch `mdi.close-network-outline` (ein Geräte-Symbol
   mit deutlichem X, klare Silhouette) und auf 22px vergrößert (`lab_gui/
   dashboard.py`).
+- **[BUGS.md #17] Testablauf-Aktion „Netzteil: Ausgang EIN" (`PSU_OUT_ON`)
+  änderte ungewollt die Spannung**: Der Schritt hatte ein aktives
+  Spannungs-Wertfeld und überschrieb beim Ausführen immer den zuletzt per
+  `PSU_VOLT` gesetzten Sollwert. `PSU_OUT_ON` ist jetzt eine reine
+  Schaltaktion (analog `PSU_OUT_OFF`) — lässt die Spannung unangetastet und
+  hebt nur den Strom auf mind. 0,1A an (`lab_gui/testcase_model.py`:
+  `VALUELESS_ACTIONS`/`ACTION_VALUE_RANGE`; `lab_gui/device_worker.py`:
+  `_dispatch_action`).
+- **[BUGS.md #16] Control-Tab: „Kein Gerät verbunden"-Kachel blieb nach
+  „Geräte-Zuordnung löschen" sichtbar, obwohl andere Geräte weiter verbunden
+  waren**: `ControlTab.on_device_known` prüfte die Sichtbarkeit der
+  Platzhalter-Kachel bisher nur beim Neuanlegen einer Sektion, nicht im
+  Relabel-Pfad (bereits existierende Sektion eines weiterhin verbundenen
+  Geräts) — genau dieser Pfad läuft aber beim Reset-Button für jedes
+  weiterhin verbundene Gerät. `_update_empty_tile()` wird jetzt auch dort
+  aufgerufen (`lab_gui/control_tab.py`).
+- **[BUGS.md #15, Nachbesserung zu 10e] Neu angeschlossenes Gerät bekam bei
+  bereits aktiver Panel-Farben-Option keine automatische Farbe**: 10e deckte
+  nur das Einschalten der Option für bereits bekannte Geräte ab. Die
+  Vergabe-Logik ist jetzt in `_assign_free_panel_colors()` ausgelagert und
+  wird zusätzlich in `_on_device_known_panel_color` für ein einzelnes neu
+  hinzukommendes Gerät angestoßen, wenn die Option schon aktiv ist
+  (`lab_gui/main_window.py`).
+- **[BUGS.md #18] Testablauf-Editor: eingeklappter Baustein zeigte die
+  echte erste Schritt-Zeile statt einer Zusammenfassung**: Die Kopfzeile
+  eines eingeklappten Bausteins zeigte bisher die echten Geräte-/Aktions-/
+  Wert-Widgets des ersten Schritts. Neue `_BlockHeaderOverlay`-Klasse blendet
+  im eingeklappten Zustand „Baustein"/Bausteinname/Schrittzahl als rein
+  visuelle Fläche über den (weiterhin unveränderten, allein
+  datenführenden) Zellen-Widgets ein — `steps()`/`_row_to_step` lesen
+  dadurch unverändert die echten Werte, unabhängig vom Ein-/Ausklapp-Zustand
+  (`lab_gui/testcase_tab.py`).
 
 ## [0.6.2]
 
