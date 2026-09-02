@@ -13,3 +13,5 @@ lab_gui/presets.json
 lab_gui/recordings/
 lab_gui/reports/
 lab_gui/labdash.log
+/FEATURES.md
+/BUGS.md
