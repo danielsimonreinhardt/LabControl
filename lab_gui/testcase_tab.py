@@ -112,13 +112,22 @@ BASE_COLUMNS = ["#", "Gerät", "Aktion", "Wert", "Dauer (s)", "Prüfung", "Aktiv
 # -> ca. 958px Tabellenbreite). Alle uebrigen Spalten (Geraet/Aktion/Wert/
 # Pruefung) teilen sich den verbleibenden Platz gleichmaessig per Stretch-
 # Resize-Modus (siehe __init__) -- kein fester Wert noetig/sinnvoll.
-DEFAULT_COLUMN_WIDTHS = {0: 49, 4: 94, 6: 77}
+# Spalte 0 etwas breiter als eine reine "9"-Ziffer + Klapp-Icon braeuchte --
+# Baustein-Unternummern ("4.1", "4.2", ...) sind laenger als einstellige
+# Hauptnummern (siehe _renumber_rows).
+DEFAULT_COLUMN_WIDTHS = {0: 58, 4: 94, 6: 77}
 
 # Spalten mit fester Breite (Zeilennummer/Dauer/Aktiv) -- bleiben beim
 # Skalieren des Hauptfensters unveraendert. Alle anderen Spalten (inkl.
 # "Aktion") sind Stretch und teilen sich den Rest gleichmaessig, statt dass
 # "Aktion" allein den kompletten uebrigen Platz einnimmt.
 FIXED_COLUMNS = {COL_NUM, COL_DURATION, COL_ENABLED}
+
+# Rechtsversatz (Pixel) fuer Zeilen, die zu einem Baustein gehoeren (siehe
+# _revalidate_structure/_apply_row_style) -- bewusst auf ALLEN Spalten
+# angewendet statt nur als Texteinzug in "Gerät", damit die ganze Zeile
+# sichtbar nach rechts verschoben wirkt, nicht nur ihr erstes Feld.
+BLOCK_MEMBER_INDENT_PX = 16
 
 DEFAULT_DIR = app_dir() / "testcases"
 # Ablage fuer wiederverwendbare Bausteine (siehe block_dialog.SaveBlockDialog,
@@ -196,6 +205,15 @@ class _BlockGroup:
     # _sync_header_overlay) -- nur waehrend collapsed=True erzeugt/sichtbar,
     # lazy statt beim Einfuegen, siehe dort.
     overlay: _BlockHeaderOverlay | None = None
+    # Nicht-interaktive Ueberdeckungen der Spalten "Dauer" (Gesamtdauer des
+    # Bausteins) und "Pruefung" (Aggregat-Faerbung, siehe
+    # TestcaseTab._sync_duration_overlay/_sync_check_overlay) -- anders als
+    # `overlay` oben IMMER sichtbar, solange die Kopfzeile existiert (auch
+    # aufgeklappt), da die Kopfzeile diese beiden Spalten dauerhaft als
+    # Baustein-Zusammenfassung zeigt statt als editierbares Feld des ersten
+    # Baustein-Schritts. Ebenfalls lazy erzeugt.
+    duration_overlay: _ReadonlyCellOverlay | None = None
+    check_overlay: _ReadonlyCellOverlay | None = None
 
 
 class _BlockHeaderOverlay(QWidget):
@@ -225,6 +243,34 @@ class _BlockHeaderOverlay(QWidget):
         self.value_label = QLabel()
         for label in (self.device_label, self.action_label, self.value_label):
             layout.addWidget(label, 1)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt-Override)
+        self._on_click()
+        super().mousePressEvent(event)
+
+
+class _ReadonlyCellOverlay(QWidget):
+    """Nicht-interaktive Ueberdeckung EINER Zelle der Kopfzeile eines
+    Bausteins (Spalte "Dauer" bzw. "Pruefung", siehe TestcaseTab.
+    _sync_duration_overlay/_sync_check_overlay). Anders als
+    _BlockHeaderOverlay bleibt diese Flaeche auch im aufgeklappten Zustand
+    sichtbar -- die Kopfzeile zeigt in diesen beiden Spalten dauerhaft eine
+    Baustein-Zusammenfassung (Gesamtdauer bzw. Pruefergebnis-Farbe) statt des
+    editierbaren Felds des ersten Baustein-Schritts, das sie verdeckt.
+
+    Ein Klick waehlt wie bei _BlockHeaderOverlay die Kopfzeile aus, statt an
+    das verdeckte Widget (Dauer-Spinbox/Pruefungs-Button) durchgereicht zu
+    werden."""
+
+    def __init__(self, on_click) -> None:
+        super().__init__()
+        self._on_click = on_click
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 0, 6, 0)
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.label)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt-Override)
         self._on_click()
@@ -737,6 +783,7 @@ class TestcaseTab(QWidget):
         duration_spin.setSuffix(" s")
         duration_spin.setValue(step.duration)
         self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+        duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
 
         # Pass/Fail-Pruefung: Zusammenfassung + Dialog-Button, gleiches Muster
         # wie die Bedingungszelle einer while/if-Zeile (siehe _build_control_row).
@@ -957,6 +1004,7 @@ class TestcaseTab(QWidget):
             duration_spin.setSuffix(" s")
             duration_spin.setValue(step.duration)
             self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+            duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
 
         elif t == "wait":
             duration_spin = SteppedDoubleSpinBox()
@@ -965,6 +1013,7 @@ class TestcaseTab(QWidget):
             duration_spin.setSuffix(" s")
             duration_spin.setValue(step.duration)
             self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+            duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
 
         self._retranslate_control_row(row_index, t)
 
@@ -1045,8 +1094,28 @@ class TestcaseTab(QWidget):
             self._apply_row_style(row)
 
     def _renumber_rows(self) -> None:
+        """Nummeriert alle Zeilen neu. Zeilen innerhalb eines Bausteins (siehe
+        _BlockGroup) bekommen statt der fortlaufenden Hauptnummer eine eigene
+        Unternummerierung "<Kopfzeilennummer>.<Position>" (z.B. "4.1", "4.2"),
+        die Kopfzeile selbst zaehlt normal in der Hauptsequenz mit -- die
+        Zeile danach setzt die Hauptsequenz nahtlos fort (z.B. "5"), als waere
+        der Baustein nur eine einzelne Zeile. Bausteine sind nicht
+        verschachtelbar (siehe _insert_block_from_file), daher genuegt eine
+        flache Zuordnung Zeile -> Position innerhalb ihres Bausteins."""
+        member_position = {
+            row: position
+            for group in self._block_groups
+            for position, row in enumerate(range(group.start + 1, group.start + group.count), start=1)
+        }
+        main_number = 0
+        current_header_number = ""
         for row in range(self._table.rowCount()):
-            self._table.item(row, COL_NUM).setText(str(row + 1))
+            if row in member_position:
+                self._table.item(row, COL_NUM).setText(f"{current_header_number}.{member_position[row]}")
+                continue
+            main_number += 1
+            current_header_number = str(main_number)
+            self._table.item(row, COL_NUM).setText(current_header_number)
 
     # -- Ein-/ausklappbare Bausteine -------------------------------------------
     #
@@ -1075,6 +1144,8 @@ class TestcaseTab(QWidget):
         for row in range(group.start + 1, group.start + group.count):
             self._table.setRowHidden(row, group.collapsed)
         self._sync_header_overlay(group)
+        self._sync_duration_overlay(group)
+        self._sync_check_overlay(group)
 
     def _unhide_group_rows(self, group: _BlockGroup) -> None:
         for row in range(group.start, group.start + group.count):
@@ -1083,13 +1154,16 @@ class TestcaseTab(QWidget):
 
     def _sync_header_overlay(self, group: _BlockGroup) -> None:
         """Erzeugt/aktualisiert/positioniert den Kopfzeilen-Overlay (siehe
-        _BlockHeaderOverlay) im eingeklappten Zustand, oder blendet ihn aus,
-        wenn die Gruppe aufgeklappt ist. Muss nach jeder Aenderung, die Text
-        (group.name/count), Position (Zeile verschoben/Spalten resized) oder
-        Sichtbarkeit (collapsed) betreffen koennte, erneut aufgerufen werden
-        -- siehe _sync_all_header_overlays fuer den zentralen Sammel-Aufruf."""
+        _BlockHeaderOverlay) -- zeigt "Baustein"/Bausteinname/Schrittzahl an,
+        UNABHAENGIG vom Ein-/Ausklapp-Zustand (die Kopfzeile bleibt so immer
+        als Baustein-Zusammenfassung erkennbar, statt beim Aufklappen wieder
+        die rohen Geraet-/Aktion/Wert-Felder des ersten Baustein-Schritts
+        freizugeben). Muss nach jeder Aenderung, die Text (group.name/count),
+        Position (Zeile verschoben/Spalten resized) oder Faerbung betreffen
+        koennte, erneut aufgerufen werden -- siehe _sync_all_header_overlays
+        fuer den zentralen Sammel-Aufruf."""
         row = group.start
-        if not group.collapsed or not (0 <= row < self._table.rowCount()):
+        if not (0 <= row < self._table.rowCount()):
             if group.overlay is not None:
                 group.overlay.hide()
             return
@@ -1107,6 +1181,16 @@ class TestcaseTab(QWidget):
         for label in (overlay.device_label, overlay.action_label, overlay.value_label):
             label.setStyleSheet(label_style)
         overlay.setStyleSheet(f"background-color: {color};")
+        # Der Overlay verdeckt das eigentliche Widget in Spalte COL_DEVICE
+        # komplett -- ohne diese Uebernahme des dort hinterlegten
+        # _indent_depth (siehe _revalidate_structure) wuerde die Kopfzeile im
+        # eingeklappten Zustand IMMER unabhaengig von ihrer tatsaechlichen
+        # Verschachtelungstiefe (z.B. innerhalb einer Schleife/eines
+        # Wenn-Blocks) ohne Einrueckung erscheinen, obwohl das darunterliegende
+        # Widget korrekt eingerueckt waere.
+        col1 = self._table.cellWidget(row, COL_DEVICE)
+        depth = getattr(col1, "_indent_depth", 0)
+        overlay.layout().setContentsMargins(6 + depth * 18, 0, 6, 0)
         self._position_header_overlay(group)
         overlay.show()
         overlay.raise_()
@@ -1121,14 +1205,114 @@ class TestcaseTab(QWidget):
         height = self._table.rowHeight(row)
         group.overlay.setGeometry(x, y, width, height)
 
+    def _row_of_widget(self, widget: QWidget, column: int) -> int:
+        """Ermittelt die aktuelle Zeile eines Zellen-Widgets ueber Identitaet
+        statt eines beim Erzeugen erfassten Zeilenindex -- letzterer wuerde
+        durch spaeteres Einfuegen/Entfernen/Verschieben ANDERER Zeilen
+        veralten. Fuer die kleinen Testablauf-Tabellen dieser App (typisch
+        wenige Dutzend Zeilen) ist die lineare Suche unproblematisch."""
+        for row in range(self._table.rowCount()):
+            if self._table.cellWidget(row, column) is widget:
+                return row
+        return -1
+
+    def _notify_duration_changed(self, spin: QDoubleSpinBox) -> None:
+        """Haengt an jeder Dauer-Spinbox (siehe _build_action_row/
+        _build_control_row) -- aktualisiert die Gesamtdauer-Anzeige der
+        Kopfzeile, falls die geaenderte Zeile Teil eines (auf- oder
+        eingeklappten) Bausteins ist."""
+        row = self._row_of_widget(spin, COL_DURATION)
+        if row < 0:
+            return
+        group = self._group_containing(row)
+        if group is not None:
+            self._sync_duration_overlay(group)
+
+    def _block_total_duration(self, group: _BlockGroup) -> float:
+        """Aufsummierte Dauer aller Schritte des Bausteins (Kopfzeile
+        inklusive) -- fuer die Anzeige in der Dauer-Spalte der Kopfzeile
+        (siehe _sync_duration_overlay). Bewusst eine einfache Summe der
+        einzelnen `duration`-Felder ohne Beruecksichtigung von
+        Schleifen-Wiederholungen o.ae. -- das entspricht der Dauer EINES
+        Durchlaufs des Baustein-Rumpfs, wie er im Editor sichtbar ist."""
+        return sum(
+            self._row_to_step(row).duration
+            for row in range(group.start, group.start + group.count)
+        )
+
+    def _sync_duration_overlay(self, group: _BlockGroup) -> None:
+        """Zeigt in der Dauer-Spalte der Kopfzeile die aufsummierte
+        Gesamtdauer des Bausteins an, statt der (editierbaren) Dauer des
+        ersten Baustein-Schritts, die sie verdeckt. Anders als der
+        Geraet/Aktion/Wert-Overlay (_sync_header_overlay) unabhaengig vom
+        collapsed-Zustand immer sichtbar -- die Kopfzeile bleibt auch
+        aufgeklappt die Baustein-Zusammenfassung fuer diese Spalte."""
+        row = group.start
+        if not (0 <= row < self._table.rowCount()):
+            if group.duration_overlay is not None:
+                group.duration_overlay.hide()
+            return
+        if group.duration_overlay is None:
+            group.duration_overlay = _ReadonlyCellOverlay(lambda g=group: self._table.selectRow(g.start))
+            group.duration_overlay.setParent(self._table.viewport())
+        overlay = group.duration_overlay
+        overlay.label.setText(f"{self._block_total_duration(group):g} s")
+        pal = current_palette()
+        color = self._row_style_color(row) or pal.surface
+        overlay.label.setStyleSheet(f"color: {pal.text};")
+        overlay.setStyleSheet(f"background-color: {color};")
+        x = self._table.columnViewportPosition(COL_DURATION)
+        width = self._table.columnWidth(COL_DURATION)
+        y = self._table.rowViewportPosition(row)
+        height = self._table.rowHeight(row)
+        overlay.setGeometry(x, y, width, height)
+        overlay.show()
+        overlay.raise_()
+
+    def _sync_check_overlay(self, group: _BlockGroup) -> None:
+        """Blockt die Pruefungs-Spalte der Kopfzeile gegen Bearbeitung (kein
+        eigener Pruefungs-Dialog fuer den Baustein als Ganzes). Die
+        Faerbung nach Pruefergebnis passiert NICHT hier, sondern ueber die
+        normale Zeilenfarbe (siehe _update_block_check_aggregate/
+        _row_style_color) -- die Kopfzeile traegt dafuer selbst einen
+        Eintrag in _check_results, genau wie jede andere geprueft Zeile,
+        die Ueberdeckung uebernimmt nur denselben Hintergrund."""
+        row = group.start
+        if not (0 <= row < self._table.rowCount()):
+            if group.check_overlay is not None:
+                group.check_overlay.hide()
+            return
+        if group.check_overlay is None:
+            group.check_overlay = _ReadonlyCellOverlay(lambda g=group: self._table.selectRow(g.start))
+            group.check_overlay.setParent(self._table.viewport())
+        overlay = group.check_overlay
+        pal = current_palette()
+        color = self._row_style_color(row) or pal.surface
+        overlay.setStyleSheet(f"background-color: {color};")
+        x = self._table.columnViewportPosition(COL_CHECK)
+        width = self._table.columnWidth(COL_CHECK)
+        y = self._table.rowViewportPosition(row)
+        height = self._table.rowHeight(row)
+        overlay.setGeometry(x, y, width, height)
+        overlay.show()
+        overlay.raise_()
+
     def _sync_all_header_overlays(self) -> None:
         for group in self._block_groups:
             self._sync_header_overlay(group)
+            self._sync_duration_overlay(group)
+            self._sync_check_overlay(group)
 
     def _dissolve_group_overlay(self, group: _BlockGroup) -> None:
         if group.overlay is not None:
             group.overlay.deleteLater()
             group.overlay = None
+        if group.duration_overlay is not None:
+            group.duration_overlay.deleteLater()
+            group.duration_overlay = None
+        if group.check_overlay is not None:
+            group.check_overlay.deleteLater()
+            group.check_overlay = None
 
     def _clear_block_groups(self) -> None:
         for group in self._block_groups:
@@ -1422,16 +1606,19 @@ class TestcaseTab(QWidget):
     # oder aus einer aelteren Programmversion geladen worden sein).
 
     def _revalidate_structure(self) -> None:
+        self._renumber_rows()
         steps = self.steps()
         matching, depths, errors = validate_structure(steps)
         error_by_row = dict(errors)
         end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn")}
 
         # Zeilen innerhalb einer (ein- oder ausgeklappten) Baustein-Gruppe
-        # bekommen zusaetzlich zur Schleifen/If-Verschachtelungstiefe eine
-        # weitere Einrueckstufe -- "im aufgeklappten Zustand dann etwas
-        # eingerückt" (die Kopfzeile selbst bleibt auf ihrer normalen Tiefe,
-        # sie repraesentiert ja den ersten Schritt des Bausteins).
+        # bekommen zusaetzlich zur Schleifen/If-Verschachtelungstiefe (die nur
+        # Spalte COL_DEVICE betrifft, siehe _apply_row_style) einen eigenen,
+        # von der Tiefe unabhaengigen Zeilen-weiten Rechtsversatz -- ueber
+        # ALLE Spalten hinweg, nicht nur als Texteinzug in "Gerät" (die
+        # Kopfzeile selbst bleibt unverschoben, sie ist keine Mitgliederzeile,
+        # sondern die Baustein-Zusammenfassung selbst).
         group_by_header = {group.start: group for group in self._block_groups}
         group_member_rows: set[int] = set()
         for group in self._block_groups:
@@ -1442,10 +1629,8 @@ class TestcaseTab(QWidget):
             col1 = self._table.cellWidget(row, COL_DEVICE)
             if col1 is None:
                 continue
-            depth = depths[row] if row < len(depths) else 0
-            if row in group_member_rows:
-                depth += 1
-            col1._indent_depth = depth
+            col1._indent_depth = depths[row] if row < len(depths) else 0
+            col1._block_member = row in group_member_rows
             col1._structure_error = row in error_by_row
             if row in error_by_row:
                 col1.setToolTip(error_by_row[row])
@@ -1590,6 +1775,28 @@ class TestcaseTab(QWidget):
         summary_label = getattr(check_page, "_summary_label", None)
         if summary_label is not None:
             summary_label.setToolTip(tr("Gemessen: {value:g}", value=value))
+        group = self._group_containing(index)
+        if group is not None:
+            self._update_block_check_aggregate(group)
+            self._apply_row_style(group.start)
+
+    def _update_block_check_aggregate(self, group: _BlockGroup) -> None:
+        """Fasst die Pruefergebnisse aller Schritte eines Bausteins zu einem
+        Gesamtergebnis fuer dessen Kopfzeile zusammen (gruen nur, wenn ALLE
+        bislang ausgewerteten Unter-Pruefungen bestanden haben) -- dieses
+        Aggregat wird wie ein normales Zeilenergebnis in _check_results
+        abgelegt, damit die vorhandene Faerbe-/Overlay-Logik
+        (_row_style_color/_apply_row_style) es ohne Sonderfall fuer die
+        Kopfzeile mitbehandelt. Schritte ohne aktive Pruefung liefern nie
+        einen Eintrag in _check_results und fliessen daher nicht ein --
+        ohne jede Pruefung im Baustein bleibt die Kopfzeile ungefaerbt."""
+        rows_with_result = [
+            row for row in range(group.start, group.start + group.count)
+            if row in self._check_results
+        ]
+        if not rows_with_result:
+            return
+        self._check_results[group.start] = all(self._check_results[row] for row in rows_with_result)
 
     def on_run_finished(self) -> None:
         self._stop_blink()
@@ -1680,7 +1887,13 @@ class TestcaseTab(QWidget):
             return
         color = self._row_style_color(row)
         style = f"background-color: {color};" if color else ""
-        combo_style = self._combo_row_style(color)
+        # _indent_depth (Schleifen/If-Verschachtelung) und _block_member
+        # (Baustein-Mitgliederzeile) werden nur an der Spalte COL_DEVICE
+        # abgelegt (siehe _revalidate_structure) -- fuer alle anderen Spalten
+        # dieser Zeile hier einmal vorab auslesen.
+        depth_widget = self._table.cellWidget(row, COL_DEVICE)
+        block_indent = BLOCK_MEMBER_INDENT_PX if getattr(depth_widget, "_block_member", False) else 0
+        combo_style = self._combo_row_style(color, block_indent)
         for col in range(1, self._table.columnCount()):
             widget = self._table.cellWidget(row, col)
             if widget is None:
@@ -1694,13 +1907,18 @@ class TestcaseTab(QWidget):
                 depth = getattr(widget, "_indent_depth", 0)
                 has_error = getattr(widget, "_structure_error", False)
                 border = f"border: 1px solid {current_palette().danger};" if has_error else ""
+                left = depth * 18 + block_indent
                 if isinstance(widget, QComboBox):
-                    widget.setStyleSheet(self._combo_row_style(color, depth * 18, border))
+                    widget.setStyleSheet(self._combo_row_style(color, left, border))
                 else:
                     base = f"background-color: {color};" if color else ""
-                    widget.setStyleSheet(f"{base} padding-left: {depth * 18}px; {border}")
+                    widget.setStyleSheet(f"{base} padding-left: {left}px; {border}")
+            elif isinstance(widget, QComboBox):
+                widget.setStyleSheet(combo_style)
+            elif block_indent:
+                widget.setStyleSheet(f"{style} padding-left: {block_indent}px;")
             else:
-                widget.setStyleSheet(combo_style if isinstance(widget, QComboBox) else style)
+                widget.setStyleSheet(style)
         number_item = self._table.item(row, COL_NUM)
         if number_item is not None:
             number_item.setBackground(QBrush(QColor(color)) if color else QBrush())
@@ -1711,6 +1929,8 @@ class TestcaseTab(QWidget):
         group = self._group_at_header(row)
         if group is not None:
             self._sync_header_overlay(group)
+            self._sync_duration_overlay(group)
+            self._sync_check_overlay(group)
 
     def _combo_row_style(self, color: str | None, indent_px: int = 0, border: str = "") -> str:
         # QComboBox braucht einen eigenen Stylesheet-Zweig: eine einfache

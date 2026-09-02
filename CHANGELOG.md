@@ -7,6 +7,27 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
+  Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
+  in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
+  gehörenden Zeilen eine eigene Unternummerierung bekommen (z.B. "4.1",
+  "4.2" unter Kopfzeile "4"). Die Zeilen eines Bausteins sind dabei als
+  Ganzes (alle Spalten gleichmäßig, nicht nur ein Texteinzug in "Gerät")
+  leicht nach rechts verschoben, unabhängig von der Verschachtelungstiefe
+  in Schleifen/Wenn-Blöcken (`testcase_tab.py::_renumber_rows`,
+  `BLOCK_MEMBER_INDENT_PX`). Die Kopfzeile selbst bleibt dabei UNVERSCHOBEN
+  und zeigt dauerhaft "Baustein"/Bausteinname/Schrittzahl an -- auch im
+  aufgeklappten Zustand, statt wieder die rohen Geräte-/Aktion-/Wert-Felder
+  ihres ersten Schritts freizugeben (`_sync_header_overlay`). Die Spalte
+  "Dauer" der Kopfzeile zeigt statt der Dauer des ersten Baustein-Schritts
+  die aufsummierte Gesamtdauer aller Baustein-Schritte an und ist nicht
+  mehr editierbar; die Spalte "Prüfung" der Kopfzeile lässt sich ebenfalls
+  nicht mehr bearbeiten und färbt sich stattdessen nach dem Gesamtergebnis
+  aller im Baustein angelegten Prüfungen ein (grün nur, wenn alle bestanden
+  haben, sonst rot) -- auch dies unabhängig vom Ein-/Ausklapp-Zustand (neue
+  Klasse `_ReadonlyCellOverlay`, `_sync_duration_overlay`/
+  `_sync_check_overlay`/`_update_block_check_aggregate` in
+  `testcase_tab.py`).
 - **Eigenes Increment-Verhalten der Pfeil-Buttons an Sollwert-Eingabefeldern**:
   Ein einfacher Klick auf Hoch/Runter an den Sollwert-Spinboxen im
   Control-Tab (Last: Sollwert; Netzteil: Spannung/Strom/OVP/OCP) ändert den
