@@ -12,7 +12,7 @@ from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon
+from PySide6.QtGui import QBrush, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -128,6 +128,23 @@ FIXED_COLUMNS = {COL_NUM, COL_DURATION, COL_ENABLED}
 # angewendet statt nur als Texteinzug in "Gerät", damit die ganze Zeile
 # sichtbar nach rechts verschoben wirkt, nicht nur ihr erstes Feld.
 BLOCK_MEMBER_INDENT_PX = 16
+
+
+def _spacer_icon(width_px: int, height_px: int = 16) -> QIcon:
+    """Unsichtbares Icon fester Breite fuer die Spalte "#" (siehe
+    _revalidate_structure) -- reserviert dort Platz VOR dem Zeilennummer-Text
+    einer Baustein-Mitgliederzeile. Diese Spalte ist ein QTableWidgetItem statt
+    eines eigenen Widgets: "padding-left" per Stylesheet greift dort nicht
+    (siehe _combo_row_style/_field_row_style fuer dieselbe Problematik bei
+    anderen Spalten), und fuehrende Leerzeichen im Zellentext werden von Qts
+    Standard-Delegate beim Zeichnen verworfen (per Screenshot-Vergleich
+    verifiziert) -- ein Icon-Platzhalter ist der einzige zuverlaessige Weg,
+    definierten Platz vor dem Text zu erzwingen.
+    """
+    pixmap = QPixmap(width_px, height_px)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    return QIcon(pixmap)
+
 
 DEFAULT_DIR = app_dir() / "testcases"
 # Ablage fuer wiederverwendbare Bausteine (siehe block_dialog.SaveBlockDialog,
@@ -1110,12 +1127,25 @@ class TestcaseTab(QWidget):
         main_number = 0
         current_header_number = ""
         for row in range(self._table.rowCount()):
+            item = self._table.item(row, COL_NUM)
             if row in member_position:
-                self._table.item(row, COL_NUM).setText(f"{current_header_number}.{member_position[row]}")
+                # Spalte "#" ist ein QTableWidgetItem, kein eigenes Widget --
+                # "padding-left" per Stylesheet greift hier nicht (siehe
+                # _apply_row_style/_combo_row_style fuer dieselbe Problematik
+                # bei anderen Spalten). Fuehrende Leerzeichen im Text werden
+                # von Qts Standard-Delegate beim Zeichnen verworfen (per
+                # Screenshot-Vergleich verifiziert -- keine sichtbare
+                # Verschiebung trotz zehn Leerzeichen), daher stattdessen ein
+                # unsichtbares Platzhalter-Icon fester Breite (siehe
+                # _spacer_icon/_revalidate_structure) plus Linksbuendigkeit,
+                # statt wie bei normalen Zeilen zentriert zu bleiben.
+                item.setText(f"{current_header_number}.{member_position[row]}")
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 continue
             main_number += 1
             current_header_number = str(main_number)
-            self._table.item(row, COL_NUM).setText(current_header_number)
+            item.setText(current_header_number)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
     # -- Ein-/ausklappbare Bausteine -------------------------------------------
     #
@@ -1174,7 +1204,7 @@ class TestcaseTab(QWidget):
         overlay.device_label.setText(tr("Baustein"))
         name = f"{group.name} {tr('(modifiziert)')}" if group.modified else group.name
         overlay.action_label.setText(name)
-        overlay.value_label.setText(str(group.count))
+        overlay.value_label.setText(tr("{n} Schritte", n=group.count))
         pal = current_palette()
         color = self._row_style_color(row) or pal.surface
         label_style = f"color: {pal.text}; font-style: italic;"
@@ -1669,13 +1699,18 @@ class TestcaseTab(QWidget):
                         name=group.name, n=group.count,
                     )
                 )
-            else:
-                number_item.setIcon(QIcon())
+            elif row in group_member_rows:
+                # Unsichtbares Platzhalter-Icon statt QIcon() -- reserviert
+                # den Baustein-Einzug vor der Unternummer (siehe
+                # _spacer_icon), auf gleicher Hoehe wie BLOCK_MEMBER_INDENT_PX
+                # bei den uebrigen Spalten dieser Zeile.
+                number_item.setIcon(_spacer_icon(BLOCK_MEMBER_INDENT_PX))
                 number_item.setToolTip(
                     tr("Teil des Bausteins „{name}“", name=self._group_containing(row).name)
-                    if row in group_member_rows
-                    else ""
                 )
+            else:
+                number_item.setIcon(QIcon())
+                number_item.setToolTip("")
 
         self._sync_all_header_overlays()
 
@@ -1894,6 +1929,7 @@ class TestcaseTab(QWidget):
         depth_widget = self._table.cellWidget(row, COL_DEVICE)
         block_indent = BLOCK_MEMBER_INDENT_PX if getattr(depth_widget, "_block_member", False) else 0
         combo_style = self._combo_row_style(color, block_indent)
+        field_style = self._field_row_style(color, block_indent)
         for col in range(1, self._table.columnCount()):
             widget = self._table.cellWidget(row, col)
             if widget is None:
@@ -1915,6 +1951,13 @@ class TestcaseTab(QWidget):
                     widget.setStyleSheet(f"{base} padding-left: {left}px; {border}")
             elif isinstance(widget, QComboBox):
                 widget.setStyleSheet(combo_style)
+            elif isinstance(widget, (QDoubleSpinBox, QSpinBox, QLineEdit)):
+                # Diese "nativen" Eingabefelder teilen sich mit QComboBox
+                # dieselbe globale Regel in theme.py::form_control_qss() --
+                # ein simples "padding-left" reicht hier aus demselben Grund
+                # nicht (siehe _combo_row_style), daher ebenfalls die
+                # vollstaendig selbst-deklarierte Variante verwenden.
+                widget.setStyleSheet(field_style)
             elif block_indent:
                 widget.setStyleSheet(f"{style} padding-left: {block_indent}px;")
             else:
@@ -1946,11 +1989,23 @@ class TestcaseTab(QWidget):
         # "::item:hover"/"::item:selected" nachbaut (die globale
         # "selection-background-color"-Regel aus theme.py greift hier NICHT
         # mehr, weil dieses spezifischere Stylesheet sie ueberschreibt).
+        #
+        # Border/Hintergrund/Padding werden hier VOLLSTAENDIG neu deklariert
+        # (nicht nur "padding-left") statt sich auf eine Kaskade mit der
+        # globalen QComboBox-Regel aus theme.py::form_control_qss() zu
+        # verlassen -- ein bloßes "padding-left" ergab dort im echten Theme
+        # (mit bereits gesetztem "padding: 3px 6px;") nur einen kaum
+        # sichtbaren Bruchteil des gewuenschten Einzugs statt der vollen
+        # Pixelzahl. Mit vollstaendig eigener Deklaration "gehoert" dieses
+        # Stylesheet der ComboBox allein, keine Kaskade noetig.
         pal = current_palette()
-        combo_bg = f"background-color: {color};" if color else ""
-        indent = f"padding-left: {indent_px}px;" if indent_px else ""
+        combo_bg = color or pal.surface
+        box_border = border or f"border: 1px solid {pal.border};"
         return (
-            f"QComboBox {{ {combo_bg} {indent} {border} }}"
+            f"QComboBox {{"
+            f" background-color: {combo_bg}; color: {pal.text};"
+            f" {box_border} border-radius: 4px;"
+            f" padding: 3px 6px 3px {6 + indent_px}px; }}"
             f"QComboBox QAbstractItemView {{"
             f" background-color: {pal.surface}; color: {pal.text}; }}"
             f"QComboBox QAbstractItemView::item {{"
@@ -1959,6 +2014,20 @@ class TestcaseTab(QWidget):
             f" background-color: {pal.selection}; color: {pal.text}; }}"
             f"QComboBox QAbstractItemView::item:selected {{"
             f" background-color: {pal.selection}; color: {pal.text}; }}"
+        )
+
+    def _field_row_style(self, color: str | None, indent_px: int = 0, border: str = "") -> str:
+        """Wie _combo_row_style, aber fuer die uebrigen "nativen" Eingabefelder
+        (QLineEdit/QDoubleSpinBox/QSpinBox), die dieselbe globale Regel aus
+        theme.py::form_control_qss() teilen und daher denselben
+        Kaskaden-Effekt zeigen -- ebenfalls vollstaendig selbst deklariert
+        statt nur "padding-left" (siehe dortiger Kommentar)."""
+        pal = current_palette()
+        bg = color or pal.surface
+        box_border = border or f"border: 1px solid {pal.border};"
+        return (
+            f"background-color: {bg}; color: {pal.text}; {box_border}"
+            f" border-radius: 4px; padding: 3px 6px 3px {6 + indent_px}px;"
         )
 
     def _on_selection_changed(self) -> None:
