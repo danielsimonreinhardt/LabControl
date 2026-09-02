@@ -225,7 +225,7 @@ Semantic Versioning (`lab_gui/version.py`).
   des vollen Theme-Akzenttons — letzterer wirkte als Dauerfläche zu grell.
 - Version auf 0.9.0 angehoben.
 - Version auf 0.9.3 angehoben (bündelt u.a. mehrere an echter Hardware
-  verifizierte Fixes, siehe [BUGS.md](BUGS.md)).
+  verifizierte Fixes, siehe [BUGS_GESCHLOSSEN.md](BUGS_GESCHLOSSEN.md)).
 
 ### Geändert
 - **Simulationsmodus nur noch im Dev-Betrieb verfügbar**: In der von
@@ -272,6 +272,65 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **[BUGS.md #16, tatsächliche Root Cause -- vorheriger Fix wirkungslos]
+  Control-Tab: „Kein Gerät verbunden"-Kachel blieb nach „Geräte-Zuordnung
+  löschen" gleichzeitig mit weiterhin verbundenen Geräten sichtbar**: Der
+  vorherige Fix (`_update_empty_tile()` zusätzlich im Relabel-Pfad
+  aufrufen) traf nicht die eigentliche Ursache und blieb laut
+  Nutzer-Rückmeldung im Live-Test wirkungslos. Tatsächliche Ursache:
+  `_update_empty_tile()` prüfte `section.isVisible()` — das hängt in Qt
+  aber von der GESAMTEN Vorfahrenkette ab, nicht nur vom eigenen
+  Sichtbarkeits-Flag. Der „Geräte-Zuordnung löschen"-Button sitzt im
+  Einstellungen-Tab; während er geklickt wird, ist der Control-Tab
+  zwangsläufig NICHT die aktive Seite des `QTabWidget` und daher selbst
+  unsichtbar — dadurch lieferte JEDE Geräte-Sektion `isVisible() == False`,
+  unabhängig vom tatsächlichen Verbindungsstatus. Die Platzhalter-Kachel
+  wurde so fälschlich sichtbar geschaltet und blieb es auch nach dem
+  Zurückwechseln auf den Control-Tab, während die eigentlich verbundenen
+  Sektionen (ihr eigenes Sichtbarkeits-Flag war ja unverändert) ebenfalls
+  wieder erschienen. Per gezieltem Offscreen-Repro (ControlTab als Seite
+  eines `QTabWidget` mit einer zweiten, aktiven Seite) reproduziert und
+  verifiziert. Fix: `_update_empty_tile()` nutzt jetzt `isHidden()` (das
+  eigene, explizit gesetzte hide()/show()-Flag einer Sektion, unabhängig
+  vom Sichtbarkeitszustand der Vorfahren) statt `isVisible()`
+  (`lab_gui/control_tab.py`).
+- **[BUGS.md #20] Testablauf-Editor: „Zeile hinzufügen" fügte bei markierter
+  Baustein-Kopfzeile in den Baustein ein statt darunter**:
+  `_insert_at_selection()` berechnete die Einfügeposition immer als
+  `selected_row + 1`, ohne zu prüfen, ob die markierte Zeile die Kopfzeile
+  eines Bausteins ist — landete dadurch strikt innerhalb des Bausteins
+  statt danach. Ist die markierte Zeile eine Baustein-Kopfzeile, wird jetzt
+  hinter den gesamten Baustein eingefügt (`group.start + group.count`);
+  betrifft denselben Mechanismus auch bei „Baustein einfügen…"
+  (`lab_gui/testcase_tab.py`).
+- **[BUGS.md #22] Testablauf-Editor: „Zeile entfernen" bei
+  Baustein-Kopfzeile löschte nicht den ganzen Baustein, keine
+  „modifiziert"-Kennzeichnung**: Drei zusammenhängende Punkte rund um
+  eingefügte Bausteine. a)/b) „Zeile entfernen" bei markierter (im
+  eingeklappten Zustand ohnehin einzig markierbarer) Baustein-Kopfzeile
+  löscht jetzt den kompletten Bereich statt nur der Kopfzeile — im
+  aufgeklappten Zustand bleibt das Entfernen einzelner Mitgliederzeilen
+  unverändert möglich. c) Neues `_BlockGroup.modified`-Flag, gesetzt von
+  `_on_row_inserted`/`_on_row_removed` bei einer Zeilenzahl-Änderung
+  INNERHALB eines bestehenden Bausteins (nicht beim Auflösen/kompletten
+  Löschen) — die Kopfzeilen-Zusammenfassung zeigt bei gesetztem Flag
+  zusätzlich zum Namen „(modifiziert)" an (`lab_gui/testcase_tab.py`).
+- **[BUGS.md #21] Eigenes Increment-Verhalten der Pfeil-Buttons nur im
+  Control-Tab umgesetzt, nicht app-übergreifend**: `SteppedDoubleSpinBox`
+  (siehe Eintrag oben) war bisher nur an den Sollwert-Feldern in
+  `control_tab.py` im Einsatz, alle übrigen Zahlen-Eingabefelder der App
+  nutzten weiterhin Qts eingebautes Klick-/Halte-Verhalten. Gemeinsame
+  Maus-Event-Logik nach `_SteppedSpinMixin` ausgelagert; neue
+  `SteppedSpinBox`-Klasse für Ganzzahl-Felder (Default 1/Klick, 10/Schritt
+  beim Halten, pro Feld über `small_step`/`large_step` anpassbar, z.B.
+  50/200 für das ms-Intervall im Arbiträrsignal-Dialog) ergänzt
+  `SteppedDoubleSpinBox`. Jetzt überall eingesetzt: Sicherheits-Grenzwerte
+  (`settings_tab.py`), Wert-/Dauer-Felder und Durchlaufzahl bei Schleifen
+  (`testcase_tab.py`), Bedingungs-Werte und max. Iterationen
+  (`condition_dialog.py`), Prüfung Min/Max (`check_dialog.py`),
+  Arbiträrsignal-Parameter (`signal_dialog.py`), Y-Achsen-Grenzwerte
+  (`timeline_tab.py`), Zeilenbereich von/bis (`block_dialog.py`)
+  (`lab_gui/step_spinbox.py` und die genannten Module).
 - **Mitgelieferte Sprachdateien/Benutzerhandbuch in der `.exe` unerreichbar
   (Sprachumschaltung fiel lautlos auf Deutsch zurück, Hilfe-Dialog zeigte
   eine leere Fläche)**: `LabControl.spec` bündelte `lab_gui/translations`

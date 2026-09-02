@@ -21,11 +21,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QSpinBox,
     QVBoxLayout,
 )
 
 from i18n import Translator, tr
+from step_spinbox import SteppedSpinBox
 from testcase_model import (
     CONTROL_STEP_LABELS,
     STEP_TYPE_ACTION,
@@ -81,10 +81,10 @@ class SaveBlockDialog(QDialog):
         self._form.addRow(" ", self._name_edit)
 
         start_default = min(default_row + 1 if default_row >= 0 else 1, len(steps))
-        self._from_spin = QSpinBox()
+        self._from_spin = SteppedSpinBox()
         self._from_spin.setRange(1, len(steps))
         self._from_spin.setValue(start_default)
-        self._to_spin = QSpinBox()
+        self._to_spin = SteppedSpinBox()
         self._to_spin.setRange(1, len(steps))
         self._to_spin.setValue(start_default)
         self._form.addRow(" ", self._from_spin)
@@ -120,7 +120,7 @@ class SaveBlockDialog(QDialog):
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
 
-    def _on_range_changed(self, changed: QSpinBox) -> None:
+    def _on_range_changed(self, changed: SteppedSpinBox) -> None:
         # "von" darf "bis" nicht ueberholen und umgekehrt -- statt eines
         # Fehlers einfach den jeweils anderen Wert mitziehen.
         if self._from_spin.value() > self._to_spin.value():

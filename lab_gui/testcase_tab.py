@@ -39,6 +39,7 @@ from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
 from paths import app_dir
 from signal_dialog import SignalDialog
+from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager
 from theme import current as current_palette
 from testcase_model import (
@@ -185,6 +186,11 @@ class _BlockGroup:
     count: int
     name: str
     collapsed: bool = True
+    # True, sobald sich die Zeilenzahl durch Hinzufuegen/Entfernen einzelner
+    # Zeilen INNERHALB des aufgeklappten Bausteins veraendert hat (BUGS.md
+    # #22c) -- gesetzt von TestcaseTab._on_row_inserted/_on_row_removed,
+    # ausgewertet von _sync_header_overlay ("(modifiziert)"-Zusatz zum Namen).
+    modified: bool = False
     # Schwebender Zusammenfassungs-Overlay ueber der Kopfzeile im
     # eingeklappten Zustand (siehe _BlockHeaderOverlay/TestcaseTab.
     # _sync_header_overlay) -- nur waehrend collapsed=True erzeugt/sichtbar,
@@ -627,8 +633,15 @@ class TestcaseTab(QWidget):
         """Einfuegeposition fuer einen neuen Schritt: direkt nach der
         markierten Zeile, sonst ans Ende -- so landen neu eingefuegte
         Kontrollfluss-Bloecke da, wo der Nutzer gerade arbeitet, statt immer
-        am Tabellenende."""
+        am Tabellenende. Ist die markierte Zeile die Kopfzeile eines
+        Bausteins (BUGS.md #20), landet die neue Zeile hinter dem GESAMTEN
+        Baustein statt zwischen Kopfzeile und erster Mitgliederzeile -- ein
+        Einfuegen "in den Baustein hinein" waere fuer den Nutzer nicht von
+        einer regulaeren Folgezeile zu unterscheiden."""
         if self._selected_row >= 0:
+            group = self._group_at_header(self._selected_row)
+            if group is not None:
+                return group.start + group.count
             return self._selected_row + 1
         return self._table.rowCount()
 
@@ -691,7 +704,7 @@ class TestcaseTab(QWidget):
         action_combo = QComboBox()
         self._table.setCellWidget(row_index, COL_ACTION, action_combo)
 
-        value_spin = QDoubleSpinBox()
+        value_spin = SteppedDoubleSpinBox()
         value_spin.setDecimals(3)
 
         arb_page = QWidget()
@@ -718,7 +731,7 @@ class TestcaseTab(QWidget):
         value_stack.addWidget(arb_page)    # Index 1: Arbiträrsignal-Zusammenfassung + Button
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
-        duration_spin = QDoubleSpinBox()
+        duration_spin = SteppedDoubleSpinBox()
         duration_spin.setRange(0, 36000)
         duration_spin.setDecimals(1)
         duration_spin.setSuffix(" s")
@@ -879,7 +892,7 @@ class TestcaseTab(QWidget):
             self._table.setCellWidget(row_index, COL_ENABLED, enabled_container)
 
         if t == "loop":
-            count_spin = QSpinBox()
+            count_spin = SteppedSpinBox()
             count_spin.setRange(1, 100000)
             count_spin.setSuffix(" ×")
             count_spin.setValue(max(step.loop_count, 1))
@@ -932,13 +945,13 @@ class TestcaseTab(QWidget):
             name_edit.textChanged.connect(lambda _=None: self._revalidate_structure())
             self._table.setCellWidget(row_index, COL_ACTION, name_edit)
 
-            value_spin = QDoubleSpinBox()
+            value_spin = SteppedDoubleSpinBox()
             value_spin.setDecimals(3)
             value_spin.setRange(-1e9, 1e9)
             value_spin.setValue(step.value)
             self._table.setCellWidget(row_index, COL_VALUE, value_spin)
 
-            duration_spin = QDoubleSpinBox()
+            duration_spin = SteppedDoubleSpinBox()
             duration_spin.setRange(0, 36000)
             duration_spin.setDecimals(1)
             duration_spin.setSuffix(" s")
@@ -946,7 +959,7 @@ class TestcaseTab(QWidget):
             self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
 
         elif t == "wait":
-            duration_spin = QDoubleSpinBox()
+            duration_spin = SteppedDoubleSpinBox()
             duration_spin.setRange(0, 36000)
             duration_spin.setDecimals(1)
             duration_spin.setSuffix(" s")
@@ -973,9 +986,17 @@ class TestcaseTab(QWidget):
         # Tabellenmutation die Signale blocken und den Endzustand danach
         # einmalig sauber neu berechnen, statt auf Zwischenereignisse zu
         # reagieren (siehe auch _move_selected_row).
+        # Ist die markierte Zeile die Kopfzeile eines Bausteins (BUGS.md
+        # #22a/b), soll "Zeile entfernen" den gesamten Baustein loeschen --
+        # im eingeklappten Zustand ist ohnehin nur die Kopfzeile markierbar,
+        # im aufgeklappten Zustand bleibt das Entfernen einzelner
+        # Mitgliederzeilen ueber den else-Zweig unveraendert moeglich.
+        group = self._group_at_header(row)
+        count = group.count if group is not None else 1
         self._table.blockSignals(True)
-        self._on_row_removed(row)
-        self._table.removeRow(row)
+        for _ in range(count):
+            self._on_row_removed(row)
+            self._table.removeRow(row)
         self._table.blockSignals(False)
         self._renumber_rows()
         self._resync_selection()
@@ -1077,7 +1098,8 @@ class TestcaseTab(QWidget):
             group.overlay.setParent(self._table.viewport())
         overlay = group.overlay
         overlay.device_label.setText(tr("Baustein"))
-        overlay.action_label.setText(group.name)
+        name = f"{group.name} {tr('(modifiziert)')}" if group.modified else group.name
+        overlay.action_label.setText(name)
         overlay.value_label.setText(str(group.count))
         pal = current_palette()
         color = self._row_style_color(row) or pal.surface
@@ -1145,6 +1167,7 @@ class TestcaseTab(QWidget):
                 group.start += 1
             elif group.start < row_index < group.start + group.count:
                 group.count += 1
+                group.modified = True
 
     def _on_row_removed(self, row_index: int) -> None:
         remaining: list[_BlockGroup] = []
@@ -1159,6 +1182,7 @@ class TestcaseTab(QWidget):
             elif group.start < row_index < group.start + group.count:
                 group.count -= 1
                 if group.count > 1:
+                    group.modified = True
                     remaining.append(group)
                 else:
                     self._unhide_group_rows(group)

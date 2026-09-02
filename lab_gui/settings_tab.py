@@ -26,6 +26,7 @@ from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import IconButton
 from paths import IS_FROZEN
 from safety import SAFETY_LIMIT_FIELDS
+from step_spinbox import SteppedDoubleSpinBox
 from theme import current as current_palette
 
 # field -> deutscher Basis-Anzeigename (Uebersetzungsschluessel), analog zu
@@ -83,7 +84,7 @@ class _DeviceSafetyGroup(QGroupBox):
         self._row_labels: dict[str, QLabel] = {}
         for field, unit, lo, hi, _default in SAFETY_LIMIT_FIELDS.get(kind, []):
             checkbox = QCheckBox()
-            spin = QDoubleSpinBox()
+            spin = SteppedDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setDecimals(2)
             spin.setSuffix(f" {unit}" if unit else "")

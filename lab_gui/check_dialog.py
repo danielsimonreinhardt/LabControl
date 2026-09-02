@@ -20,13 +20,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QVBoxLayout,
 )
 
 from i18n import Translator, tr
+from step_spinbox import SteppedDoubleSpinBox
 from testcase_model import COND_FIELD_LABELS, COND_FIELD_UNITS, TestStep, check_summary
 from theme import current as current_palette
 
@@ -58,12 +58,12 @@ class CheckDialog(QDialog):
         self._populate_field_combo()
         self._form.addRow(" ", self._field_combo)
 
-        self._min_spin = QDoubleSpinBox()
+        self._min_spin = SteppedDoubleSpinBox()
         self._min_spin.setDecimals(3)
         self._min_spin.setRange(-100000, 100000)
         self._form.addRow(" ", self._min_spin)
 
-        self._max_spin = QDoubleSpinBox()
+        self._max_spin = SteppedDoubleSpinBox()
         self._max_spin.setDecimals(3)
         self._max_spin.setRange(-100000, 100000)
         self._form.addRow(" ", self._max_spin)

@@ -856,7 +856,28 @@ class ControlTab(QWidget):
         self._set_online(device_id, online)
 
     def _update_empty_tile(self) -> None:
-        self._empty_tile.setVisible(not any(s.isVisible() for s in self._sections.values()))
+        # BUGS.md #16 (Root Cause, per Live-Debug in einem QTabWidget mit
+        # zweitem Tab bestaetigt): NICHT s.isVisible() verwenden. isVisible()
+        # ist NICHT die eigene, explizit gesetzte Sichtbarkeit einer Sektion
+        # (das waere hier gewollt) -- Qt liefert dort false, sobald IRGENDEIN
+        # Vorfahre im Widget-Baum unsichtbar ist. ControlTab selbst ist aber
+        # nur die AKTIVE Seite eines QTabWidget (siehe main_window.py):
+        # solange z.B. der SettingsTab angezeigt wird (wo der "Geraetezu-
+        # ordnung loeschen"-Button sitzt, der on_device_known/forget_device
+        # und damit diese Methode ausloest), ist die ControlTab-Seite selbst
+        # unsichtbar -- dann liefert JEDE Sektion isVisible()==False, egal ob
+        # sie fuer ein verbundenes Geraet regulaer sichtbar geschaltet wurde.
+        # Die Kachel wuerde dadurch faelschlich sichtbar geschaltet und blieb
+        # es auch nach dem Zurueckwechseln auf den Control-Tab, waehrend die
+        # eigentlich verbundenen Geraete-Sektionen (ihr eigenes Sichtbarkeits-
+        # Flag blieb ja unveraendert "sichtbar") ebenfalls wieder erschienen
+        # -- genau das gemeldete gleichzeitige Anzeigen beider.
+        #
+        # isHidden() dagegen spiegelt NUR das eigene, explizit gesetzte
+        # hide()/show()-Flag der Sektion wider (siehe Qt-Doku), unabhaengig
+        # vom Sichtbarkeitszustand der Vorfahren -- genau das hier benoetigte
+        # "ist diese Sektion fuer ihr Geraet als verbunden markiert".
+        self._empty_tile.setVisible(not any(not s.isHidden() for s in self._sections.values()))
 
     def _set_online(self, device_id: str, online: bool) -> None:
         section = self._sections.get(device_id)

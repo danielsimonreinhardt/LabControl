@@ -15,15 +15,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QLabel,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from i18n import Translator, tr
+from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from testcase_model import ACTION_VALUE_RANGE, ARB_SHAPE_LABELS, ARB_TARGETS, action_label, arb_value
 from theme import current as current_palette
 
@@ -157,26 +156,31 @@ class SignalDialog(QDialog):
         self._target_combo = QComboBox()
         self._populate_target_combo()
 
-        self._amplitude_spin = QDoubleSpinBox()
+        self._amplitude_spin = SteppedDoubleSpinBox()
         self._amplitude_spin.setDecimals(3)
 
-        self._offset_spin = QDoubleSpinBox()
+        self._offset_spin = SteppedDoubleSpinBox()
         self._offset_spin.setDecimals(3)
 
-        self._frequency_spin = QDoubleSpinBox()
+        self._frequency_spin = SteppedDoubleSpinBox()
         self._frequency_spin.setDecimals(3)
         self._frequency_spin.setRange(0.001, 50.0)
         self._frequency_spin.setSuffix(" Hz")
         self._frequency_spin.setValue(1.0)
 
-        self._interval_spin = QSpinBox()
+        # 50/200 statt der Standard-1/10 -- passend zum bisherigen
+        # QSpinBox-singleStep(50) dieses Felds (Update-Intervall in ms).
+        self._interval_spin = SteppedSpinBox(small_step=50, large_step=200)
         self._interval_spin.setRange(50, 5000)
-        self._interval_spin.setSingleStep(50)
         self._interval_spin.setSuffix(" ms")
         self._interval_spin.setValue(200)
 
         # Nur fuer shape == "square" relevant (siehe _on_shape_changed).
-        self._duty_spin = QDoubleSpinBox()
+        # decimals=0 (ganzzahlige %-Anzeige) -- kleine Schrittweite 1 statt
+        # der Standard-0,1, sonst wuerde ein einzelner Klick durch die
+        # Rundung auf 0 Nachkommastellen haeufig gar keine sichtbare
+        # Aenderung bewirken.
+        self._duty_spin = SteppedDoubleSpinBox(small_step=1, large_step=10)
         self._duty_spin.setDecimals(0)
         self._duty_spin.setRange(1, 99)
         self._duty_spin.setSuffix(" %")

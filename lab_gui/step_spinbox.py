@@ -1,34 +1,47 @@
-"""Eigenes Increment-Verhalten fuer die Pfeil-Buttons an Sollwert-Eingabe-
-feldern (siehe FEATURES.md Punkt 3): einfacher Klick aendert den Wert um
-0,1, ein gehaltener Klick um 1,0 pro Schritt alle 0,2s. Ersetzt dafuer Qts
+"""Eigenes Increment-Verhalten fuer die Pfeil-Buttons an Zahlen-Eingabe-
+feldern (siehe FEATURES.md Punkt 3, BUGS.md #21 fuer die app-weite
+Ausweitung): einfacher Klick aendert den Wert um einen kleinen Schritt, ein
+gehaltener Klick um einen groesseren Schritt alle 0,2s. Ersetzt dafuer Qts
 eingebautes Klick-/Halte-Verhalten (singleStep + internes Auto-Repeat)
 komplett, indem die Maus-Events fuer die Pfeil-Subcontrols selbst
 ausgewertet werden -- Tastatur-Pfeiltasten und Mausrad bleiben unveraendert
 (dort gilt weiterhin singleStep, siehe QAbstractSpinBox).
+
+Zwei konkrete Klassen teilen sich die Maus-Event-Logik ueber
+_SteppedSpinMixin und unterscheiden sich nur in Schrittweite und
+Wertrundung: SteppedDoubleSpinBox (0,1/1,0, wie urspruenglich nur in
+control_tab.py verwendet) und SteppedSpinBox fuer Ganzzahl-Felder (1/10,
+z.B. Durchlaufzahl, max. Iterationen, Intervall, Zeilenbereich).
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QDoubleSpinBox, QStyle, QStyleOptionSpinBox
+from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox, QStyle, QStyleOptionSpinBox
 
-_SMALL_STEP = 0.1
-_LARGE_STEP = 1.0
+_DOUBLE_SMALL_STEP = 0.1
+_DOUBLE_LARGE_STEP = 1.0
+_INT_SMALL_STEP = 1
+_INT_LARGE_STEP = 10
 _HOLD_THRESHOLD_MS = 300
 _REPEAT_INTERVAL_MS = 200
 
 
-class SteppedDoubleSpinBox(QDoubleSpinBox):
-    """QDoubleSpinBox mit 0,1/Klick, 1,0/Schritt beim Halten (alle 0,2s)."""
+class _SteppedSpinMixin:
+    """Gemeinsame Maus-Event-Auswertung fuer SteppedDoubleSpinBox/
+    SteppedSpinBox (siehe Modul-Docstring). Muss als ERSTE Basisklasse vor
+    dem jeweiligen Q*SpinBox stehen, damit super() innerhalb dieses Mixins
+    per MRO auf die Qt-Basisklasse durchgreift."""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setSingleStep(_SMALL_STEP)
+    def _init_stepping(self, small_step, large_step) -> None:
+        self._small_step = small_step
+        self._large_step = large_step
+        self.setSingleStep(small_step)
         self._pressed_control = QStyle.SubControl.SC_None
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self._start_repeat)
         self._repeat_timer = QTimer(self)
-        self._repeat_timer.timeout.connect(lambda: self._apply_step(_LARGE_STEP))
+        self._repeat_timer.timeout.connect(lambda: self._apply_step(self._large_step))
 
     def _sub_control_at(self, pos):
         opt = QStyleOptionSpinBox()
@@ -44,7 +57,7 @@ class SteppedDoubleSpinBox(QDoubleSpinBox):
         if sc not in (QStyle.SubControl.SC_SpinBoxUp, QStyle.SubControl.SC_SpinBoxDown):
             return False
         self._pressed_control = sc
-        self._apply_step(_SMALL_STEP)
+        self._apply_step(self._small_step)
         self._hold_timer.start(_HOLD_THRESHOLD_MS)
         self.update()
         event.accept()
@@ -79,12 +92,19 @@ class SteppedDoubleSpinBox(QDoubleSpinBox):
     def _start_repeat(self) -> None:
         if self._pressed_control == QStyle.SubControl.SC_None:
             return
-        self._apply_step(_LARGE_STEP)
+        self._apply_step(self._large_step)
         self._repeat_timer.start(_REPEAT_INTERVAL_MS)
 
-    def _apply_step(self, step: float) -> None:
+    def _apply_step(self, step) -> None:
         delta = step if self._pressed_control == QStyle.SubControl.SC_SpinBoxUp else -step
-        self.setValue(round(self.value() + delta, self.decimals()))
+        self.setValue(self._stepped_value(self.value() + delta))
+
+    def _stepped_value(self, value):
+        """Rundung des neuen Werts vor setValue() -- Ganzzahl-Felder brauchen
+        keine, Dezimalfelder runden auf self.decimals() (siehe
+        SteppedDoubleSpinBox), sonst summieren sich Gleitkomma-Ungenauigkeiten
+        ueber viele Schritte auf."""
+        return value
 
     def _stop_stepping(self) -> None:
         self._hold_timer.stop()
@@ -97,3 +117,31 @@ class SteppedDoubleSpinBox(QDoubleSpinBox):
         if self._pressed_control != QStyle.SubControl.SC_None:
             option.activeSubControls = self._pressed_control
             option.state |= QStyle.StateFlag.State_Sunken
+
+
+class SteppedDoubleSpinBox(_SteppedSpinMixin, QDoubleSpinBox):
+    """QDoubleSpinBox mit 0,1/Klick, 1,0/Schritt beim Halten (alle 0,2s) per
+    Default -- ueber small_step/large_step pro Feld anpassbar, falls die
+    Groessenordnung des Werts (z.B. Tastgrad in %) andere Schritte sinnvoller
+    macht als die Default-0,1/1,0 fuer Sollwerte."""
+
+    def __init__(self, parent=None, small_step: float = _DOUBLE_SMALL_STEP, large_step: float = _DOUBLE_LARGE_STEP):
+        super().__init__(parent)
+        self._init_stepping(small_step, large_step)
+
+    def _stepped_value(self, value: float) -> float:
+        return round(value, self.decimals())
+
+
+class SteppedSpinBox(_SteppedSpinMixin, QSpinBox):
+    """QSpinBox (Ganzzahl) mit 1/Klick, 10/Schritt beim Halten (alle 0,2s)
+    per Default -- fuer Ganzzahl-Felder wie Durchlaufzahl, max. Iterationen,
+    Intervall (ms) oder Zeilenbereich (BUGS.md #21). small_step/large_step
+    pro Feld anpassbar (z.B. 50/200 fuer ein Intervall-Feld in ms-Schritten)."""
+
+    def __init__(self, parent=None, small_step: int = _INT_SMALL_STEP, large_step: int = _INT_LARGE_STEP):
+        super().__init__(parent)
+        self._init_stepping(small_step, large_step)
+
+    def _stepped_value(self, value: float) -> int:
+        return int(round(value))

@@ -56,7 +56,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -74,6 +73,7 @@ from PySide6.QtWidgets import (
 from i18n import Translator, tr
 from icons import IconButton
 from paths import app_dir
+from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
@@ -390,10 +390,10 @@ class _YAxisDialog(QDialog):
         layout.addWidget(self._auto_check)
 
         form = QFormLayout()
-        self._left_min = QDoubleSpinBox()
-        self._left_max = QDoubleSpinBox()
-        self._right_min = QDoubleSpinBox()
-        self._right_max = QDoubleSpinBox()
+        self._left_min = SteppedDoubleSpinBox()
+        self._left_max = SteppedDoubleSpinBox()
+        self._right_min = SteppedDoubleSpinBox()
+        self._right_max = SteppedDoubleSpinBox()
         for spin in (self._left_min, self._left_max, self._right_min, self._right_max):
             spin.setRange(-1_000_000.0, 1_000_000.0)
             spin.setDecimals(3)

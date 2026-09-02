@@ -13,17 +13,16 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QLineEdit,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from i18n import Translator, tr
+from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from testcase_model import COND_FIELD_LABELS, COND_FIELD_UNITS, COND_OPS, TestStep, condition_summary
 from theme import current as current_palette
 
@@ -85,7 +84,7 @@ class ConditionDialog(QDialog):
         self._populate_field_combo()
         self._m_op_combo = QComboBox()
         self._populate_op_combo(self._m_op_combo)
-        self._m_value_spin = QDoubleSpinBox()
+        self._m_value_spin = SteppedDoubleSpinBox()
         self._m_value_spin.setDecimals(3)
         self._m_value_spin.setRange(-100000, 100000)
         m_form.addRow(" ", self._device_combo)
@@ -101,7 +100,7 @@ class ConditionDialog(QDialog):
         self._populate_time_ref_combo()
         self._t_op_combo = QComboBox()
         self._populate_op_combo(self._t_op_combo)
-        self._t_value_spin = QDoubleSpinBox()
+        self._t_value_spin = SteppedDoubleSpinBox()
         self._t_value_spin.setDecimals(1)
         self._t_value_spin.setRange(0, 1e7)
         self._t_value_spin.setSuffix(" s")
@@ -116,7 +115,7 @@ class ConditionDialog(QDialog):
         self._var_edit = QLineEdit()
         self._v_op_combo = QComboBox()
         self._populate_op_combo(self._v_op_combo)
-        self._v_value_spin = QDoubleSpinBox()
+        self._v_value_spin = SteppedDoubleSpinBox()
         self._v_value_spin.setDecimals(3)
         self._v_value_spin.setRange(-1e9, 1e9)
         v_form.addRow(" ", self._var_edit)
@@ -125,7 +124,7 @@ class ConditionDialog(QDialog):
         self._pages.addWidget(self._variable_page)
 
         self._max_iter_label = QLabel()
-        self._max_iter_spin = QSpinBox()
+        self._max_iter_spin = SteppedSpinBox()
         self._max_iter_spin.setRange(0, 1_000_000)
         if is_while:
             self._form.addRow(self._max_iter_label, self._max_iter_spin)
