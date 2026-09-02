@@ -28,6 +28,10 @@ PSU_ACTIONS = {
     "PSU_ARB": "Arbiträrsignal",
 }
 
+CAN_ACTIONS = {
+    "CAN_SEND": "CAN-Frame senden",
+}
+
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
 # Schaltaktionen (Ausgang EIN/AUS, Presets) scheiden aus, da sie keinen
@@ -51,13 +55,22 @@ def arb_shape_label(shape: str) -> str:
 DEVICE_ACTIONS = {
     "load": LOAD_ACTIONS,
     "psu": PSU_ACTIONS,
+    "can": CAN_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
 DEVICE_KIND_LABELS = {
     "load": "Last",
     "psu": "Netzteil",
+    "can": "CAN-Bus",
 }
+
+# Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
+# on_load_measurement/on_psu_measurement) -- fuer die Bedingungs-Geraeteauswahl
+# (cond_source == "measurement", siehe condition_dialog.py) relevant. CAN-Bus
+# hat keine solchen Messwerte, daher hier bewusst ausgeschlossen statt wie bei
+# DEVICE_KIND_LABELS/DEVICE_ACTIONS jede Geraeteart zu listen.
+MEASUREMENT_DEVICE_KINDS = ("load", "psu")
 
 # Alte Testablauf-Dateien speichern die Geraeteart noch unter dem Feldnamen
 # "device" mit den frueheren deutschen Anzeigenamen als Wert.
@@ -72,9 +85,13 @@ _LEGACY_DEVICE_KIND = {"Last": "load", "Netzteil": "psu"}
 # Arbiträrsignal-Aktionen brauchen ebenfalls keinen Wert im normalen Feld --
 # ihre Parameter (Signalform, Amplitude, ...) kommen aus dem Definieren-Dialog
 # (siehe signal_dialog.py) und liegen in den arb_*-Feldern von TestStep.
+# CAN_SEND traegt seine Nutzdaten ebenfalls in eigenen Feldern (can_*, siehe
+# TestStep) statt im normalen Wert-Feld -- eine CAN-ID + Datenbytes passen
+# nicht in einen einzelnen float.
 VALUELESS_ACTIONS = {
     "OUT_ON", "OUT_OFF", "PSU_OUT_ON", "PSU_OUT_OFF",
     "ARB", "PSU_ARB",
+    "CAN_SEND",
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -96,6 +113,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "PSU_OUT_OFF": ("", 0, 0),
     "ARB": ("", 0, 0),
     "PSU_ARB": ("", 0, 0),
+    "CAN_SEND": ("", 0, 0),
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -177,6 +195,15 @@ class TestStep:
     arb_frequency: float = 1.0    # Hz
     arb_interval_ms: int = 200    # Abstand zwischen zwei Sollwert-Updates
     arb_duty: float = 0.5         # nur "square": Tastgrad (Anteil High-Phase), 0..1
+
+    # -- CAN-Frame-Parameter (nur relevant wenn action == "CAN_SEND") -----
+    # Ein periodisches Senden (z.B. alle 100ms fuer die Dauer des Schritts)
+    # braucht keine eigenen Felder -- laesst sich mit den vorhandenen
+    # Kontrollfluss-Schritten (loop + wait um einen CAN_SEND-Schritt) bauen,
+    # genau wie jede andere wiederholte Aktion auch.
+    can_id: int = 0            # Arbitration-ID (11-bit Standard oder 29-bit Extended)
+    can_data: str = ""         # Hex-String, z.B. "01 A2 FF" (max. 8 Bytes, klassisches CAN)
+    can_extended: bool = False  # 29-bit Extended-ID statt 11-bit Standard-ID
 
     # -- Ablaufsteuerung: Schritttyp-Diskriminator ------------------------
     # "action" (Standard, s.o.) | "loop" | "while" | "if" | "else" | "end"

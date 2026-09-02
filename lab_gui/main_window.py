@@ -45,6 +45,10 @@ class MainWindow(QMainWindow):
     # Verbindung -- wie alle anderen Worker-Aufrufe -- ueber eine Queued
     # Connection korrekt in den Worker-Thread gelangt.
     _dispatch_test_action = Signal(str, str, str, float)  # device_id, kind, action, value
+    # device_id, arbitration_id, data (Hex-String), extended -- eigenes Signal
+    # aus demselben Grund wie _dispatch_test_action (Queued Connection in den
+    # Worker-Thread), siehe testcase_runner.TestRunner.execute_can_send.
+    _dispatch_test_can_send = Signal(str, int, str, bool)
 
     # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
     # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
@@ -103,7 +107,7 @@ class MainWindow(QMainWindow):
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
-        self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set()}
+        self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set(), "can": set()}
 
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
@@ -151,15 +155,20 @@ class MainWindow(QMainWindow):
 
     def _setup_worker(self) -> None:
         self._thread = QThread(self)
-        self._worker = DeviceWorker(simulation_mode=self._settings.simulation_mode)
+        self._worker = DeviceWorker(
+            simulation_mode=self._settings.simulation_mode,
+            can_configs=self._settings.can_configs,
+        )
         self._worker.moveToThread(self._thread)
 
         self._worker.device_added.connect(self._registry.on_device_added)
         self._worker.device_removed.connect(self._registry.on_device_removed)
         self._worker.load_connected.connect(self._on_load_connected)
         self._worker.psu_connected.connect(self._on_psu_connected)
+        self._worker.can_connected.connect(self._on_can_connected)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
+        self._worker.can_stats.connect(self.dashboard.update_can)
         self._worker.load_measurement.connect(self.timeline_tab.update_load)
         self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
@@ -169,6 +178,7 @@ class MainWindow(QMainWindow):
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
+        self._worker.can_frame_received.connect(self.control_tab.on_can_frame)
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -176,6 +186,7 @@ class MainWindow(QMainWindow):
     def _wire_safety(self) -> None:
         self._worker.load_measurement.connect(self._safety.on_load_measurement)
         self._worker.psu_measurement.connect(self._safety.on_psu_measurement)
+        self._worker.can_stats.connect(self._safety.on_can_stats)
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
@@ -279,8 +290,10 @@ class MainWindow(QMainWindow):
             self._registry.device_known.emit(kind, device_id, label)
             if kind == "load":
                 self._on_load_connected(device_id, False)
-            else:
+            elif kind == "psu":
                 self._on_psu_connected(device_id, False)
+            else:
+                self._on_can_connected(device_id, False)
 
     def _on_device_known_safety_limits(self, kind: str, device_id: str, _label: str) -> None:
         # Initialbefuellung der pro Geraet erzeugten Grenzwert-Sektion (siehe
@@ -304,12 +317,14 @@ class MainWindow(QMainWindow):
             # ausfuehren (kurzes Einfrieren/Flackern des Panels beim "Übernehmen").
             section.apply_setpoint.connect(self._worker.set_load_setpoint)
             section.set_input.connect(self._worker.set_load_input)
-        else:
+        elif kind == "psu":
             section.set_voltage.connect(self._worker.set_psu_voltage)
             section.set_current.connect(self._worker.set_psu_current)
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
+        else:
+            section.send_frame.connect(self._worker.send_can_frame)
 
     def _wire_recording(self) -> None:
         # Aufzeichnung-Steuerung sitzt im Verlauf-Tab (siehe timeline_tab.py-
@@ -400,6 +415,10 @@ class MainWindow(QMainWindow):
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
         self.settings_tab.reset_devices_requested.connect(self._on_reset_devices_requested)
 
+        self.settings_tab.set_can_configs(self._settings.can_configs)
+        self.settings_tab.can_configs_changed.connect(self._settings.set_can_configs)
+        self._settings.can_configs_changed.connect(self._worker.set_can_configs)
+
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.
         py) -- die Rueckfrage lief bereits dort, hier nur noch die Ausfuehrung.
@@ -426,7 +445,7 @@ class MainWindow(QMainWindow):
           wieder neu an (siehe on_device_known der jeweiligen Widgets)."""
         known = self._registry.reset_all()
         self._settings.reset_device_settings()
-        online_ids = self._online_devices["load"] | self._online_devices["psu"]
+        online_ids = set().union(*self._online_devices.values())
         for kind, device_id in known:
             if device_id in online_ids:
                 self._registry.on_device_added(kind, device_id)
@@ -551,6 +570,8 @@ class MainWindow(QMainWindow):
         self._test_runner = TestRunner()
         self._test_runner.execute_action.connect(self._on_test_execute_action)
         self._dispatch_test_action.connect(self._worker.execute_action)
+        self._test_runner.execute_can_send.connect(self._on_test_execute_can_send)
+        self._dispatch_test_can_send.connect(self._worker.execute_can_send)
         self._worker.action_completed.connect(self._test_runner.on_action_completed)
         self._worker.load_measurement.connect(self._test_runner.on_load_measurement)
         self._worker.psu_measurement.connect(self._test_runner.on_psu_measurement)
@@ -643,6 +664,13 @@ class MainWindow(QMainWindow):
             return
         self._dispatch_test_action.emit(resolved_id, kind, action, value)
 
+    def _on_test_execute_can_send(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
+        resolved_id, error = self._resolve_device_id("can", device_id)
+        if resolved_id is None:
+            self._test_runner.on_action_completed(False, error)
+            return
+        self._dispatch_test_can_send.emit(resolved_id, arbitration_id, data_hex, extended)
+
     def _resolve_device_id(self, kind: str, device_id: str) -> tuple[str | None, str]:
         if device_id:
             return device_id, ""
@@ -668,6 +696,12 @@ class MainWindow(QMainWindow):
         self._set_online("psu", device_id, online)
         self.dashboard.set_psu_online(device_id, online)
         self.control_tab.set_psu_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_can_connected(self, device_id: str, online: bool) -> None:
+        self._set_online("can", device_id, online)
+        self.dashboard.set_can_online(device_id, online)
+        self.control_tab.set_can_online(device_id, online)
 
     def _set_online(self, kind: str, device_id: str, online: bool) -> None:
         if online:

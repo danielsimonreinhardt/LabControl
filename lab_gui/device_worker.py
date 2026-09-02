@@ -22,6 +22,8 @@ from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
+from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
+from can_bus.mock import MockCanBus
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +47,23 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
+# Obergrenze empfangener CAN-Frames, die pro Poll-Zyklus UND Interface aus
+# der Empfangs-Queue geleert werden (siehe _poll) -- verhindert, dass ein
+# Interface mit sehr hoher Buslast die anderen Geraete im selben Zyklus
+# verhungern laesst. Bei Ueberschreiten bleiben weitere Frames einfach bis
+# zum naechsten Zyklus in der Queue (python-can puffert selbst).
+CAN_DRAIN_LIMIT = 32
+
 # Feste Device-IDs fuer die simulierten Geraete (siehe set_simulation_mode) --
 # im Gegensatz zu echten Geraeten gibt es hier keine USB-Seriennummer/COM-Port,
 # aus der sich eine ID ableiten liesse.
 SIM_PSU_ID = "psu:SIM"
 SIM_LOAD_ID = "load:SIM"
+SIM_CAN_ID = "can:mock:SIM"
+
+
+def _can_device_id(cfg: dict) -> str:
+    return f"can:{cfg['interface']}:{cfg['channel']}"
 
 
 def _resolve_device_ids(kind: str, infos: list) -> dict[str, object]:
@@ -96,10 +110,18 @@ class DeviceWorker(QObject):
     action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
-    def __init__(self, simulation_mode: bool = False) -> None:
+    can_connected = Signal(str, bool)        # device_id, online
+    # device_id, arbitration_id, data (Hex-String z.B. "01 A2 FF"), extended, timestamp (s)
+    can_frame_received = Signal(str, int, str, bool, float)
+    can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
+
+    def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
         super().__init__()
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
+        self._can_buses: dict[str, CanBus] = {}
+        self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
+        self._can_configs: list[dict] = list(can_configs or [])
         self._simulation_mode = simulation_mode
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
@@ -111,6 +133,7 @@ class DeviceWorker(QObject):
         if self._simulation_mode:
             self._add_mock_psu()
             self._add_mock_load()
+            self._add_mock_can()
         self._try_reconnect()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
@@ -125,9 +148,25 @@ class DeviceWorker(QObject):
         if enabled:
             self._add_mock_psu()
             self._add_mock_load()
+            self._add_mock_can()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
+            self._close_can(SIM_CAN_ID)
+
+    # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
+    # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
+    # verbunden werden sollen, kommt ausschliesslich aus dieser Liste (siehe
+    # can_bus/README.md: keine sichere Autodiscovery ohne bekannte Bitrate).
+
+    @Slot(list)
+    def set_can_configs(self, configs: list) -> None:
+        self._can_configs = list(configs)
+        wanted_ids = {_can_device_id(cfg) for cfg in self._can_configs}
+        for device_id in list(self._can_buses):
+            if device_id != SIM_CAN_ID and device_id not in wanted_ids:
+                self._close_can(device_id)
+        self._reconnect_can()
 
     def _add_mock_psu(self) -> None:
         if SIM_PSU_ID in self._psus:
@@ -161,6 +200,22 @@ class DeviceWorker(QObject):
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
 
+    def _add_mock_can(self) -> None:
+        if SIM_CAN_ID in self._can_buses:
+            return
+        self._can_buses[SIM_CAN_ID] = MockCanBus()
+        self._can_stats[SIM_CAN_ID] = [0, 0]
+        self.device_added.emit("can", SIM_CAN_ID)
+        self.can_connected.emit(SIM_CAN_ID, True)
+
+    def _close_can(self, device_id: str) -> None:
+        bus = self._can_buses.pop(device_id, None)
+        self._can_stats.pop(device_id, None)
+        if bus is not None:
+            bus.close()
+            self.can_connected.emit(device_id, False)
+            self.device_removed.emit("can", device_id)
+
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass
         # dahinter tatsaechlich ein antwortendes Geraet haengt (z.B. wenn der
@@ -171,6 +226,7 @@ class DeviceWorker(QObject):
         # wieder korrigiert.
         self._reconnect_loads()
         self._reconnect_psus()
+        self._reconnect_can()
 
     def _reconnect_loads(self) -> None:
         candidates = _resolve_device_ids("load", KoradKEL102.discover_ports())
@@ -227,6 +283,32 @@ class DeviceWorker(QObject):
             self.psu_output_state.emit(device_id, False)
             self._emit_psu_limits(device_id)
 
+    def _reconnect_can(self) -> None:
+        """Verbindet noch nicht verbundene, konfigurierte CAN-Interfaces.
+
+        Anders als bei Load/PSU keine Discovery ueber VID/PID -- die Liste
+        der zu verbindenden Interfaces kommt ausschliesslich aus
+        self._can_configs (siehe set_can_configs/settings.py). Ein
+        Verbindungsfehler (z.B. Kabel nicht gesteckt, Kanal aktuell von
+        einer anderen Anwendung belegt) wird hier verschluckt und beim
+        naechsten RECONNECT_INTERVAL_MS-Tick erneut versucht, analog zu
+        _reconnect_psus/_reconnect_loads.
+        """
+        for cfg in self._can_configs:
+            device_id = _can_device_id(cfg)
+            if device_id in self._can_buses:
+                continue
+            try:
+                bus = CanBus(cfg["interface"], cfg["channel"], cfg.get("bitrate", CAN_DEFAULT_BITRATE))
+            except CanConnectionError as exc:
+                logger.warning("CAN-Interface %s nicht erreichbar: %s", device_id, exc)
+                continue
+            self._can_buses[device_id] = bus
+            self._can_stats[device_id] = [0, 0]
+            logger.info("CAN-Interface verbunden: %s", device_id)
+            self.device_added.emit("can", device_id)
+            self.can_connected.emit(device_id, True)
+
     def _emit_psu_limits(self, device_id: str) -> None:
         """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.
 
@@ -273,6 +355,30 @@ class DeviceWorker(QObject):
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
 
+        for device_id, bus in list(self._can_buses.items()):
+            try:
+                drained = 0
+                while drained < CAN_DRAIN_LIMIT:
+                    frame = bus.recv(timeout=0.0)
+                    if frame is None:
+                        break
+                    self._can_stats[device_id][1] += 1
+                    self.can_frame_received.emit(
+                        device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
+                        frame.extended, frame.timestamp,
+                    )
+                    drained += 1
+            except CanError as exc:
+                logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
+                bus.close()
+                del self._can_buses[device_id]
+                self._can_stats.pop(device_id, None)
+                self.can_connected.emit(device_id, False)
+                self.device_removed.emit("can", device_id)
+                continue
+            tx, rx = self._can_stats[device_id]
+            self.can_stats.emit(device_id, tx, rx)
+
     # -- gemeinsame Fehlerbehandlung ------------------------------------------
 
     def _guard_load(self, device_id: str, action: Callable[[KoradKEL102], None]) -> tuple[bool, str]:
@@ -304,6 +410,21 @@ class DeviceWorker(QObject):
             del self._psus[device_id]
             self.psu_connected.emit(device_id, False)
             self.device_removed.emit("psu", device_id)
+            return False, str(exc)
+
+    def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
+        bus = self._can_buses.get(device_id)
+        if bus is None:
+            return False, "CAN-Interface nicht verbunden"
+        try:
+            action(bus)
+            return True, ""
+        except CanError as exc:
+            bus.close()
+            del self._can_buses[device_id]
+            self._can_stats.pop(device_id, None)
+            self.can_connected.emit(device_id, False)
+            self.device_removed.emit("can", device_id)
             return False, str(exc)
 
     # -- Sicherheitsabschaltung (Watchdog, siehe safety.py) -------------------
@@ -443,6 +564,40 @@ class DeviceWorker(QObject):
     @Slot(str, int)
     def recall_psu_memory(self, device_id: str, index: int) -> None:
         self._guard_psu(device_id, lambda psu: psu.recall_memory(index))
+
+    # -- CAN-Bus: Steuerbefehle -----------------------------------------------
+    # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
+    # Signale ueber die Thread-Grenze hinweg fuer str/int/float/bool
+    # zuverlaessig funktionieren (siehe uebrige Signale in dieser Datei),
+    # fuer bytes aber nicht garantiert getestet ist.
+
+    def _send_can(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> tuple[bool, str]:
+        try:
+            data = bytes.fromhex(data_hex.replace(" ", ""))
+        except ValueError as exc:
+            return False, f"Ungueltige CAN-Nutzdaten '{data_hex}': {exc}"
+        ok, message = self._guard_can(device_id, lambda bus: bus.send(arbitration_id, data, extended))
+        if ok:
+            self._can_stats[device_id][0] += 1
+        return ok, message
+
+    @Slot(str, int, str, bool)
+    def send_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
+        """Manuelles Senden aus dem Control-Tab -- meldet Fehler NICHT ueber
+        action_completed (das ist reserviert fuer den Testablauf-Dispatch,
+        siehe execute_can_send), analog zu set_load_current/set_psu_voltage
+        etc., die ihr _guard_*-Ergebnis ebenfalls nicht zurueckmelden."""
+        self._send_can(device_id, arbitration_id, data_hex, extended)
+
+    @Slot(str, int, str, bool)
+    def execute_can_send(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
+        """Senden aus einem Testablauf-Schritt (step_type "can_send", siehe
+        testcase_runner.py) -- im Gegensatz zu send_can_frame() wird das
+        Ergebnis ueber action_completed gemeldet, damit der TestRunner auf
+        den Abschluss warten kann (gleiches Muster wie execute_action/
+        _dispatch_action fuer Last/Netzteil)."""
+        ok, message = self._send_can(device_id, arbitration_id, data_hex, extended)
+        self.action_completed.emit(ok, message)
 
     # -- Testablauf: generischer Dispatch fuer einen Testschritt -------------
 

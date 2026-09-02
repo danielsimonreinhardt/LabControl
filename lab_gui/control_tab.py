@@ -11,15 +11,20 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -30,9 +35,16 @@ from icons import IconButton
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from presets import PresetStore, SLOT_COUNT
-from step_spinbox import SteppedDoubleSpinBox
+from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
+
+# Obergrenze der im Live-Traffic-Tisch angezeigten Zeilen (siehe
+# CanControlGroup.append_frame) -- reine GUI-Anzeige, kein Log/Export, daher
+# reicht ein kleiner Ausschnitt der zuletzt empfangenen Frames.
+CAN_TRAFFIC_ROW_LIMIT = 50
+CAN_STANDARD_ID_MAX = 0x7FF
+CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
 
 # Interner SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS) ->
 # deutscher Basis-Anzeigename (Uebersetzungsschluessel fuer i18n.tr).
@@ -589,6 +601,138 @@ class PsuControlGroup(QGroupBox):
         self._current_button.setEnabled(bool(self._output_on))
 
 
+class CanControlGroup(QGroupBox):
+    """Steuersektion fuer ein CAN-Interface: Formular zum Senden eines
+    einzelnen Frames + eine kleine Live-Traffic-Tabelle. Anders als Last/
+    Netzteil kein Dauer-Sollwert -- daher deutlich schlanker als
+    LoadControlGroup/PsuControlGroup (kein Preset-Zustand, keine
+    Sicherheits-Grenzwerte: ein Bus hat keinen "Ausgang", der abzuschalten
+    waere, siehe device_worker.py)."""
+
+    send_frame = Signal(str, int, str, bool)  # device_id, arbitration_id, data (Hex-String), extended
+    panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
+    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+
+    def __init__(self, device_id: str, label: str) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self.setTitle(label)
+
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(self._on_color_selected)
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
+
+        self._id_spin = SteppedSpinBox()
+        self._id_spin.setDisplayIntegerBase(16)
+        self._id_spin.setPrefix("0x")
+        self._extended_check = QCheckBox()
+        self._extended_check.toggled.connect(self._on_extended_toggled)
+        self._on_extended_toggled(False)
+        self._id_row = _row(self._id_spin, self._extended_check)
+        self._form.addRow(" ", self._id_row)
+        _detint_label(self._form, self._id_row)
+
+        self._data_edit = QLineEdit()
+        self._data_edit.setPlaceholderText("01 A2 FF")
+        self._send_button = IconButton("mdi.send-outline", "")
+        self._send_button.clicked.connect(self._on_send_clicked)
+        self._data_row = _row(self._data_edit, self._send_button)
+        self._form.addRow(" ", self._data_row)
+        _detint_label(self._form, self._data_row)
+
+        self._traffic_table = QTableWidget(0, 3)
+        self._traffic_table.setHorizontalHeaderItem(0, QTableWidgetItem())
+        self._traffic_table.setHorizontalHeaderItem(1, QTableWidgetItem())
+        self._traffic_table.setHorizontalHeaderItem(2, QTableWidgetItem())
+        self._traffic_table.verticalHeader().setVisible(False)
+        self._traffic_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._traffic_table.setMinimumHeight(160)
+        outer.addWidget(self._traffic_table, 1)
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("CAN-Bus"))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._form.labelForField(self._id_row).setText(tr("ID / Extended:"))
+        self._extended_check.setText(tr("Extended"))
+        self._form.labelForField(self._data_row).setText(tr("Daten (Hex):"))
+        self._send_button.setToolTip(tr("Senden"))
+        self._traffic_table.setHorizontalHeaderLabels([tr("Zeit (s)"), tr("ID"), tr("Daten")])
+
+    def _on_extended_toggled(self, extended: bool) -> None:
+        self._id_spin.setRange(0, CAN_EXTENDED_ID_MAX if extended else CAN_STANDARD_ID_MAX)
+
+    def _on_send_clicked(self) -> None:
+        self.send_frame.emit(
+            self._device_id, self._id_spin.value(), self._data_edit.text().strip(),
+            self._extended_check.isChecked(),
+        )
+
+    def append_frame(self, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
+        id_text = f"0x{arbitration_id:X}" if extended else f"0x{arbitration_id:03X}"
+        self._traffic_table.insertRow(0)
+        self._traffic_table.setItem(0, 0, QTableWidgetItem(f"{timestamp:.3f}"))
+        self._traffic_table.setItem(0, 1, QTableWidgetItem(id_text))
+        self._traffic_table.setItem(0, 2, QTableWidgetItem(data_hex))
+        while self._traffic_table.rowCount() > CAN_TRAFFIC_ROW_LIMIT:
+            self._traffic_table.removeRow(self._traffic_table.rowCount() - 1)
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        for row in (self._id_row, self._data_row):
+            row.setStyleSheet(_row_stylesheet(palette))
+        apply_panel_tint(self, self._color_key)
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def _on_color_selected(self, color_key) -> None:
+        self.panel_color_requested.emit(self._device_id, color_key)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
+        )
+        if ok and new_label.strip():
+            self.rename_requested.emit("can", self._device_id, new_label.strip())
+
+    def capture_state(self) -> dict:
+        # Kein sinnvoller "Preset-Zustand" fuer ein CAN-Interface (kein
+        # Dauer-Sollwert wie bei Last/Netzteil) -- die globale Preset-Leiste
+        # (PresetBar) ruft capture_state/apply_state trotzdem fuer JEDE
+        # sichtbare Sektion auf, daher leere Implementierung statt Absturz.
+        return {}
+
+    def apply_state(self, state: dict) -> None:
+        pass
+
+
 PRESET_BUTTON_SIZE = QSize(132, 60)
 PRESET_SUB_BUTTON_SIZE = QSize(24, 22)
 PRESET_SUB_BUTTON_MARGIN = 3
@@ -789,8 +933,10 @@ class ControlTab(QWidget):
             return
         if kind == "load":
             section = LoadControlGroup(device_id, label)
-        else:
+        elif kind == "psu":
             section = PsuControlGroup(device_id, label)
+        else:
+            section = CanControlGroup(device_id, label)
         section.hide()
         section.set_colors_enabled(self._colors_enabled)
         section.panel_color_requested.connect(self.panel_color_requested)
@@ -854,6 +1000,14 @@ class ControlTab(QWidget):
 
     def set_psu_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_can_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def on_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, CanControlGroup):
+            section.append_frame(arbitration_id, data_hex, extended, timestamp)
 
     def _update_empty_tile(self) -> None:
         # BUGS.md #16 (Root Cause, per Live-Debug in einem QTabWidget mit

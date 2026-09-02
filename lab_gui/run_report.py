@@ -127,7 +127,11 @@ def _step_started_text(record: RunRecord, index: int) -> str:
         return tr("Schritt {n}: Warten ({duration:g} s)", n=index + 1, duration=step.duration)
     device = _device_display(record, step.device_kind, step.device_id)
     action = action_label(step.device_kind, step.action)
-    detail = f"{step.value:g}" if step.value else "–"
+    if step.action == "CAN_SEND":
+        id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
+        detail = f"ID {id_text}: {step.can_data or '–'}"
+    else:
+        detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)
 
 

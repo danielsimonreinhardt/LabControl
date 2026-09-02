@@ -94,6 +94,10 @@ class _Frame:
 
 class TestRunner(QObject):
     execute_action = Signal(str, str, str, float)  # device_id, device_kind, action, value
+    # device_id, arbitration_id, data (Hex-String), extended -- eigener Signal-
+    # Pfad statt execute_action, da eine CAN-ID + Datenbytes nicht in dessen
+    # einzelnen float-Wert passen (siehe testcase_model.py: can_id/can_data).
+    execute_can_send = Signal(str, int, str, bool)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -327,6 +331,8 @@ class TestRunner(QObject):
                 self.step_started.emit(self._index, step)
                 if is_arb_action(step.action):
                     self._start_arb(step)
+                elif step.action == "CAN_SEND":
+                    self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
                 else:
                     self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value)
                 return

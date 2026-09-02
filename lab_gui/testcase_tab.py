@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from block_dialog import SaveBlockDialog
+from can_frame_dialog import CanFrameDialog
 from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
@@ -50,6 +51,7 @@ from testcase_model import (
     CONTROL_STEP_LABELS,
     DEVICE_ACTIONS,
     DEVICE_KIND_LABELS,
+    MEASUREMENT_DEVICE_KINDS,
     STEP_TYPE_ACTION,
     VALUELESS_ACTIONS,
     TestStep,
@@ -672,9 +674,11 @@ class TestcaseTab(QWidget):
         testcase_tab._device_key/_parse_device_key haben soll."""
         items = [
             (tr("{kind} (automatisch)", kind=kind_label(kind)), kind, "")
-            for kind in DEVICE_KIND_LABELS
+            for kind in MEASUREMENT_DEVICE_KINDS
         ]
         for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
+            if kind not in MEASUREMENT_DEVICE_KINDS:
+                continue
             items.append((f"{label} ({kind_label(kind)})", kind, device_id))
         return items
 
@@ -814,7 +818,12 @@ class TestcaseTab(QWidget):
         arb_layout.addWidget(arb_button)
         arb_page._params = dict(
             shape=step.arb_shape,
-            target=step.arb_target or ARB_TARGETS[step.device_kind][0],
+            # ARB_TARGETS kennt kein "can" (CAN_SEND ist kein Arbiträrsignal-
+            # Ziel, siehe testcase_model.ARB_ACTIONS) -- Fallback-Leerstring
+            # hier nur, damit arb_page._params fuer JEDE Geraeteart befuellt
+            # werden kann (siehe on_action_changed: Seite bleibt fuer diese
+            # Aktion einfach unsichtbar/ungenutzt).
+            target=step.arb_target or ARB_TARGETS.get(step.device_kind, [""])[0],
             amplitude=step.arb_amplitude,
             offset=step.arb_offset,
             frequency=step.arb_frequency,
@@ -822,9 +831,20 @@ class TestcaseTab(QWidget):
             duty=step.arb_duty,
         )
 
+        can_page = QWidget()
+        can_layout = QHBoxLayout(can_page)
+        can_layout.setContentsMargins(2, 0, 2, 0)
+        can_summary_label = QLabel()
+        can_summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+        can_button = IconButton("mdi.card-bulleted-outline", tr("CAN-Frame definieren…"))
+        can_layout.addWidget(can_summary_label, 1)
+        can_layout.addWidget(can_button)
+        can_page._params = dict(id=step.can_id, data=step.can_data, extended=step.can_extended)
+
         value_stack = QStackedWidget()
         value_stack.addWidget(value_spin)  # Index 0: normaler Zahlenwert
         value_stack.addWidget(arb_page)    # Index 1: Arbiträrsignal-Zusammenfassung + Button
+        value_stack.addWidget(can_page)    # Index 2: CAN-Frame-Zusammenfassung + Button
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -948,6 +968,23 @@ class TestcaseTab(QWidget):
 
         arb_button.clicked.connect(open_signal_dialog)
 
+        def refresh_can_summary() -> None:
+            params = can_page._params
+            id_text = f"0x{params['id']:X}" if params["extended"] else f"0x{params['id']:03X}"
+            data = params["data"] or "–"
+            can_summary_label.setText(f"ID {id_text}: {data}")
+
+        can_page._refresh_summary = refresh_can_summary
+        refresh_can_summary()
+
+        def open_can_dialog() -> None:
+            dialog = CanFrameDialog(can_page._params, parent=self)
+            if dialog.exec() == CanFrameDialog.DialogCode.Accepted:
+                can_page._params = dialog.params()
+                refresh_can_summary()
+
+        can_button.clicked.connect(open_can_dialog)
+
         def on_action_changed(index: int) -> None:
             kind = current_kind()
             code = action_combo.itemData(index) or ""
@@ -960,6 +997,9 @@ class TestcaseTab(QWidget):
                     arb_page._params["target"] = ARB_TARGETS[kind][0]
                 refresh_arb_summary()
                 value_stack.setCurrentIndex(1)
+            elif code == "CAN_SEND":
+                refresh_can_summary()
+                value_stack.setCurrentIndex(2)
             else:
                 value_stack.setCurrentIndex(0)
             refresh_value_warning()
@@ -1634,6 +1674,7 @@ class TestcaseTab(QWidget):
         value_stack: QStackedWidget = self._table.cellWidget(row, COL_VALUE)
         value_spin: QDoubleSpinBox = value_stack.widget(0)
         arb_page: QWidget = value_stack.widget(1)
+        can_page: QWidget = value_stack.widget(2)
         duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
         check_page = self._table.cellWidget(row, COL_CHECK)
         enabled_container = self._table.cellWidget(row, COL_ENABLED)
@@ -1642,6 +1683,7 @@ class TestcaseTab(QWidget):
         kind, device_id = _parse_device_key(device_combo.currentData())
         action_code = action_combo.currentData() or ""
         params = arb_page._params
+        can_params = can_page._params
         check_params = check_page._check_params
         return TestStep(
             device_kind=kind,
@@ -1657,6 +1699,9 @@ class TestcaseTab(QWidget):
             arb_frequency=params["frequency"],
             arb_interval_ms=params["interval_ms"],
             arb_duty=params.get("duty", 0.5),
+            can_id=can_params["id"],
+            can_data=can_params["data"],
+            can_extended=can_params["extended"],
             check_enabled=check_params["enabled"],
             check_field=check_params["field"],
             check_min=check_params["min"],
@@ -2000,6 +2045,9 @@ class TestcaseTab(QWidget):
                 frequency=step.arb_frequency,
                 duration=step.duration,
             )
+        elif step.action == "CAN_SEND":
+            id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
+            detail = f"ID {id_text}: {step.can_data or '–'}"
         else:
             detail = f"{step.value}"
         self._set_status(

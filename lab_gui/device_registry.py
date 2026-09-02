@@ -20,6 +20,7 @@ LABELS_PATH = app_dir() / "device_labels.json"
 KIND_DISPLAY = {
     "load": "Last",
     "psu": "Netzteil",
+    "can": "CAN-Bus",
 }
 
 

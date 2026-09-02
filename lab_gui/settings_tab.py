@@ -14,19 +14,26 @@ from PySide6.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from can_bus.driver import INTERFACE_LIST as CAN_INTERFACE_LIST, CanBus, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import IconButton
 from paths import IS_FROZEN
 from safety import SAFETY_LIMIT_FIELDS
-from step_spinbox import SteppedDoubleSpinBox
+from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import current as current_palette
 
 # field -> deutscher Basis-Anzeigename (Uebersetzungsschluessel), analog zu
@@ -125,6 +132,129 @@ class _DeviceSafetyGroup(QGroupBox):
         self.limit_changed.emit(field, checkbox.isChecked(), spin.value())
 
 
+_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "label", "remove")
+
+
+class _CanConfigTable(QTableWidget):
+    """Editierbare Liste konfigurierter CAN-Interfaces (siehe settings.py:
+    can_configs). Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
+    can_bus/README.md) -- der Nutzer traegt Interface-Typ/Kanal/Bitrate hier
+    explizit ein, ein "..."-Button pro Zeile bietet ueber CanBus.
+    discover_configs() gefundene Kanaele als Auswahl an."""
+
+    changed = Signal()  # irgendeine Zeile wurde hinzugefuegt/entfernt/bearbeitet
+
+    def __init__(self) -> None:
+        super().__init__(0, len(_CAN_TABLE_COLUMNS))
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        for col in (0, 2, 3, 5):
+            self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
+    def retranslate(self) -> None:
+        self.setHorizontalHeaderLabels(
+            [tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Bezeichnung"), ""]
+        )
+
+    def add_row(self, cfg: dict | None = None) -> None:
+        cfg = cfg or {}
+        row = self.rowCount()
+        self.insertRow(row)
+
+        interface_combo = QComboBox()
+        for code in CAN_INTERFACE_LIST:
+            interface_combo.addItem(code, code)
+        index = interface_combo.findData(cfg.get("interface", CAN_INTERFACE_LIST[0]))
+        interface_combo.setCurrentIndex(max(index, 0))
+        interface_combo.currentIndexChanged.connect(lambda _=None: self.changed.emit())
+        self.setCellWidget(row, 0, interface_combo)
+
+        # editingFinished (Fokusverlust/Enter) statt textChanged: sonst wuerde
+        # jeder einzelne Tastendruck sofort einen Rekonfigurations-/Reconnect-
+        # Versuch im DeviceWorker anstossen (siehe set_can_configs), waehrend
+        # der Nutzer den Kanalnamen noch tippt.
+        channel_edit = QLineEdit(str(cfg.get("channel", "")))
+        channel_edit.editingFinished.connect(lambda: self.changed.emit())
+        self.setCellWidget(row, 1, channel_edit)
+
+        pick_button = IconButton("mdi.magnify", tr("Verfügbare Kanäle suchen…"))
+        pick_button.clicked.connect(lambda _=None, r=row: self._pick_channel(r))
+        self.setCellWidget(row, 2, pick_button)
+
+        bitrate_spin = SteppedSpinBox(small_step=1000, large_step=100_000)
+        bitrate_spin.setRange(10_000, 1_000_000)
+        bitrate_spin.setSuffix(" bit/s")
+        bitrate_spin.setValue(int(cfg.get("bitrate", CAN_DEFAULT_BITRATE)))
+        bitrate_spin.valueChanged.connect(lambda _=None: self.changed.emit())
+        self.setCellWidget(row, 3, bitrate_spin)
+
+        label_edit = QLineEdit(str(cfg.get("label", "")))
+        label_edit.editingFinished.connect(lambda: self.changed.emit())
+        self.setCellWidget(row, 4, label_edit)
+
+        remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
+        remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
+        self.setCellWidget(row, 5, remove_button)
+
+    def _remove_row_of(self, widget: QWidget) -> None:
+        for row in range(self.rowCount()):
+            if self.cellWidget(row, 5) is widget:
+                self.removeRow(row)
+                self.changed.emit()
+                return
+
+    def _pick_channel(self, row: int) -> None:
+        interface_combo: QComboBox = self.cellWidget(row, 0)
+        channel_edit: QLineEdit = self.cellWidget(row, 1)
+        interface = interface_combo.currentData()
+        try:
+            configs = CanBus.discover_configs()
+        except Exception:
+            configs = []
+        channels = [c["channel"] for c in configs if c.get("interface") == interface]
+        if not channels:
+            QMessageBox.information(
+                self, tr("Keine Kanäle gefunden"),
+                tr(
+                    "Für Interface-Typ '{interface}' wurden keine Kanäle gefunden -- "
+                    "ist der zugehörige Vendor-Treiber installiert und das Gerät "
+                    "angeschlossen?", interface=interface,
+                ),
+            )
+            return
+        channel, ok = QInputDialog.getItem(
+            self, tr("Kanal wählen"), tr("Verfügbare Kanäle:"), channels, editable=False,
+        )
+        if ok:
+            channel_edit.setText(channel)
+            self.changed.emit()
+
+    def configs(self) -> list[dict]:
+        result = []
+        for row in range(self.rowCount()):
+            interface_combo: QComboBox = self.cellWidget(row, 0)
+            channel_edit: QLineEdit = self.cellWidget(row, 1)
+            bitrate_spin: QSpinBox = self.cellWidget(row, 3)
+            label_edit: QLineEdit = self.cellWidget(row, 4)
+            channel = channel_edit.text().strip()
+            if not channel:
+                continue
+            result.append(dict(
+                interface=interface_combo.currentData(),
+                channel=channel,
+                bitrate=bitrate_spin.value(),
+                label=label_edit.text().strip(),
+            ))
+        return result
+
+    def set_configs(self, configs: list[dict]) -> None:
+        self.setRowCount(0)
+        for cfg in configs:
+            self.add_row(cfg)
+
+
 class SettingsTab(QWidget):
     simulation_mode_toggled = Signal(bool)
     dark_mode_toggled = Signal(bool)
@@ -132,6 +262,7 @@ class SettingsTab(QWidget):
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
+    can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label
     # Nutzer hat die Rueckfrage in _on_reset_devices_clicked bereits mit Ja
     # bestaetigt -- main_window._on_reset_devices_requested fuehrt den
     # eigentlichen Reset aus (DeviceRegistry/Settings kennt dieses Widget
@@ -207,6 +338,25 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
+        # -- CAN-Interfaces ------------------------------------------------
+        # Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
+        # can_bus/README.md) -- der Nutzer konfiguriert hier explizit, welche
+        # Interfaces device_worker.py ueberhaupt verbinden soll.
+        self._can_hint = QLabel()
+        self._can_hint.setWordWrap(True)
+        self._can_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._can_hint)
+
+        self._can_table = _CanConfigTable()
+        self._can_table.changed.connect(self._on_can_table_changed)
+        layout.addWidget(self._can_table)
+
+        self._can_add_button = IconButton("mdi.plus", "", text=tr("Interface hinzufügen"))
+        self._can_add_button.clicked.connect(self._on_can_add_clicked)
+        layout.addLayout(_button_row(self._can_add_button))
+
+        layout.addWidget(_separator())
+
         # -- Sicherheit (geraete-individuelle Grenzwerte) ---------------------
         self._safety_hint = QLabel()
         self._safety_hint.setWordWrap(True)
@@ -261,6 +411,14 @@ class SettingsTab(QWidget):
         )
         for section in self._safety_sections.values():
             section.retranslate()
+        self._can_hint.setText(
+            tr(
+                "CAN-Interfaces (Vector, PEAK/PCAN) -- werden hier explizit konfiguriert, "
+                "da anders als bei Last/Netzteil keine automatische Erkennung möglich ist."
+            )
+        )
+        self._can_table.retranslate()
+        self._can_add_button.setText(tr("Interface hinzufügen"))
 
     def set_simulation_mode(self, enabled: bool) -> None:
         self._sim_checkbox.blockSignals(True)
@@ -334,6 +492,19 @@ class SettingsTab(QWidget):
         section = self._safety_sections.get(device_id)
         if section is not None:
             section.set_limits(limits)
+
+    # -- CAN-Interfaces -------------------------------------------------------
+
+    def set_can_configs(self, configs: list[dict]) -> None:
+        self._can_table.blockSignals(True)
+        self._can_table.set_configs(configs)
+        self._can_table.blockSignals(False)
+
+    def _on_can_add_clicked(self) -> None:
+        self._can_table.add_row()
+
+    def _on_can_table_changed(self) -> None:
+        self.can_configs_changed.emit(self._can_table.configs())
 
     def _on_help_clicked(self) -> None:
         HelpDialog(self).exec()

@@ -46,9 +46,12 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "current": ("Strom", "A"),
     "power": ("Leistung", "W"),
     "mode": ("Modus", ""),
+    "tx_count": ("Gesendet", ""),
+    "rx_count": ("Empfangen", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
+CAN_FIELD_KEYS = ["tx_count", "rx_count"]
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
 # Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md
 # "Bekannte Eigenheiten"), MockKoradKEL102 dagegen den SET-Code aus
@@ -61,11 +64,11 @@ LOAD_MODE_SHORT: dict[str, str] = {
     "POW": "CW", "CW": "CW",
     "SHORT": "SHORT",
 }
-KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
+KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
-KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline"}
+KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip"}
 
 # "Verbindung getrennt"-Badge oben rechts im Panel, siehe
 # _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
@@ -87,6 +90,8 @@ FIELD_ICONS: dict[str, str] = {
     "current": "mdi.current-dc",
     "power": "mdi.gauge",
     "mode": "mdi.swap-horizontal-bold",
+    "tx_count": "mdi.upload-outline",
+    "rx_count": "mdi.download-outline",
 }
 
 
@@ -528,7 +533,7 @@ class DashboardWidget(QGroupBox):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
-            field_keys = LOAD_FIELD_KEYS if kind == "load" else PSU_FIELD_KEYS
+            field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
             panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
@@ -584,6 +589,10 @@ class DashboardWidget(QGroupBox):
     def set_psu_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    @Slot(str, bool)
+    def set_can_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
     def _set_online(self, device_id: str, online: bool) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
@@ -610,6 +619,14 @@ class DashboardWidget(QGroupBox):
         panel.set_value("voltage", f"{voltage:.2f}")
         panel.set_value("current", f"{current:.2f}")
         panel.set_value("mode", "CC" if constant_current else "CV")
+
+    @Slot(str, int, int)
+    def update_can(self, device_id: str, tx_count: int, rx_count: int) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_value("tx_count", str(tx_count))
+        panel.set_value("rx_count", str(rx_count))
 
     @Slot(str, str)
     def set_load_mode(self, device_id: str, function_code: str) -> None:

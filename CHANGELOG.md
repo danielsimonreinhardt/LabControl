@@ -7,6 +7,29 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **CAN-Bus-Unterstützung** (Vector CANcase XL, PEAK PCAN-USB): neuer,
+  vendor-unabhängiger Treiber `can_bus/` (`driver.py::CanBus` wrapt
+  `python-can`, `interface="vector"`/`"pcan"` je nach Hersteller-Treiber
+  -- Vector XL Driver Library bzw. PCAN-Basic müssen separat installiert
+  sein; `mock.py::MockCanBus` für den Simulationsmodus). CAN-Interfaces
+  werden anders als Last/Netzteil nicht automatisch erkannt (kein
+  sicheres Identify ohne bekannte Bitrate) -- stattdessen im
+  Einstellungen-Tab explizit konfiguriert (Interface-Typ/Kanal/Bitrate,
+  Kanalsuche über `CanBus.discover_configs()`), `settings.py::can_configs`
+  persistiert. Neue Dashboard-Kachel (gesendete/empfangene Frames) und
+  Control-Tab-Sektion (`CanControlGroup`: Frame senden + Live-Traffic-
+  Tabelle) nach demselben Muster wie Last/Netzteil. Testablauf-
+  Integration: neue Aktion "CAN-Frame senden" (`CAN_SEND`) mit eigenem
+  Dialog (`can_frame_dialog.py::CanFrameDialog` für Arbitration-ID/
+  Daten-Bytes/Extended-Flag, analog `signal_dialog.py` für
+  Arbiträrsignale) und eigenem Signal-Pfad in `device_worker.py`/
+  `testcase_runner.py` (eine CAN-ID + Datenbytes passen nicht in den
+  normalen float-Wertkanal der übrigen Aktionen). Sicherheits-Watchdog
+  (`safety.py`) bekommt einen CAN-Heartbeat (`on_can_stats`), damit ein in
+  einem Testlauf verwendetes CAN-Interface nicht fälschlich als
+  "veraltet" abgebrochen wird (CAN hat keine U/I/P-Messwerte). DBC-
+  Signaldecodierung und ein "auf CAN-Frame warten"-Prüfschritt sind
+  bewusst zurückgestellt (siehe [FEATURES.md](FEATURES.md) Punkt 3).
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
