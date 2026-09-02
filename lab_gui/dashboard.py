@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
+from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
@@ -66,6 +67,19 @@ KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
 KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline"}
 
+# "Verbindung getrennt"-Badge oben rechts im Panel, siehe
+# _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
+# die Panel-Breite sich nachtraeglich angleicht (siehe DashboardWidget.
+# _relayout_panels). Netzwerk-Trennsymbol statt eines Stecker-Icons -- passt
+# sowohl fuer die Last als auch fuers Netzteil (kein Bezug zu "Stecker"
+# speziell). mdi.lan-disconnect (zwei Geraete-Rechtecke + Verbindungslinie +
+# X) war bei der bisherigen Badge-Groesse zu detailreich, um noch erkennbar
+# zu sein (siehe Bugmeldung) -- close-network-outline (ein Geraete-Symbol
+# mit X, klare Silhouette) bleibt bei kleiner Groesse deutlich lesbar.
+OFFLINE_ICON_NAME = "mdi.close-network-outline"
+OFFLINE_ICON_SIZE = 22
+OFFLINE_ICON_MARGIN = 5
+
 # Icons fuer die Kompaktansicht: dort ersetzen sie die Text-Beschriftung der
 # Messgroessen komplett (der volle Name bleibt als Tooltip erreichbar).
 FIELD_ICONS: dict[str, str] = {
@@ -88,6 +102,11 @@ class _DevicePanel(QGroupBox):
         self._device_id = device_id
         self._field_keys = field_keys
         self._color_key: str | None = None
+        # Bleibt (anders als frueher) auch nach dem Trennen als Panel stehen,
+        # nur ausgegraut statt versteckt -- siehe set_online(). True ist der
+        # Startwert, da _set_online(True) unmittelbar nach dem Erzeugen des
+        # Panels folgt (siehe DashboardWidget.on_device_known/_set_online).
+        self._online = True
         # Feste Breite wird nicht hier, sondern zentral von DashboardWidget
         # gesetzt (siehe _relayout_panels) -- Last- und Netzteil-Panels
         # brauchen unterschiedlich viel Platz (z.B. 3 statt 2 Nachkommastellen),
@@ -166,17 +185,49 @@ class _DevicePanel(QGroupBox):
         self._compact_widget.hide()
         self._apply_compact_icons(current_palette())
 
+        # "Verbindung getrennt"-Badge: eigenes Kind-Widget mit absoluter
+        # Position (statt im Layout) statt eigener Zeile -- so sitzt es
+        # wirklich in der Panel-Ecke, unabhaengig von Normal-/Kompaktansicht.
+        # Feste Farbe (OFFLINE_TEXT) statt Theme-Farbe, da es nur auf dem
+        # ebenfalls fest grauen "getrennt"-Hintergrund erscheint (siehe
+        # set_online/_apply_style) und dort in beiden Themes gleich lesbar
+        # bleiben soll. no_own_background() ist hier PFLICHT, nicht nur
+        # Kosmetik: als direktes Kind-Widget DIESER QGroupBox (nicht ueber
+        # einen no_own_background()-Wrapper wie die uebrigen Labels, siehe
+        # oben) erbt es sonst die globale "QWidget{background-color:pal.bg}"-
+        # Regel aus theme.stylesheet() und malt ein opakes Quadrat in der
+        # Seitenhintergrundfarbe -- das Icon-Pixmap war dahinter komplett
+        # unsichtbar (in Amber Dark quasi ein schwarzes Quadrat, per
+        # Screenshot bestaetigt).
+        self._offline_icon = no_own_background(QLabel(self))
+        self._offline_icon.setFixedSize(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
+        self._offline_icon.setPixmap(
+            qta.icon(OFFLINE_ICON_NAME, color=OFFLINE_TEXT).pixmap(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
+        )
+        self._offline_icon.hide()
+        self._offline_icon.raise_()
+
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
         self._apply_style(current_palette())
 
     def _retranslate(self) -> None:
         self._kind_icon.setToolTip(tr(KIND_TITLE.get(self._kind, self._kind)))
+        self._offline_icon.setToolTip(tr("Verbindung getrennt"))
         for field_key in self._field_keys:
             self._form.labelForField(self._value_rows[field_key]).setText(_field_display(field_key) + ":")
             tooltip = _field_display(field_key)
             self._compact_icons[field_key].setToolTip(tooltip)
             self._compact_values[field_key].setToolTip(tooltip)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        self._position_offline_icon()
+
+    def _position_offline_icon(self) -> None:
+        self._offline_icon.move(
+            self.width() - OFFLINE_ICON_SIZE - OFFLINE_ICON_MARGIN, OFFLINE_ICON_MARGIN
+        )
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_compact_icons(palette)
@@ -204,6 +255,24 @@ class _DevicePanel(QGroupBox):
         praesenter und dient bereits andernorts als "gedaempfter, aber gut
         lesbarer" Grauton (Subtitle-Labels etc.), daher hier wiederverwendet
         statt eines neuen Palettenwerts."""
+        if not self._online:
+            # Fest grau -- siehe no_device_tile.py (dieselben Farben, gleicher
+            # "kein aktives Geraet"-Zustand) statt einer aus palette
+            # abgeleiteten oder der individuellen Panel-Farbe (_color_key
+            # wird hier bewusst ignoriert, kommt beim naechsten Online-Gehen
+            # ueber _apply_style wieder zum Zug). Der Rahmentitel (Geraete-
+            # name) bekommt HIER bewusst KEINE eigene Farbregel -- er faellt
+            # damit auf die globale "QGroupBox::title { color: pal.text }"-
+            # Regel aus theme.stylesheet() zurueck, die in beiden Themes auf
+            # dem Panel-Hintergrund gut lesbar ist (dieselbe Regel, die auch
+            # die normalen Online-Panels ohne Probleme nutzen). Eine fest
+            # verdrahtete Titel-Farbe (fruehere Fassung: OFFLINE_TEXT, dunkel)
+            # war im Amber-Dark-Theme praktisch unlesbar (Screenshot-Bug).
+            self.setStyleSheet(
+                f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
+                f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+            )
+            return
         border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
         if self._color_key is None:
             self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
@@ -211,6 +280,21 @@ class _DevicePanel(QGroupBox):
         hex_color = palette.panel_tints.get(self._color_key)
         bg_rule = f"background-color: {hex_color};" if hex_color else ""
         self.setStyleSheet(f"QGroupBox {{ {border_rule} {bg_rule} }}")
+
+    def set_online(self, online: bool) -> None:
+        """Verbindungsstatus-Wechsel (siehe DashboardWidget._set_online).
+
+        Anders als frueher wird das Panel beim Trennen NICHT mehr versteckt,
+        sondern bleibt sichtbar und wird nur ausgegraut (fest grau, siehe
+        _apply_style) -- der Nutzer soll auf einen Blick sehen, welches
+        zuletzt bekannte Geraet gerade fehlt, statt dass die Kachel spurlos
+        verschwindet."""
+        self._online = online
+        if not online:
+            self.clear_values()
+        self._offline_icon.setVisible(not online)
+        self.setVisible(True)
+        self._apply_style(current_palette())
 
     def _apply_compact_icons(self, palette: Palette) -> None:
         for field_key, icon_label in self._compact_icons.items():
@@ -280,6 +364,12 @@ class DashboardWidget(QGroupBox):
         self._container = QWidget()
         self._panel_layout = QHBoxLayout(self._container)
         self._panel_layout.addStretch()
+
+        # Platzhalter, solange kein Geraet verbunden ist (siehe
+        # _update_empty_tile) -- von Anfang an sichtbar, da beim Start noch
+        # kein Panel existiert.
+        self._empty_tile = NoDeviceTile()
+        self._panel_layout.insertWidget(0, self._empty_tile)
 
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
@@ -425,6 +515,15 @@ class DashboardWidget(QGroupBox):
 
     # -- Geraete-Lebenszyklus --------------------------------------------------
 
+    def _update_empty_tile(self) -> None:
+        # Anders als beim Control-Tab (dort verschwinden Sektionen beim
+        # Trennen, siehe ControlTab._update_empty_tile) bleiben Dashboard-
+        # Panels nach dem ersten Bekanntwerden dauerhaft (ausgegraut)
+        # sichtbar (siehe _DevicePanel.set_online) -- die Platzhalter-Kachel
+        # richtet sich hier also danach, ob JEMALS ein Geraet bekannt wurde,
+        # nicht nach dessen aktuellem Online-Status.
+        self._empty_tile.setVisible(not self._panels)
+
     @Slot(str, str, str)
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         panel = self._panels.get(device_id)
@@ -436,9 +535,29 @@ class DashboardWidget(QGroupBox):
             panel.hide()
             self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
             self._panels[device_id] = panel
+            self._update_empty_tile()
             self._relayout_panels()
         else:
             panel.set_label(label)
+
+    def forget_device(self, device_id: str) -> None:
+        """Entfernt ein Geraet vollstaendig (auch die ausgegraute Kachel
+        eines aktuell getrennten Geraets, siehe _DevicePanel.set_online) --
+        anders als eine normale Trennung, die das Panel bewusst als
+        Erinnerung stehen laesst. Nur fuer den "Geraetezuordnung loeschen"-
+        Button (main_window._on_reset_devices_requested) gedacht: ein noch
+        VERBUNDENES Geraet nutzt stattdessen den Live-Relabel-Pfad
+        (DeviceRegistry.on_device_added), da sein Panel ja weiter gebraucht
+        wird."""
+        panel = self._panels.pop(device_id, None)
+        if panel is None:
+            return
+        self._panel_layout.removeWidget(panel)
+        panel.deleteLater()
+        self._panel_colors.pop(device_id, None)
+        self._compact_widths.pop(device_id, None)
+        self._update_empty_tile()
+        self._relayout_panels()
 
     def set_panel_color(self, device_id: str, color_key: str | None) -> None:
         self._panel_colors[device_id] = color_key
@@ -469,9 +588,7 @@ class DashboardWidget(QGroupBox):
         panel = self._panels.get(device_id)
         if panel is None:
             return
-        panel.setVisible(online)
-        if not online:
-            panel.clear_values()
+        panel.set_online(online)
         self._relayout_panels()
 
     # -- Messwerte -----------------------------------------------------------

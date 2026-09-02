@@ -7,6 +7,83 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Benutzerhandbuch / Hilfe**: Neuer Button „Hilfe“ im Einstellungen-Tab
+  öffnet ein vollstaendiges Benutzerhandbuch, das Dashboard, alle vier
+  Reiter (Steuerung/Testablauf/Verlauf/Einstellungen), den
+  Sicherheits-Watchdog und die Statuszeile beschreibt (siehe
+  [FEATURES.md](FEATURES.md) Punkt 3). Neues Modul
+  `lab_gui/help_dialog.py` (`HelpDialog`) zeigt den Text ueber
+  `QTextBrowser.setMarkdown()` direkt in der App an, statt einen
+  externen Browser/PDF-Reader zu oeffnen -- funktioniert dadurch
+  identisch im Dev-Betrieb und in der `.exe`. Der Anleitungstext liegt
+  als mitgelieferte Markdown-Datei je Sprache unter neuem `lab_gui/help/`
+  (`manual_de.md`/`manual_en.md`), gebuendelt nach demselben
+  MEIPASS-Muster wie `translations/`/`icons/` (`LabControl.spec`:
+  `datas`).
+- **Wiederverwendbare Testcase-Bausteine**: Ein zusammenhaengender
+  Zeilenbereich des Testablauf-Editors (z.B. ein Entladeprofil) laesst sich
+  jetzt unter einem Namen als eigene Datei ablegen und in beliebiger Stelle
+  desselben oder eines anderen Testablaufs wieder einfuegen, statt haeufige
+  Schrittfolgen jedes Mal neu aufzubauen (siehe [FEATURES.md](FEATURES.md)
+  Punkt 3). Neue Toolbar-Buttons „Baustein speichern…“/„Baustein
+  einfügen…“ neben den bestehenden Laden/Speichern-Buttons
+  (`lab_gui/testcase_tab.py`, `_save_block`/`_insert_block_from_file`);
+  Zeilenbereich + Name werden im neuen `block_dialog.SaveBlockDialog`
+  gewaehlt, das den Bereich per `testcase_model.validate_structure()` gegen
+  strukturelle Unwucht prueft (z.B. eine Schleife ohne ihr „Ende“ im Bereich)
+  und den OK-Button dafuer sperrt. Eigenes Dateiformat
+  `testcase_model.save_block`/`load_block` (`"labor-testcase-block"`,
+  zusaetzlich zum Schritte-Array mit Namen versehen), abgelegt unter dem
+  neuen Verzeichnis `blocks/` neben `testcases/`, damit ein Baustein nicht
+  versehentlich ueber „Testablauf laden…“ als vollstaendiger Ablauf geoeffnet
+  werden kann. Ein eingefuegter Baustein (ab zwei Zeilen) erscheint im Editor
+  standardmaessig eingeklappt auf nur seine erste Zeile reduziert, mit
+  Klapp-Pfeil-Icon in der Zeilennummer-Spalte zum Auf-/Zuklappen; im
+  aufgeklappten Zustand sind die uebrigen Baustein-Zeilen wie ein
+  Schleifen-/Wenn-Rumpf zusaetzlich eingerueckt. Rein editorseitige
+  Gruppierung (neue Klasse `testcase_tab._BlockGroup`) ohne Einfluss auf
+  Testschritt-Daten, Speichern oder Ausfuehrung -- verborgene Zeilen bleiben
+  ganz normal Teil von `steps()`; waehrend eines Testlaufs klappt eine
+  eingeklappte Gruppe automatisch auf, sobald ihr laufender Schritt erreicht
+  wird (`_reveal_row`), damit der Fortschritt sichtbar bleibt.
+- **Platzhalter-Kachel „Kein Gerät verbunden"**: Dashboard und Control-Tab
+  zeigen jetzt eine graue Hinweis-Kachel, solange kein einziges Gerät (weder
+  Last noch Netzteil) verbunden ist -- neues Modul `lab_gui/no_device_tile.py`
+  (`NoDeviceTile`), eingebunden in `DashboardWidget`/`ControlTab`
+  (`_update_empty_tile`, aufgerufen bei jedem Online-/Offline-Wechsel).
+  Hintergrundfarbe (`#9e9e9e`) ist bewusst fest verdrahtet statt aus
+  `theme.Palette` -- bleibt dadurch in beiden Themes und unabhängig von
+  individuellen Panel-Farben (`panel_color.py`) immer gleich grau.
+- **Dashboard-Panel bleibt nach dem Trennen stehen (ausgegraut)**: Ein
+  einmal bekanntes Geräte-Panel im Dashboard verschwindet beim Trennen nicht
+  mehr, sondern wird fest grau eingefärbt (dieselben Farben wie die
+  „Kein Gerät verbunden"-Kachel, siehe oben) und bekommt oben rechts ein
+  „Verbindung getrennt"-Icon (`mdi.lan-disconnect`) --
+  `_DevicePanel.set_online` (`dashboard.py`), Position per `resizeEvent`
+  nachgeführt. Die zuletzt bekannte Kachel bleibt damit als Erinnerung
+  sichtbar, statt spurlos zu verschwinden. Die Platzhalter-Kachel
+  „Kein Gerät verbunden" richtet sich dadurch jetzt danach, ob JEMALS ein
+  Gerät bekannt wurde, nicht mehr nach dessen Online-Status. Im Control-Tab
+  bleibt das bisherige Verhalten (Sektion verschwindet beim Trennen)
+  unverändert.
+- **Button „Gerätezuordnung löschen" im Einstellungen-Tab**: Setzt alle
+  gespeicherten Geräte-Namen (`device_registry.DeviceRegistry.reset_all`),
+  Sicherheits-Grenzwerte und Panel-Farben (`settings.Settings.
+  reset_device_settings`) auf die Standardwerte zurück, mit
+  Rückfrage (`settings_tab.py`, `QMessageBox.question`, analog zu
+  `timeline_tab._on_recording_clear_clicked`). Wirkt sofort live, kein
+  Neustart nötig, und unterscheidet zwei Fälle je zuvor bekanntem Gerät
+  (`main_window._on_reset_devices_requested`): ein AKTUELL VERBUNDENES Gerät
+  bekommt nur einen frischen Standardnamen (über `DeviceRegistry.
+  on_device_added`, wie beim allerersten Verbinden — darüber laufen
+  Dashboard/Control-Tab/Testablauf/Verlauf/Statusleiste/Einstellungen-Tab
+  automatisch über die bestehende `device_known`-Verkabelung mit), ein NICHT
+  verbundenes Gerät (z.B. eine ausgegraute Dashboard-Kachel) wird dagegen
+  komplett vergessen (`main_window._forget_device`, neue
+  `forget_device()`-Methode in `dashboard.py`/`control_tab.py`/
+  `settings_tab.py`/`testcase_tab.py` sowie Aufräumen der Statuszeile) —
+  ohne diese Unterscheidung blieb ein getrenntes Gerät trotz Klick auf den
+  Button überall sichtbar stehen, nur umbenannt statt vergessen.
 - **Last-Modus im Dashboard-Panel**: Das Dashboard-Panel der elektronischen
   Last zeigt jetzt zusätzlich zu Spannung/Strom/Leistung den aktuell aktiven
   Betriebsmodus an (CC/CV/CR/CW/SHORT), analog zur bestehenden CC/CV-Anzeige
@@ -129,6 +206,40 @@ Semantic Versioning (`lab_gui/version.py`).
 - Version auf 0.9.3 angehoben (bündelt u.a. mehrere an echter Hardware
   verifizierte Fixes, siehe [BUGS.md](BUGS.md)).
 
+### Geändert
+- **Simulationsmodus nur noch im Dev-Betrieb verfügbar**: In der von
+  PyInstaller gebauten Release-`.exe` ist die Option im Einstellungen-Tab
+  jetzt komplett ausgeblendet, `Settings.simulation_mode` liefert dort
+  zusätzlich hart `False` (auch falls eine ältere `settings.json` noch
+  `true` enthält) — verhindert, dass ein Release-Build versehentlich mit
+  simulierten statt echten Geräten läuft (siehe [FEATURES.md](FEATURES.md)
+  Punkt 4). Unterscheidung über `sys.frozen`, neue Konstante
+  `paths.IS_FROZEN`, analog zum bereits bestehenden Muster in
+  `paths.app_dir()`.
+- **Einstellungen-Tab: thematisch gruppiert + Buttons nicht mehr volle
+  Breite**: Dünne Trennlinien (neue Helfer `settings_tab._separator()`)
+  gliedern den Tab jetzt in Simulationsmodus / Darstellung (Dark Mode,
+  Benachrichtigungen, Panel-Farben, Sprache) / Hilfe / Geräteverwaltung
+  („Gerätezuordnung löschen") / Sicherheit (Grenzwerte). Die Trennlinie vor
+  dem Simulationsmodus wird in der Release-`.exe` zusammen mit der
+  (ohnehin ausgeblendeten) Option selbst versteckt, sonst stünde dort eine
+  Linie ohne Inhalt darüber. „Hilfe"- und „Gerätezuordnung löschen"-Button
+  sind jetzt (neuer Helfer `settings_tab._button_row()`, analog zur
+  bestehenden `language_row`) nur noch so breit wie ihr Text statt über die
+  volle Tab-Breite gestreckt — `QPushButton` hat standardmäßig eine
+  horizontale `Minimum`-SizePolicy (kann wachsen), die ihn in einem
+  `QVBoxLayout` ohne einschränkenden Wrapper auf die volle verfügbare
+  Breite zieht.
+- **„Panel-Farbe wählen…"-Button im Control-Tab nur noch bei aktivierten
+  individuellen Panel-Farben sichtbar**: Vorher stand der Button in jeder
+  Geräte-Sektion, auch wenn die Option „Individuelle Panel-Hintergrundfarben"
+  im Einstellungen-Tab ausgeschaltet war — eine Auswahl anzubieten, die
+  gerade gar nicht wirkt, war irreführend. Neue Methode
+  `LoadControlGroup.set_colors_enabled`/`PsuControlGroup.set_colors_enabled`
+  (`lab_gui/control_tab.py`), aufgerufen von `ControlTab.
+  set_panel_colors_enabled` (bestehender globaler An/Aus-Schalter) und für
+  neu hinzukommende Geräte direkt in `ControlTab.on_device_known`.
+
 ### Entfernt
 - **Testablauf-Aktion „Preset P1/P2/P3 abrufen"**: Griff auf die
   geräteseitigen HCS-34xx-Presets zu (`hcs34xx/driver.py: recall_memory`);
@@ -140,6 +251,23 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **Mitgelieferte Sprachdateien/Benutzerhandbuch in der `.exe` unerreichbar
+  (Sprachumschaltung fiel lautlos auf Deutsch zurück, Hilfe-Dialog zeigte
+  eine leere Fläche)**: `LabControl.spec` bündelte `lab_gui/translations`
+  und `lab_gui/help` mit demselben `lab_gui/`-Präfix als Ziel-Verzeichnis
+  im Onefile-Build, wodurch sie zur Laufzeit unter
+  `<Extraktionsordner>/lab_gui/translations/…` bzw. `…/lab_gui/help/…`
+  landeten. `i18n._TRANSLATIONS_DIR`/`help_dialog._HELP_DIR` suchten dort
+  aber ohne dieses Präfix (`<Extraktionsordner>/translations/…` bzw.
+  `…/help/…`) — ein Nachweis über den Inhalt eines echten
+  Extraktions-Temp-Ordners bestätigte die Abweichung. Die Ziel-Pfade in
+  `LabControl.spec: datas` sind jetzt flach (`translations`, `help`
+  statt `lab_gui/translations`, `lab_gui/help`), passend zum bereits
+  vorhandenen Code; per Neu-Build verifiziert (Archiv-Inspektion zeigt
+  `translations\de.json`/`help\manual_de.md` an der erwarteten Stelle).
+  Betraf vermutlich jede bisher gebaute `.exe` seit Einführung von
+  `LabControl.spec` (v0.9.0) — nicht neu durch das Benutzerhandbuch-Feature
+  in dieser Session, nur dadurch aufgefallen.
 - **[Sicherheitskritisch] Setzen von Strom/Spannung schaltete den
   PSU-Ausgang real ein, obwohl der Schalter auf „Aus" stand** (an echter
   HCS-34xx-Hardware reproduziert): Die Spannung/Strom-„Setzen"-Buttons im
@@ -216,6 +344,40 @@ Semantic Versioning (`lab_gui/version.py`).
   bei den Spinbox-Pfeilen ersetzt (`QToolButton::menu-arrow` — das
   zuständige Subcontrol bei `MenuButtonPopup`, weder `down-arrow` noch
   `menu-indicator` griffen hier) (`lab_gui/theme.py`).
+- **Getrenntes Gerät nach App-Neustart spurlos aus dem Dashboard
+  verschwunden**: Der "einmal bekannt"-Status eines Geräts existierte bisher
+  nur im laufenden Prozess (`DashboardWidget._panels`) — nach einem Neustart
+  fehlte die ausgegraute Erinnerungs-Kachel für ein aktuell nicht
+  verbundenes, aber früher schon einmal gesehenes Gerät komplett, obwohl sein
+  Name weiterhin in `device_labels.json` stand. Neue Methode
+  `DeviceRegistry.known_devices()` plus `main_window._replay_known_devices()`
+  (aufgerufen einmalig beim Start, nach allen `_wire_*()`-Verkabelungen):
+  spielt für jedes gespeicherte Gerät `device_known` erneut ein und markiert
+  es als offline (`_on_load_connected`/`_on_psu_connected` mit
+  `online=False`) — dieselben Pfade wie bei einer echten
+  Verbindungsänderung, daher ohne Sonderfall in Dashboard/Control-Tab/
+  Statusleiste. Ein tatsächliches (Wieder-)Verbinden überschreibt diesen
+  Startzustand danach ganz normal.
+- **Ausgegraute Dashboard-Kachel im Dark Mode kaum lesbar** (Screenshot-Bug):
+  Zwei Ursachen. (1) Die feste Titel-Textfarbe (`OFFLINE_TEXT`, dunkel) war
+  für die native `QGroupBox::title`-Zeile gedacht, aber gegen das
+  Amber-Industrial-Theme nicht kontrastreich genug geplant — jetzt ohne
+  eigene Farbregel, fällt zurück auf die globale
+  `QGroupBox::title { color: pal.text }`-Regel (dieselbe, die die normalen
+  Online-Panels bereits problemlos nutzen). (2) Das „Verbindung
+  getrennt"-Icon oben rechts (`_offline_icon`) war als direktes Kind-Widget
+  der `QGroupBox` OHNE `theme.no_own_background()` angelegt und erbte
+  dadurch die globale `QWidget { background-color: pal.bg }`-Regel — im Dark
+  Mode ein praktisch schwarzes Quadrat, das das Icon-Pixmap komplett
+  verdeckte. Jetzt mit `no_own_background()` transparent (`lab_gui/
+  dashboard.py`).
+- **„Verbindung getrennt"-Icon trotz Fix oben weiterhin kaum erkennbar**:
+  Ursache war diesmal nicht Sichtbarkeit, sondern die Symbolwahl selbst --
+  `mdi.lan-disconnect` (zwei Geräte-Rechtecke + Verbindungslinie + X) ist bei
+  18px zu detailreich, um noch als Silhouette erkennbar zu sein, unabhängig
+  vom Theme. Ersetzt durch `mdi.close-network-outline` (ein Geräte-Symbol
+  mit deutlichem X, klare Silhouette) und auf 22px vergrößert (`lab_gui/
+  dashboard.py`).
 
 ## [0.6.2]
 

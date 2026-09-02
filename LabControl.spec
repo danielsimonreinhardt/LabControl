@@ -36,7 +36,20 @@ a = Analysis(
     ['lab_gui/main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[('lab_gui/icons', 'lab_gui/icons'), ('lab_gui/translations', 'lab_gui/translations')],
+    # Ziel-Unterordner bewusst FLACH (nicht "lab_gui/translations" o.ae.):
+    # i18n._TRANSLATIONS_DIR und help_dialog._HELP_DIR suchen zur Laufzeit in
+    # der .exe unter sys._MEIPASS/<name> (kein Praefix) -- ein "lab_gui/"-
+    # Praefix hier fuehrte dazu, dass diese Ordner im Onefile-Bootloader zwar
+    # nach "<MEIPASS>/lab_gui/translations" bzw. "<MEIPASS>/lab_gui/help"
+    # entpackt wurden, der Code aber unter "<MEIPASS>/translations" bzw.
+    # "<MEIPASS>/help" suchte -- Sprachumschaltung liest in der .exe seitdem
+    # lautlos leer (Fallback auf Deutsch), das Benutzerhandbuch zeigte eine
+    # leere Flaeche (siehe HelpDialog._manual_text-Fallback).
+    datas=[
+        ('lab_gui/icons', 'lab_gui/icons'),
+        ('lab_gui/translations', 'translations'),
+        ('lab_gui/help', 'help'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

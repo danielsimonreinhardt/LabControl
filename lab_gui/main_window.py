@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         self._wire_dashboard_view()
         self._wire_notifications()
         self._wire_panel_colors()
+        self._replay_known_devices()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
         # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
@@ -257,6 +258,30 @@ class MainWindow(QMainWindow):
         # (dort aus dem Dashboard-Panel entfernt).
         self.control_tab.rename_requested.connect(self._registry.rename)
 
+    def _replay_known_devices(self) -> None:
+        """Stellt beim App-Start die aus der letzten Sitzung gespeicherten
+        Geraete wieder her (DeviceRegistry.known_devices, siehe deren
+        Docstring), noch BEVOR der Worker ueberhaupt eine echte (Wieder-)
+        Verbindung gefunden hat -- ohne das war ein vor dem Neustart bereits
+        getrenntes Geraet nach dem Start spurlos verschwunden (Dashboard
+        zeigte gar kein Panel mehr dafuer), obwohl sein Name/Einstellungen
+        weiterhin in device_labels.json standen.
+
+        Muss NACH allen _wire_*()-Aufrufen oben laufen, damit device_known
+        bereits Abonnenten hat (Dashboard/Control-Tab/Testablauf/Verlauf/
+        Statusleiste/Einstellungen-Tab, siehe _wire_registry). Nutzt
+        denselben Pfad wie eine echte Verbindungsaenderung
+        (_on_load_connected/_on_psu_connected mit online=False), damit alle
+        Abonnenten konsistent bleiben -- findet der Worker das Geraet
+        anschliessend tatsaechlich, ueberschreibt dessen online=True-Signal
+        diesen Startzustand ganz normal."""
+        for kind, device_id, label in self._registry.known_devices():
+            self._registry.device_known.emit(kind, device_id, label)
+            if kind == "load":
+                self._on_load_connected(device_id, False)
+            else:
+                self._on_psu_connected(device_id, False)
+
     def _on_device_known_safety_limits(self, kind: str, device_id: str, _label: str) -> None:
         # Initialbefuellung der pro Geraet erzeugten Grenzwert-Sektion (siehe
         # settings_tab._DeviceSafetyGroup) mit dem persistierten Stand --
@@ -373,6 +398,59 @@ class MainWindow(QMainWindow):
         self.settings_tab.notifications_toggled.connect(self._settings.set_notifications_enabled)
 
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
+        self.settings_tab.reset_devices_requested.connect(self._on_reset_devices_requested)
+
+    def _on_reset_devices_requested(self) -> None:
+        """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.
+        py) -- die Rueckfrage lief bereits dort, hier nur noch die Ausfuehrung.
+
+        Loescht Labels (DeviceRegistry) und geraete-individuelle
+        Einstellungen (Settings: Sicherheits-Grenzwerte, Panel-Farben) und
+        rollt das Ergebnis SOFORT live aus, ohne Neustart. Zwei Faelle pro
+        zuvor bekanntem Geraet:
+
+        - AKTUELL VERBUNDEN (siehe _online_devices): sein Panel/seine
+          Sektion wird weiter gebraucht, bekommt daher nur einen frischen
+          Standardnamen -- ueber denselben Weg wie beim allerersten
+          Verbinden (DeviceRegistry.on_device_added), das emittiert erneut
+          device_known und frischt darueber alle Abonnenten auf (siehe
+          _wire_registry).
+        - NICHT verbunden (z.B. eine ausgegraute Dashboard-Kachel, siehe
+          dashboard.py): wird komplett vergessen statt nur umbenannt --
+          ohne das blieb trotz Klick auf den Button ueberall eine sichtbare
+          Spur des Geraets stehen (Dashboard-Kachel, Control-Tab-Sektion,
+          Sicherheits-Grenzwert-Sektion im Einstellungen-Tab, Statuszeile,
+          Geraete-Auswahl im Testablauf-Editor) -- genau der gemeldete Bug.
+          _forget_device() raeumt das ueberall auf; ein spaeteres
+          tatsaechliches Verbinden desselben Geraets legt alles ganz normal
+          wieder neu an (siehe on_device_known der jeweiligen Widgets)."""
+        known = self._registry.reset_all()
+        self._settings.reset_device_settings()
+        online_ids = self._online_devices["load"] | self._online_devices["psu"]
+        for kind, device_id in known:
+            if device_id in online_ids:
+                self._registry.on_device_added(kind, device_id)
+            else:
+                self._forget_device(device_id)
+
+    def _forget_device(self, device_id: str) -> None:
+        """Entfernt ein NICHT verbundenes Geraet vollstaendig aus der
+        laufenden App (siehe _on_reset_devices_requested) -- betrifft nur
+        Widgets, die ein Geraet als eigene Kachel/Sektion/Zeile darstellen;
+        recorder.py/run_record.py/timeline_tab.py sind bewusst NICHT
+        einbezogen (deren geraete-bezogene Daten sind Beschriftungen fuer
+        bereits aufgezeichnete Messwerte/Diagramm-Zuordnungen, die absichtlich
+        auch nach dem Trennen erhalten bleiben, siehe deren Docstrings)."""
+        self.dashboard.forget_device(device_id)
+        self.control_tab.forget_device(device_id)
+        self.settings_tab.forget_device(device_id)
+        self.testcase_tab.forget_device(device_id)
+        status_label = self._status_labels.pop(device_id, None)
+        if status_label is not None:
+            self._status_layout.removeWidget(status_label)
+            status_label.deleteLater()
+        self._device_labels.pop(device_id, None)
+        self._device_online.pop(device_id, None)
 
     def _wire_dashboard_view(self) -> None:
         # Der Ansicht-Umschalter sitzt unten rechts im Dashboard selbst (siehe

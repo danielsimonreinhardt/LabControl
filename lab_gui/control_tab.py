@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
+from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from presets import PresetStore, SLOT_COUNT
 from theme import Palette, ThemeManager, form_control_qss
@@ -252,6 +253,13 @@ class LoadControlGroup(QGroupBox):
         self._color_key = color_key
         apply_panel_tint(self, color_key)
         self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        """Blendet den Panel-Farbe-Button aus, solange individuelle
+        Panel-Farben global deaktiviert sind (Einstellungen-Tab) -- eine
+        Auswahlmoeglichkeit fuer eine Funktion anzuzeigen, die gerade gar
+        nicht wirkt, waere irrefuehrend."""
+        self._color_button.setVisible(enabled)
 
     def _on_rename_clicked(self) -> None:
         new_label, ok = QInputDialog.getText(
@@ -506,6 +514,13 @@ class PsuControlGroup(QGroupBox):
         apply_panel_tint(self, color_key)
         self._color_button.set_current_color(color_key)
 
+    def set_colors_enabled(self, enabled: bool) -> None:
+        """Blendet den Panel-Farbe-Button aus, solange individuelle
+        Panel-Farben global deaktiviert sind (Einstellungen-Tab) -- eine
+        Auswahlmoeglichkeit fuer eine Funktion anzuzeigen, die gerade gar
+        nicht wirkt, waere irrefuehrend."""
+        self._color_button.setVisible(enabled)
+
     def _on_rename_clicked(self) -> None:
         new_label, ok = QInputDialog.getText(
             self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
@@ -743,6 +758,12 @@ class ControlTab(QWidget):
         scroll_area.setWidget(content)
         outer_layout.addWidget(scroll_area)
 
+        # Platzhalter, solange kein Geraet verbunden ist (siehe
+        # _update_empty_tile) -- von Anfang an sichtbar, da beim Start noch
+        # keine Sektion existiert.
+        self._empty_tile = NoDeviceTile()
+        self._content_layout.addWidget(self._empty_tile)
+
         self._sections: dict[str, QWidget] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
@@ -764,12 +785,29 @@ class ControlTab(QWidget):
         else:
             section = PsuControlGroup(device_id, label)
         section.hide()
+        section.set_colors_enabled(self._colors_enabled)
         section.panel_color_requested.connect(self.panel_color_requested)
         section.rename_requested.connect(self.rename_requested)
         self._content_layout.addWidget(section)
         self._sections[device_id] = section
         self._equalize_sections()
         self.section_created.emit(kind, device_id, section)
+
+    def forget_device(self, device_id: str) -> None:
+        """Entfernt ein Geraet vollstaendig -- nur fuer den "Geraetezuordnung
+        loeschen"-Button (main_window._on_reset_devices_requested) gedacht,
+        siehe dashboard.DashboardWidget.forget_device fuer die Begruendung.
+        Die Sektion ist bei einem getrennten Geraet ohnehin schon versteckt
+        (siehe _set_online), wird hier aber zusaetzlich zerstoert statt nur
+        unsichtbar zu bleiben."""
+        section = self._sections.pop(device_id, None)
+        if section is None:
+            return
+        self._content_layout.removeWidget(section)
+        section.deleteLater()
+        self._panel_colors.pop(device_id, None)
+        self._equalize_sections()
+        self._update_empty_tile()
 
     def set_panel_color(self, device_id: str, color_key: str | None) -> None:
         self._panel_colors[device_id] = color_key
@@ -781,6 +819,7 @@ class ControlTab(QWidget):
         self._colors_enabled = enabled
         for device_id, section in self._sections.items():
             section.set_panel_color(self._panel_colors.get(device_id) if enabled else None)
+            section.set_colors_enabled(enabled)
 
     def _equalize_sections(self) -> None:
         """Bringt alle Panels auf Hoehe und Breite des groessten Panels.
@@ -809,10 +848,14 @@ class ControlTab(QWidget):
     def set_psu_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    def _update_empty_tile(self) -> None:
+        self._empty_tile.setVisible(not any(s.isVisible() for s in self._sections.values()))
+
     def _set_online(self, device_id: str, online: bool) -> None:
         section = self._sections.get(device_id)
         if section is not None:
             section.setVisible(online)
+        self._update_empty_tile()
 
     def set_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         section = self._sections.get(device_id)

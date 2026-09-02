@@ -6,6 +6,7 @@ dist/
 *.spec
 !LabControl.spec
 lab_gui/testcases/
+lab_gui/blocks/
 lab_gui/device_labels.json
 lab_gui/settings.json
 lab_gui/timeline_layout.json

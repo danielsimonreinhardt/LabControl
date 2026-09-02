@@ -13,7 +13,7 @@ import json
 from PySide6.QtCore import QObject, Signal
 
 from i18n import DEFAULT_LANGUAGE
-from paths import app_dir
+from paths import IS_FROZEN, app_dir
 from safety import SAFETY_LIMIT_FIELDS, default_device_limits, device_kind
 
 SETTINGS_PATH = app_dir() / "settings.json"
@@ -48,9 +48,16 @@ class Settings(QObject):
 
     @property
     def simulation_mode(self) -> bool:
+        # In Release-Builds (PyInstaller-.exe) hart gesperrt, auch wenn eine
+        # aeltere settings.json (z.B. aus Dev-Betrieb) noch "true" enthaelt --
+        # siehe FEATURES.md Punkt 4.
+        if IS_FROZEN:
+            return False
         return bool(self._data.get("simulation_mode", False))
 
     def set_simulation_mode(self, enabled: bool) -> None:
+        if IS_FROZEN:
+            return
         if enabled == self.simulation_mode:
             return
         self._data["simulation_mode"] = enabled
@@ -169,6 +176,28 @@ class Settings(QObject):
                     except (TypeError, ValueError):
                         pass
         return merged
+
+    def reset_device_settings(self) -> None:
+        """Loescht alle geraete-individuellen Einstellungen (Sicherheits-
+        Grenzwerte + Panel-Farben) -- Teil des "Geraetezuordnung loeschen"-
+        Buttons im Einstellungen-Tab (siehe settings_tab.py), zusammen mit
+        DeviceRegistry.reset_all() (Labels).
+
+        Meldet die Aenderung live fuer jedes betroffene Geraet (statt nur
+        die Datei zu leeren), damit Dashboard/Control-Tab sofort wieder die
+        Standardfarbe zeigen -- ueber set_panel_color(..., None) waere das
+        hier NICHT passiert, da dessen "bereits gleich"-Kurzschluss (siehe
+        dort) eine erneute Emission unterdrueckt haette, sobald die
+        gespeicherte Farbe ohnehin schon None ist.
+        """
+        previous_colors = self._data.get("panel_colors")
+        device_ids_with_color = list(previous_colors.keys()) if isinstance(previous_colors, dict) else []
+        self._data["safety_limits"] = {}
+        self._data["panel_colors"] = {}
+        self._save()
+        self.safety_limits_changed.emit({})
+        for device_id in device_ids_with_color:
+            self.panel_color_changed.emit(device_id, None)
 
     def set_safety_limit(self, device_id: str, field: str, enabled: bool, value: float) -> None:
         kind = device_kind(device_id)

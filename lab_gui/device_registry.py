@@ -70,6 +70,37 @@ class DeviceRegistry(QObject):
         self._save()
         self.label_changed.emit(kind, device_id, new_label)
 
+    def known_devices(self) -> list[tuple[str, str, str]]:
+        """Alle jemals gespeicherten Geraete (kind, device_id, label),
+        unabhaengig vom aktuellen Verbindungsstatus.
+
+        Wird beim App-Start genutzt (siehe main_window._replay_known_
+        devices), damit ein vor dem letzten Neustart bekanntes, gerade
+        NICHT verbundenes Geraet sofort wieder als ausgegraute Dashboard-
+        Kachel erscheint (siehe dashboard._DevicePanel.set_online), statt
+        dass diese Information erst mit dem naechsten echten Verbinden
+        entstuende -- vorher ging sie beim Beenden der App verloren, da nur
+        der aktuelle Prozess (nicht die JSON-Datei) den "einmal gesehen"-
+        Status kannte."""
+        return [(kind, device_id, self._labels[device_id]) for kind, device_id in self._parse_keys()]
+
+    def reset_all(self) -> list[tuple[str, str]]:
+        """Loescht ALLE gespeicherten Labels (Button "Geraetezuordnung
+        loeschen" im Einstellungen-Tab, siehe settings_tab.py).
+
+        Gibt die zuvor bekannten (kind, device_id)-Paare zurueck, damit der
+        Aufrufer (main_window._on_reset_devices_requested) jedem davon per
+        on_device_added() sofort wieder einen frischen Standardnamen
+        vergeben und live neu ausrollen kann (dieselbe Nummerierungslogik
+        wie beim allerersten Verbinden) -- betrifft auch aktuell getrennte
+        Geraete (z.B. ausgegraute Dashboard-Kacheln, siehe dashboard.py),
+        deren Label sonst bis zum naechsten echten Wiederverbinden veraltet
+        bliebe."""
+        known = list(self._parse_keys())
+        self._labels = {}
+        self._save()
+        return known
+
     def _parse_keys(self):
         # Labels tragen keinen "kind" mehr in sich (Key = device_id = "kind:...");
         # device_id-Praefix bis zum ersten ':' entspricht dem kind.

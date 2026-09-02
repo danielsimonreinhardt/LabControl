@@ -16,9 +16,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-# Wie bei den Icons (siehe theme.py: _ICONS_DIR) liegen die mitgelieferten
-# Sprachdateien im PyInstaller-Onefile-Build unter sys._MEIPASS statt neben
-# dieser Datei -- sie muessen beim Bauen per --add-data mitgegeben werden.
+# Die mitgelieferten Sprachdateien liegen im PyInstaller-Onefile-Build unter
+# sys._MEIPASS statt neben dieser Datei -- sie werden ueber LabControl.spec
+# (datas) mitgegeben. WICHTIG: Das dortige datas-Ziel muss exakt "translations"
+# lauten (kein "lab_gui/translations"-Praefix), sonst landet der Ordner beim
+# Entpacken unter sys._MEIPASS/lab_gui/translations und wird hier nicht
+# gefunden -- genau dieser Mismatch fuehrte dazu, dass die Sprachumschaltung
+# in der .exe lautlos auf Deutsch zurueckfiel (siehe BUGS.md #14, analog fuer
+# help_dialog._HELP_DIR).
 _TRANSLATIONS_DIR = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).resolve().parent) / "translations"
 
 # Anzeigename in der jeweils eigenen Sprache (nicht uebersetzt) -- so findet

@@ -137,6 +137,13 @@ CHECK_FIELD_SYMBOLS = {"voltage": "U", "current": "I", "power": "P"}
 # war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
 FILE_FORMAT_VERSION = 2
 
+# Aktuelle Baustein-Dateiversion (siehe save_block/load_block). Eigener
+# Zaehler statt FILE_FORMAT_VERSION, da Testablauf- und Baustein-Dateien
+# unabhaengig voneinander weiterentwickelt werden koennen -- ein Baustein
+# ist bewusst nur ein benannter Ausschnitt (steps + name), kein vollstaendiger
+# Testablauf.
+BLOCK_FILE_FORMAT_VERSION = 1
+
 
 @dataclass
 class TestStep:
@@ -361,6 +368,18 @@ def save_steps(steps: list[TestStep], path: Path) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _steps_from_items(items: list[dict]) -> list[TestStep]:
+    steps = []
+    for item in items:
+        if "device" in item and "device_kind" not in item:
+            item = dict(item)
+            legacy = item.pop("device")
+            item["device_kind"] = _LEGACY_DEVICE_KIND.get(legacy, legacy)
+            item.setdefault("device_id", "")
+        steps.append(TestStep(**item))
+    return steps
+
+
 def load_steps(path: Path) -> list[TestStep]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
@@ -376,15 +395,37 @@ def load_steps(path: Path) -> list[TestStep]:
                 )
             )
         items = data["steps"]
-    steps = []
-    for item in items:
-        if "device" in item and "device_kind" not in item:
-            item = dict(item)
-            legacy = item.pop("device")
-            item["device_kind"] = _LEGACY_DEVICE_KIND.get(legacy, legacy)
-            item.setdefault("device_id", "")
-        steps.append(TestStep(**item))
-    return steps
+    return _steps_from_items(items)
+
+
+def save_block(steps: list[TestStep], name: str, path: Path) -> None:
+    """Speichert einen (typischerweise per SaveBlockDialog ausgewaehlten)
+    Ausschnitt von Schritten als benannten, wiederverwendbaren Baustein --
+    eigenes Dateiformat statt save_steps(), da ein Baustein zusaetzlich einen
+    Namen traegt und kein vollstaendiger, eigenstaendig lauffaehiger
+    Testablauf sein muss (z.B. ein einzelner Block-Rumpf ohne Start/Ende)."""
+    payload = {
+        "format": "labor-testcase-block",
+        "version": BLOCK_FILE_FORMAT_VERSION,
+        "name": name,
+        "steps": [asdict(step) for step in steps],
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def load_block(path: Path) -> tuple[str, list[TestStep]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    version = int(data.get("version", 0))
+    if version > BLOCK_FILE_FORMAT_VERSION:
+        raise ValueError(
+            tr(
+                "Baustein-Datei stammt aus einer neueren Programmversion "
+                "(Format {version}) und kann nicht geladen werden.",
+                version=version,
+            )
+        )
+    name = str(data.get("name") or path.stem)
+    return name, _steps_from_items(data.get("steps", []))
 
 
 def kind_label(device_kind: str) -> str:

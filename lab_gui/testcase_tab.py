@@ -7,10 +7,12 @@ run_requested/stop_requested angesteuert wird.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
+import qtawesome as qta
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from block_dialog import SaveBlockDialog
 from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
@@ -53,7 +56,9 @@ from testcase_model import (
     condition_summary,
     is_arb_action,
     kind_label,
+    load_block,
     load_steps,
+    save_block,
     save_steps,
     validate_structure,
 )
@@ -114,8 +119,25 @@ DEFAULT_COLUMN_WIDTHS = {0: 49, 4: 94, 6: 77}
 FIXED_COLUMNS = {COL_NUM, COL_DURATION, COL_ENABLED}
 
 DEFAULT_DIR = app_dir() / "testcases"
+# Ablage fuer wiederverwendbare Bausteine (siehe block_dialog.SaveBlockDialog,
+# save_block/load_block in testcase_model.py) -- eigenes Verzeichnis statt
+# DEFAULT_DIR, da ein Baustein kein vollstaendiger Testablauf ist und beim
+# Laden ueber "Testablauf laden…" nicht versehentlich als solcher geoeffnet
+# werden soll.
+BLOCKS_DIR = app_dir() / "blocks"
 
 BLINK_INTERVAL_MS = 400
+
+# Zeichen, die in Windows-Dateinamen ungueltig sind -- fuer den Default-
+# Dateinamen im Speichern-Dialog eines Bausteins (siehe _save_block), dessen
+# Name frei eingegeben wird. Der Nutzer kann den vorgeschlagenen Dateinamen im
+# QFileDialog jederzeit noch anpassen, dies ist nur eine sinnvolle Vorbelegung.
+_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def _sanitize_filename(name: str) -> str:
+    cleaned = "".join(" " if c in _INVALID_FILENAME_CHARS else c for c in name).strip()
+    return cleaned or "baustein"
 
 # Trennzeichen fuer den itemData-Schluessel des Geraete-Combos (siehe
 # _device_key/_parse_device_key). QComboBox.findData() vergleicht userData
@@ -136,6 +158,32 @@ def _parse_device_key(key: str | None) -> tuple[str, str]:
         return "load", ""
     kind, _, device_id = key.partition(_DEVICE_KEY_SEP)
     return kind, device_id
+
+
+@dataclass
+class _BlockGroup:
+    """Rein editorseitige Gruppierung eines ueber "Baustein einfügen"
+    hinzugefuegten Zeilenbereichs (siehe TestcaseTab._insert_block_from_file)
+    -- erlaubt, den Bereich im Editor auf die erste (Kopf-)Zeile einzuklappen.
+
+    Wirkt sich NICHT auf die Testschritt-Daten aus: steps()/Speichern/
+    Ausfuehrung kennen keine Gruppen und iterieren immer ueber alle Zeilen,
+    auch eingeklappt verborgene. Wird beim Speichern/Laden eines Testablaufs
+    nicht mit persistiert -- nur eine Anzeige-Erleichterung fuer die aktuelle
+    Editier-Sitzung, siehe TestcaseTab._on_row_inserted/_on_row_removed fuer
+    die Nachfuehrung bei Zeilenmutationen.
+
+    start: Zeilenindex der Kopfzeile (immer sichtbar, zeigt den ersten
+        Baustein-Schritt normal an -- "nur eine Testschrittzeile" im
+        eingeklappten Zustand).
+    count: Gesamtzahl Zeilen inkl. Kopfzeile.
+    collapsed: True = Zeilen start+1..start+count-1 sind ausgeblendet.
+    """
+
+    start: int
+    count: int
+    name: str
+    collapsed: bool = True
 
 
 class TestcaseTab(QWidget):
@@ -171,6 +219,10 @@ class TestcaseTab(QWidget):
         self._error_row = -1
         self._selected_row = -1
 
+        # Ein-/ausklappbare Bausteine (siehe _BlockGroup) -- rein editorseitig,
+        # unabhaengig von den Testschritt-Daten.
+        self._block_groups: list[_BlockGroup] = []
+
         # Ergebnisse der Pass/Fail-Pruefungen des aktuellen/letzten Laufs:
         # Zeile -> bestanden. "Sticky fail": schlaegt ein Schritt in EINER
         # Schleifeniteration fehl, bleibt die Zeile rot, auch wenn spaetere
@@ -203,6 +255,8 @@ class TestcaseTab(QWidget):
         self._down_button = IconButton("mdi.arrow-down", "")
         self._load_button = IconButton("mdi.folder-open-outline", "")
         self._save_button = IconButton("mdi.content-save-outline", "")
+        self._block_save_button = IconButton("mdi.puzzle-plus-outline", "")
+        self._block_insert_button = IconButton("mdi.puzzle-outline", "")
         self._add_menu = QMenu(self._add_button)
         self._action_add_action = self._add_menu.addAction("")
         self._action_add_loop = self._add_menu.addAction("")
@@ -227,8 +281,12 @@ class TestcaseTab(QWidget):
         self._down_button.clicked.connect(lambda: self._move_selected_row(1))
         self._load_button.clicked.connect(self._load_from_file)
         self._save_button.clicked.connect(self._save_to_file)
+        self._block_save_button.clicked.connect(self._save_block)
+        self._block_insert_button.clicked.connect(self._insert_block_from_file)
         for button in (self._add_button, self._remove_button, self._up_button, self._down_button):
             button_row.addWidget(button)
+        button_row.addWidget(self._block_save_button)
+        button_row.addWidget(self._block_insert_button)
         button_row.addStretch()
         button_row.addWidget(self._load_button)
         button_row.addWidget(self._save_button)
@@ -253,6 +311,7 @@ class TestcaseTab(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        self._table.cellClicked.connect(self._on_table_cell_clicked)
         layout.addWidget(self._table)
 
         run_row = QHBoxLayout()
@@ -295,6 +354,8 @@ class TestcaseTab(QWidget):
         self._down_button.setToolTip(tr("Nach unten"))
         self._load_button.setToolTip(tr("Laden…"))
         self._save_button.setToolTip(tr("Speichern…"))
+        self._block_save_button.setToolTip(tr("Baustein speichern…"))
+        self._block_insert_button.setToolTip(tr("Baustein einfügen…"))
         self._action_add_action.setText(tr("Aktionsschritt"))
         self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
         self._action_add_while.setText(tr("Solange … Ende"))
@@ -417,6 +478,17 @@ class TestcaseTab(QWidget):
         self._known_devices[device_id] = (kind, label)
         self._refresh_device_combos()
 
+    def forget_device(self, device_id: str) -> None:
+        """Entfernt ein Geraet aus der Geraete-Auswahl der Testablauf-Zeilen
+        -- nur fuer den "Geraetezuordnung loeschen"-Button (main_window.
+        _on_reset_devices_requested) gedacht, siehe dashboard.
+        DashboardWidget.forget_device fuer die Begruendung. Bereits in
+        Testablauf-Zeilen ausgewaehlte device_ids bleiben unveraendert
+        gespeichert -- die Combo faellt fuer sie auf den schon bestehenden
+        "nicht verbunden"-Fallback zurueck (siehe _populate_device_combo)."""
+        if self._known_devices.pop(device_id, None) is not None:
+            self._refresh_device_combos()
+
     def on_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         self._psu_limits[device_id] = (ovp, ocp)
         for row in range(self._table.rowCount()):
@@ -533,6 +605,14 @@ class TestcaseTab(QWidget):
 
     def _insert_row(self, row_index: int, step: TestStep) -> None:
         self._table.insertRow(row_index)
+        self._on_row_inserted(row_index)
+        # Landet die neue Zeile innerhalb einer eingeklappten Gruppe (z.B.
+        # "Zeile hinzufügen" bei noch markierter, inzwischen verborgener
+        # Zeile eines kollabierten Bausteins), muss sie sofort mit verborgen
+        # werden -- sonst waere sie trotz "eingeklappt" sichtbar.
+        group = self._group_containing(row_index)
+        if group is not None and group.collapsed and row_index != group.start:
+            self._table.setRowHidden(row_index, True)
 
         number_item = QTableWidgetItem()
         number_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -829,6 +909,7 @@ class TestcaseTab(QWidget):
         # einmalig sauber neu berechnen, statt auf Zwischenereignisse zu
         # reagieren (siehe auch _move_selected_row).
         self._table.blockSignals(True)
+        self._on_row_removed(row)
         self._table.removeRow(row)
         self._table.blockSignals(False)
         self._renumber_rows()
@@ -842,6 +923,7 @@ class TestcaseTab(QWidget):
             return
         step = self._row_to_step(row)
         self._table.blockSignals(True)
+        self._on_row_removed(row)
         self._table.removeRow(row)
         self._insert_row(target, step)
         self._table.selectRow(target)
@@ -862,6 +944,90 @@ class TestcaseTab(QWidget):
     def _renumber_rows(self) -> None:
         for row in range(self._table.rowCount()):
             self._table.item(row, COL_NUM).setText(str(row + 1))
+
+    # -- Ein-/ausklappbare Bausteine -------------------------------------------
+    #
+    # Ein per "Baustein einfügen" hinzugefuegter Zeilenbereich wird als
+    # _BlockGroup nachverfolgt und kann ueber die Kopfzeile ein-/ausgeklappt
+    # werden (siehe _on_table_cell_clicked). Rein editorseitig -- die
+    # Gruppen-Liste wird bei jeder Zeilenmutation ueber _on_row_inserted/
+    # _on_row_removed nachgefuehrt, damit start/count auch nach Verschieben/
+    # Entfernen anderer Zeilen stimmen; die Kopfzeile selbst zu entfernen oder
+    # zu verschieben loest die Gruppierung wieder auf (Zeilen werden dabei
+    # eingeblendet, statt als verwaiste versteckte Zeilen zurueckzubleiben).
+
+    def _group_at_header(self, row: int) -> _BlockGroup | None:
+        for group in self._block_groups:
+            if group.start == row:
+                return group
+        return None
+
+    def _group_containing(self, row: int) -> _BlockGroup | None:
+        for group in self._block_groups:
+            if group.start <= row < group.start + group.count:
+                return group
+        return None
+
+    def _apply_group_visibility(self, group: _BlockGroup) -> None:
+        for row in range(group.start + 1, group.start + group.count):
+            self._table.setRowHidden(row, group.collapsed)
+
+    def _unhide_group_rows(self, group: _BlockGroup) -> None:
+        for row in range(group.start, group.start + group.count):
+            if 0 <= row < self._table.rowCount():
+                self._table.setRowHidden(row, False)
+
+    def _toggle_group(self, group: _BlockGroup) -> None:
+        group.collapsed = not group.collapsed
+        self._apply_group_visibility(group)
+        if group.collapsed and group.start < self._selected_row < group.start + group.count:
+            # Die markierte Zeile wuerde sonst unsichtbar markiert bleiben.
+            self._table.selectRow(group.start)
+        self._revalidate_structure()
+
+    def _reveal_row(self, row: int) -> None:
+        """Klappt die Gruppe auf, falls `row` gerade darin verborgen ist --
+        z.B. wenn der Runner (siehe on_step_started) eine Zeile innerhalb
+        eines eingeklappten Bausteins erreicht, damit der Fortschritt
+        sichtbar bleibt statt in einer verborgenen Zeile zu blinken."""
+        group = self._group_containing(row)
+        if group is not None and group.collapsed and row != group.start:
+            group.collapsed = False
+            self._apply_group_visibility(group)
+            self._revalidate_structure()
+
+    def _on_table_cell_clicked(self, row: int, column: int) -> None:
+        if column != COL_NUM:
+            return
+        group = self._group_at_header(row)
+        if group is not None:
+            self._toggle_group(group)
+
+    def _on_row_inserted(self, row_index: int) -> None:
+        for group in self._block_groups:
+            if row_index <= group.start:
+                group.start += 1
+            elif group.start < row_index < group.start + group.count:
+                group.count += 1
+
+    def _on_row_removed(self, row_index: int) -> None:
+        remaining: list[_BlockGroup] = []
+        for group in self._block_groups:
+            if row_index < group.start:
+                group.start -= 1
+                remaining.append(group)
+            elif row_index == group.start:
+                # Kopfzeile entfernt -- Gruppierung loest sich auf.
+                self._unhide_group_rows(group)
+            elif group.start < row_index < group.start + group.count:
+                group.count -= 1
+                if group.count > 1:
+                    remaining.append(group)
+                else:
+                    self._unhide_group_rows(group)
+            else:
+                remaining.append(group)
+        self._block_groups = remaining
 
     # -- Lesen/Schreiben der Zeilen -------------------------------------------
 
@@ -989,10 +1155,74 @@ class TestcaseTab(QWidget):
         self._current_path = Path(path_str)
 
         self._table.setRowCount(0)
+        self._block_groups = []
         for step in steps:
             self._insert_row(self._table.rowCount(), step)
         if not steps:
             self._add_row_clicked()
+        self._revalidate_structure()
+
+    # -- Wiederverwendbare Bausteine ------------------------------------------
+    #
+    # Ein Baustein ist ein benannter, in sich strukturell ausgeglichener
+    # Ausschnitt eines Testablaufs (siehe SaveBlockDialog), der in einem
+    # eigenen Verzeichnis (BLOCKS_DIR) abgelegt und spaeter an beliebiger
+    # Stelle -- auch in einem ganz anderen Testablauf -- wieder eingefuegt
+    # werden kann, statt haeufige Schrittfolgen (z.B. ein Entladeprofil)
+    # jedes Mal neu aufzubauen.
+
+    def _save_block(self) -> None:
+        steps = self.steps()
+        if not steps:
+            return
+        dialog = SaveBlockDialog(steps, self._selected_row, parent=self)
+        if dialog.exec() != SaveBlockDialog.DialogCode.Accepted:
+            return
+        name = dialog.block_name()
+        block_steps = dialog.selected_steps()
+
+        BLOCKS_DIR.mkdir(exist_ok=True)
+        default_path = BLOCKS_DIR / f"{_sanitize_filename(name)}.json"
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, tr("Baustein speichern"), str(default_path), tr("Baustein (*.json)")
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix != ".json":
+            path = path.with_suffix(".json")
+        try:
+            save_block(block_steps, name, path)
+        except OSError as exc:
+            QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
+
+    def _insert_block_from_file(self) -> None:
+        BLOCKS_DIR.mkdir(exist_ok=True)
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, tr("Baustein einfügen"), str(BLOCKS_DIR), tr("Baustein (*.json)")
+        )
+        if not path_str:
+            return
+        try:
+            name, block_steps = load_block(Path(path_str))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
+            return
+        if not block_steps:
+            return
+
+        index = self._insert_at_selection()
+        for offset, step in enumerate(block_steps):
+            self._insert_row(index + offset, step)
+
+        # Ab zwei Zeilen als einklappbare Gruppe nachverfolgen (siehe
+        # _BlockGroup) -- ein einzelner Schritt braucht keine Klapp-Funktion.
+        if len(block_steps) > 1:
+            group = _BlockGroup(start=index, count=len(block_steps), name=name)
+            self._block_groups.append(group)
+            self._apply_group_visibility(group)
+
+        self._table.selectRow(index)
         self._revalidate_structure()
 
     def current_testcase_name(self) -> str:
@@ -1031,12 +1261,25 @@ class TestcaseTab(QWidget):
         error_by_row = dict(errors)
         end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn")}
 
+        # Zeilen innerhalb einer (ein- oder ausgeklappten) Baustein-Gruppe
+        # bekommen zusaetzlich zur Schleifen/If-Verschachtelungstiefe eine
+        # weitere Einrueckstufe -- "im aufgeklappten Zustand dann etwas
+        # eingerückt" (die Kopfzeile selbst bleibt auf ihrer normalen Tiefe,
+        # sie repraesentiert ja den ersten Schritt des Bausteins).
+        group_by_header = {group.start: group for group in self._block_groups}
+        group_member_rows: set[int] = set()
+        for group in self._block_groups:
+            group_member_rows.update(range(group.start + 1, group.start + group.count))
+
         for row in range(self._table.rowCount()):
             step = steps[row]
             col1 = self._table.cellWidget(row, COL_DEVICE)
             if col1 is None:
                 continue
-            col1._indent_depth = depths[row] if row < len(depths) else 0
+            depth = depths[row] if row < len(depths) else 0
+            if row in group_member_rows:
+                depth += 1
+            col1._indent_depth = depth
             col1._structure_error = row in error_by_row
             if row in error_by_row:
                 col1.setToolTip(error_by_row[row])
@@ -1058,6 +1301,31 @@ class TestcaseTab(QWidget):
             self._run_button.setToolTip(tr("Start"))
         self._update_run_enabled()
 
+        # Klapp-Pfeil (Kopfzeile einer Baustein-Gruppe) bzw. keine Markierung
+        # in Spalte "#" -- siehe _on_table_cell_clicked fuer den Klick-Handler.
+        pal = current_palette()
+        for row in range(self._table.rowCount()):
+            number_item = self._table.item(row, COL_NUM)
+            if number_item is None:
+                continue
+            group = group_by_header.get(row)
+            if group is not None:
+                icon_name = "mdi.chevron-right" if group.collapsed else "mdi.chevron-down"
+                number_item.setIcon(qta.icon(icon_name, color=pal.text))
+                number_item.setToolTip(
+                    tr(
+                        "Baustein „{name}“ ({n} Schritte) -- zum Ein-/Ausklappen klicken",
+                        name=group.name, n=group.count,
+                    )
+                )
+            else:
+                number_item.setIcon(QIcon())
+                number_item.setToolTip(
+                    tr("Teil des Bausteins „{name}“", name=self._group_containing(row).name)
+                    if row in group_member_rows
+                    else ""
+                )
+
         for row in range(self._table.rowCount()):
             self._apply_row_style(row)
 
@@ -1077,6 +1345,8 @@ class TestcaseTab(QWidget):
             self._down_button,
             self._load_button,
             self._save_button,
+            self._block_save_button,
+            self._block_insert_button,
         ):
             button.setEnabled(not running)
         self._report_button.setEnabled(self._report_available and not running)
@@ -1099,6 +1369,7 @@ class TestcaseTab(QWidget):
             self._iteration_text = tr("(Durchlauf {i})", i=iteration)
 
     def on_step_started(self, index: int, step: TestStep) -> None:
+        self._reveal_row(index)
         self._start_blink(index)
         total = self._table.rowCount()
         if step.step_type in ("set_var", "inc_var"):
@@ -1175,6 +1446,7 @@ class TestcaseTab(QWidget):
         self._set_status("Gestoppt")
 
     def on_step_failed(self, index: int, message: str) -> None:
+        self._reveal_row(index)
         self._stop_blink()
         self._error_row = index
         self._apply_row_style(index)
