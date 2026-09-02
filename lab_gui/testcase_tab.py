@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPixmap
+from PySide6.QtCore import QEvent, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSpinBox,
     QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -123,27 +125,45 @@ DEFAULT_COLUMN_WIDTHS = {0: 58, 4: 94, 6: 77}
 # "Aktion" allein den kompletten uebrigen Platz einnimmt.
 FIXED_COLUMNS = {COL_NUM, COL_DURATION, COL_ENABLED}
 
-# Rechtsversatz (Pixel) fuer Zeilen, die zu einem Baustein gehoeren (siehe
-# _revalidate_structure/_apply_row_style) -- bewusst auf ALLEN Spalten
-# angewendet statt nur als Texteinzug in "Gerät", damit die ganze Zeile
-# sichtbar nach rechts verschoben wirkt, nicht nur ihr erstes Feld.
+# Rechtsversatz (Pixel), um den eine Baustein-Mitgliederzeile ALS GANZES
+# (die komplette Zeile als grafisches Element, nicht ihr Inhalt innerhalb
+# der Zellen) nach rechts verschoben wird -- sichtbare Leerflaeche am
+# Zeilenanfang, wie bei hierarchisch untergeordneten Eintraegen. Umgesetzt
+# ueber echte Widget-Geometrie (_apply_member_row_shifts) plus einen
+# versetzt zeichnenden Delegate fuer die Item-Spalte "#"
+# (_NumColumnDelegate) -- Stylesheet-Padding scheidet aus, weil es je nach
+# Widget-Typ nur den Inhalt einrueckt statt das Element zu verschieben.
 BLOCK_MEMBER_INDENT_PX = 16
 
 
-def _spacer_icon(width_px: int, height_px: int = 16) -> QIcon:
-    """Unsichtbares Icon fester Breite fuer die Spalte "#" (siehe
-    _revalidate_structure) -- reserviert dort Platz VOR dem Zeilennummer-Text
-    einer Baustein-Mitgliederzeile. Diese Spalte ist ein QTableWidgetItem statt
-    eines eigenen Widgets: "padding-left" per Stylesheet greift dort nicht
-    (siehe _combo_row_style/_field_row_style fuer dieselbe Problematik bei
-    anderen Spalten), und fuehrende Leerzeichen im Zellentext werden von Qts
-    Standard-Delegate beim Zeichnen verworfen (per Screenshot-Vergleich
-    verifiziert) -- ein Icon-Platzhalter ist der einzige zuverlaessige Weg,
-    definierten Platz vor dem Text zu erzwingen.
-    """
-    pixmap = QPixmap(width_px, height_px)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    return QIcon(pixmap)
+class _NumColumnDelegate(QStyledItemDelegate):
+    """Zeichnet die Zelle der Spalte "#" einer Baustein-Mitgliederzeile um
+    BLOCK_MEMBER_INDENT_PX nach rechts versetzt (Hintergrund UND Nummer) --
+    die Spalte ist ein QTableWidgetItem statt eines Zellen-Widgets, ihre
+    Darstellung laesst sich daher nur ueber den Delegate verschieben
+    (Stylesheet-Padding und fuehrende Leerzeichen im Text bleiben dort
+    wirkungslos, per Screenshot-Vergleich verifiziert). Das Gegenstueck fuer
+    die Zellen-WIDGETS der uebrigen Spalten ist
+    TestcaseTab._apply_member_row_shifts."""
+
+    def __init__(self, indent_for_row, parent=None) -> None:
+        super().__init__(parent)
+        # Callback statt direkter TestcaseTab-Referenz, damit der Delegate
+        # nichts ueber Gruppen/Kopfzeilen wissen muss.
+        self._indent_for_row = indent_for_row
+
+    def paint(self, painter, option, index) -> None:  # noqa: N802 (Qt-Override)
+        indent = self._indent_for_row(index.row())
+        if indent:
+            option = QStyleOptionViewItem(option)
+            # translated() statt adjusted(): adjusted(indent, 0, 0, 0) zieht
+            # nur den linken Rand nach innen und VERKLEINERT die Zelle -- der
+            # zentrierte Text wandert dadurch nur um den halben Betrag (per
+            # Pixelmessung bestaetigt: 8 statt 16 px) und der Versatz wirkte
+            # wie gar keiner. translated() verschiebt die ganze Zelle; was
+            # rechts hinausragt, klippt die Tabelle ohnehin an der Zellgrenze.
+            option.rect = option.rect.translated(indent, 0)
+        super().paint(painter, option, index)
 
 
 DEFAULT_DIR = app_dir() / "testcases"
@@ -430,12 +450,25 @@ class TestcaseTab(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellClicked.connect(self._on_table_cell_clicked)
+        # Versetzt gezeichnete Spalte "#" fuer Baustein-Mitgliederzeilen
+        # (siehe _NumColumnDelegate/BLOCK_MEMBER_INDENT_PX) -- die uebrigen
+        # Spalten dieser Zeilen verschiebt _apply_member_row_shifts als echte
+        # Widget-Geometrie um denselben Betrag.
+        self._num_delegate = _NumColumnDelegate(self._member_indent_for_row, self._table)
+        self._table.setItemDelegateForColumn(COL_NUM, self._num_delegate)
         # Baustein-Kopfzeilen-Overlay (siehe _sync_header_overlay) muss bei
         # Spaltenbreiten-Aenderung (Stretch-Spalten beim Fenster-Resize) und
         # beim vertikalen Scrollen neu positioniert werden, da es als freies
         # Kind von viewport() haengt statt als Zellen-Widget mitzuwandern.
         header.sectionResized.connect(lambda *_: self._sync_all_header_overlays())
         self._table.verticalScrollBar().valueChanged.connect(lambda *_: self._sync_all_header_overlays())
+        # Beim Scrollen/Spalten-Resize legt QTableWidget die Zellen-Widgets neu
+        # aus und verwirft dabei den Rechtsversatz der Mitgliederzeilen -- der
+        # Event-Filter faengt das pro Widget ab, diese Sammel-Aufrufe holen
+        # zusaetzlich die Zeilen nach, die dabei kein eigenes Move-Event
+        # bekommen haben (z.B. gerade erst wieder eingeblendete).
+        header.sectionResized.connect(lambda *_: self._apply_member_row_shifts())
+        self._table.verticalScrollBar().valueChanged.connect(lambda *_: self._apply_member_row_shifts())
         layout.addWidget(self._table)
 
         run_row = QHBoxLayout()
@@ -1070,15 +1103,115 @@ class TestcaseTab(QWidget):
 
     def _move_selected_row(self, offset: int) -> None:
         row = self._selected_row
-        target = row + offset
-        if row < 0 or not (0 <= target < self._table.rowCount()):
+        if row < 0:
             return
+        # Ist die markierte Zeile die Kopfzeile eines Bausteins, muss der
+        # GESAMTE Baustein als Einheit verschoben werden -- siehe _move_block.
+        group = self._group_at_header(row)
+        if group is not None:
+            self._move_block(group, offset)
+            return
+
+        target = row + offset
+        if not (0 <= target < self._table.rowCount()):
+            return
+        own_group = self._group_containing(row)
+        foreign_group = self._group_containing(target)
+        if foreign_group is not None and foreign_group is not own_group:
+            # Zielposition liegt innerhalb eines FREMDEN (ggf. eingeklappten)
+            # Bausteins -- als Ganzes ueberspringen statt mittendrin
+            # einzufuegen, sonst wuerde eine normale Zeile faelschlich zur
+            # Mitgliederzeile dieses Bausteins (Zeilenzahl+Grenzen liefen
+            # auseinander, siehe Bugreport). Beim Abwaertsverschieben (offset>0)
+            # liegt `row` VOR dem fremden Baustein -- ihr Entfernen zieht
+            # dessen Zeilen um eins nach vorn, "dahinter" landet daher bei
+            # start+count-1, nicht start+count (sonst eine Zeile zu weit).
+            # Beim Aufwaertsverschieben liegt `row` dahinter, dessen Entfernen
+            # veraendert die (davorliegenden) Indizes des Bausteins nicht.
+            target = foreign_group.start if offset < 0 else foreign_group.start + foreign_group.count - 1
+            if not (0 <= target < self._table.rowCount()):
+                return
+        if own_group is not None and not (own_group.start < target < own_group.start + own_group.count):
+            # Eine Mitgliederzeile darf ihren eigenen Baustein durch
+            # Verschieben nicht verlassen (weder zur Kopfzeile hoch noch nach
+            # unten heraus) -- dafuer gibt es "Baustein speichern"/manuelles
+            # Neuanlegen, nicht die Pfeil-Buttons.
+            return
+
         step = self._row_to_step(row)
         self._table.blockSignals(True)
         self._on_row_removed(row)
         self._table.removeRow(row)
         self._insert_row(target, step)
         self._table.selectRow(target)
+        self._table.blockSignals(False)
+        self._resync_selection()
+        self._revalidate_structure()
+
+    def _move_block(self, group: _BlockGroup, offset: int) -> None:
+        """Verschiebt einen kompletten Baustein (Kopf- plus Mitgliederzeilen)
+        als Einheit um eine Position nach oben/unten. Steht dabei eine
+        einzelne fremde Zeile im Weg, wird nur mit ihr getauscht; steht ein
+        ganzer anderer Baustein im Weg, wird komplett mit ihm getauscht,
+        statt Kopf-/Mitgliederzeilen der beiden Bausteine zu vermischen."""
+        start, count = group.start, group.count
+        if offset < 0:
+            if start == 0:
+                return
+            neighbor = self._group_containing(start - 1)
+            span = neighbor.count if neighbor is not None else 1
+            neighbor_start = start - span
+        else:
+            end = start + count
+            if end >= self._table.rowCount():
+                return
+            neighbor = self._group_containing(end)
+            span = neighbor.count if neighbor is not None else 1
+            neighbor_start = end
+
+        own_steps = [self._row_to_step(r) for r in range(start, start + count)]
+        neighbor_steps = [self._row_to_step(r) for r in range(neighbor_start, neighbor_start + span)]
+        lo = min(start, neighbor_start)
+
+        # Aus der Gruppenliste nehmen, BEVOR Zeilen entfernt werden: die
+        # generische Nachfuehrung in _on_row_removed soll fuer group/neighbor
+        # selbst nicht laufen (sie werden unten an der neuen Position komplett
+        # neu angelegt), nur fuer alle UEBRIGEN (unbeteiligten) Bausteine.
+        self._dissolve_group_overlay(group)
+        if neighbor is not None:
+            self._dissolve_group_overlay(neighbor)
+        self._block_groups = [g for g in self._block_groups if g is not group and g is not neighbor]
+
+        self._table.blockSignals(True)
+        for r in reversed(range(lo, lo + count + span)):
+            self._on_row_removed(r)
+            self._table.removeRow(r)
+
+        if offset < 0:
+            for i, step in enumerate(own_steps):
+                self._insert_row(lo + i, step)
+            for i, step in enumerate(neighbor_steps):
+                self._insert_row(lo + count + i, step)
+            new_start, neighbor_new_start = lo, lo + count
+        else:
+            for i, step in enumerate(neighbor_steps):
+                self._insert_row(lo + i, step)
+            for i, step in enumerate(own_steps):
+                self._insert_row(lo + span + i, step)
+            neighbor_new_start, new_start = lo, lo + span
+
+        new_group = _BlockGroup(start=new_start, count=count, name=group.name, collapsed=group.collapsed)
+        self._block_groups.append(new_group)
+        self._apply_group_visibility(new_group)
+        if neighbor is not None:
+            new_neighbor = _BlockGroup(
+                start=neighbor_new_start, count=neighbor.count,
+                name=neighbor.name, collapsed=neighbor.collapsed,
+            )
+            self._block_groups.append(new_neighbor)
+            self._apply_group_visibility(new_neighbor)
+
+        self._table.selectRow(new_start)
         self._table.blockSignals(False)
         self._resync_selection()
         self._revalidate_structure()
@@ -1129,23 +1262,15 @@ class TestcaseTab(QWidget):
         for row in range(self._table.rowCount()):
             item = self._table.item(row, COL_NUM)
             if row in member_position:
-                # Spalte "#" ist ein QTableWidgetItem, kein eigenes Widget --
-                # "padding-left" per Stylesheet greift hier nicht (siehe
-                # _apply_row_style/_combo_row_style fuer dieselbe Problematik
-                # bei anderen Spalten). Fuehrende Leerzeichen im Text werden
-                # von Qts Standard-Delegate beim Zeichnen verworfen (per
-                # Screenshot-Vergleich verifiziert -- keine sichtbare
-                # Verschiebung trotz zehn Leerzeichen), daher stattdessen ein
-                # unsichtbares Platzhalter-Icon fester Breite (siehe
-                # _spacer_icon/_revalidate_structure) plus Linksbuendigkeit,
-                # statt wie bei normalen Zeilen zentriert zu bleiben.
+                # Der Rechtsversatz dieser Zelle kommt vom _NumColumnDelegate
+                # (ganze Zelle inkl. Hintergrund versetzt gezeichnet), die
+                # Ausrichtung innerhalb der Zelle bleibt wie bei jeder
+                # anderen Zeile zentriert.
                 item.setText(f"{current_header_number}.{member_position[row]}")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 continue
             main_number += 1
             current_header_number = str(main_number)
             item.setText(current_header_number)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
     # -- Ein-/ausklappbare Bausteine -------------------------------------------
     #
@@ -1169,6 +1294,95 @@ class TestcaseTab(QWidget):
             if group.start <= row < group.start + group.count:
                 return group
         return None
+
+    # -- Ganze Mitgliederzeilen nach rechts verschieben ------------------------
+    #
+    # Der Zeilenanfang einer Baustein-Mitgliederzeile wird ALS GANZES um
+    # BLOCK_MEMBER_INDENT_PX nach rechts verschoben (Leerflaeche am
+    # Zeilenanfang, hierarchische Unterordnung), nicht nur der Inhalt
+    # innerhalb der Zellen: die Zelle "#" zeichnet der _NumColumnDelegate
+    # versetzt, das Geraet-Feld bekommt tatsaechlich versetzte Geometrie.
+    # Den Versatz nimmt die Geraet-Spalte in ihrer Breite auf (sie wird um
+    # denselben Betrag schmaler) -- dadurch bleibt ihr rechter Rand und damit
+    # jede folgende Spalte an der normalen Position, die Datenspalten bleiben
+    # ueber alle Zeilen hinweg buendig vergleichbar und nichts laeuft rechts
+    # aus der Tabelle hinaus. QTableWidget setzt die Widget-Geometrie bei
+    # jedem Layout (Scrollen, Spalten-Resize, Zeilenmutation) selbst auf die
+    # unversetzte Zellposition zurueck -- ein Event-Filter (siehe
+    # eventFilter) korrigiert das sofort wieder, _apply_member_row_shifts
+    # uebernimmt die (De-)Markierung nach Strukturaenderungen.
+
+    def _member_indent_for_row(self, row: int) -> int:
+        """Rechtsversatz der Zeile: BLOCK_MEMBER_INDENT_PX fuer Zeilen
+        INNERHALB eines Bausteins (die Kopfzeile selbst bleibt
+        unverschoben), sonst 0. Auch vom Spalten-"#"-Delegate abgefragt."""
+        group = self._group_containing(row)
+        if group is not None and row != group.start:
+            return BLOCK_MEMBER_INDENT_PX
+        return 0
+
+    def _cell_indent(self, row: int, col: int) -> int:
+        """Versatz eines einzelnen Zellen-Widgets: nur die Geraet-Spalte
+        traegt ihn (und wird dafuer schmaler, siehe
+        _set_cell_widget_geometry) -- alle Spalten rechts davon behalten ihre
+        normale Position."""
+        return self._member_indent_for_row(row) if col == COL_DEVICE else 0
+
+    def _set_cell_widget_geometry(self, widget: QWidget, row: int, col: int, indent: int) -> None:
+        # Basis ist Qts eigenes Zellrechteck (visualRect) statt
+        # columnViewportPosition/columnWidth: genau diese Geometrie gibt
+        # QTableView einem Zellen-Widget normalerweise, inklusive der
+        # 1px-Korrektur fuer die Gitterlinie. So ist eine unversetzte Zeile
+        # pixelgenau wie zuvor und die versetzte weicht ausschliesslich um
+        # den Einzug ab.
+        rect = self._table.visualRect(self._table.model().index(row, col))
+        target = QRect(
+            rect.x() + indent, rect.y(), rect.width() - indent, rect.height()
+        )
+        if widget.geometry() != target:
+            widget.setGeometry(target)
+
+    def _apply_member_row_shifts(self) -> None:
+        """Markiert die Zellen-Widgets aller Baustein-Mitgliederzeilen fuer
+        den Rechtsversatz (Event-Filter installieren, Geometrie setzen) bzw.
+        hebt die Markierung wieder auf, wenn eine Zeile keine Mitgliederzeile
+        mehr ist (Gruppe aufgeloest/verschoben). Nach jeder
+        Strukturaenderung von _revalidate_structure aufgerufen."""
+        for row in range(self._table.rowCount()):
+            for col in range(1, self._table.columnCount()):
+                widget = self._table.cellWidget(row, col)
+                if widget is None:
+                    continue
+                indent = self._cell_indent(row, col)
+                if indent:
+                    if not getattr(widget, "_member_shift_col", None) == col:
+                        widget._member_shift_col = col
+                        widget.installEventFilter(self)
+                    self._set_cell_widget_geometry(widget, row, col, indent)
+                elif getattr(widget, "_member_shift_col", None) is not None:
+                    widget._member_shift_col = None
+                    widget.removeEventFilter(self)
+                    self._set_cell_widget_geometry(widget, row, col, 0)
+        # Spalte "#" wird vom Delegate versetzt gezeichnet -- Neuzeichnen
+        # anstossen, damit ein geaenderter Versatz sofort sichtbar wird.
+        self._table.viewport().update()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt-Override)
+        # Korrigiert die Geometrie eines fuer den Rechtsversatz markierten
+        # Zellen-Widgets, sobald QTableWidget sie beim eigenen Layouten
+        # (Scrollen/Resize/Zeilenmutation) auf die unversetzte Zellposition
+        # zurueckgesetzt hat. Kein Endlos-Pingpong: unsere Korrektur setzt
+        # die Geometrie nur bei Abweichung (siehe _set_cell_widget_geometry),
+        # das darauf folgende Move-Event trifft dann bereits die Zielposition.
+        if event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
+            col = getattr(obj, "_member_shift_col", None)
+            if col is not None:
+                row = self._row_of_widget(obj, col)
+                if row >= 0:
+                    indent = self._cell_indent(row, col)
+                    if indent:
+                        self._set_cell_widget_geometry(obj, row, col, indent)
+        return super().eventFilter(obj, event)
 
     def _apply_group_visibility(self, group: _BlockGroup) -> None:
         for row in range(group.start + 1, group.start + group.count):
@@ -1642,13 +1856,11 @@ class TestcaseTab(QWidget):
         error_by_row = dict(errors)
         end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn")}
 
-        # Zeilen innerhalb einer (ein- oder ausgeklappten) Baustein-Gruppe
-        # bekommen zusaetzlich zur Schleifen/If-Verschachtelungstiefe (die nur
-        # Spalte COL_DEVICE betrifft, siehe _apply_row_style) einen eigenen,
-        # von der Tiefe unabhaengigen Zeilen-weiten Rechtsversatz -- ueber
-        # ALLE Spalten hinweg, nicht nur als Texteinzug in "Gerät" (die
-        # Kopfzeile selbst bleibt unverschoben, sie ist keine Mitgliederzeile,
-        # sondern die Baustein-Zusammenfassung selbst).
+        # group_member_rows markiert die Zeilen INNERHALB eines (auf- oder
+        # eingeklappten) Bausteins (ohne die Kopfzeile selbst) -- sie werden
+        # als ganze Zeile nach rechts verschoben (siehe
+        # _apply_member_row_shifts), unabhaengig von der hier berechneten
+        # Schleifen/If-Verschachtelungstiefe.
         group_by_header = {group.start: group for group in self._block_groups}
         group_member_rows: set[int] = set()
         for group in self._block_groups:
@@ -1660,7 +1872,6 @@ class TestcaseTab(QWidget):
             if col1 is None:
                 continue
             col1._indent_depth = depths[row] if row < len(depths) else 0
-            col1._block_member = row in group_member_rows
             col1._structure_error = row in error_by_row
             if row in error_by_row:
                 col1.setToolTip(error_by_row[row])
@@ -1700,11 +1911,7 @@ class TestcaseTab(QWidget):
                     )
                 )
             elif row in group_member_rows:
-                # Unsichtbares Platzhalter-Icon statt QIcon() -- reserviert
-                # den Baustein-Einzug vor der Unternummer (siehe
-                # _spacer_icon), auf gleicher Hoehe wie BLOCK_MEMBER_INDENT_PX
-                # bei den uebrigen Spalten dieser Zeile.
-                number_item.setIcon(_spacer_icon(BLOCK_MEMBER_INDENT_PX))
+                number_item.setIcon(QIcon())
                 number_item.setToolTip(
                     tr("Teil des Bausteins „{name}“", name=self._group_containing(row).name)
                 )
@@ -1716,6 +1923,11 @@ class TestcaseTab(QWidget):
 
         for row in range(self._table.rowCount()):
             self._apply_row_style(row)
+
+        # Rechtsversatz der kompletten Mitgliederzeilen zuletzt -- die
+        # Zellen-Widgets muessen dafuer bereits ihre endgueltige Zeilen-/
+        # Spaltenzuordnung haben (siehe _apply_member_row_shifts).
+        self._apply_member_row_shifts()
 
     def _update_run_enabled(self) -> None:
         self._run_button.setEnabled(not self._is_running and self._structure_ok)
@@ -1922,14 +2134,15 @@ class TestcaseTab(QWidget):
             return
         color = self._row_style_color(row)
         style = f"background-color: {color};" if color else ""
-        # _indent_depth (Schleifen/If-Verschachtelung) und _block_member
-        # (Baustein-Mitgliederzeile) werden nur an der Spalte COL_DEVICE
-        # abgelegt (siehe _revalidate_structure) -- fuer alle anderen Spalten
-        # dieser Zeile hier einmal vorab auslesen.
-        depth_widget = self._table.cellWidget(row, COL_DEVICE)
-        block_indent = BLOCK_MEMBER_INDENT_PX if getattr(depth_widget, "_block_member", False) else 0
-        combo_style = self._combo_row_style(color, block_indent)
-        field_style = self._field_row_style(color, block_indent)
+        # Der Baustein-Rechtsversatz einer Zeile steckt NICHT im Stylesheet,
+        # sondern in der Widget-Geometrie bzw. im Delegate der Spalte "#"
+        # (siehe _apply_member_row_shifts/_NumColumnDelegate): Padding wuerde
+        # je nach Widget-Typ nur den Inhalt einruecken statt das Element zu
+        # verschieben. Hier bleibt nur die (davon unabhaengige)
+        # Schleifen/If-Verschachtelungstiefe _indent_depth, die wie zuvor als
+        # Texteinzug in Spalte COL_DEVICE dargestellt wird.
+        combo_style = self._combo_row_style(color)
+        field_style = self._field_row_style(color)
         for col in range(1, self._table.columnCount()):
             widget = self._table.cellWidget(row, col)
             if widget is None:
@@ -1943,7 +2156,7 @@ class TestcaseTab(QWidget):
                 depth = getattr(widget, "_indent_depth", 0)
                 has_error = getattr(widget, "_structure_error", False)
                 border = f"border: 1px solid {current_palette().danger};" if has_error else ""
-                left = depth * 18 + block_indent
+                left = depth * 18
                 if isinstance(widget, QComboBox):
                     widget.setStyleSheet(self._combo_row_style(color, left, border))
                 else:
@@ -1958,8 +2171,6 @@ class TestcaseTab(QWidget):
                 # nicht (siehe _combo_row_style), daher ebenfalls die
                 # vollstaendig selbst-deklarierte Variante verwenden.
                 widget.setStyleSheet(field_style)
-            elif block_indent:
-                widget.setStyleSheet(f"{style} padding-left: {block_indent}px;")
             else:
                 widget.setStyleSheet(style)
         number_item = self._table.item(row, COL_NUM)

@@ -11,20 +11,25 @@ Semantic Versioning (`lab_gui/version.py`).
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
   gehörenden Zeilen eine eigene Unternummerierung bekommen (z.B. "4.1",
-  "4.2" unter Kopfzeile "4"). Die Zeilen eines Bausteins sind dabei als
-  Ganzes -- ALLE Spalten inklusive "#" gleichmäßig, nicht nur ein
-  Texteinzug in "Gerät" -- leicht nach rechts verschoben, unabhängig von
-  der Verschachtelungstiefe in Schleifen/Wenn-Blöcken
-  (`testcase_tab.py::_renumber_rows`, `BLOCK_MEMBER_INDENT_PX`). Da ein
-  einfaches "padding-left" bei QComboBox/QDoubleSpinBox/QSpinBox/QLineEdit
-  gegen die globale Formularfeld-Regel aus `theme.py::form_control_qss()`
-  kaskadiert und dadurch kaum sichtbar war, deklarieren `_combo_row_style`/
-  `_field_row_style` Rahmen/Hintergrund/Padding dort jetzt vollständig
-  selbst; die Spalte "#" ist kein eigenes Widget, sondern ein
-  QTableWidgetItem, bei dem weder Stylesheet-Padding noch führende
-  Leerzeichen im Text wirken -- dort erzwingt ein unsichtbares
-  Platzhalter-Icon fester Breite (`_spacer_icon`) den Einzug vor der
-  Unternummer. Die Kopfzeile selbst bleibt dabei UNVERSCHOBEN und zeigt
+  "4.2" unter Kopfzeile "4"). Der Anfang dieser Zeilen ist zusätzlich als
+  GANZES um 16px nach rechts verschoben (`BLOCK_MEMBER_INDENT_PX`): die
+  Zelle "#" und das Gerät-Feld wandern als komplettes Element nach rechts,
+  mit sichtbarer Leerfläche am Zeilenanfang, so dass die hierarchische
+  Unterordnung unter die Kopfzeile erkennbar ist. Den Versatz nimmt die
+  Gerät-Spalte in ihrer Breite auf (sie wird um denselben Betrag
+  schmaler), damit ihr rechter Rand -- und damit jede folgende Spalte --
+  an der normalen Position bleibt und die Datenspalten über alle Zeilen
+  hinweg bündig vergleichbar sind. Umgesetzt über echte Widget-Geometrie
+  statt Stylesheet-Padding (`_apply_member_row_shifts`), da Padding je nach
+  Widget-Typ nur den Zell-INHALT einrückt: bei QComboBox/QDoubleSpinBox/
+  QSpinBox/QLineEdit verschiebt es zwar die ganze Box, bei einfachen
+  QWidget-Containern (Checkbox-/Prüfung-Zelle) dagegen nur deren Inhalt bei
+  weiterhin voller Zellfüllung. Da QTableWidget die Geometrie seiner
+  Zellen-Widgets bei jedem Layout (Scrollen, Spalten-Resize,
+  Zeilenmutation) selbst zurücksetzt, hält ein Event-Filter den Versatz
+  nach; die Spalte "#" ist kein Widget, sondern ein QTableWidgetItem und
+  wird deshalb von einem eigenen Delegate (`_NumColumnDelegate`) versetzt
+  gezeichnet. Die Kopfzeile selbst bleibt unverschoben und zeigt
   dauerhaft "Baustein"/Bausteinname/Schrittzahl (z.B. "2 Schritte") an --
   auch im aufgeklappten Zustand, statt wieder die rohen Geräte-/Aktion-/
   Wert-Felder ihres ersten Schritts freizugeben (`_sync_header_overlay`).
@@ -302,6 +307,22 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **Testablauf-Editor: Pfeil-Buttons schoben eine Zeile in einen
+  eingeklappten Baustein hinein statt ihn zu überspringen**:
+  `_move_selected_row()` kannte Bausteine bisher gar nicht und verschob
+  stur um eine Tabellenzeile -- landete eine normale Zeile dabei auf einer
+  (bei eingeklappten Bausteinen unsichtbaren) Mitgliederzeile, wurde sie
+  fälschlich Teil des Bausteins, dessen Zeilenzahl/Grenzen liefen
+  auseinander. Prüft jetzt, ob die Zielposition in einem FREMDEN Baustein
+  liegt, und springt in dem Fall komplett darüber; eine eigene
+  Mitgliederzeile darf ihren Baustein durch Verschieben nicht verlassen
+  (weder zur Kopfzeile hoch noch unten heraus). Als Nebeneffekt desselben
+  fehlenden Gruppenbezugs ließ sich auch eine Baustein-KOPFZEILE nicht
+  verschieben, ohne den Baustein auseinanderzureißen (nur ihr einzelner
+  erster Schritt wanderte) -- neue Methode `_move_block()` verschiebt jetzt
+  Kopf- und Mitgliederzeilen als Einheit und tauscht dabei mit einer
+  einzelnen Nachbarzeile oder komplett mit einem angrenzenden anderen
+  Baustein (`lab_gui/testcase_tab.py`).
 - **[BUGS.md #16, tatsächliche Root Cause -- vorheriger Fix wirkungslos]
   Control-Tab: „Kein Gerät verbunden"-Kachel blieb nach „Geräte-Zuordnung
   löschen" gleichzeitig mit weiterhin verbundenen Geräten sichtbar**: Der
