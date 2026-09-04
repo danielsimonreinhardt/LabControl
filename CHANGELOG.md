@@ -30,6 +30,28 @@ Semantic Versioning (`lab_gui/version.py`).
   "veraltet" abgebrochen wird (CAN hat keine U/I/P-Messwerte). DBC-
   Signaldecodierung und ein "auf CAN-Frame warten"-Prüfschritt sind
   bewusst zurückgestellt (siehe [FEATURES.md](FEATURES.md) Punkt 3).
+- **microHIL-Treiber** (`microhil/driver.py::MicroHIL`): neuer Treiber für
+  das eigene STM32F446-Test-/HIL-Gerät (4 Relais, 8 Digitalausgänge,
+  8 Digitaleingänge, 4 Analogeingänge, 2 Analogausgänge, 2 schaltbare
+  12V-Ausgänge mit Stromsense, 4 PWM-Kanäle) über dessen USB-CDC-
+  Kommandoprotokoll. Bewusst als Test dafür geschrieben, ob die microHIL-
+  Protokolldoku allein für eine unabhängige Treiber-Implementierung
+  ausreicht -- entstanden ohne Zugriff auf den Firmware-Quellcode, nur
+  aus `docs/protocol.md`/`docs/can-usb.md` des microHIL-Repos. Größte
+  Abweichung vom bisherigen Treiber-Schema (hcs34xx/korad_kel102): das
+  Gerät meldet sich als USB-Composite-Device mit zwei COM-Ports gleicher
+  VID:PID (HIL-Protokoll + separates CAN1/SLCAN-Interface, letzteres
+  bewusst außerhalb dieses Treibers, siehe `can_bus/driver.py`) --
+  `discover()` unterscheidet beide über die aus `ListPortInfo`
+  extrahierte USB-Interface-Nummer, mit Fallback für Ports ohne
+  bestimmbare Kennung (auf reale hwid-Strings dieses Geräts verifiziert).
+  `AOUT`/`PWM` klemmen einen außerhalb des gültigen Bereichs liegenden
+  Wert firmwareseitig statt ihn abzulehnen -- der Treiber klemmt deshalb
+  client-seitig mit, damit der intern sichtbare Sollwert stimmt.
+  **Nicht** gegen echte Hardware verifiziert (kein Gerät verfügbar) und
+  **nicht** in `device_worker.py`/Dashboard/Testablauf eingebunden --
+  eigenständiges Modul wie die übrigen Treiber, GUI-Integration und
+  `mock.py` folgen bei Bedarf.
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
