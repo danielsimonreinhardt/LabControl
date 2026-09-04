@@ -5,9 +5,20 @@ siehe dort) braucht der microHIL eine strukturierte Anzeige: 4 Relais,
 8 Digitalein-/-ausgaenge, 4 Analogeingaenge, 2 Analogausgaenge und 2
 schaltbare 12V-Ausgaenge mit Stromsense lassen sich nicht sinnvoll in
 dessen FIELD_DEFS/QFormLayout-Schema pressen. Deshalb ein eigenstaendiges
-Panel mit vier untereinander gestapelten, durch Trennlinien abgesetzten
-Bereichen (Digital IO, Analog IO, Relais, 12V-OUT) -- Aufteilung und
-LED-Punkt-Optik nach Absprache.
+Panel mit vier Bereichen (Digital IO, Analog IO, Relais, 12V-OUT) --
+Aufteilung und LED-Punkt-Optik nach Absprache.
+
+Zwei Ansichten, analog zu dashboard._DevicePanel.set_compact():
+- Normal: die vier Bereiche untereinander gestapelt, durch Trennlinien
+  abgesetzt (_normal_widget).
+- Kompakt: dieselben vier Bereiche als 2x2-Raster -- oben links Digital
+  IO, unten links Analog IO, oben rechts Relais, unten rechts 12V-OUT
+  (_compact_widget) -- halbiert die Panel-Hoehe auf Kosten der Breite,
+  ebenfalls nach Absprache. Beide Ansichten benutzen eigene Widget-
+  Instanzen (siehe update_*()-Methoden, die beide Saetze gleichzeitig
+  fuellen) statt derselben Widgets in zwei Layouts -- ein Qt-Widget kann
+  nur in einem Layout gleichzeitig haengen, dasselbe Duplizierungsprinzip
+  nutzt bereits dashboard._DevicePanel fuer seine Normal-/Kompaktwerte.
 
 PWM1-4 bewusst NICHT auf dem Dashboard: PWM ist ein Sollwert/Steuerelement
 (mit OUT1-4 verriegelt, siehe driver.INTERLOCKED_CHANNELS), das Dashboard
@@ -16,15 +27,16 @@ Abschnitt (analog zu control_tab.LoadControlGroup/PsuControlGroup).
 
 Noch NICHT an device_worker.py/DashboardWidget angeschlossen (siehe
 microhil/README.md, "Naechste Schritte") -- dieses Modul stellt nur das
-Panel selbst bereit, mit einer set_online()/update_*()-Schnittstelle nach
-dem Vorbild von dashboard._DevicePanel, damit die spaetere Verdrahtung
-(device_registry-Kind "hil", DashboardWidget.on_device_known, Polling in
-device_worker.py) sich direkt anschliessen laesst. Wichtig fuer diese
-Verdrahtung: DashboardWidget._relayout_panels() gleicht aktuell die Breite
-ALLER Panels auf das breiteste an (siehe dortigen Kommentar) -- dieses
-Panel ist durch die 8er-Punktreihen deutlich breiter als ein Last-/
-Netzteil-Panel, das muesste vor dem Anschluss noch beruecksichtigt werden
-(z.B. eigene Breiten-Ratsche je Kind statt einer gemeinsamen).
+Panel selbst bereit, mit einer set_online()/set_compact()/update_*()-
+Schnittstelle nach dem Vorbild von dashboard._DevicePanel, damit die
+spaetere Verdrahtung (device_registry-Kind "hil", DashboardWidget.
+on_device_known, Polling in device_worker.py) sich direkt anschliessen
+laesst. Wichtig fuer diese Verdrahtung: DashboardWidget._relayout_panels()
+gleicht aktuell die Breite ALLER Panels auf das breiteste an (siehe
+dortigen Kommentar) -- dieses Panel ist selbst im kompakten 2x2-Raster
+noch breiter als ein Last-/Netzteil-Panel, das muesste vor dem Anschluss
+noch beruecksichtigt werden (z.B. eigene Breiten-Ratsche je Kind statt
+einer gemeinsamen).
 """
 from __future__ import annotations
 
@@ -65,8 +77,8 @@ class _SectionTitle(QLabel):
     "background: transparent" ist hier PFLICHT, nicht Kosmetik (siehe
     theme.no_own_background-Docstring): als direktes Kind der QVBoxLayout-
     Spalte (nicht wie die Werte-Zeilen ueber einen no_own_background()-
-    Wrapper) spannt sich das Label ueber die volle Panel-Breite und wuerde
-    sonst die globale "QWidget{background-color:pal.bg}"-Regel aus
+    Wrapper) spannt sich das Label ueber die volle Breite und wuerde sonst
+    die globale "QWidget{background-color:pal.bg}"-Regel aus
     theme.stylesheet() zeigen -- ein sichtbarer Seitenhintergrund-Balken
     quer durchs Panel, der sich farblich vom Panel selbst (pal.surface)
     abhebt."""
@@ -80,11 +92,14 @@ class _SectionTitle(QLabel):
 
 
 class _Divider(QFrame):
-    """Trennlinie zwischen den vier Bereichen. Explizit gefaerbt (statt der
-    Default-OS-Rahmenoptik von QFrame.Shape.HLine) und ueber apply_palette()
-    themefaehig, sonst bleibt sie in beiden Themes praktisch unsichtbar
-    (Default-Sunken-Schatten setzt auf Kontrast zum umgebenden Widget-
-    Hintergrund, den es hier per Stylesheet nicht gibt)."""
+    """Trennlinie zwischen den vier Bereichen (nur Normalansicht -- die
+    Kompaktansicht trennt die vier Quadranten stattdessen ueber
+    Raster-Abstand, siehe MicroHilPanel._quadrant). Explizit gefaerbt
+    (statt der Default-OS-Rahmenoptik von QFrame.Shape.HLine) und ueber
+    apply_palette() themefaehig, sonst bleibt sie in beiden Themes
+    praktisch unsichtbar (Default-Sunken-Schatten setzt auf Kontrast zum
+    umgebenden Widget-Hintergrund, den es hier per Stylesheet nicht
+    gibt)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -106,7 +121,7 @@ class _DotArray(QWidget):
 
     def __init__(self, prefix: str, count: int, tooltip_key: str) -> None:
         super().__init__()
-        # Rohes (unuebersetztes) Format-Template, z.B. "Digitaleingang {0}"
+        # Rohes (unuebersetztes) Format-Template, z.B. "Digitaleingang {index}"
         # -- wird bei jedem retranslate() (Spracheinstellung geaendert) neu
         # durch tr() gejagt, statt die Tooltips nur einmal bei der
         # Konstruktion zu uebersetzen.
@@ -263,6 +278,7 @@ class MicroHilPanel(QGroupBox):
         super().__init__()
         self._device_id = device_id
         self._online = True
+        self._compact = False
         self.setTitle(label)
 
         # Zuletzt gesetzte Bit-Zustaende, gemerkt fuer _on_theme_changed
@@ -278,32 +294,64 @@ class MicroHilPanel(QGroupBox):
         self._section_titles: list[_SectionTitle] = []
         self._dividers: list[_Divider] = []
 
-        # -- Digital IO --------------------------------------------------
-        outer.addWidget(self._section_title(SECTION_TITLES[0]))
+        # -- Normalansicht: vier Bereiche untereinander, mit Trennlinien --
+        self._normal_widget = no_own_background(QWidget())
+        normal_layout = QVBoxLayout(self._normal_widget)
+        normal_layout.setContentsMargins(0, 0, 0, 0)
+
         self._in_array = _DotArray("IN", IN_COUNT, "Digitaleingang {index}")
         self._out_array = _DotArray("OUT", OUT_COUNT, "Digitalausgang {index}")
-        outer.addWidget(self._in_array)
-        outer.addWidget(self._out_array)
-        outer.addWidget(self._new_divider())
-
-        # -- Analog IO -----------------------------------------------------
-        outer.addWidget(self._section_title(SECTION_TITLES[1]))
         self._ain_grid = _ValueGrid([f"AIN{i}" for i in range(1, AIN_COUNT + 1)])
         self._aout_grid = _ValueGrid([f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)])
-        outer.addWidget(self._ain_grid)
-        outer.addWidget(self._aout_grid)
-        outer.addWidget(self._new_divider())
-
-        # -- Relais ----------------------------------------------------------
-        outer.addWidget(self._section_title(SECTION_TITLES[2]))
         self._relay_array = _DotArray("", RELAY_COUNT, "Relais {index}")
-        outer.addWidget(self._relay_array)
-        outer.addWidget(self._new_divider())
-
-        # -- 12V-OUT -----------------------------------------------------------
-        outer.addWidget(self._section_title(SECTION_TITLES[3]))
         self._pwr12_row = _Pwr12Row(PWR12_COUNT)
-        outer.addWidget(self._pwr12_row)
+
+        normal_layout.addWidget(self._section_title(SECTION_TITLES[0]))
+        normal_layout.addWidget(self._in_array)
+        normal_layout.addWidget(self._out_array)
+        normal_layout.addWidget(self._new_divider())
+        normal_layout.addWidget(self._section_title(SECTION_TITLES[1]))
+        normal_layout.addWidget(self._ain_grid)
+        normal_layout.addWidget(self._aout_grid)
+        normal_layout.addWidget(self._new_divider())
+        normal_layout.addWidget(self._section_title(SECTION_TITLES[2]))
+        normal_layout.addWidget(self._relay_array)
+        normal_layout.addWidget(self._new_divider())
+        normal_layout.addWidget(self._section_title(SECTION_TITLES[3]))
+        normal_layout.addWidget(self._pwr12_row)
+
+        outer.addWidget(self._normal_widget)
+
+        # -- Kompaktansicht: dieselben vier Bereiche als 2x2-Raster --
+        # Eigene Widget-Instanzen (siehe Modul-Docstring) statt der obigen,
+        # gefuellt ueber dieselben update_*()-Aufrufe wie die Normalansicht.
+        self._compact_widget = no_own_background(QWidget())
+        compact_grid = QGridLayout(self._compact_widget)
+        compact_grid.setContentsMargins(0, 0, 0, 0)
+        compact_grid.setHorizontalSpacing(20)
+        compact_grid.setVerticalSpacing(8)
+
+        self._compact_in_array = _DotArray("IN", IN_COUNT, "Digitaleingang {index}")
+        self._compact_out_array = _DotArray("OUT", OUT_COUNT, "Digitalausgang {index}")
+        self._compact_ain_grid = _ValueGrid([f"AIN{i}" for i in range(1, AIN_COUNT + 1)])
+        self._compact_aout_grid = _ValueGrid([f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)])
+        self._compact_relay_array = _DotArray("", RELAY_COUNT, "Relais {index}")
+        self._compact_pwr12_row = _Pwr12Row(PWR12_COUNT)
+
+        digital_quadrant = self._quadrant(SECTION_TITLES[0], [self._compact_in_array, self._compact_out_array])
+        analog_quadrant = self._quadrant(SECTION_TITLES[1], [self._compact_ain_grid, self._compact_aout_grid])
+        relay_quadrant = self._quadrant(SECTION_TITLES[2], [self._compact_relay_array])
+        pwr12_quadrant = self._quadrant(SECTION_TITLES[3], [self._compact_pwr12_row])
+
+        # Oben links Digital IO, unten links Analog IO, oben rechts Relais,
+        # unten rechts 12V-OUT (Absprache).
+        compact_grid.addWidget(digital_quadrant, 0, 0)
+        compact_grid.addWidget(relay_quadrant, 0, 1)
+        compact_grid.addWidget(analog_quadrant, 1, 0)
+        compact_grid.addWidget(pwr12_quadrant, 1, 1)
+
+        outer.addWidget(self._compact_widget)
+        self._compact_widget.hide()
 
         # "Verbindung getrennt"-Badge -- gleiches Prinzip wie
         # dashboard._DevicePanel (siehe dortigen ausfuehrlichen Kommentar
@@ -333,13 +381,29 @@ class MicroHilPanel(QGroupBox):
         self._dividers.append(divider)
         return divider
 
+    def _quadrant(self, title_text: str, widgets: list[QWidget]) -> QWidget:
+        """Ein Viertel der Kompaktansicht: Bereichs-Ueberschrift + Inhalt
+        untereinander, wie ein Ausschnitt aus der Normalansicht (nur ohne
+        Trennlinie -- die Trennung zwischen Quadranten uebernimmt der
+        Raster-Abstand von compact_grid)."""
+        quadrant = no_own_background(QWidget())
+        layout = QVBoxLayout(quadrant)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._section_title(title_text))
+        for widget in widgets:
+            layout.addWidget(widget)
+        return quadrant
+
     def _retranslate(self) -> None:
-        for title, text in zip(self._section_titles, SECTION_TITLES):
+        for title, text in zip(self._section_titles, SECTION_TITLES * 2):
             title.setText(tr(text))
-        self._in_array.retranslate()
-        self._out_array.retranslate()
-        self._relay_array.retranslate()
+        for array in (
+            self._in_array, self._out_array, self._relay_array,
+            self._compact_in_array, self._compact_out_array, self._compact_relay_array,
+        ):
+            array.retranslate()
         self._pwr12_row.retranslate()
+        self._compact_pwr12_row.retranslate()
         self._offline_icon.setToolTip(tr("Verbindung getrennt"))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -352,14 +416,19 @@ class MicroHilPanel(QGroupBox):
         for divider in self._dividers:
             divider.apply_palette(palette)
         self._pwr12_row.apply_palette(palette)
+        self._compact_pwr12_row.apply_palette(palette)
         self._apply_style(palette)
         # Punkt-Pixmaps haengen an der Palette (check_pass/text_muted) --
         # mit den zuletzt bekannten Zustaenden neu zeichnen statt sie zu
         # verlieren.
-        self._in_array.set_states(self._last_in)
-        self._out_array.set_states(self._last_out)
-        self._relay_array.set_states(self._last_relay)
-        self._pwr12_row.set_states(self._last_pwr12_enabled)
+        for in_array in (self._in_array, self._compact_in_array):
+            in_array.set_states(self._last_in)
+        for out_array in (self._out_array, self._compact_out_array):
+            out_array.set_states(self._last_out)
+        for relay_array in (self._relay_array, self._compact_relay_array):
+            relay_array.set_states(self._last_relay)
+        for pwr12_row in (self._pwr12_row, self._compact_pwr12_row):
+            pwr12_row.set_states(self._last_pwr12_enabled)
 
     def _apply_style(self, palette: Palette) -> None:
         if not self._online:
@@ -383,38 +452,59 @@ class MicroHilPanel(QGroupBox):
         self.setVisible(True)
         self._apply_style(current_palette())
 
+    def set_compact(self, compact: bool) -> None:
+        self._compact = compact
+        self._normal_widget.setVisible(not compact)
+        self._compact_widget.setVisible(compact)
+
     # -- Werte -----------------------------------------------------------------
+    # Aktualisieren immer BEIDE Widget-Saetze (Normal- und Kompaktansicht)
+    # gleichzeitig, unabhaengig davon, welche gerade sichtbar ist -- sonst
+    # zeigt die Ansicht nach einem set_compact()-Umschalten kurzzeitig
+    # veraltete Werte, bis der naechste Polling-Zyklus (device_worker.py)
+    # durch ist.
 
     def update_inputs(self, states: list[bool]) -> None:
         self._last_in = list(states)
         self._in_array.set_states(states)
+        self._compact_in_array.set_states(states)
 
     def update_outputs(self, states: list[bool]) -> None:
         self._last_out = list(states)
         self._out_array.set_states(states)
+        self._compact_out_array.set_states(states)
 
     def update_relays(self, states: list[bool]) -> None:
         self._last_relay = list(states)
         self._relay_array.set_states(states)
+        self._compact_relay_array.set_states(states)
 
     def update_analog_in(self, values_mv: list[int]) -> None:
         for i, value in enumerate(values_mv, start=1):
             self._ain_grid.set_value(f"AIN{i}", f"{value} mV")
+            self._compact_ain_grid.set_value(f"AIN{i}", f"{value} mV")
 
     def update_analog_out(self, values_mv: list[int]) -> None:
         for i, value in enumerate(values_mv, start=1):
             self._aout_grid.set_value(f"AOUT{i}", f"{value} mV")
+            self._compact_aout_grid.set_value(f"AOUT{i}", f"{value} mV")
 
     def update_pwr12(self, enabled: list[bool], current_sense_mv: list[int]) -> None:
         self._last_pwr12_enabled = list(enabled)
         self._pwr12_row.set_states(enabled)
         self._pwr12_row.set_values(current_sense_mv)
+        self._compact_pwr12_row.set_states(enabled)
+        self._compact_pwr12_row.set_values(current_sense_mv)
 
     def clear_values(self) -> None:
         self.update_inputs([False] * IN_COUNT)
         self.update_outputs([False] * OUT_COUNT)
         self.update_relays([False] * RELAY_COUNT)
         self._ain_grid.clear_values()
+        self._compact_ain_grid.clear_values()
         self._aout_grid.clear_values()
-        self._pwr12_row.set_states([False] * PWR12_COUNT)
-        self._pwr12_row.clear_values()
+        self._compact_aout_grid.clear_values()
+        self._last_pwr12_enabled = [False] * PWR12_COUNT
+        for pwr12_row in (self._pwr12_row, self._compact_pwr12_row):
+            pwr12_row.set_states(self._last_pwr12_enabled)
+            pwr12_row.clear_values()

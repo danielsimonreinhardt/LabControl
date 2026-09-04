@@ -45,6 +45,13 @@ def main() -> None:
         out_path = OUT_DIR / f"microhil_panel_{name}.png"
         pixmap.save(str(out_path))
         print(f"{out_path} ({pixmap.width()}x{pixmap.height()})")
+
+        panel.set_compact(True)
+        panel.adjustSize()
+        compact_pixmap = panel.grab()
+        compact_path = OUT_DIR / f"microhil_panel_{name}_compact.png"
+        compact_pixmap.save(str(compact_path))
+        print(f"{compact_path} ({compact_pixmap.width()}x{compact_pixmap.height()})")
         panel.deleteLater()
 
     # Zusaetzlich: offline (getrenntes Geraet) im Light-Theme, siehe

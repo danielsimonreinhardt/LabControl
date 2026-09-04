@@ -82,6 +82,15 @@ Semantic Versioning (`lab_gui/version.py`).
   Firmware-Umrechnung also weiterhin die mV-Zahl, nur mit "mA"
   beschriftet. Bei der GUI-Integration unbedingt korrigieren, sobald die
   Firmware echte mA liefert (siehe Kommentar in `_Pwr12Row`).
+  `MicroHilPanel.set_compact()` (Absprache) schaltet zusätzlich auf eine
+  Kompaktansicht mit denselben vier Bereichen als 2x2-Raster um (oben
+  links Digital IO, unten links Analog IO, oben rechts Relais, unten
+  rechts 12V-OUT) statt der vertikal gestapelten Normalansicht -- halbiert
+  die Panel-Höhe auf Kosten der Breite. Kompakt- und Normalansicht nutzen
+  dabei eigene Widget-Instanzen (ein Qt-Widget kann nur in einem Layout
+  gleichzeitig haengen), alle `update_*()`-Methoden füllen deshalb beide
+  Sätze gleichzeitig -- dasselbe Duplizierungsprinzip wie bei
+  `dashboard._DevicePanel`s Normal-/Kompaktwerten.
   **Noch nicht** an `device_worker.py`/`DashboardWidget`/
   `device_registry.py` angeschlossen (kein Polling, keine
   Geräteerkennung) -- siehe Kommentar am Dateianfang von
