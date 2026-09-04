@@ -52,6 +52,33 @@ Semantic Versioning (`lab_gui/version.py`).
   **nicht** in `device_worker.py`/Dashboard/Testablauf eingebunden --
   eigenständiges Modul wie die übrigen Treiber, GUI-Integration und
   `mock.py` folgen bei Bedarf.
+- **microHIL: Mock-Treiber und Dashboard-Kachel** (`microhil/mock.py`,
+  `lab_gui/microhil_panel.py::MicroHilPanel`): `MockMicroHIL` bildet
+  dieselbe Schnittstelle wie `MicroHIL` nach (analog zu hcs34xx/
+  korad_kel102), inkl. der PWM/OUT1-4-Verriegelung, für GUI-Tests ohne
+  Hardware. `MicroHilPanel` ist eine eigenständige Dashboard-Kachel statt
+  eine Erweiterung von `dashboard._DevicePanel` -- dessen generisches
+  FIELD_DEFS/QFormLayout-Schema (eine Werteliste) passt nicht auf 4
+  Relais + 8 Digitalein-/-ausgänge + 4 Analogeingänge + 2 Analogausgänge +
+  2 schaltbare 12V-Ausgänge. Vier Bereiche (Digital IO, Analog IO,
+  Relais, 12V-OUT) untereinander mit Trennlinien, Bit-Zustände als
+  nummerierte LED-Punkte (qtawesome `mdi.circle`/`mdi.circle-outline`,
+  Farbe `Palette.check_pass`/`text_muted`). PWM bewusst nicht auf dem
+  Dashboard (Sollwert/Steuerelement, kein Ist-Zustand -- Kandidat für
+  einen künftigen Control-Tab-Abschnitt). Visuell per
+  `tools/preview_microhil_panel.py` (rendert die Kachel offscreen mit
+  Beispielwerten in beiden Themes + im getrennten Zustand) geprüft, u.a.
+  einen anfänglichen Bug gefunden und behoben: die Bereichs-Überschriften
+  saßen direkt im QVBoxLayout statt in einem `no_own_background()`-
+  Wrapper und zeigten deshalb einen sichtbaren Seitenhintergrund-Balken
+  quer durchs Panel (derselbe Fehlerklasse wie BUGS_GESCHLOSSEN.md #8).
+  **Noch nicht** an `device_worker.py`/`DashboardWidget`/
+  `device_registry.py` angeschlossen (kein Polling, keine
+  Geräteerkennung) -- siehe Kommentar am Dateianfang von
+  `microhil_panel.py` zur nötigen Anpassung von
+  `DashboardWidget._relayout_panels()` (gleicht aktuell die Breite aller
+  Panels an, dieses Panel ist durch die 8er-Punktreihen deutlich breiter
+  als ein Last-/Netzteil-Panel).
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
