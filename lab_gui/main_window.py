@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
-        self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set(), "can": set()}
+        self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set(), "can": set(), "hil": set()}
 
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
@@ -166,9 +166,14 @@ class MainWindow(QMainWindow):
         self._worker.load_connected.connect(self._on_load_connected)
         self._worker.psu_connected.connect(self._on_psu_connected)
         self._worker.can_connected.connect(self._on_can_connected)
+        self._worker.hil_connected.connect(self._on_hil_connected)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
+        self._worker.hil_digital_state.connect(self.dashboard.update_hil_digital)
+        self._worker.hil_relay_state.connect(self.dashboard.update_hil_relays)
+        self._worker.hil_analog_input.connect(self.dashboard.update_hil_analog_in)
+        self._worker.hil_pwr12_state.connect(self.dashboard.update_hil_pwr12)
         self._worker.load_measurement.connect(self.timeline_tab.update_load)
         self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
@@ -292,6 +297,8 @@ class MainWindow(QMainWindow):
                 self._on_load_connected(device_id, False)
             elif kind == "psu":
                 self._on_psu_connected(device_id, False)
+            elif kind == "hil":
+                self._on_hil_connected(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -702,6 +709,15 @@ class MainWindow(QMainWindow):
         self._set_online("can", device_id, online)
         self.dashboard.set_can_online(device_id, online)
         self.control_tab.set_can_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_hil_connected(self, device_id: str, online: bool) -> None:
+        # Kein control_tab.set_hil_online(): es gibt noch keine
+        # HilControlGroup (siehe control_tab.on_device_known, das kind=="hil"
+        # deshalb ueberspringt statt faelschlich eine CanControlGroup
+        # anzulegen) -- nichts, das dort online/offline gesetzt werden muesste.
+        self._set_online("hil", device_id, online)
+        self.dashboard.set_hil_online(device_id, online)
 
     def _set_online(self, kind: str, device_id: str, online: bool) -> None:
         if online:

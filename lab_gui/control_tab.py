@@ -920,6 +920,13 @@ class ControlTab(QWidget):
         Translator.instance().language_changed.connect(self._equalize_sections)
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        if kind == "hil":
+            # Noch keine HilControlGroup (siehe microhil_panel.py-Modul-
+            # Docstring, "Naechste Schritte") -- ohne diesen Guard wuerde der
+            # else-Zweig unten (der nur zwischen "load"/"psu" unterscheidet,
+            # alles andere als "can" behandelt) faelschlich eine
+            # CanControlGroup fuer den microHIL anlegen.
+            return
         section = self._sections.get(device_id)
         if section is not None:
             section.set_label(label)

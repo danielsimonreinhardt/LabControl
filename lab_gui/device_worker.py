@@ -24,6 +24,16 @@ from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
+from microhil.driver import (
+    AIN_COUNT as HIL_AIN_COUNT,
+    HilError,
+    IN_COUNT as HIL_IN_COUNT,
+    MicroHIL,
+    OUT_COUNT as HIL_OUT_COUNT,
+    PWR12_COUNT as HIL_PWR12_COUNT,
+    RELAY_COUNT as HIL_RELAY_COUNT,
+)
+from microhil.mock import MockMicroHIL
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,19 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
+# Eigenes, deutlich langsameres Poll-Intervall fuer den microHIL statt ihn in
+# denselben POLL_INTERVAL_MS-Zyklus wie Last/Netzteil/CAN zu haengen: ein
+# voller microHIL-Zyklus braucht ca. 21 Kommandos (IN? + 8x OUT? + 4x RELAY?
+# + 4x AIN? + 2x PWR12? + 2x CURR?), davon 6 mit bis zu ~10ms ADC-Latenz
+# (siehe microhil/driver.py) -- macht bis zu ~135ms allein fuer den microHIL,
+# klar mehr als die 100ms, die POLL_INTERVAL_MS den anderen Geraeten fuer
+# ihre gesamte sequentielle Abfrage einraeumt (siehe Kommentar dort). Eine
+# Dashboard-Anzeige aus LED-Punkten braucht ausserdem keine 10Hz-Aktualisierung
+# -- 1x/Sekunde reicht fuers Auge, verhindert aber, dass ein zusaetzliches,
+# eigentlich fuer Last/Netzteil-Reaktionsfaehigkeit ausgelegtes Geraet den
+# gemeinsamen Poll-Zyklus aller anderen Geraete verlangsamt.
+HIL_POLL_INTERVAL_MS = 1000
+
 # Obergrenze empfangener CAN-Frames, die pro Poll-Zyklus UND Interface aus
 # der Empfangs-Queue geleert werden (siehe _poll) -- verhindert, dass ein
 # Interface mit sehr hoher Buslast die anderen Geraete im selben Zyklus
@@ -60,6 +83,7 @@ CAN_DRAIN_LIMIT = 32
 SIM_PSU_ID = "psu:SIM"
 SIM_LOAD_ID = "load:SIM"
 SIM_CAN_ID = "can:mock:SIM"
+SIM_HIL_ID = "hil:SIM"
 
 
 def _can_device_id(cfg: dict) -> str:
@@ -115,6 +139,14 @@ class DeviceWorker(QObject):
     can_frame_received = Signal(str, int, str, bool, float)
     can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
 
+    hil_connected = Signal(str, bool)          # device_id, online
+    hil_digital_state = Signal(str, list, list)  # device_id, inputs (IN1-8), outputs (OUT1-8)
+    hil_relay_state = Signal(str, list)        # device_id, relays (RELAY1-4)
+    hil_analog_input = Signal(str, list)       # device_id, AIN1-4 in mV
+    # device_id, PWR12-Enable (1-2), Stromsense (1-2) -- siehe microhil_panel.
+    # _Pwr12Row: rohe mV vom Geraet, im Dashboard bewusst als "mA" beschriftet.
+    hil_pwr12_state = Signal(str, list, list)
+
     def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
         super().__init__()
         self._loads: dict[str, KoradKEL102] = {}
@@ -122,11 +154,16 @@ class DeviceWorker(QObject):
         self._can_buses: dict[str, CanBus] = {}
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
+        self._hils: dict[str, MicroHIL] = {}
         self._simulation_mode = simulation_mode
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.timeout.connect(self._try_reconnect)
+        # Eigener, langsamerer Timer statt im selben Zyklus wie _poll() --
+        # siehe HIL_POLL_INTERVAL_MS.
+        self._hil_poll_timer = QTimer(self)
+        self._hil_poll_timer.timeout.connect(self._poll_hils)
 
     @Slot()
     def start(self) -> None:
@@ -134,9 +171,11 @@ class DeviceWorker(QObject):
             self._add_mock_psu()
             self._add_mock_load()
             self._add_mock_can()
+            self._add_mock_hil()
         self._try_reconnect()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
+        self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
 
     # -- Simulationsmodus ----------------------------------------------------
 
@@ -149,10 +188,12 @@ class DeviceWorker(QObject):
             self._add_mock_psu()
             self._add_mock_load()
             self._add_mock_can()
+            self._add_mock_hil()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
             self._close_can(SIM_CAN_ID)
+            self._remove_mock_hil()
 
     # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
     # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
@@ -216,6 +257,21 @@ class DeviceWorker(QObject):
             self.can_connected.emit(device_id, False)
             self.device_removed.emit("can", device_id)
 
+    def _add_mock_hil(self) -> None:
+        if SIM_HIL_ID in self._hils:
+            return
+        self._hils[SIM_HIL_ID] = MockMicroHIL()
+        self.device_added.emit("hil", SIM_HIL_ID)
+        self.hil_connected.emit(SIM_HIL_ID, True)
+        self._poll_hil(SIM_HIL_ID, self._hils[SIM_HIL_ID])
+
+    def _remove_mock_hil(self) -> None:
+        hil = self._hils.pop(SIM_HIL_ID, None)
+        if hil is not None:
+            hil.close()
+            self.hil_connected.emit(SIM_HIL_ID, False)
+            self.device_removed.emit("hil", SIM_HIL_ID)
+
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass
         # dahinter tatsaechlich ein antwortendes Geraet haengt (z.B. wenn der
@@ -227,6 +283,7 @@ class DeviceWorker(QObject):
         self._reconnect_loads()
         self._reconnect_psus()
         self._reconnect_can()
+        self._reconnect_hils()
 
     def _reconnect_loads(self) -> None:
         candidates = _resolve_device_ids("load", KoradKEL102.discover_ports())
@@ -309,6 +366,49 @@ class DeviceWorker(QObject):
             self.device_added.emit("can", device_id)
             self.can_connected.emit(device_id, True)
 
+    def _reconnect_hils(self) -> None:
+        """Verbindet den microHIL, falls noch nicht verbunden.
+
+        Anders als _reconnect_loads/_reconnect_psus (die ueber
+        _resolve_device_ids beliebig viele baugleiche Geraete gleichzeitig
+        unterstuetzen) wird hier bewusst nur EIN microHIL gleichzeitig
+        unterstuetzt: MicroHIL.discover() (siehe microhil/driver.py) loest
+        selbst schon die Mehrdeutigkeit zwischen den zwei COM-Ports EINES
+        Geraets auf (HIL-Protokoll vs. CAN1/SLCAN, gleiche VID:PID), kennt
+        aber keine Gruppierung ueber mehrere PHYSISCHE microHIL-Einheiten
+        hinweg -- der microHIL ist eine Eigenentwicklung, fuer die (anders
+        als bei den Last-/Netzteil-Modellen) kein Mehrfach-Einsatz vorgesehen
+        ist. Discover_ports() wird trotzdem geloggt statt zu crashen, falls
+        doch einmal mehrere Einheiten auftauchen -- discover() wirft dann
+        HilError statt zu raten (siehe dessen Docstring).
+        """
+        try:
+            port = MicroHIL.discover()
+        except HilError as exc:
+            logger.warning("microHIL-Port nicht eindeutig bestimmbar: %s", exc)
+            return
+        if port is None:
+            return
+        info = next((i for i in MicroHIL.discover_ports() if i.device == port), None)
+        device_id = f"hil:{info.serial_number}" if info is not None and info.serial_number else f"hil:{port}"
+        if device_id in self._hils:
+            return
+        candidate = None
+        try:
+            candidate = MicroHIL(port)
+            candidate.identify()
+        except HilError:
+            if candidate is not None:
+                candidate.close()
+            return
+        self._hils[device_id] = candidate
+        logger.info("microHIL verbunden: %s", device_id)
+        self.device_added.emit("hil", device_id)
+        self.hil_connected.emit(device_id, True)
+        # Sofort abfragen statt auf den naechsten HIL_POLL_INTERVAL_MS-Zyklus
+        # zu warten (analog zu _reconnect_loads/_reconnect_psus).
+        self._poll_hil(device_id, candidate)
+
     def _emit_psu_limits(self, device_id: str) -> None:
         """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.
 
@@ -379,6 +479,44 @@ class DeviceWorker(QObject):
             tx, rx = self._can_stats[device_id]
             self.can_stats.emit(device_id, tx, rx)
 
+    def _poll_hils(self) -> None:
+        for device_id, hil in list(self._hils.items()):
+            self._poll_hil(device_id, hil)
+
+    def _poll_hil(self, device_id: str, hil: MicroHIL) -> None:
+        """Fragt einen kompletten microHIL-Zustand ab und meldet ihn ueber
+        die hil_*-Signale ans Dashboard (siehe microhil_panel.MicroHilPanel).
+
+        AOUT1-2 (Analogausgaenge) werden bewusst NICHT abgefragt: es gibt
+        kein `AOUT?`-Kommando (siehe microhil/driver.py:
+        set_analog_output()-Docstring), der zuletzt gesetzte Sollwert ist
+        also nur bekannt, wenn IRGENDWER ihn gesetzt hat -- ohne einen
+        Control-Tab-Abschnitt fuer den microHIL (siehe microhil_panel.py-
+        Modul-Docstring, "Naechste Schritte") passiert das aktuell nirgends.
+        MicroHilPanel.update_analog_out() bleibt deshalb hier unaufgerufen,
+        die AOUT-Felder zeigen weiterhin "--" statt einen erfundenen Wert.
+        Aus demselben Grund auch PWM1-4 nicht (ohnehin nicht im Dashboard,
+        siehe microhil_panel.py).
+        """
+        try:
+            inputs = hil.get_inputs()
+            outputs = [hil.get_output(ch) for ch in range(1, HIL_OUT_COUNT + 1)]
+            relays = [hil.get_relay(ch) for ch in range(1, HIL_RELAY_COUNT + 1)]
+            ain_mv = [hil.get_analog_input(ch) for ch in range(1, HIL_AIN_COUNT + 1)]
+            pwr12_enabled = [hil.get_pwr12(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
+            pwr12_current_mv = [hil.get_current_sense_mv(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
+        except HilError as exc:
+            logger.warning("microHIL %s getrennt: %s", device_id, exc)
+            hil.close()
+            del self._hils[device_id]
+            self.hil_connected.emit(device_id, False)
+            self.device_removed.emit("hil", device_id)
+            return
+        self.hil_digital_state.emit(device_id, inputs, outputs)
+        self.hil_relay_state.emit(device_id, relays)
+        self.hil_analog_input.emit(device_id, ain_mv)
+        self.hil_pwr12_state.emit(device_id, pwr12_enabled, pwr12_current_mv)
+
     # -- gemeinsame Fehlerbehandlung ------------------------------------------
 
     def _guard_load(self, device_id: str, action: Callable[[KoradKEL102], None]) -> tuple[bool, str]:
@@ -443,6 +581,14 @@ class DeviceWorker(QObject):
         jedes Geraet bekommt einen Versuch + einen Retry, danach wird es wie
         bei einem normalen Verbindungsabbruch fallengelassen und mit dem
         naechsten weitergemacht -- kein except darf diese Schleife verlassen.
+
+        Bewusst OHNE microHIL (self._hils): diese GUI setzt aktuell keinerlei
+        Zustand am microHIL (kein Control-Tab-Abschnitt, siehe
+        microhil_panel.py-Modul-Docstring, "Naechste Schritte") -- es gibt
+        also nichts, wofuer DIESE App verantwortlich waere, es abzuschalten.
+        Sobald Relais/OUT/PWM/PWR12 hier steuerbar werden, muss das
+        nachgezogen werden (Relais/OUT/PWR12 sind wie bei der Last ueber ein
+        echtes AUS-Kommando abschaltbar, siehe microhil/driver.py).
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []

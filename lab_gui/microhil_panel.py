@@ -25,18 +25,22 @@ PWM1-4 bewusst NICHT auf dem Dashboard: PWM ist ein Sollwert/Steuerelement
 zeigt nur Ist-Zustaende an -- passt eher in einen kuenftigen Control-Tab-
 Abschnitt (analog zu control_tab.LoadControlGroup/PsuControlGroup).
 
-Noch NICHT an device_worker.py/DashboardWidget angeschlossen (siehe
-microhil/README.md, "Naechste Schritte") -- dieses Modul stellt nur das
-Panel selbst bereit, mit einer set_online()/set_compact()/update_*()-
-Schnittstelle nach dem Vorbild von dashboard._DevicePanel, damit die
-spaetere Verdrahtung (device_registry-Kind "hil", DashboardWidget.
-on_device_known, Polling in device_worker.py) sich direkt anschliessen
-laesst. Wichtig fuer diese Verdrahtung: DashboardWidget._relayout_panels()
-gleicht aktuell die Breite ALLER Panels auf das breiteste an (siehe
-dortigen Kommentar) -- dieses Panel ist selbst im kompakten 2x2-Raster
-noch breiter als ein Last-/Netzteil-Panel, das muesste vor dem Anschluss
-noch beruecksichtigt werden (z.B. eigene Breiten-Ratsche je Kind statt
-einer gemeinsamen).
+An device_worker.py/DashboardWidget angeschlossen (dashboard.
+on_device_known erzeugt bei kind="hil" ein MicroHilPanel statt des
+generischen _DevicePanel, device_worker._poll_hil() fuellt es ueber die
+hil_*-Signale/dashboard.update_hil_*()-Slots) -- AOUT1-2 bleiben dabei
+absichtlich bei "--": es gibt kein `AOUT?`-Kommando zum Zuruecklesen
+(siehe microhil/driver.py), ohne einen Control-Tab-Abschnitt kennt diese
+App also keinen tatsaechlichen AOUT-Sollwert.
+
+Achtung bei Aenderungen an der Panel-Groesse: DashboardWidget.
+_relayout_panels() gleicht in der NORMALANSICHT die Breite ALLER Panels
+auf das breiteste an (siehe dortigen Kommentar) -- ein sichtbares, aber
+rein kosmetisches Detail, seit dieses Panel neben Last-/Netzteil-Panels
+auftaucht (es ist breiter, zieht die anderen Panels also etwas breiter
+als deren eigenes Minimum). In der KOMPAKTANSICHT betrifft das nicht: dort bekommt jedes Panel
+bereits seine eigene, an den Inhalt angepasste Breiten-Ratsche (siehe
+_relayout_panels, compact-Zweig).
 """
 from __future__ import annotations
 
@@ -279,6 +283,7 @@ class MicroHilPanel(QGroupBox):
         self._device_id = device_id
         self._online = True
         self._compact = False
+        self._color_key: str | None = None
         self.setTitle(label)
 
         # Zuletzt gesetzte Bit-Zustaende, gemerkt fuer _on_theme_changed
@@ -431,18 +436,33 @@ class MicroHilPanel(QGroupBox):
             pwr12_row.set_states(self._last_pwr12_enabled)
 
     def _apply_style(self, palette: Palette) -> None:
+        # Gleiche Logik wie dashboard._DevicePanel._apply_style (Panel-
+        # Farbauswahl, siehe panel_color.py) -- MUSS auch hier vorhanden
+        # sein: DashboardWidget.set_panel_colors_enabled()/set_panel_color()
+        # rufen panel.set_panel_color() unterschiedslos auf JEDEM Panel auf,
+        # unabhaengig vom Geraetekind (kein "hil"-Sonderfall dort). Ohne
+        # diese Methode wuerde das Aktivieren der Panel-Farben-Option
+        # (Einstellungen-Tab) crashen, sobald ein microHIL-Panel existiert.
         if not self._online:
             self.setStyleSheet(
                 f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
                 f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
             )
             return
-        self.setStyleSheet(
-            f"QGroupBox {{ border: 1px solid {palette.text_muted}; border-radius: 6px; }}"
-        )
+        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
+        if self._color_key is None:
+            self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
+            return
+        hex_color = palette.panel_tints.get(self._color_key)
+        bg_rule = f"background-color: {hex_color};" if hex_color else ""
+        self.setStyleSheet(f"QGroupBox {{ {border_rule} {bg_rule} }}")
 
     def set_label(self, label: str) -> None:
         self.setTitle(label)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        self._apply_style(current_palette())
 
     def set_online(self, online: bool) -> None:
         self._online = online

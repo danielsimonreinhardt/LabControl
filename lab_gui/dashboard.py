@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
+from microhil_panel import MicroHilPanel
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
@@ -533,8 +534,15 @@ class DashboardWidget(QGroupBox):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
-            field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
-            panel = _DevicePanel(kind, device_id, label, field_keys)
+            if kind == "hil":
+                # Eigenstaendiges Panel statt des generischen FIELD_DEFS-
+                # Schemas (siehe microhil_panel.py-Modul-Docstring) -- 4
+                # Relais/8+8 Digital-IO/4+2 Analog-IO/2x12V-OUT passen nicht
+                # in eine einzelne Werteliste.
+                panel = MicroHilPanel(device_id, label)
+            else:
+                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
+                panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
             panel.hide()
@@ -593,6 +601,10 @@ class DashboardWidget(QGroupBox):
     def set_can_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    @Slot(str, bool)
+    def set_hil_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
     def _set_online(self, device_id: str, online: bool) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
@@ -635,3 +647,39 @@ class DashboardWidget(QGroupBox):
             return
         code = function_code.upper()
         panel.set_value("mode", LOAD_MODE_SHORT.get(code, code))
+
+    # -- microHIL --------------------------------------------------------------
+    # Eigene Slots statt set_value()/update_load()-artiger Weiterleitung: das
+    # MicroHilPanel hat kein FIELD_DEFS-Schema, siehe dessen Modul-Docstring.
+    # panel.get(device_id) liefert hier immer ein MicroHilPanel (oder None,
+    # falls das Geraet noch kein device_known durchlaufen hat) -- device_worker.
+    # py emittiert die hil_*-Signale ausschliesslich fuer kind="hil".
+
+    @Slot(str, list, list)
+    def update_hil_digital(self, device_id: str, inputs: list, outputs: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_inputs(inputs)
+        panel.update_outputs(outputs)
+
+    @Slot(str, list)
+    def update_hil_relays(self, device_id: str, relays: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_relays(relays)
+
+    @Slot(str, list)
+    def update_hil_analog_in(self, device_id: str, values_mv: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_analog_in(values_mv)
+
+    @Slot(str, list, list)
+    def update_hil_pwr12(self, device_id: str, enabled: list, current_sense_mv: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_pwr12(enabled, current_sense_mv)

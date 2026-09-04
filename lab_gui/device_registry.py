@@ -21,6 +21,7 @@ KIND_DISPLAY = {
     "load": "Last",
     "psu": "Netzteil",
     "can": "CAN-Bus",
+    "hil": "HIL",
 }
 
 

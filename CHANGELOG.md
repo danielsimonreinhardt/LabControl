@@ -91,13 +91,28 @@ Semantic Versioning (`lab_gui/version.py`).
   gleichzeitig haengen), alle `update_*()`-Methoden füllen deshalb beide
   Sätze gleichzeitig -- dasselbe Duplizierungsprinzip wie bei
   `dashboard._DevicePanel`s Normal-/Kompaktwerten.
-  **Noch nicht** an `device_worker.py`/`DashboardWidget`/
-  `device_registry.py` angeschlossen (kein Polling, keine
-  Geräteerkennung) -- siehe Kommentar am Dateianfang von
-  `microhil_panel.py` zur nötigen Anpassung von
-  `DashboardWidget._relayout_panels()` (gleicht aktuell die Breite aller
-  Panels an, dieses Panel ist durch die 8er-Punktreihen deutlich breiter
-  als ein Last-/Netzteil-Panel).
+  **Jetzt an `device_worker.py`/`DashboardWidget`/`device_registry.py`
+  angeschlossen** (kind "hil"): `DeviceWorker._reconnect_hils()` findet den
+  microHIL über `MicroHIL.discover()` (unterstützt bewusst nur EIN Gerät
+  gleichzeitig -- Eigenentwicklung ohne Mehrfacheinsatz vorgesehen, siehe
+  Kommentar dort), `_poll_hil()` fragt Digital-/Analog-/Relais-/12V-OUT-
+  Zustand ab und meldet ihn über neue `hil_*`-Signale ans Dashboard.
+  Eigener, langsamerer Poll-Timer (`HIL_POLL_INTERVAL_MS` = 1s statt der
+  100ms von Last/Netzteil/CAN): ein voller microHIL-Zyklus braucht bis zu
+  ~135ms (21 Kommandos, 6 davon mit ~10ms ADC-Latenz) und hätte im
+  gemeinsamen 100ms-Takt die Abfrage aller anderen Geräte spürbar
+  verlangsamt. AOUT1/2 bleiben bewusst bei "--" (kein `AOUT?`-Kommando zum
+  Zurücklesen). `control_tab.on_device_known()` überspringt kind=="hil"
+  explizit -- ohne diesen Guard hätte der bestehende else-Zweig (nur
+  load/psu unterschieden, alles andere als CAN behandelt) fälschlich eine
+  `CanControlGroup` für den microHIL angelegt. `MicroHilPanel.
+  set_panel_color()` ergänzt, weil `DashboardWidget.set_panel_colors_enabled()`
+  diese Methode unterschiedslos auf jedem Panel aufruft. Gegen ein
+  angeschlossenes reales Gerät verifiziert (`*IDN?` → "microHIL,fw=0.1.0"),
+  dabei nebenbei live bestätigt, warum die mA-Beschriftung oben mit Vorsicht
+  zu genießen ist: bei BEIDEN 12V-OUT-Kanälen ausgeschaltet zeigte die
+  Stromsense trotzdem ~400 "mA" (tatsächlich mV Rauschen einer floatenden
+  ADC-Leitung) an.
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu
