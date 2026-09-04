@@ -401,6 +401,21 @@ class DeviceWorker(QObject):
             if candidate is not None:
                 candidate.close()
             return
+        except OSError:
+            # MicroHIL(port) oeffnet den seriellen Port direkt (siehe
+            # microhil/driver.py) und wirft dabei KEIN HilError, sondern
+            # pyserial's rohe SerialException (Unterklasse von OSError) --
+            # z.B. wenn der Port gerade von einem anderen Prozess/einer
+            # zweiten App-Instanz gehalten wird ("Zugriff verweigert").
+            # Ungefangen wuerde das hier den kompletten _try_reconnect()-
+            # Aufruf abbrechen und damit AUCH die Wiederverbindung von
+            # Last/Netzteil/CAN im selben Zyklus verhindern (an echter
+            # Hardware reproduziert). Naechster RECONNECT_INTERVAL_MS-Tick
+            # versucht es einfach erneut, analog zum HilError-Fall oben.
+            logger.warning("microHIL-Port %s konnte nicht geoeffnet werden", port)
+            if candidate is not None:
+                candidate.close()
+            return
         self._hils[device_id] = candidate
         logger.info("microHIL verbunden: %s", device_id)
         self.device_added.emit("hil", device_id)

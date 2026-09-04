@@ -119,6 +119,31 @@ Semantic Versioning (`lab_gui/version.py`).
   zu genießen ist: bei BEIDEN 12V-OUT-Kanälen ausgeschaltet zeigte die
   Stromsense trotzdem ~400 "mA" (tatsächlich mV Rauschen einer floatenden
   ADC-Leitung) an.
+  Kompaktansicht weiter verdichtet (Absprache): Analog IO (AIN+AOUT) UND
+  die zu einer Gruppe zusammengefassten Relais+12V-OUT sitzen jetzt
+  jeweils in einem 3x2-Raster statt einer einzeiligen Zeile -- spart
+  Breite, ohne die Zeilenhöhe zu erhöhen, die ohnehin schon Digital IO
+  vorgibt (`_ValueGrid(columns=3)` bzw. neu `_RelayPwr12Grid`: Relais 1-3
+  in Zeile 1, Relais 4 + der komplette `_Pwr12Row` in Zeile 2 -- als zwei
+  einfache Zeilen statt eines `QGridLayout` mit spaltenübergreifendem
+  Widget, weil Qt dessen benötigte Breite nicht zuverlässig gleichmäßig
+  auf die überspannten Spalten verteilt, siehe Kommentar in
+  `_RelayPwr12Grid`). Beim Verifizieren dabei einen echten Bug in der
+  Verdrahtung gefunden und behoben: `DeviceWorker._reconnect_hils()` fing
+  nur `HilError` ab, `MicroHIL(port)` kann beim Öffnen des seriellen
+  Ports aber auch pyserials rohe `SerialException`
+  (`OSError`-Unterklasse) werfen (z. B. Port durch eine zweite
+  App-Instanz belegt) -- ungefangen riss das den kompletten
+  `_try_reconnect()`-Zyklus ab und verhinderte damit auch die
+  Wiederverbindung von Last/Netzteil/CAN im selben Tick (an echter
+  Hardware reproduziert: zweiter App-Prozess gegen dieselbe COM6). Jetzt
+  wie ein `HilError` behandelt (loggen, überspringen, nächster
+  `RECONNECT_INTERVAL_MS`-Tick versucht es erneut). Derselbe
+  Codepfad-Musterfehler (`serial.Serial()` ungefangen in
+  `HCS34xx.__init__`/`KoradKEL102.__init__`, nur die jeweilige
+  `PowerSupplyError`/`LoadError` in `_reconnect_psus`/`_reconnect_loads`
+  abgefangen) besteht vermutlich auch dort, aber unangetastet gelassen
+  -- ausserhalb des microHIL-Verdrahtungsauftrags.
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu

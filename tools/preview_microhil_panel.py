@@ -32,6 +32,29 @@ def _populate(panel: MicroHilPanel) -> None:
     panel.update_pwr12([True, False][:PWR12_COUNT], [145, 0][:PWR12_COUNT])
 
 
+def _snapshot(panel: MicroHilPanel, app: QApplication):
+    """Rendert das Panel auf seine sizeHint()-Groesse -- angelehnt an
+    DashboardWidget._relayout_panels() (sizeHint() + setFixedWidth()/
+    resize()), NICHT panel.adjustSize() (auf einem elternlosen Top-Level-
+    Widget mit addStretch() im Layout liefert das eine spuerbar zu
+    grosse Groesse).
+
+    HINWEIS: die in diesem Offscreen-Skript (manuell gepumpte
+    processEvents(), kein echter app.exec()-Loop) gemessene Pixel-Hoehe
+    der Kompaktansicht kann groesser ausfallen als in der echten,
+    laufenden App (beobachtet: bis zu 80px statt 56px, ohne erkennbares
+    festes Muster) -- ein Timing-Artefakt dieses Skripts, siehe Git-
+    Historie. Positionen/Breiten sind davon nicht betroffen (per direkter
+    Geometrie-Pruefung bestaetigt). Fuer eine verbindliche Pixel-Kontrolle
+    daher die laufende App verwenden (python lab_gui/main.py), nicht
+    dieses Skript."""
+    panel.show()
+    panel.resize(panel.sizeHint())
+    app.processEvents()
+    app.processEvents()
+    return panel.grab()
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,15 +63,13 @@ def main() -> None:
         ThemeManager.instance().apply(dark)
         panel = MicroHilPanel("hil:preview", "microHIL - HIL 1")
         _populate(panel)
-        panel.adjustSize()
-        pixmap = panel.grab()
+        pixmap = _snapshot(panel, app)
         out_path = OUT_DIR / f"microhil_panel_{name}.png"
         pixmap.save(str(out_path))
         print(f"{out_path} ({pixmap.width()}x{pixmap.height()})")
 
         panel.set_compact(True)
-        panel.adjustSize()
-        compact_pixmap = panel.grab()
+        compact_pixmap = _snapshot(panel, app)
         compact_path = OUT_DIR / f"microhil_panel_{name}_compact.png"
         compact_pixmap.save(str(compact_path))
         print(f"{compact_path} ({compact_pixmap.width()}x{compact_pixmap.height()})")
@@ -61,9 +82,9 @@ def main() -> None:
     offline_panel = MicroHilPanel("hil:preview", "microHIL - HIL 1")
     _populate(offline_panel)
     offline_panel.set_online(False)
-    offline_panel.adjustSize()
+    offline_pixmap = _snapshot(offline_panel, app)
     out_path = OUT_DIR / "microhil_panel_offline.png"
-    offline_panel.grab().save(str(out_path))
+    offline_pixmap.save(str(out_path))
     print(f"{out_path} ({offline_panel.width()}x{offline_panel.height()})")
 
 

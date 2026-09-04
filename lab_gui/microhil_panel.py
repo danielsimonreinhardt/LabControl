@@ -11,23 +11,21 @@ Aufteilung und LED-Punkt-Optik nach Absprache.
 Zwei Ansichten, analog zu dashboard._DevicePanel.set_compact():
 - Normal: die vier Bereiche untereinander gestapelt, durch Trennlinien
   abgesetzt (_normal_widget).
-- Kompakt: alle Bereiche NEBENEINANDER in einer Zeile statt gestapelt
-  (_compact_widget), damit die Kachel nicht wesentlich hoeher wird als
-  die Last-/Netzteil-Kompaktansicht (dashboard._DevicePanel: eine
-  einzige Zeile) -- eine fruehere 2x2-Raster-Fassung war dafuer immer
-  noch deutlich zu hoch. Relais und 12V-OUT werden dabei zu EINER Gruppe
-  zusammengefasst (beide klein genug -- 4 bzw. 2 Kanaele --, um keine
-  eigene Spalte zu rechtfertigen), Analog IO (AIN+AOUT) in eine einzige
-  Zeile geflacht. Digital IO bleibt als einzige Ausnahme zweizeilig
-  (IN + OUT uebereinander): 16 Einzel-Bits lassen sich nicht sinnvoll in
-  eine Zeile pressen, ohne entweder unleserlich klein oder unhandlich
-  breit zu werden -- die Kachelhoehe richtet sich deshalb weiterhin nach
-  diesen zwei Zeilen, nicht nach einer einzigen (Absprache). Beide
-  Ansichten benutzen eigene Widget-Instanzen (siehe update_*()-Methoden,
-  die beide Saetze gleichzeitig fuellen) statt derselben Widgets in zwei
-  Layouts -- ein Qt-Widget kann nur in einem Layout gleichzeitig haengen,
-  dasselbe Duplizierungsprinzip nutzt bereits dashboard._DevicePanel fuer
-  seine Normal-/Kompaktwerte.
+- Kompakt: alle Bereiche NEBENEINANDER statt gestapelt (_compact_widget),
+  damit die Kachel nicht wesentlich hoeher wird als die Last-/Netzteil-
+  Kompaktansicht (dashboard._DevicePanel: eine einzige Zeile) -- eine
+  fruehere 2x2-Raster-Fassung war dafuer immer noch deutlich zu hoch.
+  Analog IO (AIN+AOUT) UND die zu einer Gruppe zusammengefassten Relais+
+  12V-OUT sitzen jeweils in einem 3x2-Raster statt einer einzeiligen
+  Zeile (_ValueGrid(columns=3) bzw. _RelayPwr12Grid) -- spart Breite, ohne
+  die Zeilenhoehe zu erhoehen, die ohnehin schon Digital IO vorgibt (IN +
+  OUT uebereinander, 16 Einzel-Bits lassen sich nicht sinnvoll in eine
+  Zeile pressen, ohne entweder unleserlich klein oder unhandlich breit zu
+  werden). Beide Ansichten benutzen eigene Widget-Instanzen (siehe
+  update_*()-Methoden, die beide Saetze gleichzeitig fuellen) statt
+  derselben Widgets in zwei Layouts -- ein Qt-Widget kann nur in einem
+  Layout gleichzeitig haengen, dasselbe Duplizierungsprinzip nutzt bereits
+  dashboard._DevicePanel fuer seine Normal-/Kompaktwerte.
 
 PWM1-4 bewusst NICHT auf dem Dashboard: PWM ist ein Sollwert/Steuerelement
 (mit OUT1-4 verriegelt, siehe driver.INTERLOCKED_CHANNELS), das Dashboard
@@ -80,6 +78,34 @@ SECTION_TITLES = ["Digital IO", "Analog IO", "Relais", "12V-OUT"]
 def _dot_pixmap(on: bool, palette: Palette):
     color = palette.check_pass if on else palette.text_muted
     return qta.icon(DOT_ON if on else DOT_OFF, color=color).pixmap(DOT_ICON_SIZE, DOT_ICON_SIZE)
+
+
+def _dot_cell(number: int) -> tuple[QWidget, QLabel, QLabel]:
+    """Ein einzelner Punkt+Nummer-Indikator als eigenstaendiges Widget --
+    Baustein sowohl fuer _DotArray als auch _RelayPwr12Grid (siehe dort):
+    gibt (Zelle, Icon-Label, Nummern-Label) zurueck, damit der Aufrufer
+    Icon/Nummer selbst in seiner eigenen Icons-/Numbers-Liste fuer
+    set_states()/retranslate() nachfuehren kann.
+
+    KEIN eigener addStretch() hier -- eine fruehere Fassung hatte einen
+    (fuer ein inzwischen verworfenes QGridLayout-Design mit spalten-
+    uebergreifendem Widget, siehe Git-Historie), der aber Qt's Box-Layout-
+    Algorithmus jeder Zelle bereits dann sichtbare Zusatzbreite zuteilen
+    liess, wenn IRGENDEIN Geschwister-Widget im selben Zeilen-Layout
+    (z.B. der breite _Pwr12Row) selbst einen Stretch enthielt -- mit
+    sichtbaren Luecken zwischen den Zellen zur Folge, obwohl die Zeile
+    insgesamt exakt ihre sizeHint()-Breite bekam. Genau wie bei _DotArray
+    reicht EIN einzelner addStretch() am Ende der jeweiligen Zeile
+    (row1_layout/row2_layout in _RelayPwr12Grid)."""
+    cell = no_own_background(QWidget())
+    cell_layout = QHBoxLayout(cell)
+    cell_layout.setContentsMargins(0, 0, 0, 0)
+    cell_layout.setSpacing(2)
+    icon = QLabel()
+    number_label = QLabel(str(number))
+    cell_layout.addWidget(icon)
+    cell_layout.addWidget(number_label)
+    return cell, icon, number_label
 
 
 class _SectionTitle(QLabel):
@@ -154,14 +180,7 @@ class _DotArray(QWidget):
         layout.addWidget(self._prefix_label)
 
         for i in range(count):
-            cell = no_own_background(QWidget())
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(0, 0, 0, 0)
-            cell_layout.setSpacing(2)
-            icon = QLabel()
-            number = QLabel(str(i + 1))
-            cell_layout.addWidget(icon)
-            cell_layout.addWidget(number)
+            cell, icon, number = _dot_cell(i + 1)
             layout.addWidget(cell)
             self._icons.append(icon)
             self._numbers.append(number)
@@ -178,6 +197,80 @@ class _DotArray(QWidget):
     def retranslate(self) -> None:
         for i, (icon, number) in enumerate(zip(self._icons, self._numbers)):
             tooltip = tr(self._tooltip_key, index=i + 1)
+            icon.setToolTip(tooltip)
+            number.setToolTip(tooltip)
+
+
+class _RelayPwr12Grid(QWidget):
+    """Kompakte 3x2-Anordnung fuer Relais 1-4 + 12V-OUT 1-2 als EINE
+    gemeinsame Gruppe (Absprache) -- Relais 1-3 in Zeile 1, Relais 4 +
+    der vollstaendige _Pwr12Row in Zeile 2. Reine Kompaktansichts-
+    Variante: die Normalansicht zeigt Relais/12V-OUT weiterhin als zwei
+    eigene Bereiche (_relay_array/_pwr12_row), siehe MicroHilPanel.
+    __init__.
+
+    ZWEI EINFACHE ZEILEN (QHBoxLayout) statt eines echten QGridLayout mit
+    spaltenuebergreifendem Widget: eine erste Fassung mit QGridLayout +
+    _Pwr12Row per columnSpan() ueber 2 Spalten fuehrte zu unvorhersehbar
+    breiten Spalten (Qt verteilt die vom spannenden Widget benoetigte
+    Breite nicht gleichmaessig auf die ueberspannten Spalten, siehe
+    Git-Historie) -- Relais 2/3 landeten dadurch mit riesigen Luecken
+    dazwischen. Zwei unabhaengige Zeilen (wie _DotArray/_ValueGrid es
+    bereits vormachen) sind dagegen von Natur aus vorhersehbar: jede
+    Zeile bemisst sich nur an ihrem eigenen Inhalt.
+
+    Feste "3 in Zeile 1, Rest in Zeile 2"-Aufteilung fuer die konkrete
+    microHIL-Hardware (4 Relais) statt einer allgemeinen Formel -- diese
+    Zahl aendert sich nicht, eine generische Berechnung waere hier nur
+    unnoetige Indirektion."""
+
+    RELAYS_IN_FIRST_ROW = 3
+
+    def __init__(self, relay_count: int, pwr12_count: int) -> None:
+        super().__init__()
+        self._relay_icons: list[QLabel] = []
+        self._relay_numbers: list[QLabel] = []
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        row1 = no_own_background(QWidget())
+        row1_layout = QHBoxLayout(row1)
+        row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(10)
+        for i in range(min(self.RELAYS_IN_FIRST_ROW, relay_count)):
+            cell, icon, number = _dot_cell(i + 1)
+            row1_layout.addWidget(cell)
+            self._relay_icons.append(icon)
+            self._relay_numbers.append(number)
+        row1_layout.addStretch()
+        outer.addWidget(row1)
+
+        row2 = no_own_background(QWidget())
+        row2_layout = QHBoxLayout(row2)
+        row2_layout.setContentsMargins(0, 0, 0, 0)
+        row2_layout.setSpacing(10)
+        for i in range(self.RELAYS_IN_FIRST_ROW, relay_count):
+            cell, icon, number = _dot_cell(i + 1)
+            row2_layout.addWidget(cell)
+            self._relay_icons.append(icon)
+            self._relay_numbers.append(number)
+        # 12V-Praefix bleibt (siehe _Pwr12Row): ohne "Relais"-/"12V-OUT"-
+        # Bereichsueberschriften in der Kompaktansicht ist er die einzige
+        # Beschriftung, die die zweite Zeile von den Relais-Zellen absetzt.
+        self.pwr12_row = _Pwr12Row(pwr12_count, prefix="12V")
+        row2_layout.addWidget(self.pwr12_row)
+        row2_layout.addStretch()
+        outer.addWidget(row2)
+
+    def set_relay_states(self, states: list[bool]) -> None:
+        palette = current_palette()
+        for icon, on in zip(self._relay_icons, states):
+            icon.setPixmap(_dot_pixmap(on, palette))
+
+    def retranslate_relays(self) -> None:
+        for i, (icon, number) in enumerate(zip(self._relay_icons, self._relay_numbers)):
+            tooltip = tr("Relais {index}", index=i + 1)
             icon.setToolTip(tooltip)
             number.setToolTip(tooltip)
 
@@ -374,28 +467,22 @@ class MicroHilPanel(QGroupBox):
 
         compact_layout.addWidget(self._new_divider(vertical=True))
 
-        # Analog IO: AIN+AOUT in EINER Zeile statt zwei (columns=Anzahl
-        # aller Felder erzwingt eine einzelne Zeile in _ValueGrid).
+        # Analog IO: AIN+AOUT in einem 3x2-Raster statt einer Zeile mit 6
+        # Eintraegen -- spart Breite, ohne die Zeilenhoehe zu erhoehen (die
+        # gibt ohnehin schon die zweizeilige Digital-IO-Gruppe vor).
         self._compact_analog_grid = _ValueGrid(
             [f"AIN{i}" for i in range(1, AIN_COUNT + 1)] + [f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)],
-            columns=AIN_COUNT + AOUT_COUNT,
+            columns=3,
         )
         compact_layout.addWidget(self._compact_analog_grid)
 
         compact_layout.addWidget(self._new_divider(vertical=True))
 
-        # Relais + 12V-OUT: zu einer Gruppe zusammengefasst (Absprache) --
-        # beide klein genug (4 bzw. 2 Kanaele), um keine eigene Spalte mehr
-        # zu rechtfertigen.
-        relay_pwr12_group = no_own_background(QWidget())
-        relay_pwr12_layout = QHBoxLayout(relay_pwr12_group)
-        relay_pwr12_layout.setContentsMargins(0, 0, 0, 0)
-        relay_pwr12_layout.setSpacing(14)
-        self._compact_relay_array = _DotArray("REL", RELAY_COUNT, "Relais {index}")
-        self._compact_pwr12_row = _Pwr12Row(PWR12_COUNT, prefix="12V")
-        relay_pwr12_layout.addWidget(self._compact_relay_array)
-        relay_pwr12_layout.addWidget(self._compact_pwr12_row)
-        compact_layout.addWidget(relay_pwr12_group)
+        # Relais + 12V-OUT: zu einer Gruppe zusammengefasst UND als
+        # 3x2-Raster statt einer Zeile (Absprache) -- aus demselben
+        # Breitenspar-Grund wie Analog IO oben.
+        self._compact_relay_pwr12 = _RelayPwr12Grid(RELAY_COUNT, PWR12_COUNT)
+        compact_layout.addWidget(self._compact_relay_pwr12)
 
         compact_layout.addStretch()
         outer.addWidget(self._compact_widget)
@@ -434,11 +521,12 @@ class MicroHilPanel(QGroupBox):
             title.setText(tr(text))
         for array in (
             self._in_array, self._out_array, self._relay_array,
-            self._compact_in_array, self._compact_out_array, self._compact_relay_array,
+            self._compact_in_array, self._compact_out_array,
         ):
             array.retranslate()
+        self._compact_relay_pwr12.retranslate_relays()
         self._pwr12_row.retranslate()
-        self._compact_pwr12_row.retranslate()
+        self._compact_relay_pwr12.pwr12_row.retranslate()
         self._offline_icon.setToolTip(tr("Verbindung getrennt"))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -451,7 +539,7 @@ class MicroHilPanel(QGroupBox):
         for divider in self._dividers:
             divider.apply_palette(palette)
         self._pwr12_row.apply_palette(palette)
-        self._compact_pwr12_row.apply_palette(palette)
+        self._compact_relay_pwr12.pwr12_row.apply_palette(palette)
         self._apply_style(palette)
         # Punkt-Pixmaps haengen an der Palette (check_pass/text_muted) --
         # mit den zuletzt bekannten Zustaenden neu zeichnen statt sie zu
@@ -460,9 +548,9 @@ class MicroHilPanel(QGroupBox):
             in_array.set_states(self._last_in)
         for out_array in (self._out_array, self._compact_out_array):
             out_array.set_states(self._last_out)
-        for relay_array in (self._relay_array, self._compact_relay_array):
-            relay_array.set_states(self._last_relay)
-        for pwr12_row in (self._pwr12_row, self._compact_pwr12_row):
+        self._relay_array.set_states(self._last_relay)
+        self._compact_relay_pwr12.set_relay_states(self._last_relay)
+        for pwr12_row in (self._pwr12_row, self._compact_relay_pwr12.pwr12_row):
             pwr12_row.set_states(self._last_pwr12_enabled)
 
     def _apply_style(self, palette: Palette) -> None:
@@ -527,7 +615,7 @@ class MicroHilPanel(QGroupBox):
     def update_relays(self, states: list[bool]) -> None:
         self._last_relay = list(states)
         self._relay_array.set_states(states)
-        self._compact_relay_array.set_states(states)
+        self._compact_relay_pwr12.set_relay_states(states)
 
     def update_analog_in(self, values_mv: list[int]) -> None:
         for i, value in enumerate(values_mv, start=1):
@@ -543,8 +631,8 @@ class MicroHilPanel(QGroupBox):
         self._last_pwr12_enabled = list(enabled)
         self._pwr12_row.set_states(enabled)
         self._pwr12_row.set_values(current_sense_mv)
-        self._compact_pwr12_row.set_states(enabled)
-        self._compact_pwr12_row.set_values(current_sense_mv)
+        self._compact_relay_pwr12.pwr12_row.set_states(enabled)
+        self._compact_relay_pwr12.pwr12_row.set_values(current_sense_mv)
 
     def clear_values(self) -> None:
         self.update_inputs([False] * IN_COUNT)
@@ -554,6 +642,6 @@ class MicroHilPanel(QGroupBox):
         self._aout_grid.clear_values()
         self._compact_analog_grid.clear_values()
         self._last_pwr12_enabled = [False] * PWR12_COUNT
-        for pwr12_row in (self._pwr12_row, self._compact_pwr12_row):
+        for pwr12_row in (self._pwr12_row, self._compact_relay_pwr12.pwr12_row):
             pwr12_row.set_states(self._last_pwr12_enabled)
             pwr12_row.clear_values()
