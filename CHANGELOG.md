@@ -82,15 +82,21 @@ Semantic Versioning (`lab_gui/version.py`).
   Firmware-Umrechnung also weiterhin die mV-Zahl, nur mit "mA"
   beschriftet. Bei der GUI-Integration unbedingt korrigieren, sobald die
   Firmware echte mA liefert (siehe Kommentar in `_Pwr12Row`).
-  `MicroHilPanel.set_compact()` (Absprache) schaltet zusätzlich auf eine
-  Kompaktansicht mit denselben vier Bereichen als 2x2-Raster um (oben
-  links Digital IO, unten links Analog IO, oben rechts Relais, unten
-  rechts 12V-OUT) statt der vertikal gestapelten Normalansicht -- halbiert
-  die Panel-Höhe auf Kosten der Breite. Kompakt- und Normalansicht nutzen
-  dabei eigene Widget-Instanzen (ein Qt-Widget kann nur in einem Layout
-  gleichzeitig haengen), alle `update_*()`-Methoden füllen deshalb beide
-  Sätze gleichzeitig -- dasselbe Duplizierungsprinzip wie bei
-  `dashboard._DevicePanel`s Normal-/Kompaktwerten.
+  `MicroHilPanel.set_compact()` schaltet zusätzlich auf eine Kompaktansicht
+  um: erst ein 2x2-Raster (oben links Digital IO, unten links Analog IO,
+  oben rechts Relais, unten rechts 12V-OUT), nach Rückmeldung ("immer noch
+  deutlich höher als die Last-/Netzteil-Kompaktansicht") durch eine
+  einzeilige Anordnung ersetzt: alle Bereiche NEBENEINANDER statt gestapelt
+  (halbiert die Höhe auf 80px, war beim 2x2-Raster noch 182px). Relais und
+  12V-OUT zu einer Gruppe zusammengefasst (Absprache -- beide klein genug,
+  4 bzw. 2 Kanäle, um keine eigene Spalte mehr zu rechtfertigen), Analog IO
+  (AIN+AOUT) in eine einzige Zeile geflacht. Digital IO bleibt als einzige
+  Ausnahme zweizeilig (IN + OUT übereinander, 16 Einzel-Bits passen nicht
+  sinnvoll in eine Zeile) und bestimmt damit die Zeilenhöhe. Kompakt- und
+  Normalansicht nutzen dabei eigene Widget-Instanzen (ein Qt-Widget kann
+  nur in einem Layout gleichzeitig haengen), alle `update_*()`-Methoden
+  füllen deshalb beide Sätze gleichzeitig -- dasselbe Duplizierungsprinzip
+  wie bei `dashboard._DevicePanel`s Normal-/Kompaktwerten.
   **Jetzt an `device_worker.py`/`DashboardWidget`/`device_registry.py`
   angeschlossen** (kind "hil"): `DeviceWorker._reconnect_hils()` findet den
   microHIL über `MicroHIL.discover()` (unterstützt bewusst nur EIN Gerät

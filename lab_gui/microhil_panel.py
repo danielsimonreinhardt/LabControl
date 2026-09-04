@@ -11,14 +11,23 @@ Aufteilung und LED-Punkt-Optik nach Absprache.
 Zwei Ansichten, analog zu dashboard._DevicePanel.set_compact():
 - Normal: die vier Bereiche untereinander gestapelt, durch Trennlinien
   abgesetzt (_normal_widget).
-- Kompakt: dieselben vier Bereiche als 2x2-Raster -- oben links Digital
-  IO, unten links Analog IO, oben rechts Relais, unten rechts 12V-OUT
-  (_compact_widget) -- halbiert die Panel-Hoehe auf Kosten der Breite,
-  ebenfalls nach Absprache. Beide Ansichten benutzen eigene Widget-
-  Instanzen (siehe update_*()-Methoden, die beide Saetze gleichzeitig
-  fuellen) statt derselben Widgets in zwei Layouts -- ein Qt-Widget kann
-  nur in einem Layout gleichzeitig haengen, dasselbe Duplizierungsprinzip
-  nutzt bereits dashboard._DevicePanel fuer seine Normal-/Kompaktwerte.
+- Kompakt: alle Bereiche NEBENEINANDER in einer Zeile statt gestapelt
+  (_compact_widget), damit die Kachel nicht wesentlich hoeher wird als
+  die Last-/Netzteil-Kompaktansicht (dashboard._DevicePanel: eine
+  einzige Zeile) -- eine fruehere 2x2-Raster-Fassung war dafuer immer
+  noch deutlich zu hoch. Relais und 12V-OUT werden dabei zu EINER Gruppe
+  zusammengefasst (beide klein genug -- 4 bzw. 2 Kanaele --, um keine
+  eigene Spalte zu rechtfertigen), Analog IO (AIN+AOUT) in eine einzige
+  Zeile geflacht. Digital IO bleibt als einzige Ausnahme zweizeilig
+  (IN + OUT uebereinander): 16 Einzel-Bits lassen sich nicht sinnvoll in
+  eine Zeile pressen, ohne entweder unleserlich klein oder unhandlich
+  breit zu werden -- die Kachelhoehe richtet sich deshalb weiterhin nach
+  diesen zwei Zeilen, nicht nach einer einzigen (Absprache). Beide
+  Ansichten benutzen eigene Widget-Instanzen (siehe update_*()-Methoden,
+  die beide Saetze gleichzeitig fuellen) statt derselben Widgets in zwei
+  Layouts -- ein Qt-Widget kann nur in einem Layout gleichzeitig haengen,
+  dasselbe Duplizierungsprinzip nutzt bereits dashboard._DevicePanel fuer
+  seine Normal-/Kompaktwerte.
 
 PWM1-4 bewusst NICHT auf dem Dashboard: PWM ist ein Sollwert/Steuerelement
 (mit OUT1-4 verriegelt, siehe driver.INTERLOCKED_CHANNELS), das Dashboard
@@ -96,20 +105,24 @@ class _SectionTitle(QLabel):
 
 
 class _Divider(QFrame):
-    """Trennlinie zwischen den vier Bereichen (nur Normalansicht -- die
-    Kompaktansicht trennt die vier Quadranten stattdessen ueber
-    Raster-Abstand, siehe MicroHilPanel._quadrant). Explizit gefaerbt
-    (statt der Default-OS-Rahmenoptik von QFrame.Shape.HLine) und ueber
-    apply_palette() themefaehig, sonst bleibt sie in beiden Themes
+    """Trennlinie zwischen Bereichen -- horizontal in der Normalansicht,
+    vertikal zwischen den nebeneinander liegenden Gruppen der
+    Kompaktansicht (siehe MicroHilPanel.__init__). Explizit gefaerbt
+    (statt der Default-OS-Rahmenoptik von QFrame.Shape.HLine/VLine) und
+    ueber apply_palette() themefaehig, sonst bleibt sie in beiden Themes
     praktisch unsichtbar (Default-Sunken-Schatten setzt auf Kontrast zum
     umgebenden Widget-Hintergrund, den es hier per Stylesheet nicht
     gibt)."""
 
-    def __init__(self) -> None:
+    def __init__(self, vertical: bool = False) -> None:
         super().__init__()
-        self.setFrameShape(QFrame.Shape.HLine)
+        if vertical:
+            self.setFrameShape(QFrame.Shape.VLine)
+            self.setFixedWidth(1)
+        else:
+            self.setFrameShape(QFrame.Shape.HLine)
+            self.setFixedHeight(1)
         self.setFrameShadow(QFrame.Shadow.Plain)
-        self.setFixedHeight(1)
 
     def apply_palette(self, palette: Palette) -> None:
         # text_muted statt border: border ist auf denselben pal.surface-
@@ -215,7 +228,7 @@ class _Pwr12Row(QWidget):
     keinen Fall vergessen, das zu korrigieren, sobald die Firmware echte
     mA liefert."""
 
-    def __init__(self, count: int) -> None:
+    def __init__(self, count: int, prefix: str = "") -> None:
         super().__init__()
         self._icons: list[QLabel] = []
         self._numbers: list[QLabel] = []
@@ -224,6 +237,14 @@ class _Pwr12Row(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(20)
+        if prefix:
+            # Nur in der Kompaktansicht gesetzt (siehe MicroHilPanel.
+            # __init__): dort steht -- anders als in der Normalansicht --
+            # keine "12V-OUT"-Bereichsueberschrift mehr davor, seit Relais
+            # und 12V-OUT zu einer Zeile zusammengefasst wurden.
+            prefix_label = QLabel(prefix)
+            prefix_label.setMinimumWidth(28)
+            layout.addWidget(prefix_label)
         for i in range(count):
             cell = no_own_background(QWidget())
             cell_layout = QHBoxLayout(cell)
@@ -327,34 +348,56 @@ class MicroHilPanel(QGroupBox):
 
         outer.addWidget(self._normal_widget)
 
-        # -- Kompaktansicht: dieselben vier Bereiche als 2x2-Raster --
-        # Eigene Widget-Instanzen (siehe Modul-Docstring) statt der obigen,
+        # -- Kompaktansicht: alle Bereiche nebeneinander in einer Zeile --
+        # eigene Widget-Instanzen (siehe Modul-Docstring) statt der obigen,
         # gefuellt ueber dieselben update_*()-Aufrufe wie die Normalansicht.
+        # Keine Bereichs-Ueberschriften mehr (spart die dafuer noetige
+        # eigene Zeile) -- die Praefixe (IN/OUT/REL/12V) und Feldnamen
+        # (AIN1:/AOUT1:) tragen die Bedeutung stattdessen direkt, Tooltips
+        # bleiben zusaetzlich erreichbar.
         self._compact_widget = no_own_background(QWidget())
-        compact_grid = QGridLayout(self._compact_widget)
-        compact_grid.setContentsMargins(0, 0, 0, 0)
-        compact_grid.setHorizontalSpacing(20)
-        compact_grid.setVerticalSpacing(8)
+        compact_layout = QHBoxLayout(self._compact_widget)
+        compact_layout.setContentsMargins(0, 0, 0, 0)
+        compact_layout.setSpacing(14)
 
+        # Digital IO: einzige Gruppe, die zweizeilig bleibt (IN + OUT
+        # uebereinander) -- bestimmt damit die Hoehe der gesamten Zeile.
+        digital_col = no_own_background(QWidget())
+        digital_col_layout = QVBoxLayout(digital_col)
+        digital_col_layout.setContentsMargins(0, 0, 0, 0)
+        digital_col_layout.setSpacing(2)
         self._compact_in_array = _DotArray("IN", IN_COUNT, "Digitaleingang {index}")
         self._compact_out_array = _DotArray("OUT", OUT_COUNT, "Digitalausgang {index}")
-        self._compact_ain_grid = _ValueGrid([f"AIN{i}" for i in range(1, AIN_COUNT + 1)])
-        self._compact_aout_grid = _ValueGrid([f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)])
-        self._compact_relay_array = _DotArray("", RELAY_COUNT, "Relais {index}")
-        self._compact_pwr12_row = _Pwr12Row(PWR12_COUNT)
+        digital_col_layout.addWidget(self._compact_in_array)
+        digital_col_layout.addWidget(self._compact_out_array)
+        compact_layout.addWidget(digital_col)
 
-        digital_quadrant = self._quadrant(SECTION_TITLES[0], [self._compact_in_array, self._compact_out_array])
-        analog_quadrant = self._quadrant(SECTION_TITLES[1], [self._compact_ain_grid, self._compact_aout_grid])
-        relay_quadrant = self._quadrant(SECTION_TITLES[2], [self._compact_relay_array])
-        pwr12_quadrant = self._quadrant(SECTION_TITLES[3], [self._compact_pwr12_row])
+        compact_layout.addWidget(self._new_divider(vertical=True))
 
-        # Oben links Digital IO, unten links Analog IO, oben rechts Relais,
-        # unten rechts 12V-OUT (Absprache).
-        compact_grid.addWidget(digital_quadrant, 0, 0)
-        compact_grid.addWidget(relay_quadrant, 0, 1)
-        compact_grid.addWidget(analog_quadrant, 1, 0)
-        compact_grid.addWidget(pwr12_quadrant, 1, 1)
+        # Analog IO: AIN+AOUT in EINER Zeile statt zwei (columns=Anzahl
+        # aller Felder erzwingt eine einzelne Zeile in _ValueGrid).
+        self._compact_analog_grid = _ValueGrid(
+            [f"AIN{i}" for i in range(1, AIN_COUNT + 1)] + [f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)],
+            columns=AIN_COUNT + AOUT_COUNT,
+        )
+        compact_layout.addWidget(self._compact_analog_grid)
 
+        compact_layout.addWidget(self._new_divider(vertical=True))
+
+        # Relais + 12V-OUT: zu einer Gruppe zusammengefasst (Absprache) --
+        # beide klein genug (4 bzw. 2 Kanaele), um keine eigene Spalte mehr
+        # zu rechtfertigen.
+        relay_pwr12_group = no_own_background(QWidget())
+        relay_pwr12_layout = QHBoxLayout(relay_pwr12_group)
+        relay_pwr12_layout.setContentsMargins(0, 0, 0, 0)
+        relay_pwr12_layout.setSpacing(14)
+        self._compact_relay_array = _DotArray("REL", RELAY_COUNT, "Relais {index}")
+        self._compact_pwr12_row = _Pwr12Row(PWR12_COUNT, prefix="12V")
+        relay_pwr12_layout.addWidget(self._compact_relay_array)
+        relay_pwr12_layout.addWidget(self._compact_pwr12_row)
+        compact_layout.addWidget(relay_pwr12_group)
+
+        compact_layout.addStretch()
         outer.addWidget(self._compact_widget)
         self._compact_widget.hide()
 
@@ -380,27 +423,14 @@ class MicroHilPanel(QGroupBox):
         self._section_titles.append(title)
         return title
 
-    def _new_divider(self) -> _Divider:
-        divider = _Divider()
+    def _new_divider(self, vertical: bool = False) -> _Divider:
+        divider = _Divider(vertical=vertical)
         divider.apply_palette(current_palette())
         self._dividers.append(divider)
         return divider
 
-    def _quadrant(self, title_text: str, widgets: list[QWidget]) -> QWidget:
-        """Ein Viertel der Kompaktansicht: Bereichs-Ueberschrift + Inhalt
-        untereinander, wie ein Ausschnitt aus der Normalansicht (nur ohne
-        Trennlinie -- die Trennung zwischen Quadranten uebernimmt der
-        Raster-Abstand von compact_grid)."""
-        quadrant = no_own_background(QWidget())
-        layout = QVBoxLayout(quadrant)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._section_title(title_text))
-        for widget in widgets:
-            layout.addWidget(widget)
-        return quadrant
-
     def _retranslate(self) -> None:
-        for title, text in zip(self._section_titles, SECTION_TITLES * 2):
+        for title, text in zip(self._section_titles, SECTION_TITLES):
             title.setText(tr(text))
         for array in (
             self._in_array, self._out_array, self._relay_array,
@@ -502,12 +532,12 @@ class MicroHilPanel(QGroupBox):
     def update_analog_in(self, values_mv: list[int]) -> None:
         for i, value in enumerate(values_mv, start=1):
             self._ain_grid.set_value(f"AIN{i}", f"{value} mV")
-            self._compact_ain_grid.set_value(f"AIN{i}", f"{value} mV")
+            self._compact_analog_grid.set_value(f"AIN{i}", f"{value} mV")
 
     def update_analog_out(self, values_mv: list[int]) -> None:
         for i, value in enumerate(values_mv, start=1):
             self._aout_grid.set_value(f"AOUT{i}", f"{value} mV")
-            self._compact_aout_grid.set_value(f"AOUT{i}", f"{value} mV")
+            self._compact_analog_grid.set_value(f"AOUT{i}", f"{value} mV")
 
     def update_pwr12(self, enabled: list[bool], current_sense_mv: list[int]) -> None:
         self._last_pwr12_enabled = list(enabled)
@@ -521,9 +551,8 @@ class MicroHilPanel(QGroupBox):
         self.update_outputs([False] * OUT_COUNT)
         self.update_relays([False] * RELAY_COUNT)
         self._ain_grid.clear_values()
-        self._compact_ain_grid.clear_values()
         self._aout_grid.clear_values()
-        self._compact_aout_grid.clear_values()
+        self._compact_analog_grid.clear_values()
         self._last_pwr12_enabled = [False] * PWR12_COUNT
         for pwr12_row in (self._pwr12_row, self._compact_pwr12_row):
             pwr12_row.set_states(self._last_pwr12_enabled)
