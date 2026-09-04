@@ -43,6 +43,11 @@ DOT_OFF = "mdi.circle-outline"
 OFFLINE_ICON_NAME = "mdi.close-network-outline"
 OFFLINE_ICON_SIZE = 22
 OFFLINE_ICON_MARGIN = 5
+# Trennt in _Pwr12Row optisch den Schaltzustand (Punkt+Nummer) von der
+# Stromangabe -- dieselbe Ikonografie wie dashboard.FIELD_ICONS["current"],
+# rein dekorativ (text_muted), kein eigener Zustand.
+CURRENT_ICON_NAME = "mdi.current-dc"
+CURRENT_ICON_SIZE = 14
 
 SECTION_TITLES = ["Digital IO", "Analog IO", "Relais", "12V-OUT"]
 
@@ -178,14 +183,24 @@ class _ValueGrid(QWidget):
 
 
 class _Pwr12Row(QWidget):
-    """Eine Zeile je 12V-Ausgang: Punkt (Enable-Zustand) + Kanalnummer +
-    Stromsense-Spannung (siehe driver.get_current_sense_mv -- rohe mV,
-    keine mA-Umrechnung, daher hier ebenfalls "mV" statt "mA")."""
+    """Eine Zeile je 12V-Ausgang: Punkt (Enable-Zustand) + Kanalnummer,
+    durch ein Strom-Icon abgesetzt, dann die Stromangabe.
+
+    WICHTIG (Absprache): driver.get_current_sense_mv() liefert die ROHE
+    Sense-Spannung in mV, keine echten mA -- der Shunt-/Verstaerkungsfaktor
+    fehlt noch in der Firmware (siehe microHIL-Roadmap, "CURR? in mA
+    umrechnen"). Die Beschriftung hier zeigt trotzdem bewusst "mA" statt
+    "mV", auf ausdruecklichen Wunsch -- der intern durchgereichte Wert
+    bleibt bis zur Firmware-Umrechnung die rohe mV-Zahl, nur mit falscher
+    Einheit beschriftet. Bei der GUI-Integration (device_worker.py) auf
+    keinen Fall vergessen, das zu korrigieren, sobald die Firmware echte
+    mA liefert."""
 
     def __init__(self, count: int) -> None:
         super().__init__()
         self._icons: list[QLabel] = []
         self._numbers: list[QLabel] = []
+        self._current_icons: list[QLabel] = []
         self._value_labels: list[QLabel] = []
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -197,22 +212,34 @@ class _Pwr12Row(QWidget):
             cell_layout.setSpacing(4)
             icon = QLabel()
             number = QLabel(str(i + 1))
-            value = QLabel("-- mV")
+            current_icon = QLabel()
+            value = QLabel("-- mA")
             cell_layout.addWidget(icon)
             cell_layout.addWidget(number)
+            cell_layout.addSpacing(4)
+            cell_layout.addWidget(current_icon)
             cell_layout.addWidget(value)
             layout.addWidget(cell)
             self._icons.append(icon)
             self._numbers.append(number)
+            self._current_icons.append(current_icon)
             self._value_labels.append(value)
         layout.addStretch()
         self.retranslate()
         self.set_states([False] * count)
+        self.apply_palette(current_palette())
 
     def set_states(self, enabled: list[bool]) -> None:
         palette = current_palette()
         for icon, on in zip(self._icons, enabled):
             icon.setPixmap(_dot_pixmap(on, palette))
+
+    def apply_palette(self, palette: Palette) -> None:
+        pixmap = qta.icon(CURRENT_ICON_NAME, color=palette.text_muted).pixmap(
+            CURRENT_ICON_SIZE, CURRENT_ICON_SIZE
+        )
+        for current_icon in self._current_icons:
+            current_icon.setPixmap(pixmap)
 
     def retranslate(self) -> None:
         for i, (icon, number) in enumerate(zip(self._icons, self._numbers)):
@@ -221,12 +248,14 @@ class _Pwr12Row(QWidget):
             number.setToolTip(tooltip)
 
     def set_values(self, values_mv: list[int]) -> None:
+        # Zahl bleibt der rohe mV-Wert vom Geraet (siehe Klassendocstring) --
+        # nur die Beschriftung sagt "mA".
         for label, value in zip(self._value_labels, values_mv):
-            label.setText(f"{value} mV")
+            label.setText(f"{value} mA")
 
     def clear_values(self) -> None:
         for label in self._value_labels:
-            label.setText("-- mV")
+            label.setText("-- mA")
 
 
 class MicroHilPanel(QGroupBox):
@@ -322,6 +351,7 @@ class MicroHilPanel(QGroupBox):
             title.apply_palette(palette)
         for divider in self._dividers:
             divider.apply_palette(palette)
+        self._pwr12_row.apply_palette(palette)
         self._apply_style(palette)
         # Punkt-Pixmaps haengen an der Palette (check_pass/text_muted) --
         # mit den zuletzt bekannten Zustaenden neu zeichnen statt sie zu

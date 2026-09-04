@@ -72,6 +72,16 @@ Semantic Versioning (`lab_gui/version.py`).
   saßen direkt im QVBoxLayout statt in einem `no_own_background()`-
   Wrapper und zeigten deshalb einen sichtbaren Seitenhintergrund-Balken
   quer durchs Panel (derselbe Fehlerklasse wie BUGS_GESCHLOSSEN.md #8).
+  Im 12V-OUT-Bereich trennt ein zusätzliches Strom-Icon (`mdi.current-dc`,
+  dieselbe Ikonografie wie `dashboard.FIELD_ICONS["current"]`) den
+  Schaltzustand optisch von der Stromangabe. Deren Einheit steht dort
+  auf ausdrücklichen Wunsch bereits als "mA", **obwohl**
+  `driver.get_current_sense_mv()` nach wie vor nur die rohe Sense-Spannung
+  in mV liefert (Umrechnungsfaktor fehlt noch in der Firmware, siehe
+  microHIL-Roadmap) -- der angezeigte Zahlenwert ist bis zur
+  Firmware-Umrechnung also weiterhin die mV-Zahl, nur mit "mA"
+  beschriftet. Bei der GUI-Integration unbedingt korrigieren, sobald die
+  Firmware echte mA liefert (siehe Kommentar in `_Pwr12Row`).
   **Noch nicht** an `device_worker.py`/`DashboardWidget`/
   `device_registry.py` angeschlossen (kein Polling, keine
   Geräteerkennung) -- siehe Kommentar am Dateianfang von
