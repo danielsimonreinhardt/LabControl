@@ -26,6 +26,7 @@ from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
 from microhil.driver import (
     AIN_COUNT as HIL_AIN_COUNT,
+    AOUT_COUNT as HIL_AOUT_COUNT,
     HilError,
     IN_COUNT as HIL_IN_COUNT,
     MicroHIL,
@@ -504,14 +505,16 @@ class DeviceWorker(QObject):
 
         AOUT1-2 (Analogausgaenge) werden bewusst NICHT abgefragt: es gibt
         kein `AOUT?`-Kommando (siehe microhil/driver.py:
-        set_analog_output()-Docstring), der zuletzt gesetzte Sollwert ist
-        also nur bekannt, wenn IRGENDWER ihn gesetzt hat -- ohne einen
-        Control-Tab-Abschnitt fuer den microHIL (siehe microhil_panel.py-
-        Modul-Docstring, "Naechste Schritte") passiert das aktuell nirgends.
-        MicroHilPanel.update_analog_out() bleibt deshalb hier unaufgerufen,
-        die AOUT-Felder zeigen weiterhin "--" statt einen erfundenen Wert.
-        Aus demselben Grund auch PWM1-4 nicht (ohnehin nicht im Dashboard,
-        siehe microhil_panel.py).
+        set_analog_output()-Docstring), hier gaebe es also nichts
+        Verlaessliches abzufragen. Das Dashboard zeigt AOUT1-2 stattdessen
+        ueber einen direkten GUI-Thread-zu-GUI-Thread-Weg vom Control-Tab
+        (control_tab.HilControlGroup.set_analog_output ->
+        dashboard.set_hil_analog_out, siehe main_window._on_control_
+        section_created) -- am Worker/Poll-Zyklus hier komplett vorbei, da
+        es sich um den zuletzt GESENDETEN Sollwert handelt, keine
+        Hardware-Bestaetigung. Aus demselben Grund auch PWM1-4 nicht (kein
+        Control-Tab-Abschnitt dafuer, ohnehin nicht im Dashboard, siehe
+        microhil_panel.py).
         """
         try:
             inputs = hil.get_inputs()
@@ -580,6 +583,20 @@ class DeviceWorker(QObject):
             self.device_removed.emit("can", device_id)
             return False, str(exc)
 
+    def _guard_hil(self, device_id: str, action: Callable[[MicroHIL], None]) -> tuple[bool, str]:
+        hil = self._hils.get(device_id)
+        if hil is None:
+            return False, "microHIL nicht verbunden"
+        try:
+            action(hil)
+            return True, ""
+        except HilError as exc:
+            hil.close()
+            del self._hils[device_id]
+            self.hil_connected.emit(device_id, False)
+            self.device_removed.emit("hil", device_id)
+            return False, str(exc)
+
     # -- Sicherheitsabschaltung (Watchdog, siehe safety.py) -------------------
 
     @Slot(str)
@@ -597,13 +614,10 @@ class DeviceWorker(QObject):
         bei einem normalen Verbindungsabbruch fallengelassen und mit dem
         naechsten weitergemacht -- kein except darf diese Schleife verlassen.
 
-        Bewusst OHNE microHIL (self._hils): diese GUI setzt aktuell keinerlei
-        Zustand am microHIL (kein Control-Tab-Abschnitt, siehe
-        microhil_panel.py-Modul-Docstring, "Naechste Schritte") -- es gibt
-        also nichts, wofuer DIESE App verantwortlich waere, es abzuschalten.
-        Sobald Relais/OUT/PWM/PWR12 hier steuerbar werden, muss das
-        nachgezogen werden (Relais/OUT/PWR12 sind wie bei der Last ueber ein
-        echtes AUS-Kommando abschaltbar, siehe microhil/driver.py).
+        microHIL (self._hils) SEIT dem Control-Tab-Abschnitt (HilControlGroup,
+        siehe control_tab.py) MIT dabei: Digitalausgaenge, Relais, 12V-OUT und
+        Analogausgaenge sind von dort aus steuerbar, also genau die Zustaende,
+        fuer die diese App jetzt verantwortlich ist (siehe _kill_hil).
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []
@@ -620,6 +634,13 @@ class DeviceWorker(QObject):
                     failures.append(device_id)
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Netzteil %s", device_id)
+                failures.append(device_id)
+        for device_id, hil in list(self._hils.items()):
+            try:
+                if not self._kill_hil(device_id, hil):
+                    failures.append(device_id)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei microHIL %s", device_id)
                 failures.append(device_id)
         self.all_off_finished.emit(";".join(failures))
 
@@ -659,6 +680,43 @@ class DeviceWorker(QObject):
                 del self._psus[device_id]
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
+                return False
+        return False
+
+    def _kill_hil(self, device_id: str, hil: MicroHIL) -> bool:
+        """Schaltet alle vom Control-Tab aus steuerbaren microHIL-Ausgaenge ab:
+        Digitalausgaenge (OUT1-8), Relais (REL1-4), 12V-OUT (PWR12 1-2) und
+        Analogausgaenge (AOUT1-2, auf 0mV). NICHT PWM (kein Control-Tab-
+        Abschnitt dafuer, siehe microhil_panel.py-Modul-Docstring) -- die App
+        setzt dort ohnehin nie einen Zustand, den sie zuruecknehmen muesste.
+
+        Ein einzelner fehlgeschlagener Kanal bricht NICHT die uebrigen Kanaele
+        desselben Geraets ab (anders als bei Last/Netzteil, wo ein Fehler
+        gleichbedeutend mit Verbindungsverlust ist) -- ein HilError auf einem
+        Kanal ist typischerweise `ERR RANGE`/`ERR UNKNOWN` (Programmierfehler)
+        oder ein echter Verbindungsabbruch; im zweiten Fall schlagen ohnehin
+        alle nachfolgenden Kanaele ebenso fehl und der Retry-Mechanismus
+        greift wie bei Last/Netzteil."""
+        for attempt in (1, 2):
+            try:
+                for ch in range(1, HIL_OUT_COUNT + 1):
+                    hil.set_output(ch, False)
+                for ch in range(1, HIL_RELAY_COUNT + 1):
+                    hil.set_relay(ch, False)
+                for ch in range(1, HIL_PWR12_COUNT + 1):
+                    hil.set_pwr12(ch, False)
+                for ch in range(1, HIL_AOUT_COUNT + 1):
+                    hil.set_analog_output(ch, 0)
+                logger.info("ALL OFF: microHIL %s -> alle Ausgaenge AUS", device_id)
+                return True
+            except HilError as exc:
+                if attempt == 1:
+                    continue
+                logger.error("ALL OFF: microHIL %s nicht erreichbar: %s", device_id, exc)
+                hil.close()
+                del self._hils[device_id]
+                self.hil_connected.emit(device_id, False)
+                self.device_removed.emit("hil", device_id)
                 return False
         return False
 
@@ -759,6 +817,36 @@ class DeviceWorker(QObject):
         _dispatch_action fuer Last/Netzteil)."""
         ok, message = self._send_can(device_id, arbitration_id, data_hex, extended)
         self.action_completed.emit(ok, message)
+
+    # -- microHIL: Steuerbefehle (siehe control_tab.HilControlGroup) ----------
+    # Melden ihr _guard_hil-Ergebnis nicht zurueck, analog zu set_load_current/
+    # set_psu_voltage etc. -- Fehler landen im Log, kein Testablauf-Dispatch
+    # (siehe _guard_hil/all_outputs_off fuer die Verbindungsabbruch-Behandlung).
+
+    @Slot(str, int, bool)
+    def set_hil_output(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_output(channel, on))
+
+    @Slot(str, int, int)
+    def set_hil_analog_output(self, device_id: str, channel: int, millivolts: int) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_analog_output(channel, millivolts))
+
+    @Slot(str, int, bool)
+    def set_hil_relay(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_relay(channel, on))
+
+    @Slot(str, int, bool)
+    def set_hil_pwr12(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_pwr12(channel, on))
+
+    @Slot(str, int, int)
+    def set_hil_current_limit(self, device_id: str, channel: int, milliamps: int) -> None:
+        # Siehe microhil/driver.py: set_current_limit()-Docstring -- gegen
+        # echte, noch nicht aktualisierte Firmware schlaegt das mit
+        # HilError("ERR UNKNOWN") fehl; _guard_hil behandelt das wie jeden
+        # anderen Verbindungsfehler (Verbindung wird geschlossen). Auf dem
+        # simulierten Geraet (microhil.mock) funktioniert es bereits.
+        self._guard_hil(device_id, lambda hil: hil.set_current_limit(channel, milliamps))
 
     # -- Testablauf: generischer Dispatch fuer einen Testschritt -------------
 

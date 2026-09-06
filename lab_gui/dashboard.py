@@ -683,3 +683,15 @@ class DashboardWidget(QGroupBox):
         if panel is None:
             return
         panel.update_pwr12(enabled, current_sense_mv)
+
+    @Slot(str, int, int)
+    def set_hil_analog_out(self, device_id: str, channel: int, millivolts: int) -> None:
+        """Zeigt den im Control-Tab (control_tab.HilControlGroup) zuletzt
+        angewendeten AOUT-Sollwert an -- direkt am DeviceWorker/Poll-Zyklus
+        vorbei verdrahtet (siehe main_window._on_control_section_created,
+        kind=="hil"), da es fuer AOUT kein `AOUT?`-Kommando zum Zuruecklesen
+        gibt (siehe microhil_panel.MicroHilPanel.set_analog_out_value())."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_analog_out_value(channel, millivolts)

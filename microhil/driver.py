@@ -78,6 +78,52 @@ PWM_MAX_PERMILLE = 1000
 # anderen Kanal. Betrifft nur die Kanaele 1-4 (OUT hat 8, PWM nur 4 Kanaele).
 INTERLOCKED_CHANNELS = 4
 
+# Bekannte Hardware-Defekte je physischem Board, identifiziert ueber dessen
+# eindeutige Seriennummer (STM32-UID, seit dem *IDN?-SN=-Feld auch ueber das
+# Kommandoprotokoll abfragbar -- siehe MicroHIL.identify()/get_serial() unten
+# -- und identisch mit der USB-Seriennummer, aus der device_worker.py bereits
+# die device_id "hil:<serial>" bildet). Quelle/Details je Eintrag: microHIL-
+# Repo, docs/hardware-notes.md. Zweck: GUI (control_tab.HilControlGroup,
+# microhil_panel.MicroHilPanel) kann bekannt kaputte Kanaele fuer GENAU dieses
+# Exemplar deaktivieren/ausgrauen, statt sie als scheinbar funktionierend
+# anzuzeigen -- ein anderes microHIL-Board (andere Seriennummer) ist davon
+# nicht betroffen.
+#
+# Tags: "pwr12:<1-2>" (12V-Ausgang liefert keine/keine verlaessliche Spannung),
+# "curr:<1-2>" (Stromsense liefert keine verlaesslichen Werte).
+KNOWN_HARDWARE_DEFECTS: dict[str, frozenset[str]] = {
+    # 2026-09-06: Q22 (PMT200EPEX, Verpolschutz-PMOS vor PWR12-1) hat eine
+    # defekte Body-Diode und blockiert den Strompfad vollstaendig (0V trotz
+    # `PWR12 1 1`), unabhaengig von der GPIO-Ansteuerung -- CURR1 ist damit
+    # ebenfalls nicht sinnvoll pruefbar (kein realer Laststrom moeglich, bis
+    # Q22 getauscht ist). U19 (INA240A1D, Stromsense CURR2) liefert bei
+    # echtem, per Amperemeter verifiziertem Laststrom nicht-monotone Werte
+    # (200mA->181, 1000mA->264, 2000mA->~221 Rohwert) -- unabhaengiger Defekt,
+    # PWR12-2 selbst liefert korrekt 12V.
+    "2065386A5631": frozenset({"pwr12:1", "curr:1", "curr:2"}),
+}
+
+
+def defects_for_serial(serial: str | None) -> frozenset[str]:
+    """Bekannte Hardware-Defekte fuer ein Board mit dieser Seriennummer.
+
+    Leeres frozenset bei unbekannter/fehlender Seriennummer (z.B. simuliertes
+    Geraet, oder eine Firmware ohne SN=-Feld in *IDN?) -- kein Fehler, einfach
+    "keine bekannten Defekte fuer dieses Exemplar".
+    """
+    if not serial:
+        return frozenset()
+    return KNOWN_HARDWARE_DEFECTS.get(serial, frozenset())
+
+
+def defects_for_device_id(device_id: str) -> frozenset[str]:
+    """Wie defects_for_serial(), akzeptiert aber direkt die device_id
+    ("hil:<serial>", siehe device_worker._reconnect_hils) statt der nackten
+    Seriennummer -- Komfort fuer GUI-Code, der ohnehin nur die device_id
+    kennt (z.B. HilControlGroup.__init__, MicroHilPanel.__init__)."""
+    serial = device_id.split(":", 1)[1] if device_id.startswith("hil:") else device_id
+    return defects_for_serial(serial)
+
 
 class HilError(RuntimeError):
     """Fehler bei der Kommunikation mit dem microHIL.
@@ -317,8 +363,19 @@ class MicroHIL:
     # -- identification ------------------------------------------------------
 
     def identify(self) -> str:
-        """z.B. "microHIL,fw=0.1.0"."""
+        """z.B. "microHIL,fw=0.1.0,SN=2065386A5631"."""
         return self._query("*IDN?")
+
+    def get_serial(self) -> str | None:
+        """Eindeutige Board-ID aus dem SN=-Feld von *IDN? (STM32-UID-basiert,
+        identisch mit der USB-Seriennummer). None bei einer Firmware ohne
+        dieses Feld (aeltere fw=0.1.0-Builds vor dem SN=-Zusatz) statt eines
+        Fehlers -- siehe KNOWN_HARDWARE_DEFECTS/defects_for_serial() oben,
+        die einen fehlenden Wert ebenfalls tolerieren."""
+        for field in self.identify().split(","):
+            if field.startswith("SN="):
+                return field[len("SN="):]
+        return None
 
     # -- relays (1-4) --------------------------------------------------------
 
@@ -427,6 +484,26 @@ class MicroHIL:
             enabled=self.get_pwr12(channel),
             current_sense_mv=self.get_current_sense_mv(channel),
         )
+
+    def set_current_limit(self, channel: int, milliamps: int) -> None:
+        """Setzt eine Strombegrenzung fuer PWR12<channel>.
+
+        ACHTUNG -- FIRMWARE-SEITIG NOCH NICHT UMGESETZT: protocol.md kennt
+        aktuell nur `CURR?`/`CURRRAW?` zum reinen AUSLESEN der Stromsense,
+        aber kein Kommando zum SETZEN einer Begrenzung. Die eigentliche
+        Begrenzungslogik (Abschalten/Klemmen bei Ueberstrom) ist geplante
+        Arbeit im microHIL-Firmware-Repo, nicht Teil dieses Treibers. Diese
+        Methode existiert bereits jetzt, damit GUI/device_worker fertig
+        verdrahtet sind, sobald die Firmware nachzieht -- bis dahin liefert
+        ein Aufruf gegen echte Hardware `ERR UNKNOWN` (HilError), gegen
+        microhil.mock (haelt den Wert nur im Speicher) funktioniert er bereits.
+
+        Kommandoname/-syntax (`ILIM <1-2> <mA>`) ist ein Vorschlag in
+        Analogie zu PWR12/AOUT, NICHT mit der Firmware abgestimmt -- bei
+        Bedarf beim tatsaechlichen Firmware-Update anpassen.
+        """
+        self._check_channel(channel, PWR12_COUNT, "ILIM")
+        self._command(f"ILIM {channel} {milliamps}")
 
     # -- PWM (1-4) -------------------------------------------------------------
 

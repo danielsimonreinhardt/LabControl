@@ -39,6 +39,7 @@ class MockMicroHIL:
         self._analog_in = [0] * AIN_COUNT
         self._pwr12 = [False] * PWR12_COUNT
         self._current_sense = [0] * CURR_COUNT
+        self._current_limits = [0] * PWR12_COUNT
         self._pwm = [0] * PWM_COUNT
 
     def close(self) -> None:
@@ -118,6 +119,14 @@ class MockMicroHIL:
             enabled=self.get_pwr12(channel),
             current_sense_mv=self.get_current_sense_mv(channel),
         )
+
+    def set_current_limit(self, channel: int, milliamps: int) -> None:
+        """Haelt den Wert nur im Speicher -- anders als am realen Geraet
+        (siehe driver.py: set_current_limit()-Docstring) gibt es hier keine
+        tatsaechliche Begrenzungslogik, die Firmware-Arbeit ist. Erlaubt
+        trotzdem, die GUI-Anbindung (Eingabefeld -> Signal -> Treiber) im
+        Simulationsmodus durchzuklicken."""
+        self._current_limits[channel - 1] = milliamps
 
     # -- PWM (1-4) -------------------------------------------------------------
 

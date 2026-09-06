@@ -35,10 +35,15 @@ Abschnitt (analog zu control_tab.LoadControlGroup/PsuControlGroup).
 An device_worker.py/DashboardWidget angeschlossen (dashboard.
 on_device_known erzeugt bei kind="hil" ein MicroHilPanel statt des
 generischen _DevicePanel, device_worker._poll_hil() fuellt es ueber die
-hil_*-Signale/dashboard.update_hil_*()-Slots) -- AOUT1-2 bleiben dabei
-absichtlich bei "--": es gibt kein `AOUT?`-Kommando zum Zuruecklesen
-(siehe microhil/driver.py), ohne einen Control-Tab-Abschnitt kennt diese
-App also keinen tatsaechlichen AOUT-Sollwert.
+hil_*-Signale/dashboard.update_hil_*()-Slots). AOUT1-2 sind ein Sonderfall:
+es gibt kein `AOUT?`-Kommando zum Zuruecklesen (siehe microhil/driver.py),
+device_worker._poll_hil() fragt sie deshalb nie ab. Ihr Wert kommt
+stattdessen DIREKT vom Control-Tab (control_tab.HilControlGroup, siehe
+set_analog_out_value() unten) -- ein GUI-Thread-zu-GUI-Thread-Signal am
+Worker vorbei, sobald der Nutzer dort "Uebernehmen" klickt. Das ist der
+zuletzt GESENDETE Sollwert, KEINE Hardware-Bestaetigung (die es ohne
+`AOUT?` nicht geben kann) -- bleibt "--", bis der Control-Tab tatsaechlich
+einmal einen Wert angewendet hat.
 
 Achtung bei Aenderungen an der Panel-Groesse: DashboardWidget.
 _relayout_panels() gleicht in der NORMALANSICHT die Breite ALLER Panels
@@ -55,7 +60,7 @@ import qtawesome as qta
 from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from i18n import Translator, tr
-from microhil.driver import AIN_COUNT, AOUT_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT
+from microhil.driver import AIN_COUNT, AOUT_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
@@ -80,12 +85,17 @@ def _dot_pixmap(on: bool, palette: Palette):
     return qta.icon(DOT_ON if on else DOT_OFF, color=color).pixmap(DOT_ICON_SIZE, DOT_ICON_SIZE)
 
 
-def _dot_cell(number: int) -> tuple[QWidget, QLabel, QLabel]:
+def _dot_cell(number: int, label: str | None = None) -> tuple[QWidget, QLabel, QLabel]:
     """Ein einzelner Punkt+Nummer-Indikator als eigenstaendiges Widget --
     Baustein sowohl fuer _DotArray als auch _RelayPwr12Grid (siehe dort):
     gibt (Zelle, Icon-Label, Nummern-Label) zurueck, damit der Aufrufer
     Icon/Nummer selbst in seiner eigenen Icons-/Numbers-Liste fuer
     set_states()/retranslate() nachfuehren kann.
+
+    `label` ueberschreibt den angezeigten Text (Default: die blosse Zahl) --
+    z.B. "REL1" statt "1" in _RelayPwr12Grid, wo anders als bei _DotArray
+    kein eigenes Praefix-Label vor den Zellen steht, das den Kanaltyp schon
+    klarstellt.
 
     KEIN eigener addStretch() hier -- eine fruehere Fassung hatte einen
     (fuer ein inzwischen verworfenes QGridLayout-Design mit spalten-
@@ -102,10 +112,37 @@ def _dot_cell(number: int) -> tuple[QWidget, QLabel, QLabel]:
     cell_layout.setContentsMargins(0, 0, 0, 0)
     cell_layout.setSpacing(2)
     icon = QLabel()
-    number_label = QLabel(str(number))
+    number_label = QLabel(label if label is not None else str(number))
     cell_layout.addWidget(icon)
     cell_layout.addWidget(number_label)
     return cell, icon, number_label
+
+
+def _pwr12_cell(number: int, label: str | None = None) -> tuple[QWidget, QLabel, QLabel, QLabel, QLabel]:
+    """Ein einzelner 12V-Ausgang-Indikator (Schaltzustand-Punkt+Nummer,
+    per Strom-Icon abgesetzt von der Stromangabe) als eigenstaendiges Widget
+    -- Baustein sowohl fuer _Pwr12Row (alle Kanaele in einer Zeile,
+    Normalansicht) als auch _RelayPwr12Grid (je ein Kanal in einer eigenen
+    Relais-Zeile, Kompaktansicht, siehe dort). Gibt (Zelle, Icon-Label,
+    Nummern-Label, Strom-Icon-Label, Wert-Label) zurueck.
+
+    `label` ueberschreibt den angezeigten Text (Default: die blosse Zahl) --
+    siehe _dot_cell()-Docstring fuer die Begruendung (z.B. "OUT1" statt "1"
+    in _RelayPwr12Grid)."""
+    cell = no_own_background(QWidget())
+    cell_layout = QHBoxLayout(cell)
+    cell_layout.setContentsMargins(0, 0, 0, 0)
+    cell_layout.setSpacing(4)
+    icon = QLabel()
+    number_label = QLabel(label if label is not None else str(number))
+    current_icon = QLabel()
+    value_label = QLabel("-- mA")
+    cell_layout.addWidget(icon)
+    cell_layout.addWidget(number_label)
+    cell_layout.addSpacing(4)
+    cell_layout.addWidget(current_icon)
+    cell_layout.addWidget(value_label)
+    return cell, icon, number_label, current_icon, value_label
 
 
 class _SectionTitle(QLabel):
@@ -202,12 +239,11 @@ class _DotArray(QWidget):
 
 
 class _RelayPwr12Grid(QWidget):
-    """Kompakte 3x2-Anordnung fuer Relais 1-4 + 12V-OUT 1-2 als EINE
-    gemeinsame Gruppe (Absprache) -- Relais 1-3 in Zeile 1, Relais 4 +
-    der vollstaendige _Pwr12Row in Zeile 2. Reine Kompaktansichts-
-    Variante: die Normalansicht zeigt Relais/12V-OUT weiterhin als zwei
-    eigene Bereiche (_relay_array/_pwr12_row), siehe MicroHilPanel.
-    __init__.
+    """Kompakte 2x3-Anordnung fuer Relais 1-4 + 12V-OUT 1-2 als EINE
+    gemeinsame Gruppe (Absprache) -- Relais 1-2 + 12V-OUT 1 in Zeile 1,
+    Relais 3-4 + 12V-OUT 2 in Zeile 2. Reine Kompaktansichts-Variante: die
+    Normalansicht zeigt Relais/12V-OUT weiterhin als zwei eigene Bereiche
+    (_relay_array/_pwr12_row), siehe MicroHilPanel.__init__.
 
     ZWEI EINFACHE ZEILEN (QHBoxLayout) statt eines echten QGridLayout mit
     spaltenuebergreifendem Widget: eine erste Fassung mit QGridLayout +
@@ -219,49 +255,62 @@ class _RelayPwr12Grid(QWidget):
     bereits vormachen) sind dagegen von Natur aus vorhersehbar: jede
     Zeile bemisst sich nur an ihrem eigenen Inhalt.
 
-    Feste "3 in Zeile 1, Rest in Zeile 2"-Aufteilung fuer die konkrete
-    microHIL-Hardware (4 Relais) statt einer allgemeinen Formel -- diese
-    Zahl aendert sich nicht, eine generische Berechnung waere hier nur
-    unnoetige Indirektion."""
+    Feste "2 Relais + 1 12V-Kanal je Zeile"-Aufteilung fuer die konkrete
+    microHIL-Hardware (4 Relais, 2 12V-Kanaele) statt einer allgemeinen
+    Formel -- diese Zahlen aendern sich nicht, eine generische Berechnung
+    waere hier nur unnoetige Indirektion (Layout-Wunsch: je 12V-Kanal in
+    derselben Zeile wie sein "Partner"-Relaispaar, statt beide 12V-Kanaele
+    zusammen in einer eigenen Zeile)."""
 
-    RELAYS_IN_FIRST_ROW = 3
+    RELAYS_PER_ROW = 2
 
     def __init__(self, relay_count: int, pwr12_count: int) -> None:
         super().__init__()
         self._relay_icons: list[QLabel] = []
         self._relay_numbers: list[QLabel] = []
+        self._pwr12_icons: list[QLabel] = []
+        self._pwr12_numbers: list[QLabel] = []
+        self._pwr12_current_icons: list[QLabel] = []
+        self._pwr12_value_labels: list[QLabel] = []
+        self._defective_curr: set[int] = set()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(2)
 
-        row1 = no_own_background(QWidget())
-        row1_layout = QHBoxLayout(row1)
-        row1_layout.setContentsMargins(0, 0, 0, 0)
-        row1_layout.setSpacing(10)
-        for i in range(min(self.RELAYS_IN_FIRST_ROW, relay_count)):
-            cell, icon, number = _dot_cell(i + 1)
-            row1_layout.addWidget(cell)
-            self._relay_icons.append(icon)
-            self._relay_numbers.append(number)
-        row1_layout.addStretch()
-        outer.addWidget(row1)
+        row_layouts: list[QHBoxLayout] = []
+        for _ in range(2):
+            row = no_own_background(QWidget())
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
+            row_layouts.append(row_layout)
+            outer.addWidget(row)
 
-        row2 = no_own_background(QWidget())
-        row2_layout = QHBoxLayout(row2)
-        row2_layout.setContentsMargins(0, 0, 0, 0)
-        row2_layout.setSpacing(10)
-        for i in range(self.RELAYS_IN_FIRST_ROW, relay_count):
-            cell, icon, number = _dot_cell(i + 1)
-            row2_layout.addWidget(cell)
+        # Relais zuerst je Zeile einfuegen, danach den passenden 12V-Kanal
+        # -- QHBoxLayout.addWidget() haengt hinten an, das ergibt direkt die
+        # gewuenschte Reihenfolge "Rel, Rel, 12V" je Zeile. Beschriftung als
+        # "REL{n}"/"OUT{n}" statt blosser Zahl (Layout-Wunsch): anders als
+        # bei _DotArray (eigenes Praefix-Label "IN"/"OUT" vor den Zellen)
+        # steht hier kein Bereichs-Praefix vor den einzelnen Zellen, eine
+        # blosse Zahl waere sonst zwischen Relais- und 12V-Zellen mehrdeutig.
+        for i in range(relay_count):
+            cell, icon, number = _dot_cell(i + 1, label=f"REL{i + 1}")
+            row_layouts[i // self.RELAYS_PER_ROW].addWidget(cell)
             self._relay_icons.append(icon)
             self._relay_numbers.append(number)
-        # 12V-Praefix bleibt (siehe _Pwr12Row): ohne "Relais"-/"12V-OUT"-
-        # Bereichsueberschriften in der Kompaktansicht ist er die einzige
-        # Beschriftung, die die zweite Zeile von den Relais-Zellen absetzt.
-        self.pwr12_row = _Pwr12Row(pwr12_count, prefix="12V")
-        row2_layout.addWidget(self.pwr12_row)
-        row2_layout.addStretch()
-        outer.addWidget(row2)
+
+        for i in range(pwr12_count):
+            cell, icon, number, current_icon, value = _pwr12_cell(i + 1, label=f"OUT{i + 1}")
+            row_layouts[i].addWidget(cell)
+            self._pwr12_icons.append(icon)
+            self._pwr12_numbers.append(number)
+            self._pwr12_current_icons.append(current_icon)
+            self._pwr12_value_labels.append(value)
+
+        for row_layout in row_layouts:
+            row_layout.addStretch()
+
+        self.apply_pwr12_palette(current_palette())
 
     def set_relay_states(self, states: list[bool]) -> None:
         palette = current_palette()
@@ -271,6 +320,53 @@ class _RelayPwr12Grid(QWidget):
     def retranslate_relays(self) -> None:
         for i, (icon, number) in enumerate(zip(self._relay_icons, self._relay_numbers)):
             tooltip = tr("Relais {index}", index=i + 1)
+            icon.setToolTip(tooltip)
+            number.setToolTip(tooltip)
+
+    def set_pwr12_states(self, enabled: list[bool]) -> None:
+        palette = current_palette()
+        for icon, on in zip(self._pwr12_icons, enabled):
+            icon.setPixmap(_dot_pixmap(on, palette))
+
+    def set_pwr12_values(self, values_mv: list[int]) -> None:
+        # Siehe _Pwr12Row.set_values()-Kommentar: defekt markierte Kanaele
+        # (set_defects()) werden hier bewusst nicht ueberschrieben.
+        for i, (label, value) in enumerate(zip(self._pwr12_value_labels, values_mv), start=1):
+            if i in self._defective_curr:
+                continue
+            label.setText(f"{value} mA")
+
+    def clear_pwr12_values(self) -> None:
+        for i, label in enumerate(self._pwr12_value_labels, start=1):
+            if i in self._defective_curr:
+                continue
+            label.setText("-- mA")
+
+    def set_defects(self, defects: frozenset[str]) -> None:
+        """Siehe _Pwr12Row.set_defects() -- identisches Verhalten fuer die
+        Kompaktansicht."""
+        palette = current_palette()
+        for i, label in enumerate(self._pwr12_value_labels, start=1):
+            if f"curr:{i}" not in defects:
+                continue
+            self._defective_curr.add(i)
+            label.setText(tr("n/v"))
+            label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic; background: transparent;")
+            label.setToolTip(tr(
+                "Bekannter Hardware-Defekt auf diesem Board (siehe docs/hardware-notes.md "
+                "im microHIL-Repo) -- Messwert nicht verlaesslich."
+            ))
+
+    def apply_pwr12_palette(self, palette: Palette) -> None:
+        pixmap = qta.icon(CURRENT_ICON_NAME, color=palette.text_muted).pixmap(
+            CURRENT_ICON_SIZE, CURRENT_ICON_SIZE
+        )
+        for current_icon in self._pwr12_current_icons:
+            current_icon.setPixmap(pixmap)
+
+    def retranslate_pwr12(self) -> None:
+        for i, (icon, number) in enumerate(zip(self._pwr12_icons, self._pwr12_numbers)):
+            tooltip = tr("12V-Ausgang {index}", index=i + 1)
             icon.setToolTip(tooltip)
             number.setToolTip(tooltip)
 
@@ -327,6 +423,7 @@ class _Pwr12Row(QWidget):
         self._numbers: list[QLabel] = []
         self._current_icons: list[QLabel] = []
         self._value_labels: list[QLabel] = []
+        self._defective_curr: set[int] = set()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(20)
@@ -339,19 +436,7 @@ class _Pwr12Row(QWidget):
             prefix_label.setMinimumWidth(28)
             layout.addWidget(prefix_label)
         for i in range(count):
-            cell = no_own_background(QWidget())
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(0, 0, 0, 0)
-            cell_layout.setSpacing(4)
-            icon = QLabel()
-            number = QLabel(str(i + 1))
-            current_icon = QLabel()
-            value = QLabel("-- mA")
-            cell_layout.addWidget(icon)
-            cell_layout.addWidget(number)
-            cell_layout.addSpacing(4)
-            cell_layout.addWidget(current_icon)
-            cell_layout.addWidget(value)
+            cell, icon, number, current_icon, value = _pwr12_cell(i + 1)
             layout.addWidget(cell)
             self._icons.append(icon)
             self._numbers.append(number)
@@ -382,13 +467,39 @@ class _Pwr12Row(QWidget):
 
     def set_values(self, values_mv: list[int]) -> None:
         # Zahl bleibt der rohe mV-Wert vom Geraet (siehe Klassendocstring) --
-        # nur die Beschriftung sagt "mA".
-        for label, value in zip(self._value_labels, values_mv):
+        # nur die Beschriftung sagt "mA". Kanaele mit bekanntem Hardware-
+        # Defekt (siehe set_defects()) werden NICHT ueberschrieben -- ihr
+        # Messwert ist nachweislich unzuverlaessig (docs/hardware-notes.md
+        # im microHIL-Repo), ein Poll-Update wuerde die "defekt"-Anzeige
+        # sonst bei jedem Zyklus wieder mit einer scheinbar gueltigen Zahl
+        # ueberschreiben.
+        for i, (label, value) in enumerate(zip(self._value_labels, values_mv), start=1):
+            if i in self._defective_curr:
+                continue
             label.setText(f"{value} mA")
 
     def clear_values(self) -> None:
-        for label in self._value_labels:
+        for i, label in enumerate(self._value_labels, start=1):
+            if i in self._defective_curr:
+                continue
             label.setText("-- mA")
+
+    def set_defects(self, defects: frozenset[str]) -> None:
+        """Markiert Kanaele mit bekanntem Hardware-Defekt (Tag "curr:<n>",
+        siehe microhil/driver.py: KNOWN_HARDWARE_DEFECTS) dauerhaft als
+        nicht verlaesslich, statt ihren (garantiert falschen) Messwert
+        wie gewohnt anzuzeigen."""
+        palette = current_palette()
+        for i, label in enumerate(self._value_labels, start=1):
+            if f"curr:{i}" not in defects:
+                continue
+            self._defective_curr.add(i)
+            label.setText(tr("n/v"))
+            label.setStyleSheet(f"color: {palette.text_muted}; font-style: italic; background: transparent;")
+            label.setToolTip(tr(
+                "Bekannter Hardware-Defekt auf diesem Board (siehe docs/hardware-notes.md "
+                "im microHIL-Repo) -- Messwert nicht verlaesslich."
+            ))
 
 
 class MicroHilPanel(QGroupBox):
@@ -410,7 +521,7 @@ class MicroHilPanel(QGroupBox):
         self._last_pwr12_enabled: list[bool] = [False] * PWR12_COUNT
 
         outer = QVBoxLayout(self)
-        self._section_titles: list[_SectionTitle] = []
+        self._section_titles: list[tuple[_SectionTitle, str]] = []
         self._dividers: list[_Divider] = []
 
         # -- Normalansicht: vier Bereiche untereinander, mit Trennlinien --
@@ -444,10 +555,10 @@ class MicroHilPanel(QGroupBox):
         # -- Kompaktansicht: alle Bereiche nebeneinander in einer Zeile --
         # eigene Widget-Instanzen (siehe Modul-Docstring) statt der obigen,
         # gefuellt ueber dieselben update_*()-Aufrufe wie die Normalansicht.
-        # Keine Bereichs-Ueberschriften mehr (spart die dafuer noetige
-        # eigene Zeile) -- die Praefixe (IN/OUT/REL/12V) und Feldnamen
-        # (AIN1:/AOUT1:) tragen die Bedeutung stattdessen direkt, Tooltips
-        # bleiben zusaetzlich erreichbar.
+        # Jede Gruppe traegt (Layout-Wunsch) eine eigene Bereichsueberschrift
+        # analog zur Normalansicht (siehe _compact_group) -- zusaetzlich zu,
+        # nicht statt, der Praefixe (IN/OUT/REL/OUT) und Feldnamen (AIN1:/
+        # AOUT1:), die die Bedeutung je Zelle weiterhin direkt tragen.
         self._compact_widget = no_own_background(QWidget())
         compact_layout = QHBoxLayout(self._compact_widget)
         compact_layout.setContentsMargins(0, 0, 0, 0)
@@ -463,30 +574,49 @@ class MicroHilPanel(QGroupBox):
         self._compact_out_array = _DotArray("OUT", OUT_COUNT, "Digitalausgang {index}")
         digital_col_layout.addWidget(self._compact_in_array)
         digital_col_layout.addWidget(self._compact_out_array)
-        compact_layout.addWidget(digital_col)
+        compact_layout.addWidget(self._compact_group(SECTION_TITLES[0], digital_col))
 
         compact_layout.addWidget(self._new_divider(vertical=True))
 
         # Analog IO: AIN+AOUT in einem 3x2-Raster statt einer Zeile mit 6
         # Eintraegen -- spart Breite, ohne die Zeilenhoehe zu erhoehen (die
         # gibt ohnehin schon die zweizeilige Digital-IO-Gruppe vor).
+        # Feste Reihenfolge (Layout-Wunsch) statt Formel aus AIN_COUNT/
+        # AOUT_COUNT: AIN1/AIN2/AOUT1 in Zeile 1, AIN3/AIN4/AOUT2 in Zeile 2
+        # -- setzt AIN_COUNT==4/AOUT_COUNT==2 voraus (aktuelle microHIL-
+        # Hardware), analog zu _RelayPwr12Grid.RELAYS_PER_ROW.
         self._compact_analog_grid = _ValueGrid(
-            [f"AIN{i}" for i in range(1, AIN_COUNT + 1)] + [f"AOUT{i}" for i in range(1, AOUT_COUNT + 1)],
+            ["AIN1", "AIN2", "AOUT1", "AIN3", "AIN4", "AOUT2"],
             columns=3,
         )
-        compact_layout.addWidget(self._compact_analog_grid)
+        compact_layout.addWidget(self._compact_group(SECTION_TITLES[1], self._compact_analog_grid))
 
         compact_layout.addWidget(self._new_divider(vertical=True))
 
         # Relais + 12V-OUT: zu einer Gruppe zusammengefasst UND als
         # 3x2-Raster statt einer Zeile (Absprache) -- aus demselben
-        # Breitenspar-Grund wie Analog IO oben.
+        # Breitenspar-Grund wie Analog IO oben. Eine gemeinsame Ueberschrift
+        # ("Relais / 12V-OUT") statt zwei eigenen (wie in der Normalansicht),
+        # da beide Kanaltypen hier zeilenweise gemischt dargestellt werden.
         self._compact_relay_pwr12 = _RelayPwr12Grid(RELAY_COUNT, PWR12_COUNT)
-        compact_layout.addWidget(self._compact_relay_pwr12)
+        compact_layout.addWidget(
+            self._compact_group("Relais / 12V-OUT", self._compact_relay_pwr12)
+        )
 
         compact_layout.addStretch()
         outer.addWidget(self._compact_widget)
         self._compact_widget.hide()
+
+        # Bekannte Hardware-Defekte fuer GENAU dieses Board (device_id
+        # enthaelt seit device_worker._reconnect_hils bereits die USB-
+        # Seriennummer, siehe microhil/driver.py: defects_for_device_id) --
+        # betroffene CURR-Anzeigen in beiden Ansichten dauerhaft als nicht
+        # verlaesslich markieren statt einen bekannt falschen Messwert zu
+        # zeigen (siehe HilControlGroup in control_tab.py fuer das analoge
+        # Deaktivieren des PWR12-Schalters selbst).
+        self._hil_defects = defects_for_device_id(device_id)
+        self._pwr12_row.set_defects(self._hil_defects)
+        self._compact_relay_pwr12.set_defects(self._hil_defects)
 
         # "Verbindung getrennt"-Badge -- gleiches Prinzip wie
         # dashboard._DevicePanel (siehe dortigen ausfuehrlichen Kommentar
@@ -505,10 +635,30 @@ class MicroHilPanel(QGroupBox):
         self._apply_style(current_palette())
 
     def _section_title(self, text: str) -> _SectionTitle:
+        # Merkt sich (Titel, Rohtext) statt sich per zip() auf eine parallele
+        # Textliste (SECTION_TITLES) zu verlassen -- die Kompaktansicht nutzt
+        # inzwischen eigene, teils zusammengefasste Ueberschriften (z.B.
+        # "Relais / 12V-OUT" fuer eine Gruppe, die in der Normalansicht zwei
+        # eigene Ueberschriften hat), eine gemeinsame Positions-Zuordnung
+        # ueber eine einzige Liste waere dafuer nicht mehr eindeutig.
         title = _SectionTitle(tr(text))
         title.apply_palette(current_palette())
-        self._section_titles.append(title)
+        self._section_titles.append((title, text))
         return title
+
+    def _compact_group(self, title_text: str, content: QWidget) -> QWidget:
+        """Eine Spalte der Kompaktansicht (Digital IO/Analog IO/Relais+
+        12V-OUT) als Bereichsueberschrift ueber dem jeweiligen Inhalt --
+        Ueberschriften in der Kompaktansicht analog zur Normalansicht
+        (Layout-Wunsch), anders als in der urspruenglichen Fassung (siehe
+        Git-Historie), die bewusst ohne sie auskam."""
+        group = no_own_background(QWidget())
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self._section_title(title_text))
+        layout.addWidget(content)
+        return group
 
     def _new_divider(self, vertical: bool = False) -> _Divider:
         divider = _Divider(vertical=vertical)
@@ -517,7 +667,7 @@ class MicroHilPanel(QGroupBox):
         return divider
 
     def _retranslate(self) -> None:
-        for title, text in zip(self._section_titles, SECTION_TITLES):
+        for title, text in self._section_titles:
             title.setText(tr(text))
         for array in (
             self._in_array, self._out_array, self._relay_array,
@@ -526,7 +676,7 @@ class MicroHilPanel(QGroupBox):
             array.retranslate()
         self._compact_relay_pwr12.retranslate_relays()
         self._pwr12_row.retranslate()
-        self._compact_relay_pwr12.pwr12_row.retranslate()
+        self._compact_relay_pwr12.retranslate_pwr12()
         self._offline_icon.setToolTip(tr("Verbindung getrennt"))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -534,12 +684,12 @@ class MicroHilPanel(QGroupBox):
         self._offline_icon.move(self.width() - OFFLINE_ICON_SIZE - OFFLINE_ICON_MARGIN, OFFLINE_ICON_MARGIN)
 
     def _on_theme_changed(self, palette: Palette) -> None:
-        for title in self._section_titles:
+        for title, _ in self._section_titles:
             title.apply_palette(palette)
         for divider in self._dividers:
             divider.apply_palette(palette)
         self._pwr12_row.apply_palette(palette)
-        self._compact_relay_pwr12.pwr12_row.apply_palette(palette)
+        self._compact_relay_pwr12.apply_pwr12_palette(palette)
         self._apply_style(palette)
         # Punkt-Pixmaps haengen an der Palette (check_pass/text_muted) --
         # mit den zuletzt bekannten Zustaenden neu zeichnen statt sie zu
@@ -550,8 +700,13 @@ class MicroHilPanel(QGroupBox):
             out_array.set_states(self._last_out)
         self._relay_array.set_states(self._last_relay)
         self._compact_relay_pwr12.set_relay_states(self._last_relay)
-        for pwr12_row in (self._pwr12_row, self._compact_relay_pwr12.pwr12_row):
-            pwr12_row.set_states(self._last_pwr12_enabled)
+        self._pwr12_row.set_states(self._last_pwr12_enabled)
+        self._compact_relay_pwr12.set_pwr12_states(self._last_pwr12_enabled)
+        # set_defects() faerbt die betroffenen Labels mit der zum
+        # Konstruktionszeitpunkt aktuellen Palette (text_muted) -- erneut
+        # aufrufen, damit die Farbe nach einem Theme-Wechsel nicht veraltet.
+        self._pwr12_row.set_defects(self._hil_defects)
+        self._compact_relay_pwr12.set_defects(self._hil_defects)
 
     def _apply_style(self, palette: Palette) -> None:
         # Gleiche Logik wie dashboard._DevicePanel._apply_style (Panel-
@@ -627,12 +782,23 @@ class MicroHilPanel(QGroupBox):
             self._aout_grid.set_value(f"AOUT{i}", f"{value} mV")
             self._compact_analog_grid.set_value(f"AOUT{i}", f"{value} mV")
 
+    def set_analog_out_value(self, channel: int, millivolts: int) -> None:
+        """Zeigt den zuletzt im Control-Tab (control_tab.HilControlGroup)
+        angewendeten AOUT-Sollwert eines EINZELNEN Kanals an -- anders als
+        update_analog_out() (fuer eine spaetere echte Hardware-Rueckfrage
+        gedacht, aktuell aber nie aufgerufen, siehe device_worker._poll_hil)
+        kommt dieser Wert direkt vom Control-Tab-Signal, NICHT vom Geraet:
+        er ist der unbestaetigte, zuletzt gesendete Sollwert, keine Messung.
+        """
+        self._aout_grid.set_value(f"AOUT{channel}", f"{millivolts} mV")
+        self._compact_analog_grid.set_value(f"AOUT{channel}", f"{millivolts} mV")
+
     def update_pwr12(self, enabled: list[bool], current_sense_mv: list[int]) -> None:
         self._last_pwr12_enabled = list(enabled)
         self._pwr12_row.set_states(enabled)
         self._pwr12_row.set_values(current_sense_mv)
-        self._compact_relay_pwr12.pwr12_row.set_states(enabled)
-        self._compact_relay_pwr12.pwr12_row.set_values(current_sense_mv)
+        self._compact_relay_pwr12.set_pwr12_states(enabled)
+        self._compact_relay_pwr12.set_pwr12_values(current_sense_mv)
 
     def clear_values(self) -> None:
         self.update_inputs([False] * IN_COUNT)
@@ -642,6 +808,7 @@ class MicroHilPanel(QGroupBox):
         self._aout_grid.clear_values()
         self._compact_analog_grid.clear_values()
         self._last_pwr12_enabled = [False] * PWR12_COUNT
-        for pwr12_row in (self._pwr12_row, self._compact_relay_pwr12.pwr12_row):
-            pwr12_row.set_states(self._last_pwr12_enabled)
-            pwr12_row.clear_values()
+        self._pwr12_row.set_states(self._last_pwr12_enabled)
+        self._pwr12_row.clear_values()
+        self._compact_relay_pwr12.set_pwr12_states(self._last_pwr12_enabled)
+        self._compact_relay_pwr12.clear_pwr12_values()

@@ -174,6 +174,9 @@ class MainWindow(QMainWindow):
         self._worker.hil_relay_state.connect(self.dashboard.update_hil_relays)
         self._worker.hil_analog_input.connect(self.dashboard.update_hil_analog_in)
         self._worker.hil_pwr12_state.connect(self.dashboard.update_hil_pwr12)
+        self._worker.hil_digital_state.connect(self.control_tab.set_hil_digital_state)
+        self._worker.hil_relay_state.connect(self.control_tab.set_hil_relay_state)
+        self._worker.hil_pwr12_state.connect(self.control_tab.set_hil_pwr12_state)
         self._worker.load_measurement.connect(self.timeline_tab.update_load)
         self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
@@ -330,6 +333,18 @@ class MainWindow(QMainWindow):
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
+        elif kind == "hil":
+            section.set_output.connect(self._worker.set_hil_output)
+            section.set_analog_output.connect(self._worker.set_hil_analog_output)
+            # Zusaetzlich direkt ans Dashboard (GUI-Thread zu GUI-Thread, am
+            # Worker/Poll-Zyklus vorbei) -- fuer AOUT gibt es kein `AOUT?` zum
+            # Zuruecklesen, ohne diesen Weg bliebe die Dashboard-Anzeige trotz
+            # eines im Control-Tab tatsaechlich gesetzten Sollwerts bei "--"
+            # stehen (siehe dashboard.set_hil_analog_out()-Docstring).
+            section.set_analog_output.connect(self.dashboard.set_hil_analog_out)
+            section.set_relay.connect(self._worker.set_hil_relay)
+            section.set_pwr12.connect(self._worker.set_hil_pwr12)
+            section.set_current_limit.connect(self._worker.set_hil_current_limit)
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -712,12 +727,9 @@ class MainWindow(QMainWindow):
 
     @Slot(str, bool)
     def _on_hil_connected(self, device_id: str, online: bool) -> None:
-        # Kein control_tab.set_hil_online(): es gibt noch keine
-        # HilControlGroup (siehe control_tab.on_device_known, das kind=="hil"
-        # deshalb ueberspringt statt faelschlich eine CanControlGroup
-        # anzulegen) -- nichts, das dort online/offline gesetzt werden muesste.
         self._set_online("hil", device_id, online)
         self.dashboard.set_hil_online(device_id, online)
+        self.control_tab.set_hil_online(device_id, online)
 
     def _set_online(self, kind: str, device_id: str, online: bool) -> None:
         if online:

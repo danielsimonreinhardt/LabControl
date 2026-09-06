@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
+from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from presets import PresetStore, SLOT_COUNT
@@ -45,6 +46,12 @@ from theme import current as current_palette
 CAN_TRAFFIC_ROW_LIMIT = 50
 CAN_STANDARD_ID_MAX = 0x7FF
 CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
+
+# Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
+# provisorisch: die Firmware kennt aktuell noch kein Kommando dafuer (siehe
+# microhil/driver.py: set_current_limit()-Docstring), es gibt also keine
+# vom Geraet vorgegebene Grenze, an der sich dieser Wert orientieren koennte.
+HIL_CURRENT_LIMIT_MAX_MA = 3000
 
 # Interner SCPI-Funktionscode (siehe korad_kel102/driver.py: FUNCTIONS) ->
 # deutscher Basis-Anzeigename (Uebersetzungsschluessel fuer i18n.tr).
@@ -131,6 +138,28 @@ def _style_toggle_buttons(
     active_style = "background-color: {color}; color: {text}; font-weight: bold;"
     on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.surface) if state is True else "")
     off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
+
+
+def _channel_toggle(number: int) -> QPushButton:
+    """Ein einzelner, klickbarer Kanal-Schalter (checkable) fuer
+    HilControlGroup -- kompaktere Alternative zum EIN/AUS-Buttonpaar aus
+    _style_toggle_buttons: bei bis zu 8 gleichartigen Kanaelen (microHIL:
+    OUT1-8) waere ein Buttonpaar pro Kanal deutlich zu hoch. Text ist die
+    Kanalnummer, Zustand ueber checkable statt zweier getrennter Buttons."""
+    button = QPushButton(str(number))
+    button.setCheckable(True)
+    button.setFixedWidth(32)
+    return button
+
+
+def _style_channel_toggle(button: QPushButton, on: bool, pal: Palette) -> None:
+    """Faerbt einen _channel_toggle-Button passend zu seinem Checked-Zustand
+    -- gleiche Farblogik (gruen=ein) und Begruendung (check_pass statt
+    success, siehe dessen Docstring in theme.py) wie _style_toggle_buttons."""
+    if on:
+        button.setStyleSheet(f"background-color: {pal.check_pass}; color: {pal.surface}; font-weight: bold;")
+    else:
+        button.setStyleSheet("")
 
 
 class LoadControlGroup(QGroupBox):
@@ -733,6 +762,249 @@ class CanControlGroup(QGroupBox):
         pass
 
 
+class HilControlGroup(QGroupBox):
+    """Steuersektion fuer den microHIL: Schalter fuer Digitalausgaenge
+    (OUT1-8), Relais (REL1-4) und 12V-Ausgaenge (PWR12 1-2), Eingabefelder
+    fuer Analogausgaenge (AOUT1-2) sowie eine Strombegrenzung je 12V-Kanal.
+
+    Digitaleingaenge (IN1-8) sind absichtlich NICHT hier -- rein lesend, das
+    Dashboard (microhil_panel.MicroHilPanel) zeigt sie bereits an, eine
+    zweite Anzeige derselben Werte im Control-Tab waere redundant. PWM1-4
+    ebenfalls nicht (siehe microhil_panel.py-Modul-Docstring): kein Teil
+    dieser Anfrage, und mit OUT1-4 hardwareseitig verriegelt (siehe
+    microhil/driver.py: INTERLOCKED_CHANNELS).
+
+    Kanal-Schalter als einzelne checkable Buttons (_channel_toggle) statt
+    EIN/AUS-Buttonpaaren wie bei LoadControlGroup/PsuControlGroup -- bei bis
+    zu 8 Kanaelen (OUT) waere ein Buttonpaar pro Kanal deutlich zu hoch. Ihr
+    Zustand wird bei jedem Poll-Zyklus mit der echten Hardware synchronisiert
+    (siehe set_output_states/set_relay_states/set_pwr12_states, gespeist von
+    device_worker.hil_digital_state/hil_relay_state/hil_pwr12_state -- exakt
+    dieselben Signale, die auch das Dashboard fuellen) -- anders als beim
+    HCS-34xx-Netzteil (kein Software-Ausgang-Ein/Aus, siehe hcs34xx/README.md)
+    braucht es hier also KEINEN erzwungenen Sicherheits-Reset beim Verbinden:
+    ein bereits eingeschalteter Kanal wird korrekt als "ein" angezeigt statt
+    unbemerkt zurueckgesetzt zu werden.
+
+    AOUT-Felder werden NIE vom Geraet zurueckgelesen (kein `AOUT?`-Kommando,
+    siehe microhil/driver.py) -- sie zeigen also nur den zuletzt hier selbst
+    eingegebenen Sollwert, wie microhil_panel.MicroHilPanel es fuer das
+    Dashboard bereits dokumentiert.
+
+    Strombegrenzung (Eingabefeld je 12V-Kanal): microHIL-Firmware kennt
+    aktuell (protocol.md) kein Kommando dafuer, nur CURR?/CURRRAW? zum reinen
+    Auslesen der Stromsense -- das eigentliche Begrenzen ist geplante
+    Firmware-Arbeit (siehe microhil/driver.py: set_current_limit()-Docstring),
+    nicht Teil dieser GUI. Das Feld ist bereits vorbereitet (sendet den
+    vorgeschlagenen, noch nicht mit der Firmware abgestimmten Befehl
+    `ILIM <ch> <mA>`) -- ein Klick auf "Übernehmen" schlaegt bis zur
+    entsprechenden Firmware-Aenderung mit `ERR UNKNOWN` fehl, was
+    device_worker._guard_hil wie jeden anderen Kommunikationsfehler behandelt
+    (Verbindung wird geschlossen, automatischer Wiederverbindungsversuch nach
+    RECONNECT_INTERVAL_MS) -- auf dem simulierten Geraet (microhil.mock)
+    funktioniert es dagegen bereits."""
+
+    set_output = Signal(str, int, bool)         # device_id, Kanal (1-8), ein
+    set_analog_output = Signal(str, int, int)   # device_id, Kanal (1-2), mV
+    set_relay = Signal(str, int, bool)          # device_id, Kanal (1-4), ein
+    set_pwr12 = Signal(str, int, bool)          # device_id, Kanal (1-2), ein
+    set_current_limit = Signal(str, int, int)   # device_id, Kanal (1-2), mA
+    panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
+    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+
+    def __init__(self, device_id: str, label: str) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self.setTitle(label)
+
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(self._on_color_selected)
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
+
+        # -- Digitalausgaenge (OUT1-8) --
+        self._out_buttons = [_channel_toggle(ch) for ch in range(1, OUT_COUNT + 1)]
+        for ch, button in enumerate(self._out_buttons, start=1):
+            button.toggled.connect(lambda on, c=ch: self.set_output.emit(self._device_id, c, on))
+        self._out_row = _row(*self._out_buttons)
+        self._form.addRow(" ", self._out_row)
+        _detint_label(self._form, self._out_row)
+
+        # -- Analogausgaenge (AOUT1-2) -- je Kanal ein eigenes Sollwert-Feld
+        # + Uebernehmen-Button (kein Massen-"Setzen" wie bei den Schaltern
+        # oben: ein Zahlenwert braucht einen expliziten Bestaetigungs-Klick,
+        # analog zu PsuControlGroup.voltage/current).
+        self._aout_spins: list[SteppedSpinBox] = []
+        self._aout_rows: list[QWidget] = []
+        for ch in range(1, AOUT_COUNT + 1):
+            spin = SteppedSpinBox(small_step=10, large_step=100)
+            spin.setRange(0, AOUT_MAX_MV)
+            spin.setSuffix(" mV")
+            spin.setMaximumWidth(120)
+            button = IconButton("mdi.check", "")
+            button.clicked.connect(lambda _, c=ch, s=spin: self.set_analog_output.emit(self._device_id, c, s.value()))
+            row = _row(spin, button)
+            self._form.addRow(" ", row)
+            _detint_label(self._form, row)
+            self._aout_spins.append(spin)
+            self._aout_rows.append(row)
+
+        # -- Relais (REL1-4) --
+        self._relay_buttons = [_channel_toggle(ch) for ch in range(1, RELAY_COUNT + 1)]
+        for ch, button in enumerate(self._relay_buttons, start=1):
+            button.toggled.connect(lambda on, c=ch: self.set_relay.emit(self._device_id, c, on))
+        self._relay_row = _row(*self._relay_buttons)
+        self._form.addRow(" ", self._relay_row)
+        _detint_label(self._form, self._relay_row)
+
+        # -- 12V-Ausgaenge (PWR12 1-2) + Strombegrenzung je Kanal --
+        # Kanaele mit bekanntem Hardware-Defekt auf DIESEM Board (siehe
+        # microhil/driver.py: KNOWN_HARDWARE_DEFECTS/defects_for_device_id,
+        # Quelle docs/hardware-notes.md im microHIL-Repo) werden deaktiviert
+        # statt scheinbar funktionsfaehig angezeigt -- device_id enthaelt seit
+        # device_worker._reconnect_hils bereits die USB-Seriennummer
+        # ("hil:<serial>"), identisch mit dem Firmware-seitigen *IDN?-
+        # SN=-Feld, es braucht also keine zusaetzliche Geraeteabfrage hier.
+        hil_defects = defects_for_device_id(device_id)
+        self._pwr12_buttons: list[QPushButton] = []
+        self._limit_spins: list[SteppedSpinBox] = []
+        self._pwr12_rows: list[QWidget] = []
+        for ch in range(1, PWR12_COUNT + 1):
+            broken = f"pwr12:{ch}" in hil_defects
+            toggle = _channel_toggle(ch)
+            toggle.toggled.connect(lambda on, c=ch: self.set_pwr12.emit(self._device_id, c, on))
+            limit_spin = SteppedSpinBox(small_step=10, large_step=100)
+            limit_spin.setRange(0, HIL_CURRENT_LIMIT_MAX_MA)
+            limit_spin.setSuffix(" mA")
+            limit_spin.setMaximumWidth(120)
+            limit_button = IconButton("mdi.check", "")
+            limit_button.clicked.connect(
+                lambda _, c=ch, s=limit_spin: self.set_current_limit.emit(self._device_id, c, s.value())
+            )
+            if broken:
+                defect_tooltip = tr(
+                    "Bekannter Hardware-Defekt auf diesem Board (siehe docs/hardware-notes.md "
+                    "im microHIL-Repo) -- deaktiviert bis zur Reparatur."
+                )
+                toggle.setEnabled(False)
+                toggle.setToolTip(defect_tooltip)
+                limit_spin.setEnabled(False)
+                limit_spin.setToolTip(defect_tooltip)
+                limit_button.setEnabled(False)
+                limit_button.setToolTip(defect_tooltip)
+            row = _row(toggle, limit_spin, limit_button)
+            self._form.addRow(" ", row)
+            _detint_label(self._form, row)
+            self._pwr12_buttons.append(toggle)
+            self._limit_spins.append(limit_spin)
+            self._pwr12_rows.append(row)
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("microHIL"))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._form.labelForField(self._out_row).setText(tr("Digitalausgänge:"))
+        for i, row in enumerate(self._aout_rows, start=1):
+            self._form.labelForField(row).setText(tr("Analogausgang {n}:", n=i))
+        self._form.labelForField(self._relay_row).setText(tr("Relais:"))
+        for i, row in enumerate(self._pwr12_rows, start=1):
+            self._form.labelForField(row).setText(tr("12V-Ausgang {n}:", n=i))
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        for row in (self._out_row, self._relay_row, *self._aout_rows, *self._pwr12_rows):
+            row.setStyleSheet(_row_stylesheet(palette))
+        for button in (*self._out_buttons, *self._relay_buttons, *self._pwr12_buttons):
+            _style_channel_toggle(button, button.isChecked(), palette)
+        apply_panel_tint(self, self._color_key)
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def _on_color_selected(self, color_key) -> None:
+        self.panel_color_requested.emit(self._device_id, color_key)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
+        )
+        if ok and new_label.strip():
+            self.rename_requested.emit("hil", self._device_id, new_label.strip())
+
+    def _sync_toggles(self, buttons: list[QPushButton], states: list[bool]) -> None:
+        pal = current_palette()
+        for button, on in zip(buttons, states):
+            button.blockSignals(True)
+            button.setChecked(on)
+            button.blockSignals(False)
+            _style_channel_toggle(button, on, pal)
+
+    def set_output_states(self, states: list[bool]) -> None:
+        self._sync_toggles(self._out_buttons, states)
+
+    def set_relay_states(self, states: list[bool]) -> None:
+        self._sync_toggles(self._relay_buttons, states)
+
+    def set_pwr12_states(self, states: list[bool]) -> None:
+        self._sync_toggles(self._pwr12_buttons, states)
+
+    def capture_state(self) -> dict:
+        """Aktueller Zustand fuer die globale Preset-Leiste (siehe PresetBar)."""
+        return {
+            "outputs": [b.isChecked() for b in self._out_buttons],
+            "analog_out": [s.value() for s in self._aout_spins],
+            "relays": [b.isChecked() for b in self._relay_buttons],
+            "pwr12": [b.isChecked() for b in self._pwr12_buttons],
+            "current_limits": [s.value() for s in self._limit_spins],
+        }
+
+    def apply_state(self, state: dict) -> None:
+        """Uebernimmt ein Preset (siehe PresetBar) -- schreibt jeden Wert
+        sofort auf die Hardware (Signal-Emits), analog zu
+        LoadControlGroup.apply_state. Fehlende/kaputte Eintraege werden
+        uebersprungen statt die uebrigen Kanaele zu blockieren."""
+        for ch, on in enumerate(state.get("outputs", []), start=1):
+            self.set_output.emit(self._device_id, ch, bool(on))
+        for ch, mv in enumerate(state.get("analog_out", []), start=1):
+            try:
+                self.set_analog_output.emit(self._device_id, ch, int(mv))
+            except (TypeError, ValueError):
+                pass
+        for ch, on in enumerate(state.get("relays", []), start=1):
+            self.set_relay.emit(self._device_id, ch, bool(on))
+        for ch, on in enumerate(state.get("pwr12", []), start=1):
+            self.set_pwr12.emit(self._device_id, ch, bool(on))
+        for ch, ma in enumerate(state.get("current_limits", []), start=1):
+            try:
+                self.set_current_limit.emit(self._device_id, ch, int(ma))
+            except (TypeError, ValueError):
+                pass
+
+
 PRESET_BUTTON_SIZE = QSize(132, 60)
 PRESET_SUB_BUTTON_SIZE = QSize(24, 22)
 PRESET_SUB_BUTTON_MARGIN = 3
@@ -920,13 +1192,6 @@ class ControlTab(QWidget):
         Translator.instance().language_changed.connect(self._equalize_sections)
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
-        if kind == "hil":
-            # Noch keine HilControlGroup (siehe microhil_panel.py-Modul-
-            # Docstring, "Naechste Schritte") -- ohne diesen Guard wuerde der
-            # else-Zweig unten (der nur zwischen "load"/"psu" unterscheidet,
-            # alles andere als "can" behandelt) faelschlich eine
-            # CanControlGroup fuer den microHIL anlegen.
-            return
         section = self._sections.get(device_id)
         if section is not None:
             section.set_label(label)
@@ -942,6 +1207,8 @@ class ControlTab(QWidget):
             section = LoadControlGroup(device_id, label)
         elif kind == "psu":
             section = PsuControlGroup(device_id, label)
+        elif kind == "hil":
+            section = HilControlGroup(device_id, label)
         else:
             section = CanControlGroup(device_id, label)
         section.hide()
@@ -1011,10 +1278,32 @@ class ControlTab(QWidget):
     def set_can_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    def set_hil_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
     def on_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
         section = self._sections.get(device_id)
         if isinstance(section, CanControlGroup):
             section.append_frame(arbitration_id, data_hex, extended, timestamp)
+
+    def set_hil_digital_state(self, device_id: str, inputs: list, outputs: list) -> None:
+        # Nur outputs relevant -- inputs sind rein lesend und werden bereits
+        # im Dashboard angezeigt (siehe HilControlGroup-Docstring).
+        section = self._sections.get(device_id)
+        if isinstance(section, HilControlGroup):
+            section.set_output_states(outputs)
+
+    def set_hil_relay_state(self, device_id: str, relays: list) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, HilControlGroup):
+            section.set_relay_states(relays)
+
+    def set_hil_pwr12_state(self, device_id: str, enabled: list, current_sense_mv: list) -> None:
+        # current_sense_mv hier ungenutzt -- die Sektion synchronisiert nur
+        # den Schaltzustand, die Strommessung zeigt bereits das Dashboard.
+        section = self._sections.get(device_id)
+        if isinstance(section, HilControlGroup):
+            section.set_pwr12_states(enabled)
 
     def _update_empty_tile(self) -> None:
         # BUGS.md #16 (Root Cause, per Live-Debug in einem QTabWidget mit

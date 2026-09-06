@@ -7,6 +7,19 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **microHIL: bekannte Hardware-Defekte je Board ausblenden.** Die
+  microHIL-Firmware liefert seit Kurzem eine eindeutige, aus der STM32-UID
+  abgeleitete Board-ID über `*IDN?` (Feld `SN=...`, identisch mit der
+  bereits vorhandenen USB-Seriennummer, aus der `device_worker.py` die
+  `device_id` `"hil:<serial>"` bildet). `microhil/driver.py` bekommt eine
+  neue Registry `KNOWN_HARDWARE_DEFECTS`/`defects_for_device_id()` (Quelle:
+  `docs/hardware-notes.md` im microHIL-Repo) -- `control_tab.HilControlGroup`
+  deaktiviert damit den PWR12-1-Schalter+Strombegrenzung für das aktuell
+  betroffene Board (defekter Verpolschutz-MOSFET, liefert 0V), und
+  `microhil_panel.MicroHilPanel` markiert die CURR1/CURR2-Anzeige (beide
+  Ansichten) als "n/v" statt einen bekannt unzuverlässigen Messwert zu
+  zeigen. Ein anderes microHIL-Board (andere Seriennummer) ist davon nicht
+  betroffen. `MicroHIL.get_serial()` neu in `microhil/driver.py`.
 - **CAN-Bus-Unterstützung** (Vector CANcase XL, PEAK PCAN-USB): neuer,
   vendor-unabhängiger Treiber `can_bus/` (`driver.py::CanBus` wrapt
   `python-can`, `interface="vector"`/`"pcan"` je nach Hersteller-Treiber
