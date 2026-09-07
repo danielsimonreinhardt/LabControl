@@ -32,6 +32,47 @@ CAN_ACTIONS = {
     "CAN_SEND": "CAN-Frame senden",
 }
 
+# microHIL-Aktionen (siehe microhil/driver.py). Jede Aktion bezieht sich auf
+# genau EINEN Kanal (device_worker.MicroHIL-Methoden nehmen alle einen
+# Kanalindex) -- welcher, steht in TestStep.hil_channel statt im
+# Aktionscode selbst (anders als z.B. eine hypothetische "OUT1_ON"), damit
+# die Kanalauswahl ein normales Editor-Feld bleibt statt die Aktionsliste
+# je Aktion um die jeweilige Kanalzahl aufzublaehen (8 OUT + 4 RELAY + 2
+# AOUT + 8 IN + 4 AIN waeren sonst 26 Eintraege). HIL_IN_READ/HIL_AIN_READ
+# lesen den aktuellen Kanalzustand direkt vom Geraet (siehe
+# device_worker._dispatch_action) statt aus dem 1s-Poll-Cache -- der
+# gelesene Wert kommt darum sofort und fliesst nur in eine optionale
+# Pass/Fail-Pruefung ein (siehe HIL_READ_ACTIONS/testcase_runner.py).
+HIL_ACTIONS = {
+    "HIL_OUT_ON": "Digitalausgang EIN",
+    "HIL_OUT_OFF": "Digitalausgang AUS",
+    "HIL_RELAY_ON": "Relais EIN",
+    "HIL_RELAY_OFF": "Relais AUS",
+    "HIL_AOUT": "Analogausgang setzen",
+    "HIL_IN_READ": "Digitaleingang lesen",
+    "HIL_AIN_READ": "Analogeingang lesen",
+}
+
+# Aktionscode -> Kanalzahl des jeweiligen microHIL-Kanaltyps (siehe
+# microhil/driver.py: OUT_COUNT/RELAY_COUNT/AOUT_COUNT/IN_COUNT/AIN_COUNT) --
+# begrenzt die Kanal-Spinbox im Editor (siehe testcase_tab._build_action_row)
+# auf die tatsaechlich vorhandenen Kanaele je Aktion.
+HIL_CHANNEL_COUNTS = {
+    "HIL_OUT_ON": 8,
+    "HIL_OUT_OFF": 8,
+    "HIL_RELAY_ON": 4,
+    "HIL_RELAY_OFF": 4,
+    "HIL_AOUT": 2,
+    "HIL_IN_READ": 8,
+    "HIL_AIN_READ": 4,
+}
+
+# Lese-Aktionen (siehe HIL_ACTIONS-Kommentar): liefern anders als alle
+# anderen Aktionen einen Messwert zurueck, den testcase_runner.py sofort
+# (ohne auf den naechsten Poll-Zyklus zu warten) gegen eine optionale
+# Pass/Fail-Pruefung auswertet.
+HIL_READ_ACTIONS = {"HIL_IN_READ", "HIL_AIN_READ"}
+
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
 # Schaltaktionen (Ausgang EIN/AUS, Presets) scheiden aus, da sie keinen
@@ -56,6 +97,7 @@ DEVICE_ACTIONS = {
     "load": LOAD_ACTIONS,
     "psu": PSU_ACTIONS,
     "can": CAN_ACTIONS,
+    "hil": HIL_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -63,6 +105,7 @@ DEVICE_KIND_LABELS = {
     "load": "Last",
     "psu": "Netzteil",
     "can": "CAN-Bus",
+    "hil": "microHIL",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -92,6 +135,8 @@ VALUELESS_ACTIONS = {
     "OUT_ON", "OUT_OFF", "PSU_OUT_ON", "PSU_OUT_OFF",
     "ARB", "PSU_ARB",
     "CAN_SEND",
+    "HIL_OUT_ON", "HIL_OUT_OFF", "HIL_RELAY_ON", "HIL_RELAY_OFF",
+    "HIL_IN_READ", "HIL_AIN_READ",
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -114,6 +159,14 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "ARB": ("", 0, 0),
     "PSU_ARB": ("", 0, 0),
     "CAN_SEND": ("", 0, 0),
+    "HIL_OUT_ON": ("", 0, 0),
+    "HIL_OUT_OFF": ("", 0, 0),
+    "HIL_RELAY_ON": ("", 0, 0),
+    "HIL_RELAY_OFF": ("", 0, 0),
+    # 0-3300mV: AOUT_MAX_MV in microhil/driver.py (DAC-Referenzspannung).
+    "HIL_AOUT": ("mV", 0, 3300),
+    "HIL_IN_READ": ("", 0, 0),
+    "HIL_AIN_READ": ("", 0, 0),
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -146,15 +199,29 @@ COND_FIELDS = ("voltage", "current", "power")
 COND_OPS = ("<", "<=", ">", ">=", "==", "!=")
 COND_OP_LABELS = {"<": "<", "<=": "≤", ">": ">", ">=": "≥", "==": "=", "!=": "≠"}
 COND_TIME_REFS = ("block", "run")
-COND_FIELD_UNITS = {"voltage": "V", "current": "A", "power": "W"}
+COND_FIELD_UNITS = {"voltage": "V", "current": "A", "power": "W", "hil_ain": "mV", "hil_in": ""}
 COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
+
+# check_field-Codes fuer HIL_AIN_READ/HIL_IN_READ (siehe HIL_READ_ACTIONS) --
+# eigene Einheit/Symbol statt Spannung/Strom/Leistung, da eine Lese-Aktion
+# nur EINEN Wert liefert (kein Auswahlfeld noetig, siehe testcase_tab.py:
+# open_check_dialog()). Bewusst NICHT Teil von COND_FIELDS/COND_FIELD_LABELS
+# (die sind fuer die while/if-Bedingungsauswahl aller Geraete, die HIL-Codes
+# sollen dort nicht als Option auftauchen).
+HIL_CHECK_FIELD_LABELS = {"hil_ain": "Analogwert", "hil_in": "Zustand (0/1)"}
+
+# HIL-Lese-Aktionscode -> zugehoeriger check_field-Code (siehe
+# HIL_CHECK_FIELD_LABELS/COND_FIELD_UNITS oben) -- fuer testcase_tab.py:
+# open_check_dialog(), das aus dem gerade gewaehlten Aktionscode den
+# passenden field_choices-Eintrag fuer CheckDialog bauen muss.
+HIL_READ_CHECK_FIELD = {"HIL_AIN_READ": "hil_ain", "HIL_IN_READ": "hil_in"}
 
 # Kurzsymbole fuer die kompakte Pruefungs-Zusammenfassung in der
 # Testcase-Tabelle (siehe check_summary()) -- sprachunabhaengig, daher nicht
 # uebersetzt. Die Messgroessen selbst sind dieselben wie bei Bedingungen
 # (COND_FIELDS); die Leistung wird beim Netzteil aus U*I berechnet (siehe
 # testcase_runner.on_psu_measurement).
-CHECK_FIELD_SYMBOLS = {"voltage": "U", "current": "I", "power": "P"}
+CHECK_FIELD_SYMBOLS = {"voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN"}
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
 # war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
@@ -204,6 +271,20 @@ class TestStep:
     can_id: int = 0            # Arbitration-ID (11-bit Standard oder 29-bit Extended)
     can_data: str = ""         # Hex-String, z.B. "01 A2 FF" (max. 8 Bytes, klassisches CAN)
     can_extended: bool = False  # 29-bit Extended-ID statt 11-bit Standard-ID
+
+    # -- microHIL-Parameter (nur relevant wenn device_kind == "hil") -----
+    # 1-basierter Kanalindex, gueltiger Bereich je Aktion siehe
+    # HIL_CHANNEL_COUNTS. Bei HIL_AOUT ist `value` (mV) der Sollwert; bei
+    # HIL_IN_READ/HIL_AIN_READ hat `value` keine Bedeutung (siehe
+    # HIL_READ_ACTIONS).
+    hil_channel: int = 1
+    # Nur relevant bei device_kind=="hil" und action in HIL_READ_ACTIONS:
+    # Variablenname, in den der gelesene Wert zusaetzlich zur (optionalen)
+    # Pass/Fail-Pruefung geschrieben wird (siehe testcase_runner.
+    # on_action_completed). Leer = nicht speichern. Damit laesst sich eine
+    # microHIL-Lesung als Bedingung in einem spaeteren while/if verwenden
+    # (dort cond_source="variable" waehlen).
+    store_var: str = ""
 
     # -- Ablaufsteuerung: Schritttyp-Diskriminator ------------------------
     # "action" (Standard, s.o.) | "loop" | "while" | "if" | "else" | "end"

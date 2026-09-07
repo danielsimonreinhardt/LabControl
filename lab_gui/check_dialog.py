@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLabel,
+    QLineEdit,
     QVBoxLayout,
 )
 
@@ -38,15 +39,42 @@ def _params_to_step(params: dict) -> TestStep:
         check_min=params["min"],
         check_max=params["max"],
         check_abort=params["abort"],
+        store_var=params.get("store_var", ""),
     )
 
 
 class CheckDialog(QDialog):
-    def __init__(self, params: dict, is_arb: bool, parent=None) -> None:
-        """params: dict mit enabled/field/min/max/abort (siehe
+    def __init__(
+        self,
+        params: dict,
+        is_arb: bool,
+        field_choices: dict[str, tuple[str, str]] | None = None,
+        var_store_supported: bool = False,
+        parent=None,
+    ) -> None:
+        """params: dict mit enabled/field/min/max/abort/store_var (siehe
         testcase_tab._build_action_row). is_arb steuert nur den Hinweis, dass
-        bei einem Arbiträrsignal-Schritt nach dem Signalende gemessen wird."""
+        bei einem Arbiträrsignal-Schritt nach dem Signalende gemessen wird.
+
+        field_choices: code -> (Anzeigename, Einheit) fuer das Messgroessen-
+        Auswahlfeld. Default (None) sind die drei allgemeinen Messgroessen
+        Spannung/Strom/Leistung (COND_FIELD_LABELS/-UNITS, wie bisher) --
+        eine microHIL-Lese-Aktion liefert aber nur EINEN Wert und bekommt
+        von testcase_tab.py entsprechend genau einen Eintrag uebergeben
+        (siehe open_check_dialog() dort), statt der drei Last/Netzteil-
+        Messgroessen, die dort keinen Sinn ergeben.
+
+        var_store_supported: nur bei einer microHIL-Lese-Aktion True (siehe
+        open_check_dialog()) -- blendet ein zusaetzliches Feld ein, um den
+        gelesenen Wert in eine Variable zu schreiben (nutzbar als
+        while/if-Bedingung, cond_source="variable"). Bewusst UNABHAENGIG vom
+        Enabled-Haken der Pass/Fail-Pruefung, da man einen Wert auch ohne
+        Bereichspruefung speichern koennen soll."""
         super().__init__(parent)
+        self._field_choices = field_choices or {
+            code: (COND_FIELD_LABELS[code], COND_FIELD_UNITS.get(code, "")) for code in COND_FIELD_LABELS
+        }
+        self._var_store_supported = var_store_supported
 
         layout = QVBoxLayout(self)
         self._form = QFormLayout()
@@ -71,6 +99,12 @@ class CheckDialog(QDialog):
         self._abort_check = QCheckBox()
         self._form.addRow(" ", self._abort_check)
         layout.addLayout(self._form)
+
+        self._var_edit = QLineEdit()
+        self._var_row_label = QLabel()
+        if self._var_store_supported:
+            self._var_edit.setPlaceholderText(tr("Variablenname"))
+            self._form.addRow(self._var_row_label, self._var_edit)
 
         self._arb_hint = QLabel()
         self._arb_hint.setWordWrap(True)
@@ -100,6 +134,7 @@ class CheckDialog(QDialog):
         self._min_spin.valueChanged.connect(self._update_state)
         self._max_spin.valueChanged.connect(self._update_state)
         self._abort_check.toggled.connect(self._update_state)
+        self._var_edit.textChanged.connect(self._update_state)
 
         self._load_params(params)
         self._on_field_changed()
@@ -111,8 +146,7 @@ class CheckDialog(QDialog):
         current = self._field_combo.currentData() if self._field_combo.count() else None
         self._field_combo.blockSignals(True)
         self._field_combo.clear()
-        for code, base in COND_FIELD_LABELS.items():
-            unit = COND_FIELD_UNITS.get(code, "")
+        for code, (base, unit) in self._field_choices.items():
             self._field_combo.addItem(f"{tr(base)} ({unit})" if unit else tr(base), code)
         index = self._field_combo.findData(current) if current else 0
         self._field_combo.setCurrentIndex(max(index, 0))
@@ -126,19 +160,26 @@ class CheckDialog(QDialog):
         self._form.labelForField(self._field_combo).setText(tr("Messgröße:"))
         self._form.labelForField(self._min_spin).setText(tr("Minimum:"))
         self._form.labelForField(self._max_spin).setText(tr("Maximum:"))
+        if self._var_store_supported:
+            self._var_row_label.setText(tr("In Variable speichern:"))
+            self._var_edit.setToolTip(
+                tr("Optional -- der gelesene Wert wird zusätzlich in dieser Variable abgelegt, nutzbar als Bedingung in einem späteren Solange/Wenn-Baustein.")
+            )
         self._arb_hint.setText(tr("Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen."))
         self._update_state()
 
     def _load_params(self, params: dict) -> None:
         self._enabled_check.setChecked(bool(params.get("enabled", False)))
-        field_index = self._field_combo.findData(params.get("field", "voltage"))
+        default_field = next(iter(self._field_choices))
+        field_index = self._field_combo.findData(params.get("field") or default_field)
         self._field_combo.setCurrentIndex(max(field_index, 0))
         self._min_spin.setValue(params.get("min", 0.0))
         self._max_spin.setValue(params.get("max", 0.0))
         self._abort_check.setChecked(bool(params.get("abort", False)))
+        self._var_edit.setText(params.get("store_var", ""))
 
     def _on_field_changed(self) -> None:
-        unit = COND_FIELD_UNITS.get(self._field_combo.currentData(), "")
+        unit = self._field_choices.get(self._field_combo.currentData(), ("", ""))[1]
         suffix = f" {unit}" if unit else ""
         self._min_spin.setSuffix(suffix)
         self._max_spin.setSuffix(suffix)
@@ -154,19 +195,23 @@ class CheckDialog(QDialog):
         self._warning_label.setVisible(invalid)
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not invalid)
 
+        store_var = self._var_edit.text().strip() if self._var_store_supported else ""
         if enabled:
             summary = check_summary(_params_to_step(self.params()))
             if self._abort_check.isChecked():
                 summary = f"{summary} {tr('(Abbruch)')}"
-            self._summary_label.setText(summary)
         else:
-            self._summary_label.setText(tr("Keine Prüfung"))
+            summary = tr("Keine Prüfung")
+        if store_var:
+            summary = f"{summary} → {store_var}"
+        self._summary_label.setText(summary)
 
     def params(self) -> dict:
         return dict(
             enabled=self._enabled_check.isChecked(),
-            field=self._field_combo.currentData() or "voltage",
+            field=self._field_combo.currentData() or next(iter(self._field_choices)),
             min=self._min_spin.value(),
             max=self._max_spin.value(),
             abort=self._abort_check.isChecked(),
+            store_var=self._var_edit.text().strip() if self._var_store_supported else "",
         )

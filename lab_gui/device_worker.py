@@ -132,7 +132,10 @@ class DeviceWorker(QObject):
     # abgeschaltet wurde.
     psu_output_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
-    action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
+    # fuer Testablauf-Schritte: success, error, gelesener Wert (nur bei einer
+    # microHIL-Lese-Aktion befuellt, siehe HIL_READ_ACTIONS/_dispatch_action;
+    # 0.0 bei allen anderen Aktionen ohne Bedeutung).
+    action_completed = Signal(bool, str, float)
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
     can_connected = Signal(str, bool)        # device_id, online
@@ -816,7 +819,7 @@ class DeviceWorker(QObject):
         den Abschluss warten kann (gleiches Muster wie execute_action/
         _dispatch_action fuer Last/Netzteil)."""
         ok, message = self._send_can(device_id, arbitration_id, data_hex, extended)
-        self.action_completed.emit(ok, message)
+        self.action_completed.emit(ok, message, 0.0)
 
     # -- microHIL: Steuerbefehle (siehe control_tab.HilControlGroup) ----------
     # Melden ihr _guard_hil-Ergebnis nicht zurueck, analog zu set_load_current/
@@ -850,35 +853,42 @@ class DeviceWorker(QObject):
 
     # -- Testablauf: generischer Dispatch fuer einen Testschritt -------------
 
-    @Slot(str, str, str, float)
-    def execute_action(self, device_id: str, kind: str, action: str, value: float) -> None:
-        ok, message = self._dispatch_action(device_id, kind, action, value)
-        self.action_completed.emit(ok, message)
+    @Slot(str, str, str, float, int)
+    def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
+        ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        self.action_completed.emit(ok, message, read_value)
 
-    def _dispatch_action(self, device_id: str, kind: str, action: str, value: float) -> tuple[bool, str]:
+    def _dispatch_action(
+        self, device_id: str, kind: str, action: str, value: float, channel: int
+    ) -> tuple[bool, str, float]:
         if kind == "load":
             if action in ("CURR", "VOLT", "RES", "POW"):
                 ok, message = self._guard_load(device_id, lambda load: load.set_function(action))
                 if not ok:
-                    return ok, message
+                    return ok, message, 0.0
                 setter_name = {
                     "CURR": "set_current",
                     "VOLT": "set_voltage",
                     "RES": "set_resistance",
                     "POW": "set_power",
                 }[action]
-                return self._guard_load(device_id, lambda load: getattr(load, setter_name)(value))
+                ok, message = self._guard_load(device_id, lambda load: getattr(load, setter_name)(value))
+                return ok, message, 0.0
             if action == "OUT_ON":
-                return self._guard_load(device_id, lambda load: load.set_input(True))
+                ok, message = self._guard_load(device_id, lambda load: load.set_input(True))
+                return ok, message, 0.0
             if action == "OUT_OFF":
-                return self._guard_load(device_id, lambda load: load.set_input(False))
-            return False, f"Unbekannte Aktion '{action}' fuer Last"
+                ok, message = self._guard_load(device_id, lambda load: load.set_input(False))
+                return ok, message, 0.0
+            return False, f"Unbekannte Aktion '{action}' fuer Last", 0.0
 
         if kind == "psu":
             if action == "PSU_VOLT":
-                return self._guard_psu(device_id, lambda psu: psu.set_voltage(value))
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_voltage(value))
+                return ok, message, 0.0
             if action == "PSU_CURR":
-                return self._guard_psu(device_id, lambda psu: psu.set_current(value))
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(value))
+                return ok, message, 0.0
             if action == "PSU_OUT_ON":
                 # Workaround (kein echtes Ausgang-Ein/Aus verfuegbar, siehe
                 # hcs34xx/README.md): reine Schaltaktion (siehe BUGS.md #17)
@@ -890,9 +900,53 @@ class DeviceWorker(QObject):
                     if current < 0.1:
                         psu.set_current(0.1)
 
-                return self._guard_psu(device_id, _output_on)
+                ok, message = self._guard_psu(device_id, _output_on)
+                return ok, message, 0.0
             if action == "PSU_OUT_OFF":
-                return self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
-            return False, f"Unbekannte Aktion '{action}' fuer Netzteil"
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
+                return ok, message, 0.0
+            return False, f"Unbekannte Aktion '{action}' fuer Netzteil", 0.0
 
-        return False, f"Unbekanntes Geraet '{kind}'"
+        if kind == "hil":
+            if action == "HIL_OUT_ON":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_output(channel, True))
+                return ok, message, 0.0
+            if action == "HIL_OUT_OFF":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_output(channel, False))
+                return ok, message, 0.0
+            if action == "HIL_RELAY_ON":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_relay(channel, True))
+                return ok, message, 0.0
+            if action == "HIL_RELAY_OFF":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_relay(channel, False))
+                return ok, message, 0.0
+            if action == "HIL_AOUT":
+                ok, message = self._guard_hil(
+                    device_id, lambda hil: hil.set_analog_output(channel, int(value))
+                )
+                return ok, message, 0.0
+            if action == "HIL_IN_READ":
+                # Mutable Zwischenspeicher statt Rueckgabewert, da die an
+                # _guard_hil uebergebene Aktion (siehe deren Signatur) nichts
+                # zurueckgeben kann -- dieselbe Technik wie ueberall sonst in
+                # dieser Methode fuer reine Set-Kommandos, hier aber mit dem
+                # zusaetzlichen Zweck, den GELESENEN Wert aus der Closure
+                # herauszutragen.
+                result: dict[str, bool] = {}
+
+                def _read_in(hil: MicroHIL) -> None:
+                    result["v"] = hil.get_input(channel)
+
+                ok, message = self._guard_hil(device_id, _read_in)
+                return ok, message, (1.0 if result.get("v") else 0.0)
+            if action == "HIL_AIN_READ":
+                result: dict[str, int] = {}
+
+                def _read_ain(hil: MicroHIL) -> None:
+                    result["v"] = hil.get_analog_input(channel)
+
+                ok, message = self._guard_hil(device_id, _read_ain)
+                return ok, message, float(result.get("v", 0))
+            return False, f"Unbekannte Aktion '{action}' fuer microHIL", 0.0
+
+        return False, f"Unbekanntes Geraet '{kind}'", 0.0

@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
     # aufgeloest wurde. Eigenes Signal statt direktem Methodenaufruf, damit die
     # Verbindung -- wie alle anderen Worker-Aufrufe -- ueber eine Queued
     # Connection korrekt in den Worker-Thread gelangt.
-    _dispatch_test_action = Signal(str, str, str, float)  # device_id, kind, action, value
+    _dispatch_test_action = Signal(str, str, str, float, int)  # device_id, kind, action, value, channel
     # device_id, arbitration_id, data (Hex-String), extended -- eigenes Signal
     # aus demselben Grund wie _dispatch_test_action (Queued Connection in den
     # Worker-Thread), siehe testcase_runner.TestRunner.execute_can_send.
@@ -679,17 +679,19 @@ class MainWindow(QMainWindow):
                     device_ids.add(resolved)
         return device_ids
 
-    def _on_test_execute_action(self, device_id: str, kind: str, action: str, value: float) -> None:
+    def _on_test_execute_action(
+        self, device_id: str, kind: str, action: str, value: float, channel: int
+    ) -> None:
         resolved_id, error = self._resolve_device_id(kind, device_id)
         if resolved_id is None:
-            self._test_runner.on_action_completed(False, error)
+            self._test_runner.on_action_completed(False, error, 0.0)
             return
-        self._dispatch_test_action.emit(resolved_id, kind, action, value)
+        self._dispatch_test_action.emit(resolved_id, kind, action, value, channel)
 
     def _on_test_execute_can_send(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
         resolved_id, error = self._resolve_device_id("can", device_id)
         if resolved_id is None:
-            self._test_runner.on_action_completed(False, error)
+            self._test_runner.on_action_completed(False, error, 0.0)
             return
         self._dispatch_test_can_send.emit(resolved_id, arbitration_id, data_hex, extended)
 

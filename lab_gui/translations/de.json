@@ -204,6 +204,8 @@
   "Messwert {value:g} {unit} außerhalb {lo:g}–{hi:g} {unit}": "Messwert {value:g} {unit} außerhalb {lo:g}–{hi:g} {unit}",
   "Unbekannte Messgröße '{field}'": "Unbekannte Messgröße '{field}'",
   "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.": "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.",
+  "In Variable speichern:": "In Variable speichern:",
+  "Optional -- der gelesene Wert wird zusätzlich in dieser Variable abgelegt, nutzbar als Bedingung in einem späteren Solange/Wenn-Baustein.": "Optional -- der gelesene Wert wird zusätzlich in dieser Variable abgelegt, nutzbar als Bedingung in einem späteren Solange/Wenn-Baustein.",
   "Fertig – BESTANDEN ({total} Prüfungen)": "Fertig – BESTANDEN ({total} Prüfungen)",
   "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)": "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)",
   "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",

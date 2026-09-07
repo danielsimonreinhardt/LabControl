@@ -7,6 +7,20 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Testablauf: microHIL-Lesewert in Variable speichern (für Solange/Wenn-Bedingungen).**
+  `HIL_IN_READ`/`HIL_AIN_READ`-Schritte im Testcase-Editor können den
+  gelesenen Wert jetzt zusätzlich in eine benannte Variable schreiben
+  (`TestStep.store_var`, neues Feld "In Variable speichern:" im
+  "Prüfung…"-Dialog, bewusst unabhängig vom Pass/Fail-Häkchen).
+  `testcase_runner.TestRunner` legt den Wert nach `on_action_completed` in
+  seinen Variablenspeicher (`self._vars`) ab, sodass er als Bedingung
+  (`cond_source="variable"`) in einem späteren Solange/Wenn-Baustein
+  genutzt werden kann -- Testabläufe können damit erstmals auf eine live
+  microHIL-Messung reagieren (verzweigen/loopen) statt nur linear bzw. mit
+  festen Werten zu laufen. Dafür musste `device_worker.py::_dispatch_action`
+  den gelesenen Wert überhaupt erst über `action_completed` zurückmelden
+  (neuer Kanal-Parameter + Rückgabewert für alle microHIL-Aktionen, vorher
+  nur `(bool, str)`).
 - **microHIL: bekannte Hardware-Defekte je Board ausblenden.** Die
   microHIL-Firmware liefert seit Kurzem eine eindeutige, aus der STM32-UID
   abgeleitete Board-ID über `*IDN?` (Feld `SN=...`, identisch mit der

@@ -130,6 +130,12 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     if step.action == "CAN_SEND":
         id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
         detail = f"ID {id_text}: {step.can_data or '–'}"
+    elif step.device_kind == "hil":
+        detail = (
+            tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)
+            if step.action == "HIL_AOUT"
+            else tr("Kanal {ch}", ch=step.hil_channel)
+        )
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)
