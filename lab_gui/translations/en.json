@@ -207,6 +207,8 @@
   "Messwert {value:g} {unit} außerhalb {lo:g}–{hi:g} {unit}": "Measured value {value:g} {unit} outside {lo:g}–{hi:g} {unit}",
   "Unbekannte Messgröße '{field}'": "Unknown measured quantity '{field}'",
   "Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen.": "For arbitrary-signal steps the value is measured after the signal ends.",
+  "In Variable speichern:": "Store in variable:",
+  "Optional -- der gelesene Wert wird zusätzlich in dieser Variable abgelegt, nutzbar als Bedingung in einem späteren Solange/Wenn-Baustein.": "Optional -- the value read is also stored in this variable, usable as a condition in a later While/If block.",
   "Fertig – BESTANDEN ({total} Prüfungen)": "Finished – PASSED ({total} checks)",
   "Fertig – NICHT bestanden ({failed}/{total} Prüfungen fehlgeschlagen)": "Finished – FAILED ({failed}/{total} checks failed)",
   "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Multiple devices of type '{kind}' connected -- please select the target device in the test case row",

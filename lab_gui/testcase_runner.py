@@ -64,6 +64,7 @@ from PySide6.QtCore import QElapsedTimer, QObject, QTimer, Signal, Slot
 from i18n import tr
 from testcase_model import (
     COND_FIELD_UNITS,
+    HIL_READ_ACTIONS,
     BlockMatch,
     TestStep,
     arb_value,
@@ -93,7 +94,11 @@ class _Frame:
 
 
 class TestRunner(QObject):
-    execute_action = Signal(str, str, str, float)  # device_id, device_kind, action, value
+    execute_action = Signal(str, str, str, float, int)  # device_id, device_kind, action, value, channel
+    # device_id, arbitration_id, data (Hex-String), extended -- eigener Signal-
+    # Pfad statt execute_action, da eine CAN-ID + Datenbytes nicht in dessen
+    # einzelnen float-Wert passen (siehe testcase_model.py: can_id/can_data).
+    execute_can_send = Signal(str, int, str, bool)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -148,6 +153,12 @@ class TestRunner(QObject):
         self._run_started = 0.0
         # device_id -> (voltage, current, power, monotonic-Zeitstempel).
         self._measurements: dict[str, tuple[float, float, float, float]] = {}
+        # Zuletzt von einer microHIL-Lese-Aktion (HIL_READ_ACTIONS) gelesener
+        # Wert -- anders als _measurements kein Cache mehrerer Geraete/Kanaele,
+        # da immer nur EIN Lese-Schritt gleichzeitig laufen kann und der Wert
+        # sofort (noch in derselben Ausfuehrung) durch _finish_step verbraucht
+        # wird (siehe dort).
+        self._last_hil_read_value = 0.0
 
     def is_running(self) -> bool:
         return self._running
@@ -205,8 +216,8 @@ class TestRunner(QObject):
     def on_device_removed(self, _kind: str, device_id: str) -> None:
         self._measurements.pop(device_id, None)
 
-    @Slot(bool, str)
-    def on_action_completed(self, success: bool, message: str) -> None:
+    @Slot(bool, str, float)
+    def on_action_completed(self, success: bool, message: str, value: float) -> None:
         if not self._running:
             return  # Ergebnis eines bereits gestoppten Laufs -- ignorieren
         if not success:
@@ -216,6 +227,13 @@ class TestRunner(QObject):
             self._continue_arb()
             return
         step = self._steps[self._index]
+        if step.device_kind == "hil" and step.action in HIL_READ_ACTIONS:
+            self._last_hil_read_value = value
+            if step.store_var:
+                # Macht die microHIL-Lesung als while/if-Bedingung nutzbar
+                # (dort cond_source="variable"), unabhaengig von der
+                # separaten Pass/Fail-Pruefung in _finish_step.
+                self._vars[step.store_var] = value
         self._wait_timer.start(max(0, round(step.duration * 1000)))
 
     def _fail_at(self, index: int, message: str) -> None:
@@ -237,6 +255,23 @@ class TestRunner(QObject):
             return
         step = self._steps[self._index]
         if not step.check_enabled:
+            self._advance()
+            return
+        if step.device_kind == "hil" and step.action in HIL_READ_ACTIONS:
+            # Der Wert kam mit der Aktion selbst (siehe on_action_completed),
+            # KEINE Messwert-Cache-Quelle wie bei Last/Netzteil -- also direkt
+            # auswerten statt eine "pending"-Pruefung auf die naechste
+            # eintreffende Messung zu armieren (die es fuer microHIL-Kanaele
+            # hier gar nicht gibt).
+            value = self._last_hil_read_value
+            passed = step.check_min <= value <= step.check_max
+            self.step_result.emit(self._index, passed, value)
+            if not passed and step.check_abort:
+                self._fail_at(
+                    self._index,
+                    tr("Messwert {value:g} außerhalb {lo:g}–{hi:g}", value=value, lo=step.check_min, hi=step.check_max),
+                )
+                return
             self._advance()
             return
         device_id = step.device_id
@@ -327,8 +362,12 @@ class TestRunner(QObject):
                 self.step_started.emit(self._index, step)
                 if is_arb_action(step.action):
                     self._start_arb(step)
+                elif step.action == "CAN_SEND":
+                    self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
                 else:
-                    self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value)
+                    self.execute_action.emit(
+                        step.device_id, step.device_kind, step.action, step.value, step.hil_channel
+                    )
                 return
 
             if t == "wait":
@@ -549,7 +588,7 @@ class TestRunner(QObject):
         step = self._steps[self._index]
         t = self._arb_clock.elapsed() / 1000.0
         value = arb_value(step, t)
-        self.execute_action.emit(step.device_id, step.device_kind, step.arb_target, value)
+        self.execute_action.emit(step.device_id, step.device_kind, step.arb_target, value, step.hil_channel)
 
     def _continue_arb(self) -> None:
         step = self._steps[self._index]

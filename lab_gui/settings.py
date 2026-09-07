@@ -28,6 +28,7 @@ class Settings(QObject):
     notifications_enabled_changed = Signal(bool)
     panel_colors_enabled_changed = Signal(bool)
     panel_color_changed = Signal(str, object)  # device_id, color_key (str | None)
+    can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label
 
     def __init__(self) -> None:
         super().__init__()
@@ -127,6 +128,22 @@ class Settings(QObject):
         self._data["panel_colors"] = colors
         self._save()
         self.panel_color_changed.emit(device_id, color_key)
+
+    @property
+    def can_configs(self) -> list[dict]:
+        """Konfigurierte CAN-Interfaces: [{interface, channel, bitrate, label}, ...].
+
+        Anders als bei Last/Netzteil gibt es fuer CAN keine Hotplug-
+        Autodiscovery (siehe can_bus/README.md) -- die Liste ist die einzige
+        Quelle, welche Interfaces device_worker.py ueberhaupt verbinden soll.
+        """
+        stored = self._data.get("can_configs")
+        return copy.deepcopy(stored) if isinstance(stored, list) else []
+
+    def set_can_configs(self, configs: list[dict]) -> None:
+        self._data["can_configs"] = copy.deepcopy(configs)
+        self._save()
+        self.can_configs_changed.emit(copy.deepcopy(configs))
 
     @property
     def language(self) -> str:

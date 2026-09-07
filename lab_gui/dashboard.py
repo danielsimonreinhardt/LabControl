@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
+from microhil_panel import MicroHilPanel
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
@@ -46,9 +47,12 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "current": ("Strom", "A"),
     "power": ("Leistung", "W"),
     "mode": ("Modus", ""),
+    "tx_count": ("Gesendet", ""),
+    "rx_count": ("Empfangen", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
+CAN_FIELD_KEYS = ["tx_count", "rx_count"]
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
 # Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md
 # "Bekannte Eigenheiten"), MockKoradKEL102 dagegen den SET-Code aus
@@ -61,11 +65,11 @@ LOAD_MODE_SHORT: dict[str, str] = {
     "POW": "CW", "CW": "CW",
     "SHORT": "SHORT",
 }
-KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil"}
+KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
-KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline"}
+KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip"}
 
 # "Verbindung getrennt"-Badge oben rechts im Panel, siehe
 # _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
@@ -87,6 +91,8 @@ FIELD_ICONS: dict[str, str] = {
     "current": "mdi.current-dc",
     "power": "mdi.gauge",
     "mode": "mdi.swap-horizontal-bold",
+    "tx_count": "mdi.upload-outline",
+    "rx_count": "mdi.download-outline",
 }
 
 
@@ -528,8 +534,15 @@ class DashboardWidget(QGroupBox):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
-            field_keys = LOAD_FIELD_KEYS if kind == "load" else PSU_FIELD_KEYS
-            panel = _DevicePanel(kind, device_id, label, field_keys)
+            if kind == "hil":
+                # Eigenstaendiges Panel statt des generischen FIELD_DEFS-
+                # Schemas (siehe microhil_panel.py-Modul-Docstring) -- 4
+                # Relais/8+8 Digital-IO/4+2 Analog-IO/2x12V-OUT passen nicht
+                # in eine einzelne Werteliste.
+                panel = MicroHilPanel(device_id, label)
+            else:
+                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
+                panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
             panel.hide()
@@ -584,6 +597,14 @@ class DashboardWidget(QGroupBox):
     def set_psu_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    @Slot(str, bool)
+    def set_can_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    @Slot(str, bool)
+    def set_hil_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
     def _set_online(self, device_id: str, online: bool) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
@@ -611,6 +632,14 @@ class DashboardWidget(QGroupBox):
         panel.set_value("current", f"{current:.2f}")
         panel.set_value("mode", "CC" if constant_current else "CV")
 
+    @Slot(str, int, int)
+    def update_can(self, device_id: str, tx_count: int, rx_count: int) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_value("tx_count", str(tx_count))
+        panel.set_value("rx_count", str(rx_count))
+
     @Slot(str, str)
     def set_load_mode(self, device_id: str, function_code: str) -> None:
         panel = self._panels.get(device_id)
@@ -618,3 +647,51 @@ class DashboardWidget(QGroupBox):
             return
         code = function_code.upper()
         panel.set_value("mode", LOAD_MODE_SHORT.get(code, code))
+
+    # -- microHIL --------------------------------------------------------------
+    # Eigene Slots statt set_value()/update_load()-artiger Weiterleitung: das
+    # MicroHilPanel hat kein FIELD_DEFS-Schema, siehe dessen Modul-Docstring.
+    # panel.get(device_id) liefert hier immer ein MicroHilPanel (oder None,
+    # falls das Geraet noch kein device_known durchlaufen hat) -- device_worker.
+    # py emittiert die hil_*-Signale ausschliesslich fuer kind="hil".
+
+    @Slot(str, list, list)
+    def update_hil_digital(self, device_id: str, inputs: list, outputs: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_inputs(inputs)
+        panel.update_outputs(outputs)
+
+    @Slot(str, list)
+    def update_hil_relays(self, device_id: str, relays: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_relays(relays)
+
+    @Slot(str, list)
+    def update_hil_analog_in(self, device_id: str, values_mv: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_analog_in(values_mv)
+
+    @Slot(str, list, list)
+    def update_hil_pwr12(self, device_id: str, enabled: list, current_sense_mv: list) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.update_pwr12(enabled, current_sense_mv)
+
+    @Slot(str, int, int)
+    def set_hil_analog_out(self, device_id: str, channel: int, millivolts: int) -> None:
+        """Zeigt den im Control-Tab (control_tab.HilControlGroup) zuletzt
+        angewendeten AOUT-Sollwert an -- direkt am DeviceWorker/Poll-Zyklus
+        vorbei verdrahtet (siehe main_window._on_control_section_created,
+        kind=="hil"), da es fuer AOUT kein `AOUT?`-Kommando zum Zuruecklesen
+        gibt (siehe microhil_panel.MicroHilPanel.set_analog_out_value())."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_analog_out_value(channel, millivolts)

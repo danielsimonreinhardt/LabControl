@@ -7,6 +7,170 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Testablauf: microHIL-Lesewert in Variable speichern (für Solange/Wenn-Bedingungen).**
+  `HIL_IN_READ`/`HIL_AIN_READ`-Schritte im Testcase-Editor können den
+  gelesenen Wert jetzt zusätzlich in eine benannte Variable schreiben
+  (`TestStep.store_var`, neues Feld "In Variable speichern:" im
+  "Prüfung…"-Dialog, bewusst unabhängig vom Pass/Fail-Häkchen).
+  `testcase_runner.TestRunner` legt den Wert nach `on_action_completed` in
+  seinen Variablenspeicher (`self._vars`) ab, sodass er als Bedingung
+  (`cond_source="variable"`) in einem späteren Solange/Wenn-Baustein
+  genutzt werden kann -- Testabläufe können damit erstmals auf eine live
+  microHIL-Messung reagieren (verzweigen/loopen) statt nur linear bzw. mit
+  festen Werten zu laufen. Dafür musste `device_worker.py::_dispatch_action`
+  den gelesenen Wert überhaupt erst über `action_completed` zurückmelden
+  (neuer Kanal-Parameter + Rückgabewert für alle microHIL-Aktionen, vorher
+  nur `(bool, str)`).
+- **microHIL: bekannte Hardware-Defekte je Board ausblenden.** Die
+  microHIL-Firmware liefert seit Kurzem eine eindeutige, aus der STM32-UID
+  abgeleitete Board-ID über `*IDN?` (Feld `SN=...`, identisch mit der
+  bereits vorhandenen USB-Seriennummer, aus der `device_worker.py` die
+  `device_id` `"hil:<serial>"` bildet). `microhil/driver.py` bekommt eine
+  neue Registry `KNOWN_HARDWARE_DEFECTS`/`defects_for_device_id()` (Quelle:
+  `docs/hardware-notes.md` im microHIL-Repo) -- `control_tab.HilControlGroup`
+  deaktiviert damit den PWR12-1-Schalter+Strombegrenzung für das aktuell
+  betroffene Board (defekter Verpolschutz-MOSFET, liefert 0V), und
+  `microhil_panel.MicroHilPanel` markiert die CURR1/CURR2-Anzeige (beide
+  Ansichten) als "n/v" statt einen bekannt unzuverlässigen Messwert zu
+  zeigen. Ein anderes microHIL-Board (andere Seriennummer) ist davon nicht
+  betroffen. `MicroHIL.get_serial()` neu in `microhil/driver.py`.
+- **CAN-Bus-Unterstützung** (Vector CANcase XL, PEAK PCAN-USB): neuer,
+  vendor-unabhängiger Treiber `can_bus/` (`driver.py::CanBus` wrapt
+  `python-can`, `interface="vector"`/`"pcan"` je nach Hersteller-Treiber
+  -- Vector XL Driver Library bzw. PCAN-Basic müssen separat installiert
+  sein; `mock.py::MockCanBus` für den Simulationsmodus). CAN-Interfaces
+  werden anders als Last/Netzteil nicht automatisch erkannt (kein
+  sicheres Identify ohne bekannte Bitrate) -- stattdessen im
+  Einstellungen-Tab explizit konfiguriert (Interface-Typ/Kanal/Bitrate,
+  Kanalsuche über `CanBus.discover_configs()`), `settings.py::can_configs`
+  persistiert. Neue Dashboard-Kachel (gesendete/empfangene Frames) und
+  Control-Tab-Sektion (`CanControlGroup`: Frame senden + Live-Traffic-
+  Tabelle) nach demselben Muster wie Last/Netzteil. Testablauf-
+  Integration: neue Aktion "CAN-Frame senden" (`CAN_SEND`) mit eigenem
+  Dialog (`can_frame_dialog.py::CanFrameDialog` für Arbitration-ID/
+  Daten-Bytes/Extended-Flag, analog `signal_dialog.py` für
+  Arbiträrsignale) und eigenem Signal-Pfad in `device_worker.py`/
+  `testcase_runner.py` (eine CAN-ID + Datenbytes passen nicht in den
+  normalen float-Wertkanal der übrigen Aktionen). Sicherheits-Watchdog
+  (`safety.py`) bekommt einen CAN-Heartbeat (`on_can_stats`), damit ein in
+  einem Testlauf verwendetes CAN-Interface nicht fälschlich als
+  "veraltet" abgebrochen wird (CAN hat keine U/I/P-Messwerte). DBC-
+  Signaldecodierung und ein "auf CAN-Frame warten"-Prüfschritt sind
+  bewusst zurückgestellt (siehe [FEATURES.md](FEATURES.md) Punkt 3).
+- **microHIL-Treiber** (`microhil/driver.py::MicroHIL`): neuer Treiber für
+  das eigene STM32F446-Test-/HIL-Gerät (4 Relais, 8 Digitalausgänge,
+  8 Digitaleingänge, 4 Analogeingänge, 2 Analogausgänge, 2 schaltbare
+  12V-Ausgänge mit Stromsense, 4 PWM-Kanäle) über dessen USB-CDC-
+  Kommandoprotokoll. Bewusst als Test dafür geschrieben, ob die microHIL-
+  Protokolldoku allein für eine unabhängige Treiber-Implementierung
+  ausreicht -- entstanden ohne Zugriff auf den Firmware-Quellcode, nur
+  aus `docs/protocol.md`/`docs/can-usb.md` des microHIL-Repos. Größte
+  Abweichung vom bisherigen Treiber-Schema (hcs34xx/korad_kel102): das
+  Gerät meldet sich als USB-Composite-Device mit zwei COM-Ports gleicher
+  VID:PID (HIL-Protokoll + separates CAN1/SLCAN-Interface, letzteres
+  bewusst außerhalb dieses Treibers, siehe `can_bus/driver.py`) --
+  `discover()` unterscheidet beide über die aus `ListPortInfo`
+  extrahierte USB-Interface-Nummer, mit Fallback für Ports ohne
+  bestimmbare Kennung (auf reale hwid-Strings dieses Geräts verifiziert).
+  `AOUT`/`PWM` klemmen einen außerhalb des gültigen Bereichs liegenden
+  Wert firmwareseitig statt ihn abzulehnen -- der Treiber klemmt deshalb
+  client-seitig mit, damit der intern sichtbare Sollwert stimmt.
+  **Nicht** gegen echte Hardware verifiziert (kein Gerät verfügbar) und
+  **nicht** in `device_worker.py`/Dashboard/Testablauf eingebunden --
+  eigenständiges Modul wie die übrigen Treiber, GUI-Integration und
+  `mock.py` folgen bei Bedarf.
+- **microHIL: Mock-Treiber und Dashboard-Kachel** (`microhil/mock.py`,
+  `lab_gui/microhil_panel.py::MicroHilPanel`): `MockMicroHIL` bildet
+  dieselbe Schnittstelle wie `MicroHIL` nach (analog zu hcs34xx/
+  korad_kel102), inkl. der PWM/OUT1-4-Verriegelung, für GUI-Tests ohne
+  Hardware. `MicroHilPanel` ist eine eigenständige Dashboard-Kachel statt
+  eine Erweiterung von `dashboard._DevicePanel` -- dessen generisches
+  FIELD_DEFS/QFormLayout-Schema (eine Werteliste) passt nicht auf 4
+  Relais + 8 Digitalein-/-ausgänge + 4 Analogeingänge + 2 Analogausgänge +
+  2 schaltbare 12V-Ausgänge. Vier Bereiche (Digital IO, Analog IO,
+  Relais, 12V-OUT) untereinander mit Trennlinien, Bit-Zustände als
+  nummerierte LED-Punkte (qtawesome `mdi.circle`/`mdi.circle-outline`,
+  Farbe `Palette.check_pass`/`text_muted`). PWM bewusst nicht auf dem
+  Dashboard (Sollwert/Steuerelement, kein Ist-Zustand -- Kandidat für
+  einen künftigen Control-Tab-Abschnitt). Visuell per
+  `tools/preview_microhil_panel.py` (rendert die Kachel offscreen mit
+  Beispielwerten in beiden Themes + im getrennten Zustand) geprüft, u.a.
+  einen anfänglichen Bug gefunden und behoben: die Bereichs-Überschriften
+  saßen direkt im QVBoxLayout statt in einem `no_own_background()`-
+  Wrapper und zeigten deshalb einen sichtbaren Seitenhintergrund-Balken
+  quer durchs Panel (derselbe Fehlerklasse wie BUGS_GESCHLOSSEN.md #8).
+  Im 12V-OUT-Bereich trennt ein zusätzliches Strom-Icon (`mdi.current-dc`,
+  dieselbe Ikonografie wie `dashboard.FIELD_ICONS["current"]`) den
+  Schaltzustand optisch von der Stromangabe. Deren Einheit steht dort
+  auf ausdrücklichen Wunsch bereits als "mA", **obwohl**
+  `driver.get_current_sense_mv()` nach wie vor nur die rohe Sense-Spannung
+  in mV liefert (Umrechnungsfaktor fehlt noch in der Firmware, siehe
+  microHIL-Roadmap) -- der angezeigte Zahlenwert ist bis zur
+  Firmware-Umrechnung also weiterhin die mV-Zahl, nur mit "mA"
+  beschriftet. Bei der GUI-Integration unbedingt korrigieren, sobald die
+  Firmware echte mA liefert (siehe Kommentar in `_Pwr12Row`).
+  `MicroHilPanel.set_compact()` schaltet zusätzlich auf eine Kompaktansicht
+  um: erst ein 2x2-Raster (oben links Digital IO, unten links Analog IO,
+  oben rechts Relais, unten rechts 12V-OUT), nach Rückmeldung ("immer noch
+  deutlich höher als die Last-/Netzteil-Kompaktansicht") durch eine
+  einzeilige Anordnung ersetzt: alle Bereiche NEBENEINANDER statt gestapelt
+  (halbiert die Höhe auf 80px, war beim 2x2-Raster noch 182px). Relais und
+  12V-OUT zu einer Gruppe zusammengefasst (Absprache -- beide klein genug,
+  4 bzw. 2 Kanäle, um keine eigene Spalte mehr zu rechtfertigen), Analog IO
+  (AIN+AOUT) in eine einzige Zeile geflacht. Digital IO bleibt als einzige
+  Ausnahme zweizeilig (IN + OUT übereinander, 16 Einzel-Bits passen nicht
+  sinnvoll in eine Zeile) und bestimmt damit die Zeilenhöhe. Kompakt- und
+  Normalansicht nutzen dabei eigene Widget-Instanzen (ein Qt-Widget kann
+  nur in einem Layout gleichzeitig haengen), alle `update_*()`-Methoden
+  füllen deshalb beide Sätze gleichzeitig -- dasselbe Duplizierungsprinzip
+  wie bei `dashboard._DevicePanel`s Normal-/Kompaktwerten.
+  **Jetzt an `device_worker.py`/`DashboardWidget`/`device_registry.py`
+  angeschlossen** (kind "hil"): `DeviceWorker._reconnect_hils()` findet den
+  microHIL über `MicroHIL.discover()` (unterstützt bewusst nur EIN Gerät
+  gleichzeitig -- Eigenentwicklung ohne Mehrfacheinsatz vorgesehen, siehe
+  Kommentar dort), `_poll_hil()` fragt Digital-/Analog-/Relais-/12V-OUT-
+  Zustand ab und meldet ihn über neue `hil_*`-Signale ans Dashboard.
+  Eigener, langsamerer Poll-Timer (`HIL_POLL_INTERVAL_MS` = 1s statt der
+  100ms von Last/Netzteil/CAN): ein voller microHIL-Zyklus braucht bis zu
+  ~135ms (21 Kommandos, 6 davon mit ~10ms ADC-Latenz) und hätte im
+  gemeinsamen 100ms-Takt die Abfrage aller anderen Geräte spürbar
+  verlangsamt. AOUT1/2 bleiben bewusst bei "--" (kein `AOUT?`-Kommando zum
+  Zurücklesen). `control_tab.on_device_known()` überspringt kind=="hil"
+  explizit -- ohne diesen Guard hätte der bestehende else-Zweig (nur
+  load/psu unterschieden, alles andere als CAN behandelt) fälschlich eine
+  `CanControlGroup` für den microHIL angelegt. `MicroHilPanel.
+  set_panel_color()` ergänzt, weil `DashboardWidget.set_panel_colors_enabled()`
+  diese Methode unterschiedslos auf jedem Panel aufruft. Gegen ein
+  angeschlossenes reales Gerät verifiziert (`*IDN?` → "microHIL,fw=0.1.0"),
+  dabei nebenbei live bestätigt, warum die mA-Beschriftung oben mit Vorsicht
+  zu genießen ist: bei BEIDEN 12V-OUT-Kanälen ausgeschaltet zeigte die
+  Stromsense trotzdem ~400 "mA" (tatsächlich mV Rauschen einer floatenden
+  ADC-Leitung) an.
+  Kompaktansicht weiter verdichtet (Absprache): Analog IO (AIN+AOUT) UND
+  die zu einer Gruppe zusammengefassten Relais+12V-OUT sitzen jetzt
+  jeweils in einem 3x2-Raster statt einer einzeiligen Zeile -- spart
+  Breite, ohne die Zeilenhöhe zu erhöhen, die ohnehin schon Digital IO
+  vorgibt (`_ValueGrid(columns=3)` bzw. neu `_RelayPwr12Grid`: Relais 1-3
+  in Zeile 1, Relais 4 + der komplette `_Pwr12Row` in Zeile 2 -- als zwei
+  einfache Zeilen statt eines `QGridLayout` mit spaltenübergreifendem
+  Widget, weil Qt dessen benötigte Breite nicht zuverlässig gleichmäßig
+  auf die überspannten Spalten verteilt, siehe Kommentar in
+  `_RelayPwr12Grid`). Beim Verifizieren dabei einen echten Bug in der
+  Verdrahtung gefunden und behoben: `DeviceWorker._reconnect_hils()` fing
+  nur `HilError` ab, `MicroHIL(port)` kann beim Öffnen des seriellen
+  Ports aber auch pyserials rohe `SerialException`
+  (`OSError`-Unterklasse) werfen (z. B. Port durch eine zweite
+  App-Instanz belegt) -- ungefangen riss das den kompletten
+  `_try_reconnect()`-Zyklus ab und verhinderte damit auch die
+  Wiederverbindung von Last/Netzteil/CAN im selben Tick (an echter
+  Hardware reproduziert: zweiter App-Prozess gegen dieselbe COM6). Jetzt
+  wie ein `HilError` behandelt (loggen, überspringen, nächster
+  `RECONNECT_INTERVAL_MS`-Tick versucht es erneut). Derselbe
+  Codepfad-Musterfehler (`serial.Serial()` ungefangen in
+  `HCS34xx.__init__`/`KoradKEL102.__init__`, nur die jeweilige
+  `PowerSupplyError`/`LoadError` in `_reconnect_psus`/`_reconnect_loads`
+  abgefangen) besteht vermutlich auch dort, aber unangetastet gelassen
+  -- ausserhalb des microHIL-Verdrahtungsauftrags.
 - **Baustein-Kopfzeile mit eigener Unternummerierung und Zusammenfassung**:
   Die Kopfzeile eines per "Baustein einfügen" hinzugefügten Bausteins zählt
   in der Spalte "#" jetzt normal in der Hauptsequenz mit, während die dazu

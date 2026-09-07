@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from block_dialog import SaveBlockDialog
+from can_frame_dialog import CanFrameDialog
 from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
@@ -47,9 +48,15 @@ from theme import current as current_palette
 from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
+    COND_FIELD_UNITS,
     CONTROL_STEP_LABELS,
     DEVICE_ACTIONS,
     DEVICE_KIND_LABELS,
+    HIL_CHANNEL_COUNTS,
+    HIL_CHECK_FIELD_LABELS,
+    HIL_READ_ACTIONS,
+    HIL_READ_CHECK_FIELD,
+    MEASUREMENT_DEVICE_KINDS,
     STEP_TYPE_ACTION,
     VALUELESS_ACTIONS,
     TestStep,
@@ -104,6 +111,7 @@ def _check_params_to_step(params: dict) -> TestStep:
         check_min=params["min"],
         check_max=params["max"],
         check_abort=params["abort"],
+        store_var=params.get("store_var", ""),
     )
 
 # Deutsche Basis-Anzeigenamen (Uebersetzungsschluessel) der Spaltenkoepfe.
@@ -672,9 +680,11 @@ class TestcaseTab(QWidget):
         testcase_tab._device_key/_parse_device_key haben soll."""
         items = [
             (tr("{kind} (automatisch)", kind=kind_label(kind)), kind, "")
-            for kind in DEVICE_KIND_LABELS
+            for kind in MEASUREMENT_DEVICE_KINDS
         ]
         for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
+            if kind not in MEASUREMENT_DEVICE_KINDS:
+                continue
             items.append((f"{label} ({kind_label(kind)})", kind, device_id))
         return items
 
@@ -814,7 +824,12 @@ class TestcaseTab(QWidget):
         arb_layout.addWidget(arb_button)
         arb_page._params = dict(
             shape=step.arb_shape,
-            target=step.arb_target or ARB_TARGETS[step.device_kind][0],
+            # ARB_TARGETS kennt kein "can" (CAN_SEND ist kein Arbiträrsignal-
+            # Ziel, siehe testcase_model.ARB_ACTIONS) -- Fallback-Leerstring
+            # hier nur, damit arb_page._params fuer JEDE Geraeteart befuellt
+            # werden kann (siehe on_action_changed: Seite bleibt fuer diese
+            # Aktion einfach unsichtbar/ungenutzt).
+            target=step.arb_target or ARB_TARGETS.get(step.device_kind, [""])[0],
             amplitude=step.arb_amplitude,
             offset=step.arb_offset,
             frequency=step.arb_frequency,
@@ -822,9 +837,46 @@ class TestcaseTab(QWidget):
             duty=step.arb_duty,
         )
 
+        can_page = QWidget()
+        can_layout = QHBoxLayout(can_page)
+        can_layout.setContentsMargins(2, 0, 2, 0)
+        can_summary_label = QLabel()
+        can_summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+        can_button = IconButton("mdi.card-bulleted-outline", tr("CAN-Frame definieren…"))
+        can_layout.addWidget(can_summary_label, 1)
+        can_layout.addWidget(can_button)
+        can_page._params = dict(id=step.can_id, data=step.can_data, extended=step.can_extended)
+
+        # microHIL: Kanalauswahl (siehe testcase_model.HIL_CHANNEL_COUNTS) +
+        # eigene Wert-Spinbox statt der normalen `value_spin` -- eine
+        # microHIL-Aktion bezieht sich immer auf einen von mehreren
+        # gleichartigen Kanaelen (8x OUT, 4x RELAIS, ...), waehrend
+        # `value_spin` (Seite 0) bei Last/Netzteil ein einzelnes Geraet ohne
+        # Kanalwahl adressiert. Nur bei HIL_AOUT traegt der Schritt
+        # ueberhaupt einen Zahlenwert (siehe VALUELESS_ACTIONS) -- die
+        # Wert-Spinbox bleibt bei allen anderen HIL-Aktionen einfach
+        # deaktiviert, analog zu `value_spin` bei einer valuelosen Aktion.
+        hil_page = QWidget()
+        hil_layout = QHBoxLayout(hil_page)
+        hil_layout.setContentsMargins(2, 0, 2, 0)
+        hil_channel_label = QLabel(tr("Kanal"))
+        hil_channel_spin = SteppedSpinBox(small_step=1, large_step=1)
+        hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(step.action, 8))
+        hil_channel_spin.setValue(max(1, step.hil_channel))
+        hil_value_spin = SteppedDoubleSpinBox(small_step=1.0, large_step=50.0)
+        hil_value_spin.setDecimals(0)
+        hil_value_spin.setValue(step.value)
+        hil_layout.addWidget(hil_channel_label)
+        hil_layout.addWidget(hil_channel_spin)
+        hil_layout.addWidget(hil_value_spin, 1)
+        hil_page._channel_spin = hil_channel_spin
+        hil_page._value_spin = hil_value_spin
+
         value_stack = QStackedWidget()
-        value_stack.addWidget(value_spin)  # Index 0: normaler Zahlenwert
-        value_stack.addWidget(arb_page)    # Index 1: Arbiträrsignal-Zusammenfassung + Button
+        value_stack.addWidget(value_spin)   # Index 0: normaler Zahlenwert
+        value_stack.addWidget(arb_page)     # Index 1: Arbiträrsignal-Zusammenfassung + Button
+        value_stack.addWidget(can_page)     # Index 2: CAN-Frame-Zusammenfassung + Button
+        value_stack.addWidget(hil_page)     # Index 3: microHIL Kanal + Wert
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -854,25 +906,45 @@ class TestcaseTab(QWidget):
             min=step.check_min,
             max=step.check_max,
             abort=step.check_abort,
+            store_var=step.store_var,
         )
 
         def refresh_check_summary() -> None:
             params = check_page._check_params
+            store_var = params.get("store_var", "")
             if not params["enabled"]:
-                check_summary_label.setText("–")
-                return
-            summary = check_summary(_check_params_to_step(params))
-            if params["abort"]:
-                summary = f"{summary} {tr('(Abbruch)')}"
+                summary = "–" if not store_var else tr("Keine Prüfung")
+            else:
+                summary = check_summary(_check_params_to_step(params))
+                if params["abort"]:
+                    summary = f"{summary} {tr('(Abbruch)')}"
+            if store_var:
+                summary = f"{summary} → {store_var}"
             check_summary_label.setText(summary)
 
         check_page._refresh_summary = refresh_check_summary
         refresh_check_summary()
 
         def open_check_dialog() -> None:
+            code = action_combo.currentData() or ""
+            field_choices = None
+            field_code = HIL_READ_CHECK_FIELD.get(code)
+            if field_code is not None:
+                # Nur der eine Wert, den HIL_AIN_READ/HIL_IN_READ tatsaechlich
+                # liefern -- die drei generischen Last/Netzteil-Messgroessen
+                # (Default in CheckDialog) waeren hier bedeutungslos.
+                unit = COND_FIELD_UNITS.get(field_code, "")
+                field_choices = {field_code: (HIL_CHECK_FIELD_LABELS[field_code], unit)}
+            # Nur eine microHIL-Lese-Aktion liefert ueberhaupt einen Wert, der
+            # sich sinnvoll in eine Variable schreiben laesst (siehe
+            # testcase_runner.on_action_completed) -- Last/Netzteil haben
+            # keinen entsprechenden Mechanismus.
+            var_store_supported = current_kind() == "hil" and code in HIL_READ_ACTIONS
             dialog = CheckDialog(
                 check_page._check_params,
-                is_arb=is_arb_action(action_combo.currentData() or ""),
+                is_arb=is_arb_action(code),
+                field_choices=field_choices,
+                var_store_supported=var_store_supported,
                 parent=self,
             )
             if dialog.exec() == CheckDialog.DialogCode.Accepted:
@@ -948,6 +1020,23 @@ class TestcaseTab(QWidget):
 
         arb_button.clicked.connect(open_signal_dialog)
 
+        def refresh_can_summary() -> None:
+            params = can_page._params
+            id_text = f"0x{params['id']:X}" if params["extended"] else f"0x{params['id']:03X}"
+            data = params["data"] or "–"
+            can_summary_label.setText(f"ID {id_text}: {data}")
+
+        can_page._refresh_summary = refresh_can_summary
+        refresh_can_summary()
+
+        def open_can_dialog() -> None:
+            dialog = CanFrameDialog(can_page._params, parent=self)
+            if dialog.exec() == CanFrameDialog.DialogCode.Accepted:
+                can_page._params = dialog.params()
+                refresh_can_summary()
+
+        can_button.clicked.connect(open_can_dialog)
+
         def on_action_changed(index: int) -> None:
             kind = current_kind()
             code = action_combo.itemData(index) or ""
@@ -960,8 +1049,26 @@ class TestcaseTab(QWidget):
                     arb_page._params["target"] = ARB_TARGETS[kind][0]
                 refresh_arb_summary()
                 value_stack.setCurrentIndex(1)
+            elif code == "CAN_SEND":
+                refresh_can_summary()
+                value_stack.setCurrentIndex(2)
+            elif kind == "hil":
+                hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(code, 8))
+                hil_value_spin.setSuffix(f" {unit}" if unit else "")
+                hil_value_spin.setRange(lo, hi)
+                hil_value_spin.setEnabled(code not in VALUELESS_ACTIONS)
+                value_stack.setCurrentIndex(3)
             else:
                 value_stack.setCurrentIndex(0)
+            # Pass/Fail-Pruefung setzt eine Messung voraus, die der Runner
+            # sofort (Lese-Aktion) oder ueber den Poll-Zyklus (Last/Netzteil,
+            # siehe MEASUREMENT_DEVICE_KINDS) bekommt -- fuer alle anderen
+            # Aktionen (CAN_SEND, HIL-Schaltaktionen) gibt es keine Quelle
+            # dafuer; _finish_step wuerde sonst 2s auf eine nie eintreffende
+            # Messung warten und den GESAMTEN Testlauf mit "keine aktuelle
+            # Messung" abbrechen (siehe testcase_runner.MEASUREMENT_STALE_S).
+            checkable = kind in MEASUREMENT_DEVICE_KINDS or (kind == "hil" and code in HIL_READ_ACTIONS)
+            check_button.setEnabled(checkable)
             refresh_value_warning()
 
         device_combo.currentIndexChanged.connect(lambda _=None: refresh_value_warning())
@@ -1634,6 +1741,8 @@ class TestcaseTab(QWidget):
         value_stack: QStackedWidget = self._table.cellWidget(row, COL_VALUE)
         value_spin: QDoubleSpinBox = value_stack.widget(0)
         arb_page: QWidget = value_stack.widget(1)
+        can_page: QWidget = value_stack.widget(2)
+        hil_page: QWidget = value_stack.widget(3)
         duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
         check_page = self._table.cellWidget(row, COL_CHECK)
         enabled_container = self._table.cellWidget(row, COL_ENABLED)
@@ -1642,12 +1751,17 @@ class TestcaseTab(QWidget):
         kind, device_id = _parse_device_key(device_combo.currentData())
         action_code = action_combo.currentData() or ""
         params = arb_page._params
+        can_params = can_page._params
         check_params = check_page._check_params
+        # microHIL-Aktionen tragen ihren Wert (nur HIL_AOUT) in der eigenen
+        # hil_page-Spinbox statt in value_spin (siehe _build_action_row).
+        value = hil_page._value_spin.value() if kind == "hil" else value_spin.value()
         return TestStep(
             device_kind=kind,
             device_id=device_id,
             action=action_code,
-            value=value_spin.value(),
+            value=value,
+            hil_channel=hil_page._channel_spin.value(),
             duration=duration_spin.value(),
             enabled=enabled_check.isChecked(),
             arb_shape=params["shape"],
@@ -1657,11 +1771,15 @@ class TestcaseTab(QWidget):
             arb_frequency=params["frequency"],
             arb_interval_ms=params["interval_ms"],
             arb_duty=params.get("duty", 0.5),
+            can_id=can_params["id"],
+            can_data=can_params["data"],
+            can_extended=can_params["extended"],
             check_enabled=check_params["enabled"],
             check_field=check_params["field"],
             check_min=check_params["min"],
             check_max=check_params["max"],
             check_abort=check_params["abort"],
+            store_var=check_params.get("store_var", ""),
         )
 
     def _control_row_to_step(self, row: int, step_type: str) -> TestStep:
@@ -2000,6 +2118,14 @@ class TestcaseTab(QWidget):
                 frequency=step.arb_frequency,
                 duration=step.duration,
             )
+        elif step.action == "CAN_SEND":
+            id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
+            detail = f"ID {id_text}: {step.can_data or '–'}"
+        elif step.device_kind == "hil":
+            if step.action == "HIL_AOUT":
+                detail = tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)
+            else:
+                detail = tr("Kanal {ch}", ch=step.hil_channel)
         else:
             detail = f"{step.value}"
         self._set_status(

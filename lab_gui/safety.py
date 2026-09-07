@@ -137,6 +137,19 @@ class SafetyMonitor(QObject):
         self._last_seen[device_id] = time.monotonic()
         self._check("load", device_id, {"voltage": voltage, "current": current, "power": power})
 
+    @Slot(str, int, int)
+    def on_can_stats(self, device_id: str, _tx_count: int, _rx_count: int) -> None:
+        """Heartbeat fuer die Verbindungsueberwachung (siehe _check_stale) --
+        CAN hat keine U/I/P-Messwerte und daher keine SAFETY_LIMIT_FIELDS-
+        Eintraege, aber ohne diesen Aufruf wuerde ein waehrend eines
+        Testlaufs per CAN_SEND-Schritt supervisiertes Interface (siehe
+        main_window._resolve_step_device_ids) nach STALE_TIMEOUT_S faelschlich
+        als "veraltet" abgebrochen, obwohl es einwandfrei laeuft -- device_
+        worker.py emittiert can_stats bei jedem Poll-Zyklus, auch ohne neue
+        Frames (siehe dessen Docstring), genau wie load_measurement/
+        psu_measurement."""
+        self._last_seen[device_id] = time.monotonic()
+
     @Slot(str, float, float, bool)
     def on_psu_measurement(
         self, device_id: str, voltage: float, current: float, _constant_current: bool

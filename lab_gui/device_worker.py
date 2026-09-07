@@ -22,6 +22,19 @@ from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
+from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
+from can_bus.mock import MockCanBus
+from microhil.driver import (
+    AIN_COUNT as HIL_AIN_COUNT,
+    AOUT_COUNT as HIL_AOUT_COUNT,
+    HilError,
+    IN_COUNT as HIL_IN_COUNT,
+    MicroHIL,
+    OUT_COUNT as HIL_OUT_COUNT,
+    PWR12_COUNT as HIL_PWR12_COUNT,
+    RELAY_COUNT as HIL_RELAY_COUNT,
+)
+from microhil.mock import MockMicroHIL
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +58,37 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
+# Eigenes, deutlich langsameres Poll-Intervall fuer den microHIL statt ihn in
+# denselben POLL_INTERVAL_MS-Zyklus wie Last/Netzteil/CAN zu haengen: ein
+# voller microHIL-Zyklus braucht ca. 21 Kommandos (IN? + 8x OUT? + 4x RELAY?
+# + 4x AIN? + 2x PWR12? + 2x CURR?), davon 6 mit bis zu ~10ms ADC-Latenz
+# (siehe microhil/driver.py) -- macht bis zu ~135ms allein fuer den microHIL,
+# klar mehr als die 100ms, die POLL_INTERVAL_MS den anderen Geraeten fuer
+# ihre gesamte sequentielle Abfrage einraeumt (siehe Kommentar dort). Eine
+# Dashboard-Anzeige aus LED-Punkten braucht ausserdem keine 10Hz-Aktualisierung
+# -- 1x/Sekunde reicht fuers Auge, verhindert aber, dass ein zusaetzliches,
+# eigentlich fuer Last/Netzteil-Reaktionsfaehigkeit ausgelegtes Geraet den
+# gemeinsamen Poll-Zyklus aller anderen Geraete verlangsamt.
+HIL_POLL_INTERVAL_MS = 1000
+
+# Obergrenze empfangener CAN-Frames, die pro Poll-Zyklus UND Interface aus
+# der Empfangs-Queue geleert werden (siehe _poll) -- verhindert, dass ein
+# Interface mit sehr hoher Buslast die anderen Geraete im selben Zyklus
+# verhungern laesst. Bei Ueberschreiten bleiben weitere Frames einfach bis
+# zum naechsten Zyklus in der Queue (python-can puffert selbst).
+CAN_DRAIN_LIMIT = 32
+
 # Feste Device-IDs fuer die simulierten Geraete (siehe set_simulation_mode) --
 # im Gegensatz zu echten Geraeten gibt es hier keine USB-Seriennummer/COM-Port,
 # aus der sich eine ID ableiten liesse.
 SIM_PSU_ID = "psu:SIM"
 SIM_LOAD_ID = "load:SIM"
+SIM_CAN_ID = "can:mock:SIM"
+SIM_HIL_ID = "hil:SIM"
+
+
+def _can_device_id(cfg: dict) -> str:
+    return f"can:{cfg['interface']}:{cfg['channel']}"
 
 
 def _resolve_device_ids(kind: str, infos: list) -> dict[str, object]:
@@ -93,27 +132,54 @@ class DeviceWorker(QObject):
     # abgeschaltet wurde.
     psu_output_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
-    action_completed = Signal(bool, str)     # fuer Testablauf-Schritte: success, error
+    # fuer Testablauf-Schritte: success, error, gelesener Wert (nur bei einer
+    # microHIL-Lese-Aktion befuellt, siehe HIL_READ_ACTIONS/_dispatch_action;
+    # 0.0 bei allen anderen Aktionen ohne Bedeutung).
+    action_completed = Signal(bool, str, float)
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
-    def __init__(self, simulation_mode: bool = False) -> None:
+    can_connected = Signal(str, bool)        # device_id, online
+    # device_id, arbitration_id, data (Hex-String z.B. "01 A2 FF"), extended, timestamp (s)
+    can_frame_received = Signal(str, int, str, bool, float)
+    can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
+
+    hil_connected = Signal(str, bool)          # device_id, online
+    hil_digital_state = Signal(str, list, list)  # device_id, inputs (IN1-8), outputs (OUT1-8)
+    hil_relay_state = Signal(str, list)        # device_id, relays (RELAY1-4)
+    hil_analog_input = Signal(str, list)       # device_id, AIN1-4 in mV
+    # device_id, PWR12-Enable (1-2), Stromsense (1-2) -- siehe microhil_panel.
+    # _Pwr12Row: rohe mV vom Geraet, im Dashboard bewusst als "mA" beschriftet.
+    hil_pwr12_state = Signal(str, list, list)
+
+    def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
         super().__init__()
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
+        self._can_buses: dict[str, CanBus] = {}
+        self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
+        self._can_configs: list[dict] = list(can_configs or [])
+        self._hils: dict[str, MicroHIL] = {}
         self._simulation_mode = simulation_mode
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.timeout.connect(self._try_reconnect)
+        # Eigener, langsamerer Timer statt im selben Zyklus wie _poll() --
+        # siehe HIL_POLL_INTERVAL_MS.
+        self._hil_poll_timer = QTimer(self)
+        self._hil_poll_timer.timeout.connect(self._poll_hils)
 
     @Slot()
     def start(self) -> None:
         if self._simulation_mode:
             self._add_mock_psu()
             self._add_mock_load()
+            self._add_mock_can()
+            self._add_mock_hil()
         self._try_reconnect()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
+        self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
 
     # -- Simulationsmodus ----------------------------------------------------
 
@@ -125,9 +191,27 @@ class DeviceWorker(QObject):
         if enabled:
             self._add_mock_psu()
             self._add_mock_load()
+            self._add_mock_can()
+            self._add_mock_hil()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
+            self._close_can(SIM_CAN_ID)
+            self._remove_mock_hil()
+
+    # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
+    # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
+    # verbunden werden sollen, kommt ausschliesslich aus dieser Liste (siehe
+    # can_bus/README.md: keine sichere Autodiscovery ohne bekannte Bitrate).
+
+    @Slot(list)
+    def set_can_configs(self, configs: list) -> None:
+        self._can_configs = list(configs)
+        wanted_ids = {_can_device_id(cfg) for cfg in self._can_configs}
+        for device_id in list(self._can_buses):
+            if device_id != SIM_CAN_ID and device_id not in wanted_ids:
+                self._close_can(device_id)
+        self._reconnect_can()
 
     def _add_mock_psu(self) -> None:
         if SIM_PSU_ID in self._psus:
@@ -161,6 +245,37 @@ class DeviceWorker(QObject):
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
 
+    def _add_mock_can(self) -> None:
+        if SIM_CAN_ID in self._can_buses:
+            return
+        self._can_buses[SIM_CAN_ID] = MockCanBus()
+        self._can_stats[SIM_CAN_ID] = [0, 0]
+        self.device_added.emit("can", SIM_CAN_ID)
+        self.can_connected.emit(SIM_CAN_ID, True)
+
+    def _close_can(self, device_id: str) -> None:
+        bus = self._can_buses.pop(device_id, None)
+        self._can_stats.pop(device_id, None)
+        if bus is not None:
+            bus.close()
+            self.can_connected.emit(device_id, False)
+            self.device_removed.emit("can", device_id)
+
+    def _add_mock_hil(self) -> None:
+        if SIM_HIL_ID in self._hils:
+            return
+        self._hils[SIM_HIL_ID] = MockMicroHIL()
+        self.device_added.emit("hil", SIM_HIL_ID)
+        self.hil_connected.emit(SIM_HIL_ID, True)
+        self._poll_hil(SIM_HIL_ID, self._hils[SIM_HIL_ID])
+
+    def _remove_mock_hil(self) -> None:
+        hil = self._hils.pop(SIM_HIL_ID, None)
+        if hil is not None:
+            hil.close()
+            self.hil_connected.emit(SIM_HIL_ID, False)
+            self.device_removed.emit("hil", SIM_HIL_ID)
+
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass
         # dahinter tatsaechlich ein antwortendes Geraet haengt (z.B. wenn der
@@ -171,6 +286,8 @@ class DeviceWorker(QObject):
         # wieder korrigiert.
         self._reconnect_loads()
         self._reconnect_psus()
+        self._reconnect_can()
+        self._reconnect_hils()
 
     def _reconnect_loads(self) -> None:
         candidates = _resolve_device_ids("load", KoradKEL102.discover_ports())
@@ -227,6 +344,90 @@ class DeviceWorker(QObject):
             self.psu_output_state.emit(device_id, False)
             self._emit_psu_limits(device_id)
 
+    def _reconnect_can(self) -> None:
+        """Verbindet noch nicht verbundene, konfigurierte CAN-Interfaces.
+
+        Anders als bei Load/PSU keine Discovery ueber VID/PID -- die Liste
+        der zu verbindenden Interfaces kommt ausschliesslich aus
+        self._can_configs (siehe set_can_configs/settings.py). Ein
+        Verbindungsfehler (z.B. Kabel nicht gesteckt, Kanal aktuell von
+        einer anderen Anwendung belegt) wird hier verschluckt und beim
+        naechsten RECONNECT_INTERVAL_MS-Tick erneut versucht, analog zu
+        _reconnect_psus/_reconnect_loads.
+        """
+        for cfg in self._can_configs:
+            device_id = _can_device_id(cfg)
+            if device_id in self._can_buses:
+                continue
+            try:
+                bus = CanBus(cfg["interface"], cfg["channel"], cfg.get("bitrate", CAN_DEFAULT_BITRATE))
+            except CanConnectionError as exc:
+                logger.warning("CAN-Interface %s nicht erreichbar: %s", device_id, exc)
+                continue
+            self._can_buses[device_id] = bus
+            self._can_stats[device_id] = [0, 0]
+            logger.info("CAN-Interface verbunden: %s", device_id)
+            self.device_added.emit("can", device_id)
+            self.can_connected.emit(device_id, True)
+
+    def _reconnect_hils(self) -> None:
+        """Verbindet den microHIL, falls noch nicht verbunden.
+
+        Anders als _reconnect_loads/_reconnect_psus (die ueber
+        _resolve_device_ids beliebig viele baugleiche Geraete gleichzeitig
+        unterstuetzen) wird hier bewusst nur EIN microHIL gleichzeitig
+        unterstuetzt: MicroHIL.discover() (siehe microhil/driver.py) loest
+        selbst schon die Mehrdeutigkeit zwischen den zwei COM-Ports EINES
+        Geraets auf (HIL-Protokoll vs. CAN1/SLCAN, gleiche VID:PID), kennt
+        aber keine Gruppierung ueber mehrere PHYSISCHE microHIL-Einheiten
+        hinweg -- der microHIL ist eine Eigenentwicklung, fuer die (anders
+        als bei den Last-/Netzteil-Modellen) kein Mehrfach-Einsatz vorgesehen
+        ist. Discover_ports() wird trotzdem geloggt statt zu crashen, falls
+        doch einmal mehrere Einheiten auftauchen -- discover() wirft dann
+        HilError statt zu raten (siehe dessen Docstring).
+        """
+        try:
+            port = MicroHIL.discover()
+        except HilError as exc:
+            logger.warning("microHIL-Port nicht eindeutig bestimmbar: %s", exc)
+            return
+        if port is None:
+            return
+        info = next((i for i in MicroHIL.discover_ports() if i.device == port), None)
+        device_id = f"hil:{info.serial_number}" if info is not None and info.serial_number else f"hil:{port}"
+        if device_id in self._hils:
+            return
+        candidate = None
+        try:
+            candidate = MicroHIL(port)
+            candidate.identify()
+        except HilError:
+            if candidate is not None:
+                candidate.close()
+            return
+        except OSError:
+            # MicroHIL(port) oeffnet den seriellen Port direkt (siehe
+            # microhil/driver.py) und wirft dabei KEIN HilError, sondern
+            # pyserial's rohe SerialException (Unterklasse von OSError) --
+            # z.B. wenn der Port gerade von einem anderen Prozess/einer
+            # zweiten App-Instanz gehalten wird ("Zugriff verweigert").
+            # Ungefangen wuerde das hier den kompletten _try_reconnect()-
+            # Aufruf abbrechen und damit AUCH die Wiederverbindung von
+            # Last/Netzteil/CAN im selben Zyklus verhindern (an echter
+            # Hardware reproduziert). Naechster RECONNECT_INTERVAL_MS-Tick
+            # versucht es einfach erneut, analog zum HilError-Fall oben.
+            logger.warning("microHIL-Port %s konnte nicht geoeffnet werden", port)
+            if candidate is not None:
+                candidate.close()
+            return
+        self._hils[device_id] = candidate
+        logger.info("microHIL verbunden: %s", device_id)
+        self.device_added.emit("hil", device_id)
+        self.hil_connected.emit(device_id, True)
+        # Sofort abfragen statt auf den naechsten HIL_POLL_INTERVAL_MS-Zyklus
+        # zu warten (analog zu _reconnect_loads/_reconnect_psus).
+        self._poll_hil(device_id, candidate)
+
     def _emit_psu_limits(self, device_id: str) -> None:
         """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.
 
@@ -273,6 +474,70 @@ class DeviceWorker(QObject):
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
 
+        for device_id, bus in list(self._can_buses.items()):
+            try:
+                drained = 0
+                while drained < CAN_DRAIN_LIMIT:
+                    frame = bus.recv(timeout=0.0)
+                    if frame is None:
+                        break
+                    self._can_stats[device_id][1] += 1
+                    self.can_frame_received.emit(
+                        device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
+                        frame.extended, frame.timestamp,
+                    )
+                    drained += 1
+            except CanError as exc:
+                logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
+                bus.close()
+                del self._can_buses[device_id]
+                self._can_stats.pop(device_id, None)
+                self.can_connected.emit(device_id, False)
+                self.device_removed.emit("can", device_id)
+                continue
+            tx, rx = self._can_stats[device_id]
+            self.can_stats.emit(device_id, tx, rx)
+
+    def _poll_hils(self) -> None:
+        for device_id, hil in list(self._hils.items()):
+            self._poll_hil(device_id, hil)
+
+    def _poll_hil(self, device_id: str, hil: MicroHIL) -> None:
+        """Fragt einen kompletten microHIL-Zustand ab und meldet ihn ueber
+        die hil_*-Signale ans Dashboard (siehe microhil_panel.MicroHilPanel).
+
+        AOUT1-2 (Analogausgaenge) werden bewusst NICHT abgefragt: es gibt
+        kein `AOUT?`-Kommando (siehe microhil/driver.py:
+        set_analog_output()-Docstring), hier gaebe es also nichts
+        Verlaessliches abzufragen. Das Dashboard zeigt AOUT1-2 stattdessen
+        ueber einen direkten GUI-Thread-zu-GUI-Thread-Weg vom Control-Tab
+        (control_tab.HilControlGroup.set_analog_output ->
+        dashboard.set_hil_analog_out, siehe main_window._on_control_
+        section_created) -- am Worker/Poll-Zyklus hier komplett vorbei, da
+        es sich um den zuletzt GESENDETEN Sollwert handelt, keine
+        Hardware-Bestaetigung. Aus demselben Grund auch PWM1-4 nicht (kein
+        Control-Tab-Abschnitt dafuer, ohnehin nicht im Dashboard, siehe
+        microhil_panel.py).
+        """
+        try:
+            inputs = hil.get_inputs()
+            outputs = [hil.get_output(ch) for ch in range(1, HIL_OUT_COUNT + 1)]
+            relays = [hil.get_relay(ch) for ch in range(1, HIL_RELAY_COUNT + 1)]
+            ain_mv = [hil.get_analog_input(ch) for ch in range(1, HIL_AIN_COUNT + 1)]
+            pwr12_enabled = [hil.get_pwr12(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
+            pwr12_current_mv = [hil.get_current_sense_mv(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
+        except HilError as exc:
+            logger.warning("microHIL %s getrennt: %s", device_id, exc)
+            hil.close()
+            del self._hils[device_id]
+            self.hil_connected.emit(device_id, False)
+            self.device_removed.emit("hil", device_id)
+            return
+        self.hil_digital_state.emit(device_id, inputs, outputs)
+        self.hil_relay_state.emit(device_id, relays)
+        self.hil_analog_input.emit(device_id, ain_mv)
+        self.hil_pwr12_state.emit(device_id, pwr12_enabled, pwr12_current_mv)
+
     # -- gemeinsame Fehlerbehandlung ------------------------------------------
 
     def _guard_load(self, device_id: str, action: Callable[[KoradKEL102], None]) -> tuple[bool, str]:
@@ -306,6 +571,35 @@ class DeviceWorker(QObject):
             self.device_removed.emit("psu", device_id)
             return False, str(exc)
 
+    def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
+        bus = self._can_buses.get(device_id)
+        if bus is None:
+            return False, "CAN-Interface nicht verbunden"
+        try:
+            action(bus)
+            return True, ""
+        except CanError as exc:
+            bus.close()
+            del self._can_buses[device_id]
+            self._can_stats.pop(device_id, None)
+            self.can_connected.emit(device_id, False)
+            self.device_removed.emit("can", device_id)
+            return False, str(exc)
+
+    def _guard_hil(self, device_id: str, action: Callable[[MicroHIL], None]) -> tuple[bool, str]:
+        hil = self._hils.get(device_id)
+        if hil is None:
+            return False, "microHIL nicht verbunden"
+        try:
+            action(hil)
+            return True, ""
+        except HilError as exc:
+            hil.close()
+            del self._hils[device_id]
+            self.hil_connected.emit(device_id, False)
+            self.device_removed.emit("hil", device_id)
+            return False, str(exc)
+
     # -- Sicherheitsabschaltung (Watchdog, siehe safety.py) -------------------
 
     @Slot(str)
@@ -322,6 +616,11 @@ class DeviceWorker(QObject):
         jedes Geraet bekommt einen Versuch + einen Retry, danach wird es wie
         bei einem normalen Verbindungsabbruch fallengelassen und mit dem
         naechsten weitergemacht -- kein except darf diese Schleife verlassen.
+
+        microHIL (self._hils) SEIT dem Control-Tab-Abschnitt (HilControlGroup,
+        siehe control_tab.py) MIT dabei: Digitalausgaenge, Relais, 12V-OUT und
+        Analogausgaenge sind von dort aus steuerbar, also genau die Zustaende,
+        fuer die diese App jetzt verantwortlich ist (siehe _kill_hil).
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []
@@ -338,6 +637,13 @@ class DeviceWorker(QObject):
                     failures.append(device_id)
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Netzteil %s", device_id)
+                failures.append(device_id)
+        for device_id, hil in list(self._hils.items()):
+            try:
+                if not self._kill_hil(device_id, hil):
+                    failures.append(device_id)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei microHIL %s", device_id)
                 failures.append(device_id)
         self.all_off_finished.emit(";".join(failures))
 
@@ -377,6 +683,43 @@ class DeviceWorker(QObject):
                 del self._psus[device_id]
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
+                return False
+        return False
+
+    def _kill_hil(self, device_id: str, hil: MicroHIL) -> bool:
+        """Schaltet alle vom Control-Tab aus steuerbaren microHIL-Ausgaenge ab:
+        Digitalausgaenge (OUT1-8), Relais (REL1-4), 12V-OUT (PWR12 1-2) und
+        Analogausgaenge (AOUT1-2, auf 0mV). NICHT PWM (kein Control-Tab-
+        Abschnitt dafuer, siehe microhil_panel.py-Modul-Docstring) -- die App
+        setzt dort ohnehin nie einen Zustand, den sie zuruecknehmen muesste.
+
+        Ein einzelner fehlgeschlagener Kanal bricht NICHT die uebrigen Kanaele
+        desselben Geraets ab (anders als bei Last/Netzteil, wo ein Fehler
+        gleichbedeutend mit Verbindungsverlust ist) -- ein HilError auf einem
+        Kanal ist typischerweise `ERR RANGE`/`ERR UNKNOWN` (Programmierfehler)
+        oder ein echter Verbindungsabbruch; im zweiten Fall schlagen ohnehin
+        alle nachfolgenden Kanaele ebenso fehl und der Retry-Mechanismus
+        greift wie bei Last/Netzteil."""
+        for attempt in (1, 2):
+            try:
+                for ch in range(1, HIL_OUT_COUNT + 1):
+                    hil.set_output(ch, False)
+                for ch in range(1, HIL_RELAY_COUNT + 1):
+                    hil.set_relay(ch, False)
+                for ch in range(1, HIL_PWR12_COUNT + 1):
+                    hil.set_pwr12(ch, False)
+                for ch in range(1, HIL_AOUT_COUNT + 1):
+                    hil.set_analog_output(ch, 0)
+                logger.info("ALL OFF: microHIL %s -> alle Ausgaenge AUS", device_id)
+                return True
+            except HilError as exc:
+                if attempt == 1:
+                    continue
+                logger.error("ALL OFF: microHIL %s nicht erreichbar: %s", device_id, exc)
+                hil.close()
+                del self._hils[device_id]
+                self.hil_connected.emit(device_id, False)
+                self.device_removed.emit("hil", device_id)
                 return False
         return False
 
@@ -444,37 +787,108 @@ class DeviceWorker(QObject):
     def recall_psu_memory(self, device_id: str, index: int) -> None:
         self._guard_psu(device_id, lambda psu: psu.recall_memory(index))
 
+    # -- CAN-Bus: Steuerbefehle -----------------------------------------------
+    # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
+    # Signale ueber die Thread-Grenze hinweg fuer str/int/float/bool
+    # zuverlaessig funktionieren (siehe uebrige Signale in dieser Datei),
+    # fuer bytes aber nicht garantiert getestet ist.
+
+    def _send_can(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> tuple[bool, str]:
+        try:
+            data = bytes.fromhex(data_hex.replace(" ", ""))
+        except ValueError as exc:
+            return False, f"Ungueltige CAN-Nutzdaten '{data_hex}': {exc}"
+        ok, message = self._guard_can(device_id, lambda bus: bus.send(arbitration_id, data, extended))
+        if ok:
+            self._can_stats[device_id][0] += 1
+        return ok, message
+
+    @Slot(str, int, str, bool)
+    def send_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
+        """Manuelles Senden aus dem Control-Tab -- meldet Fehler NICHT ueber
+        action_completed (das ist reserviert fuer den Testablauf-Dispatch,
+        siehe execute_can_send), analog zu set_load_current/set_psu_voltage
+        etc., die ihr _guard_*-Ergebnis ebenfalls nicht zurueckmelden."""
+        self._send_can(device_id, arbitration_id, data_hex, extended)
+
+    @Slot(str, int, str, bool)
+    def execute_can_send(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
+        """Senden aus einem Testablauf-Schritt (step_type "can_send", siehe
+        testcase_runner.py) -- im Gegensatz zu send_can_frame() wird das
+        Ergebnis ueber action_completed gemeldet, damit der TestRunner auf
+        den Abschluss warten kann (gleiches Muster wie execute_action/
+        _dispatch_action fuer Last/Netzteil)."""
+        ok, message = self._send_can(device_id, arbitration_id, data_hex, extended)
+        self.action_completed.emit(ok, message, 0.0)
+
+    # -- microHIL: Steuerbefehle (siehe control_tab.HilControlGroup) ----------
+    # Melden ihr _guard_hil-Ergebnis nicht zurueck, analog zu set_load_current/
+    # set_psu_voltage etc. -- Fehler landen im Log, kein Testablauf-Dispatch
+    # (siehe _guard_hil/all_outputs_off fuer die Verbindungsabbruch-Behandlung).
+
+    @Slot(str, int, bool)
+    def set_hil_output(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_output(channel, on))
+
+    @Slot(str, int, int)
+    def set_hil_analog_output(self, device_id: str, channel: int, millivolts: int) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_analog_output(channel, millivolts))
+
+    @Slot(str, int, bool)
+    def set_hil_relay(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_relay(channel, on))
+
+    @Slot(str, int, bool)
+    def set_hil_pwr12(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_pwr12(channel, on))
+
+    @Slot(str, int, int)
+    def set_hil_current_limit(self, device_id: str, channel: int, milliamps: int) -> None:
+        # Siehe microhil/driver.py: set_current_limit()-Docstring -- gegen
+        # echte, noch nicht aktualisierte Firmware schlaegt das mit
+        # HilError("ERR UNKNOWN") fehl; _guard_hil behandelt das wie jeden
+        # anderen Verbindungsfehler (Verbindung wird geschlossen). Auf dem
+        # simulierten Geraet (microhil.mock) funktioniert es bereits.
+        self._guard_hil(device_id, lambda hil: hil.set_current_limit(channel, milliamps))
+
     # -- Testablauf: generischer Dispatch fuer einen Testschritt -------------
 
-    @Slot(str, str, str, float)
-    def execute_action(self, device_id: str, kind: str, action: str, value: float) -> None:
-        ok, message = self._dispatch_action(device_id, kind, action, value)
-        self.action_completed.emit(ok, message)
+    @Slot(str, str, str, float, int)
+    def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
+        ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        self.action_completed.emit(ok, message, read_value)
 
-    def _dispatch_action(self, device_id: str, kind: str, action: str, value: float) -> tuple[bool, str]:
+    def _dispatch_action(
+        self, device_id: str, kind: str, action: str, value: float, channel: int
+    ) -> tuple[bool, str, float]:
         if kind == "load":
             if action in ("CURR", "VOLT", "RES", "POW"):
                 ok, message = self._guard_load(device_id, lambda load: load.set_function(action))
                 if not ok:
-                    return ok, message
+                    return ok, message, 0.0
                 setter_name = {
                     "CURR": "set_current",
                     "VOLT": "set_voltage",
                     "RES": "set_resistance",
                     "POW": "set_power",
                 }[action]
-                return self._guard_load(device_id, lambda load: getattr(load, setter_name)(value))
+                ok, message = self._guard_load(device_id, lambda load: getattr(load, setter_name)(value))
+                return ok, message, 0.0
             if action == "OUT_ON":
-                return self._guard_load(device_id, lambda load: load.set_input(True))
+                ok, message = self._guard_load(device_id, lambda load: load.set_input(True))
+                return ok, message, 0.0
             if action == "OUT_OFF":
-                return self._guard_load(device_id, lambda load: load.set_input(False))
-            return False, f"Unbekannte Aktion '{action}' fuer Last"
+                ok, message = self._guard_load(device_id, lambda load: load.set_input(False))
+                return ok, message, 0.0
+            return False, f"Unbekannte Aktion '{action}' fuer Last", 0.0
 
         if kind == "psu":
             if action == "PSU_VOLT":
-                return self._guard_psu(device_id, lambda psu: psu.set_voltage(value))
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_voltage(value))
+                return ok, message, 0.0
             if action == "PSU_CURR":
-                return self._guard_psu(device_id, lambda psu: psu.set_current(value))
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(value))
+                return ok, message, 0.0
             if action == "PSU_OUT_ON":
                 # Workaround (kein echtes Ausgang-Ein/Aus verfuegbar, siehe
                 # hcs34xx/README.md): reine Schaltaktion (siehe BUGS.md #17)
@@ -486,9 +900,53 @@ class DeviceWorker(QObject):
                     if current < 0.1:
                         psu.set_current(0.1)
 
-                return self._guard_psu(device_id, _output_on)
+                ok, message = self._guard_psu(device_id, _output_on)
+                return ok, message, 0.0
             if action == "PSU_OUT_OFF":
-                return self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
-            return False, f"Unbekannte Aktion '{action}' fuer Netzteil"
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
+                return ok, message, 0.0
+            return False, f"Unbekannte Aktion '{action}' fuer Netzteil", 0.0
 
-        return False, f"Unbekanntes Geraet '{kind}'"
+        if kind == "hil":
+            if action == "HIL_OUT_ON":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_output(channel, True))
+                return ok, message, 0.0
+            if action == "HIL_OUT_OFF":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_output(channel, False))
+                return ok, message, 0.0
+            if action == "HIL_RELAY_ON":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_relay(channel, True))
+                return ok, message, 0.0
+            if action == "HIL_RELAY_OFF":
+                ok, message = self._guard_hil(device_id, lambda hil: hil.set_relay(channel, False))
+                return ok, message, 0.0
+            if action == "HIL_AOUT":
+                ok, message = self._guard_hil(
+                    device_id, lambda hil: hil.set_analog_output(channel, int(value))
+                )
+                return ok, message, 0.0
+            if action == "HIL_IN_READ":
+                # Mutable Zwischenspeicher statt Rueckgabewert, da die an
+                # _guard_hil uebergebene Aktion (siehe deren Signatur) nichts
+                # zurueckgeben kann -- dieselbe Technik wie ueberall sonst in
+                # dieser Methode fuer reine Set-Kommandos, hier aber mit dem
+                # zusaetzlichen Zweck, den GELESENEN Wert aus der Closure
+                # herauszutragen.
+                result: dict[str, bool] = {}
+
+                def _read_in(hil: MicroHIL) -> None:
+                    result["v"] = hil.get_input(channel)
+
+                ok, message = self._guard_hil(device_id, _read_in)
+                return ok, message, (1.0 if result.get("v") else 0.0)
+            if action == "HIL_AIN_READ":
+                result: dict[str, int] = {}
+
+                def _read_ain(hil: MicroHIL) -> None:
+                    result["v"] = hil.get_analog_input(channel)
+
+                ok, message = self._guard_hil(device_id, _read_ain)
+                return ok, message, float(result.get("v", 0))
+            return False, f"Unbekannte Aktion '{action}' fuer microHIL", 0.0
+
+        return False, f"Unbekanntes Geraet '{kind}'", 0.0
