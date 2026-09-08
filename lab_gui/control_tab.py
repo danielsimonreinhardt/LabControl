@@ -1192,6 +1192,14 @@ class ControlTab(QWidget):
         Translator.instance().language_changed.connect(self._equalize_sections)
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        if kind == "picoscope":
+            # Bewusst KEINE Control-Tab-Sektion: das PicoScope hat nur eine
+            # Dashboard-Kachel + Start-Button fuer die PicoScope-7-App
+            # (siehe picoscope_panel.py-Modul-Docstring) -- ohne diesen
+            # fruehen Ausstieg wuerde es faelschlich in den generischen
+            # "else"-Zweig unten fallen und eine bedeutungslose
+            # CanControlGroup-Sektion bekommen.
+            return
         section = self._sections.get(device_id)
         if section is not None:
             section.set_label(label)

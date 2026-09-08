@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from i18n import tr
+from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 
 # Interner Aktionscode -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
 # fuer i18n.tr, siehe action_label()), je Geraeteart ("load"/"psu").
@@ -73,6 +74,31 @@ HIL_CHANNEL_COUNTS = {
 # Pass/Fail-Pruefung auswertet.
 HIL_READ_ACTIONS = {"HIL_IN_READ", "HIL_AIN_READ"}
 
+# PicoScope-Aktionen: jede fuehrt eine einzelne Blockerfassung durch (siehe
+# picoscope2000.driver.PicoScope2000.measure()) und liefert einen daraus
+# abgeleiteten Kennwert (mV) zurueck -- reine Lese-Aktionen wie
+# HIL_IN_READ/HIL_AIN_READ, siehe PICO_READ_ACTIONS unten. Kein eigenes
+# "PICO_CHANNEL"-Feld im TestStep: der Zielkanal (A=1/B=2) nutzt denselben
+# generischen Kanal-Slot wie microHIL (TestStep.hil_channel, siehe dessen
+# Docstring), der Spannungsbereich wird -- da execute_action keinen eigenen
+# Range-Parameter hat -- als VOLTAGE_RANGE_CODES-Zahlencode im sonst bei
+# Lese-Aktionen unbenutzten `value`-Feld transportiert (siehe
+# testcase_tab._build_action_row: picoscope_page, device_worker.
+# _dispatch_action).
+PICO_ACTIONS = {
+    "PICO_VMAX": "Maximum (Spitzenwert)",
+    "PICO_VMIN": "Minimum (Spitzenwert)",
+    "PICO_VPP": "Spitze-Spitze (Vpp)",
+    "PICO_VRMS": "Effektivwert (RMS)",
+}
+PICO_READ_ACTIONS = {"PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS"}
+
+# Vereinigung aller Lese-Aktionen ueber alle Geraetearten -- Aktionscodes
+# sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
+# zur Codepruefung ist daher nicht noetig (siehe testcase_runner.py:
+# on_action_completed/_finish_step).
+READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS
+
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
 # Schaltaktionen (Ausgang EIN/AUS, Presets) scheiden aus, da sie keinen
@@ -98,6 +124,7 @@ DEVICE_ACTIONS = {
     "psu": PSU_ACTIONS,
     "can": CAN_ACTIONS,
     "hil": HIL_ACTIONS,
+    "picoscope": PICO_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -106,6 +133,7 @@ DEVICE_KIND_LABELS = {
     "psu": "Netzteil",
     "can": "CAN-Bus",
     "hil": "microHIL",
+    "picoscope": "Oszilloskop",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -137,6 +165,7 @@ VALUELESS_ACTIONS = {
     "CAN_SEND",
     "HIL_OUT_ON", "HIL_OUT_OFF", "HIL_RELAY_ON", "HIL_RELAY_OFF",
     "HIL_IN_READ", "HIL_AIN_READ",
+    "PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS",
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -167,6 +196,13 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "HIL_AOUT": ("mV", 0, 3300),
     "HIL_IN_READ": ("", 0, 0),
     "HIL_AIN_READ": ("", 0, 0),
+    # value_spin (Seite 0) wird fuer PICO_*-Aktionen nie angezeigt (eigene
+    # picoscope_page, siehe testcase_tab._build_action_row) -- Eintraege nur
+    # der Vollstaendigkeit halber, analog zu den HIL_*-Lese-Aktionen oben.
+    "PICO_VMAX": ("", 0, 0),
+    "PICO_VMIN": ("", 0, 0),
+    "PICO_VPP": ("", 0, 0),
+    "PICO_VRMS": ("", 0, 0),
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -199,29 +235,44 @@ COND_FIELDS = ("voltage", "current", "power")
 COND_OPS = ("<", "<=", ">", ">=", "==", "!=")
 COND_OP_LABELS = {"<": "<", "<=": "≤", ">": ">", ">=": "≥", "==": "=", "!=": "≠"}
 COND_TIME_REFS = ("block", "run")
-COND_FIELD_UNITS = {"voltage": "V", "current": "A", "power": "W", "hil_ain": "mV", "hil_in": ""}
+COND_FIELD_UNITS = {
+    "voltage": "V", "current": "A", "power": "W", "hil_ain": "mV", "hil_in": "",
+    "pico_vmax": "mV", "pico_vmin": "mV", "pico_vpp": "mV", "pico_vrms": "mV",
+}
 COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
 
-# check_field-Codes fuer HIL_AIN_READ/HIL_IN_READ (siehe HIL_READ_ACTIONS) --
-# eigene Einheit/Symbol statt Spannung/Strom/Leistung, da eine Lese-Aktion
-# nur EINEN Wert liefert (kein Auswahlfeld noetig, siehe testcase_tab.py:
-# open_check_dialog()). Bewusst NICHT Teil von COND_FIELDS/COND_FIELD_LABELS
-# (die sind fuer die while/if-Bedingungsauswahl aller Geraete, die HIL-Codes
-# sollen dort nicht als Option auftauchen).
+# check_field-Codes fuer HIL_AIN_READ/HIL_IN_READ/PICO_* (siehe
+# HIL_READ_ACTIONS/PICO_READ_ACTIONS) -- eigene Einheit/Symbol statt
+# Spannung/Strom/Leistung, da eine Lese-Aktion nur EINEN Wert liefert (kein
+# Auswahlfeld noetig, siehe testcase_tab.py: open_check_dialog()). Bewusst
+# NICHT Teil von COND_FIELDS/COND_FIELD_LABELS (die sind fuer die
+# while/if-Bedingungsauswahl aller Geraete, diese Codes sollen dort nicht
+# als Option auftauchen).
 HIL_CHECK_FIELD_LABELS = {"hil_ain": "Analogwert", "hil_in": "Zustand (0/1)"}
+PICO_CHECK_FIELD_LABELS = {
+    "pico_vmax": "Maximum", "pico_vmin": "Minimum",
+    "pico_vpp": "Spitze-Spitze", "pico_vrms": "Effektivwert (RMS)",
+}
 
-# HIL-Lese-Aktionscode -> zugehoeriger check_field-Code (siehe
-# HIL_CHECK_FIELD_LABELS/COND_FIELD_UNITS oben) -- fuer testcase_tab.py:
-# open_check_dialog(), das aus dem gerade gewaehlten Aktionscode den
-# passenden field_choices-Eintrag fuer CheckDialog bauen muss.
+# HIL-/PicoScope-Lese-Aktionscode -> zugehoeriger check_field-Code (siehe
+# HIL_CHECK_FIELD_LABELS/PICO_CHECK_FIELD_LABELS/COND_FIELD_UNITS oben) --
+# fuer testcase_tab.py: open_check_dialog(), das aus dem gerade gewaehlten
+# Aktionscode den passenden field_choices-Eintrag fuer CheckDialog bauen muss.
 HIL_READ_CHECK_FIELD = {"HIL_AIN_READ": "hil_ain", "HIL_IN_READ": "hil_in"}
+PICO_READ_CHECK_FIELD = {
+    "PICO_VMAX": "pico_vmax", "PICO_VMIN": "pico_vmin",
+    "PICO_VPP": "pico_vpp", "PICO_VRMS": "pico_vrms",
+}
 
 # Kurzsymbole fuer die kompakte Pruefungs-Zusammenfassung in der
 # Testcase-Tabelle (siehe check_summary()) -- sprachunabhaengig, daher nicht
 # uebersetzt. Die Messgroessen selbst sind dieselben wie bei Bedingungen
 # (COND_FIELDS); die Leistung wird beim Netzteil aus U*I berechnet (siehe
 # testcase_runner.on_psu_measurement).
-CHECK_FIELD_SYMBOLS = {"voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN"}
+CHECK_FIELD_SYMBOLS = {
+    "voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN",
+    "pico_vmax": "VMAX", "pico_vmin": "VMIN", "pico_vpp": "VPP", "pico_vrms": "VRMS",
+}
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
 # war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
@@ -243,6 +294,12 @@ class TestStep:
     # Geraet je Art erstellte Testablaeufe ohne Anpassung lauffaehig.
     device_id: str = ""
     action: str = "CURR"
+    # Bei PICO_VMAX/PICO_VMIN/PICO_VPP/PICO_VRMS (siehe PICO_READ_ACTIONS)
+    # zweckentfremdet: kein Sollwert (das Feld ist sonst bei Lese-Aktionen
+    # bedeutungslos, siehe HIL_IN_READ/HIL_AIN_READ), sondern der
+    # VOLTAGE_RANGE_CODES-Zahlencode (picoscope2000.common) des gewaehlten
+    # Spannungsbereichs -- execute_action hat kein eigenes Range-Feld, siehe
+    # testcase_tab._build_action_row: picoscope_page.
     value: float = 0.0
     # Dauer (s): bei normalen Aktionen die Wartezeit NACH dem (sofortigen)
     # Setzen des Sollwerts, bevor der naechste Schritt beginnt. Bei einem
@@ -272,18 +329,23 @@ class TestStep:
     can_data: str = ""         # Hex-String, z.B. "01 A2 FF" (max. 8 Bytes, klassisches CAN)
     can_extended: bool = False  # 29-bit Extended-ID statt 11-bit Standard-ID
 
-    # -- microHIL-Parameter (nur relevant wenn device_kind == "hil") -----
-    # 1-basierter Kanalindex, gueltiger Bereich je Aktion siehe
-    # HIL_CHANNEL_COUNTS. Bei HIL_AOUT ist `value` (mV) der Sollwert; bei
+    # -- Geraete-Kanal (microHIL + PicoScope) -----------------------------
+    # Urspruenglich nur fuer microHIL gedacht (Name historisch gewachsen),
+    # inzwischen genereller Kanal-Slot fuer JEDE Geraeteart mit mehreren
+    # gleichartigen Kanaelen -- execute_action/_dispatch_action kennen nur
+    # dieses eine Kanal-Feld (siehe testcase_runner.py: execute_action.emit).
+    # microHIL: 1-basierter Kanalindex, gueltiger Bereich je Aktion siehe
+    # HIL_CHANNEL_COUNTS; bei HIL_AOUT ist `value` (mV) der Sollwert, bei
     # HIL_IN_READ/HIL_AIN_READ hat `value` keine Bedeutung (siehe
-    # HIL_READ_ACTIONS).
+    # HIL_READ_ACTIONS). PicoScope (PICO_*-Aktionen, siehe PICO_ACTIONS):
+    # 1=Kanal A, 2=Kanal B.
     hil_channel: int = 1
-    # Nur relevant bei device_kind=="hil" und action in HIL_READ_ACTIONS:
-    # Variablenname, in den der gelesene Wert zusaetzlich zur (optionalen)
-    # Pass/Fail-Pruefung geschrieben wird (siehe testcase_runner.
-    # on_action_completed). Leer = nicht speichern. Damit laesst sich eine
-    # microHIL-Lesung als Bedingung in einem spaeteren while/if verwenden
-    # (dort cond_source="variable" waehlen).
+    # Nur relevant bei action in READ_ACTIONS (HIL_READ_ACTIONS/
+    # PICO_READ_ACTIONS): Variablenname, in den der gelesene Wert zusaetzlich
+    # zur (optionalen) Pass/Fail-Pruefung geschrieben wird (siehe
+    # testcase_runner.on_action_completed). Leer = nicht speichern. Damit
+    # laesst sich eine microHIL-/PicoScope-Lesung als Bedingung in einem
+    # spaeteren while/if verwenden (dort cond_source="variable" waehlen).
     store_var: str = ""
 
     # -- Ablaufsteuerung: Schritttyp-Diskriminator ------------------------

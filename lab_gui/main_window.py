@@ -49,6 +49,20 @@ class MainWindow(QMainWindow):
     # aus demselben Grund wie _dispatch_test_action (Queued Connection in den
     # Worker-Thread), siehe testcase_runner.TestRunner.execute_can_send.
     _dispatch_test_can_send = Signal(str, int, str, bool)
+    # An DeviceWorker.set_test_running weitergereicht (pausiert den PicoScope-
+    # Reconnect-Timer waehrend eines Testlaufs) -- eigenes Signal aus demselben
+    # Grund wie _dispatch_test_action (Queued Connection in den Worker-Thread).
+    _set_picoscope_test_running = Signal(bool)
+    # An DeviceWorker.open_picoscope_session weitergereicht -- einmal pro
+    # device_id, den ein Testlauf tatsaechlich braucht (siehe
+    # _on_run_requested), damit PICO_*-Schritte nicht bei JEDER Aktion erneut
+    # das exklusive Handle auf-/zumachen muessen (~4,5s Verbinden/Trennen pro
+    # Aktion, siehe picoscope2000/README.md). Eigenes Signal aus demselben
+    # Grund wie _dispatch_test_action.
+    _open_picoscope_session = Signal(str)
+    # An DeviceWorker.close_picoscope_sessions weitergereicht -- am Laufende
+    # (fertig/gestoppt/fehlgeschlagen), No-Op falls nie eine Session offen war.
+    _close_picoscope_sessions = Signal()
 
     # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
     # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
@@ -107,7 +121,9 @@ class MainWindow(QMainWindow):
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
-        self._online_devices: dict[str, set[str]] = {"load": set(), "psu": set(), "can": set(), "hil": set()}
+        self._online_devices: dict[str, set[str]] = {
+            "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(),
+        }
 
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
@@ -167,6 +183,8 @@ class MainWindow(QMainWindow):
         self._worker.psu_connected.connect(self._on_psu_connected)
         self._worker.can_connected.connect(self._on_can_connected)
         self._worker.hil_connected.connect(self._on_hil_connected)
+        self._worker.picoscope_connected.connect(self._on_picoscope_connected)
+        self._worker.picoscope_state.connect(self.dashboard.update_picoscope_state)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
@@ -302,6 +320,8 @@ class MainWindow(QMainWindow):
                 self._on_psu_connected(device_id, False)
             elif kind == "hil":
                 self._on_hil_connected(device_id, False)
+            elif kind == "picoscope":
+                self._on_picoscope_connected(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -630,6 +650,32 @@ class MainWindow(QMainWindow):
         self._test_runner.run_stopped.connect(self._safety.end_run_supervision)
         self._test_runner.step_failed.connect(lambda *_args: self._safety.end_run_supervision())
 
+        # Pausiert den PicoScope-Reconnect-Timer waehrend eines Testlaufs
+        # (siehe device_worker._reconnect_picoscope-Docstring) -- sonst kann
+        # dessen periodisches Verbinden mit einer PICO_*-Testablauf-Aktion um
+        # das exklusive Handle konkurrieren. Ueber _set_picoscope_test_running
+        # (nicht direkt self._worker.set_test_running), da run_finished/
+        # run_stopped/step_failed im GUI-Thread emittiert werden -- ein
+        # direkter Methodenaufruf auf dem Worker wuerde KEINE Queued
+        # Connection nutzen (siehe Kommentar bei _dispatch_test_action oben).
+        self._set_picoscope_test_running.connect(self._worker.set_test_running)
+        self._test_runner.run_finished.connect(lambda: self._set_picoscope_test_running.emit(False))
+        self._test_runner.run_stopped.connect(lambda: self._set_picoscope_test_running.emit(False))
+        self._test_runner.step_failed.connect(lambda *_args: self._set_picoscope_test_running.emit(False))
+
+        # Einmalig offen gehaltene PicoScope-Verbindung fuer die Laufdauer
+        # (siehe _on_run_requested/device_worker.open_picoscope_session) --
+        # muss NACH set_test_running(False) verdrahtet sein (Reihenfolge der
+        # connect()-Aufrufe = Zustellreihenfolge auf dem Worker-Thread bei
+        # SELBER emittierender Signal-Quelle), damit _reconnect_picoscope()
+        # beim abschliessenden Status-Refresh in close_picoscope_sessions()
+        # nicht mehr durch _test_running blockiert wird.
+        self._open_picoscope_session.connect(self._worker.open_picoscope_session)
+        self._close_picoscope_sessions.connect(self._worker.close_picoscope_sessions)
+        self._test_runner.run_finished.connect(lambda: self._close_picoscope_sessions.emit())
+        self._test_runner.run_stopped.connect(lambda: self._close_picoscope_sessions.emit())
+        self._test_runner.step_failed.connect(lambda *_args: self._close_picoscope_sessions.emit())
+
         # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
         # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen")
         # schaltet sofort alle Ausgaenge ab, statt auf das manuelle Quittieren
@@ -653,12 +699,36 @@ class MainWindow(QMainWindow):
             return
         self.testcase_tab.on_run_started()
         self._run_recorder.begin(steps, self.testcase_tab.current_testcase_name())
-        self._safety.begin_run_supervision(self._resolve_step_device_ids(steps))
+        step_device_ids = self._resolve_step_device_ids(steps)
+        # PicoScope bewusst NICHT an die Watchdog-Verbindungsueberwachung
+        # uebergeben (siehe _resolve_step_device_ids-Docstring): anders als
+        # PSU/Last/HIL hat es keinen steuerbaren Ausgang (taucht nirgends in
+        # all_outputs_off auf) UND liefert waehrend eines Laufs bewusst KEINE
+        # periodischen Messwerte (kein Poll-Zyklus, siehe device_worker.py) --
+        # ohne diesen Ausschluss wuerde jeder Lauf mit PICO_*-Schritt nach
+        # STALE_TIMEOUT_S faelschlich als "veraltet" abgebrochen, obwohl
+        # nichts falsch lief (an echter Hardware reproduziert).
+        self._safety.begin_run_supervision(
+            {d for d in step_device_ids if not d.startswith("picoscope:")}
+        )
+        self._set_picoscope_test_running.emit(True)
+        # Nur oeffnen, wenn der Lauf tatsaechlich eine PICO_*-Aktion
+        # enthaelt -- ein Lauf ohne Oszilloskop-Beteiligung soll weder die
+        # ~4,5s Verbindungszeit noch die PicoScope-7-App fuer die gesamte
+        # Laufdauer blockieren (siehe device_worker.open_picoscope_session).
+        for device_id in step_device_ids:
+            if device_id.startswith("picoscope:"):
+                self._open_picoscope_session.emit(device_id)
         self._test_runner.start(steps)
 
     def _resolve_step_device_ids(self, steps: list[TestStep]) -> set[str]:
-        """Ermittelt die an einem Testlauf beteiligten Geraete-IDs fuer die
-        Watchdog-Verbindungsueberwachung (siehe safety.begin_run_supervision).
+        """Ermittelt die an einem Testlauf beteiligten Geraete-IDs -- genutzt
+        sowohl fuer die Watchdog-Verbindungsueberwachung (siehe
+        safety.begin_run_supervision) als auch dafuer, welche PicoScope-
+        Sessions ein Lauf oeffnen muss (siehe _on_run_requested unten).
+        Liefert bewusst ALLE Geraetearten inkl. "picoscope" -- der Aufrufer
+        filtert fuer die Watchdog-Uebergabe selbst heraus, was er braucht
+        (PicoScope wird dort ausgeschlossen, siehe Kommentar dort).
 
         Nicht aufloesbare Ziele (z.B. "automatisch" ohne aktuell verbundenes
         Geraet dieser Art) werden uebersprungen -- der Runner scheitert an
@@ -732,6 +802,14 @@ class MainWindow(QMainWindow):
         self._set_online("hil", device_id, online)
         self.dashboard.set_hil_online(device_id, online)
         self.control_tab.set_hil_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_picoscope_connected(self, device_id: str, online: bool) -> None:
+        # Kein control_tab.set_picoscope_online: das PicoScope hat bewusst
+        # keinen Control-Tab-Abschnitt (nur Dashboard-Kachel + Start-Button
+        # fuer die PicoScope-7-App, siehe picoscope_panel.py-Modul-Docstring).
+        self._set_online("picoscope", device_id, online)
+        self.dashboard.set_picoscope_online(device_id, online)
 
     def _set_online(self, kind: str, device_id: str, online: bool) -> None:
         if online:

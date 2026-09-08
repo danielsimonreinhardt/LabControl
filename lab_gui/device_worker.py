@@ -13,6 +13,7 @@ Slots referenziert wird.
 from __future__ import annotations
 
 import logging
+import time
 from collections import Counter
 from typing import Callable
 
@@ -35,6 +36,9 @@ from microhil.driver import (
     RELAY_COUNT as HIL_RELAY_COUNT,
 )
 from microhil.mock import MockMicroHIL
+from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
+from picoscope2000.driver import PicoScope2000, PicoScope2000Error, usb_present as picoscope_usb_present
+from picoscope2000.mock import MockPicoScope2000
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +75,35 @@ RECONNECT_INTERVAL_MS = 3000
 # gemeinsamen Poll-Zyklus aller anderen Geraete verlangsamt.
 HIL_POLL_INTERVAL_MS = 1000
 
+# Eigenes, sehr viel langsameres Reconnect-Intervall fuer das PicoScope statt
+# des gemeinsamen RECONNECT_INTERVAL_MS (3s): anders als bei Last/Netzteil/CAN
+# (reines Portoeffnen + kurze Abfrage, siehe RECONNECT_INTERVAL_MS-Kommentar)
+# braucht ein einzelner PicoScope-Reconnect-Versuch (open+close) ca. 4,5s
+# real gemessen (siehe picoscope2000/README.md) -- BLOCKIEREND, da alles im
+# selben DeviceWorker-Thread laeuft wie POLL_INTERVAL_MS/HIL_POLL_INTERVAL_MS.
+# Bei 3s wuerde der naechste Tick praktisch immer mitten in den vorherigen
+# hineinlaufen: der Worker-Thread waere de facto dauerhaft mit dem PicoScope
+# beschaeftigt, PSU/Last/CAN/HIL wuerden regelmaessig einfrieren (an echter
+# Hardware reproduziert). 30s haelt das Dashboard trotzdem "praktisch live"
+# fuer eine reine Statusanzeige, senkt die Blockierfrequenz aber auf ein
+# vertretbares Mass. Siehe auch set_test_running(): waehrend eines
+# Testlaufs pausiert dieser Timer zusaetzlich komplett (siehe
+# _reconnect_picoscope), sonst kollidiert er mit PICO_*-Testschritten um das
+# exklusive Handle (an echter Hardware reproduziert: ein Testschritt scheitert
+# dann faelschlich mit "belegt", obwohl gar keine externe App im Weg ist).
+PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
+
+# Mindestabstand (s) zwischen einem ps2000_close_unit() und dem naechsten
+# ps2000_open_unit() -- an echter Hardware beobachtet: ein Reopen direkt
+# (~0s) nach dem Schliessen schlaegt mit Status 0 fehl (nicht von "belegt
+# durch andere App" unterscheidbar, siehe picoscope2000/README.md), ab ca.
+# 0,5-1s Abstand klappt es zuverlaessig. Doppelte Sicherheitsmarge, da nicht
+# hardware-/firmwareuebergreifend verifiziert. Betrifft nur
+# _execute_picoscope_action (das eigentliche Oeffnen fuer einen Testschritt);
+# _reconnect_picoscope() selbst braucht keine Wartezeit gegen sich selbst, da
+# zwischen zwei Ticks ohnehin PICOSCOPE_RECONNECT_INTERVAL_MS liegt.
+PICOSCOPE_SETTLE_S = 2.0
+
 # Obergrenze empfangener CAN-Frames, die pro Poll-Zyklus UND Interface aus
 # der Empfangs-Queue geleert werden (siehe _poll) -- verhindert, dass ein
 # Interface mit sehr hoher Buslast die anderen Geraete im selben Zyklus
@@ -85,6 +118,40 @@ SIM_PSU_ID = "psu:SIM"
 SIM_LOAD_ID = "load:SIM"
 SIM_CAN_ID = "can:mock:SIM"
 SIM_HIL_ID = "hil:SIM"
+SIM_PICOSCOPE_ID = "picoscope:SIM"
+
+# Die ps2000-API kennt (anders als bei Last/Netzteil/microHIL) keine
+# Geraete-Enumeration/Seriennummer-basierte Unterscheidung mehrerer
+# angeschlossener Einheiten (siehe picoscope2000/README.md) -- deshalb hier
+# eine feste ID statt einer aus USB-Seriennummer/COM-Port abgeleiteten wie
+# bei _resolve_device_ids. Nur EIN echtes PicoScope gleichzeitig unterstuetzt.
+PICOSCOPE_ID = "picoscope:default"
+
+# PICO_*-Aktionscode (testcase_model.PICO_ACTIONS) -> Feldname auf
+# picoscope2000.common.Measurement (siehe _execute_picoscope_action).
+PICO_ACTION_FIELDS = {
+    "PICO_VMAX": "vmax", "PICO_VMIN": "vmin", "PICO_VPP": "vpp", "PICO_VRMS": "vrms",
+}
+# Kehrwert von picoscope2000.common.VOLTAGE_RANGE_CODES -- execute_action hat
+# kein eigenes Range-Feld, der Zahlencode kommt ueber `value` an (siehe
+# testcase_model.TestStep.value-Docstring).
+PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.items()}
+
+# Sentinel-Fehlermeldung von _execute_picoscope_action: signalisiert
+# testcase_runner.TestRunner, dass NICHT das Geraet/die Verbindung das
+# Problem war, sondern eine erkannte Verschachtelung mit einem noch
+# laufenden Reconnect-Tick (siehe _picoscope_busy-Docstring in __init__) --
+# der Runner soll den Schritt automatisch neu versuchen statt den Testlauf
+# mit einem irrefuehrenden "belegt" abzubrechen. Bewusst KEIN Warten in
+# _execute_picoscope_action selbst: der aeussere (verschachtelnde) Aufruf
+# kann strukturell nicht fertig werden, waehrend WIR (der verschachtelte
+# Aufruf) blockieren -- das waere ein garantierter Deadlock/Timeout statt
+# einer Loesung (an echter Hardware verifiziert: selbst 20s Wartezeit halfen
+# nicht). Der Retry muss stattdessen als NEUER, nicht verschachtelter Aufruf
+# erfolgen, erst nachdem der aeussere Aufruf laengst zurueckgekehrt ist --
+# das uebernimmt testcase_runner.py mit einer verzoegerten erneuten
+# execute_action-Emission.
+PICOSCOPE_RETRY_MESSAGE = "picoscope_retry"
 
 
 def _can_device_id(cfg: dict) -> str:
@@ -151,6 +218,17 @@ class DeviceWorker(QObject):
     # _Pwr12Row: rohe mV vom Geraet, im Dashboard bewusst als "mA" beschriftet.
     hil_pwr12_state = Signal(str, list, list)
 
+    # device_id, online -- rein physische USB-Praesenz (siehe
+    # picoscope2000.driver.usb_present), UNABHAENGIG davon, ob das Geraet
+    # gerade von LabControl selbst angesprochen werden kann (siehe
+    # picoscope_state: "busy" vs "free").
+    picoscope_connected = Signal(str, bool)
+    # device_id, status ("free" = LabControl konnte oeffnen, "busy" = Geraet
+    # angeschlossen aber nicht oeffenbar, vermutlich PicoScope-7-App offen),
+    # variant, serial -- variant/serial bleiben im "busy"-Fall auf dem
+    # zuletzt bekannten Stand stehen (siehe _reconnect_picoscope).
+    picoscope_state = Signal(str, str, str, str)
+
     def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
         super().__init__()
         self._loads: dict[str, KoradKEL102] = {}
@@ -159,6 +237,50 @@ class DeviceWorker(QObject):
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
         self._hils: dict[str, MicroHIL] = {}
+        # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
+        # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
+        # Zustand statt eines Treiber-Objekts.
+        self._picoscope_present = False
+        self._picoscope_variant = ""
+        self._picoscope_serial = ""
+        self._mock_picoscope_active = False
+        # monotonic()-Zeitpunkt des letzten ps2000_close_unit() (egal ob aus
+        # _reconnect_picoscope() oder _execute_picoscope_action()) -- siehe
+        # PICOSCOPE_SETTLE_S.
+        self._picoscope_last_close = 0.0
+        # Reentranz-Schutz: an echter Hardware beobachtet, dass waehrend
+        # ps2000_open_unit() (blockierend, ~3,5s) eine ZWEITE, verschachtelte
+        # Ausfuehrung von execute_action auf demselben Worker-Thread moeglich
+        # ist (vermutlich pumpt die Vendor-DLL waehrend des Wartens intern
+        # Windows-Messages, wodurch Qts ueber PostMessage zugestellte Queued-
+        # Connection-Events verschachtelt zum Zug kommen -- per Log bestaetigt:
+        # eine execute_action-Ausfuehrung lief nachweislich VOR dem Rueckgabe-
+        # Zeitpunkt des noch laufenden ps2000_open_unit()-Aufrufs der
+        # Reconnect-Probe). set_test_running() allein reicht deshalb NICHT
+        # (verhindert nur NEUE Reconnect-Ticks, nicht die Verschachtelung in
+        # einem bereits laufenden). Ein simples bool reicht trotz Verschach-
+        # telung: das GIL serialisiert Python-Bytecode weiterhin, ein
+        # verschachtelter Aufruf sieht das vom AEUSSEREN Aufruf gesetzte Flag
+        # zuverlaessig.
+        self._picoscope_busy = False
+        # Waehrend eines Testablaufs offen gehaltene Verbindung(en) -- device_id
+        # -> PicoScope2000/MockPicoScope2000-Instanz (siehe open_picoscope_
+        # session/close_picoscope_sessions). Anders als bei _reconnect_
+        # picoscope()/dem Fallback in _execute_picoscope_action wird hier
+        # bewusst NICHT nach jeder Aktion getrennt: ein Testablauf mit
+        # mehreren PICO_*-Schritten wuerde sonst bei JEDEM Schritt erneut die
+        # vollen ~4,5s Verbinden/Trennen zahlen (siehe picoscope2000/README.md)
+        # -- einmalig beim Laufstart oeffnen und erst am Laufende schliessen
+        # spart das. Waehrenddessen pausiert _reconnect_picoscope() ohnehin
+        # (siehe _test_running), das exklusive Handle bleibt also fuer die
+        # Laufdauer bei uns.
+        self._picoscope_sessions: dict[str, object] = {}
+        # True waehrend eines laufenden Testablaufs (siehe set_test_running) --
+        # pausiert _reconnect_picoscope() komplett, damit dessen periodisches
+        # Verbinden nicht mit einer PICO_*-Testablauf-Aktion um das exklusive
+        # ps2000-Handle konkurriert (an echter Hardware reproduziert, siehe
+        # PICOSCOPE_RECONNECT_INTERVAL_MS-Kommentar).
+        self._test_running = False
         self._simulation_mode = simulation_mode
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
@@ -168,6 +290,10 @@ class DeviceWorker(QObject):
         # siehe HIL_POLL_INTERVAL_MS.
         self._hil_poll_timer = QTimer(self)
         self._hil_poll_timer.timeout.connect(self._poll_hils)
+        # Eigener, NOCH langsamerer Timer als der gemeinsame _reconnect_timer
+        # -- siehe PICOSCOPE_RECONNECT_INTERVAL_MS.
+        self._picoscope_reconnect_timer = QTimer(self)
+        self._picoscope_reconnect_timer.timeout.connect(self._reconnect_picoscope)
 
     @Slot()
     def start(self) -> None:
@@ -176,10 +302,79 @@ class DeviceWorker(QObject):
             self._add_mock_load()
             self._add_mock_can()
             self._add_mock_hil()
+            self._add_mock_picoscope()
         self._try_reconnect()
+        self._reconnect_picoscope()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
         self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
+        self._picoscope_reconnect_timer.start(PICOSCOPE_RECONNECT_INTERVAL_MS)
+
+    @Slot(bool)
+    def set_test_running(self, running: bool) -> None:
+        self._test_running = running
+
+    @Slot(str)
+    def open_picoscope_session(self, device_id: str) -> None:
+        """Oeffnet das PicoScope einmalig fuer die Dauer eines Testablaufs
+        (siehe _picoscope_sessions-Docstring in __init__) -- vom
+        Aufrufer (main_window._on_run_requested) nur emittiert, wenn die
+        Schritte des Laufs tatsaechlich eine PICO_*-Aktion mit diesem
+        device_id enthalten.
+
+        Best-Effort: schlaegt das Oeffnen fehl (Geraet nicht da, belegt durch
+        PicoScope 7, oder gerade eine verschachtelte Reconnect-Probe aktiv,
+        siehe _picoscope_busy), bleibt einfach keine Session fuer diese
+        device_id bestehen -- _execute_picoscope_action faellt dann pro
+        Aktion auf den alten Oeffnen+Schliessen-Pfad zurueck (inkl. dessen
+        eigenem Retry-Mechanismus, siehe PICOSCOPE_RETRY_MESSAGE), es gibt
+        also keinen Grund, hier selbst zu warten/erneut zu versuchen."""
+        if device_id in self._picoscope_sessions:
+            return
+        if device_id == SIM_PICOSCOPE_ID:
+            if self._mock_picoscope_active:
+                scope = MockPicoScope2000.open_first()
+                self._picoscope_sessions[device_id] = scope
+                info = scope.get_info()
+                self.picoscope_state.emit(device_id, "test", info.variant, info.serial)
+            return
+        if not self._picoscope_present or self._picoscope_busy:
+            return
+        elapsed = time.monotonic() - self._picoscope_last_close
+        if elapsed < PICOSCOPE_SETTLE_S:
+            time.sleep(PICOSCOPE_SETTLE_S - elapsed)
+        self._picoscope_busy = True
+        try:
+            scope = PicoScope2000.open_first()
+        except PicoScope2000Error:
+            return
+        finally:
+            self._picoscope_busy = False
+        self._picoscope_sessions[device_id] = scope
+        self.picoscope_state.emit(device_id, "test", self._picoscope_variant, self._picoscope_serial)
+
+    @Slot()
+    def close_picoscope_sessions(self) -> None:
+        """Schliesst alle per open_picoscope_session() offen gehaltenen
+        Verbindungen -- am Laufende (fertig/gestoppt/fehlgeschlagen) immer
+        aufgerufen, auch wenn nie eine Session geoeffnet wurde (dann No-Op)."""
+        if not self._picoscope_sessions:
+            return
+        for device_id, scope in self._picoscope_sessions.items():
+            try:
+                scope.close()
+            except Exception:  # noqa: BLE001 -- Aufraeumen darf nie fehlschlagen
+                logger.exception("PicoScope-Session %s: Fehler beim Schliessen", device_id)
+            if device_id != SIM_PICOSCOPE_ID:
+                self._picoscope_last_close = time.monotonic()
+        self._picoscope_sessions.clear()
+        # Sofort einen frischen Status statt bis zu PICOSCOPE_RECONNECT_
+        # INTERVAL_MS (30s) auf die naechste periodische Probe zu warten --
+        # _test_running ist zu diesem Zeitpunkt bereits False (siehe
+        # main_window._wire_test_runner: set_test_running(False) wird VOR
+        # close_picoscope_sessions verdrahtet), _reconnect_picoscope() laeuft
+        # also nicht mehr ins Leere.
+        self._reconnect_picoscope()
 
     # -- Simulationsmodus ----------------------------------------------------
 
@@ -193,11 +388,13 @@ class DeviceWorker(QObject):
             self._add_mock_load()
             self._add_mock_can()
             self._add_mock_hil()
+            self._add_mock_picoscope()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
             self._close_can(SIM_CAN_ID)
             self._remove_mock_hil()
+            self._remove_mock_picoscope()
 
     # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
     # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
@@ -276,6 +473,22 @@ class DeviceWorker(QObject):
             self.hil_connected.emit(SIM_HIL_ID, False)
             self.device_removed.emit("hil", SIM_HIL_ID)
 
+    def _add_mock_picoscope(self) -> None:
+        if self._mock_picoscope_active:
+            return
+        self._mock_picoscope_active = True
+        info = MockPicoScope2000.open_first().get_info()
+        self.device_added.emit("picoscope", SIM_PICOSCOPE_ID)
+        self.picoscope_connected.emit(SIM_PICOSCOPE_ID, True)
+        self.picoscope_state.emit(SIM_PICOSCOPE_ID, "free", info.variant, info.serial)
+
+    def _remove_mock_picoscope(self) -> None:
+        if not self._mock_picoscope_active:
+            return
+        self._mock_picoscope_active = False
+        self.picoscope_connected.emit(SIM_PICOSCOPE_ID, False)
+        self.device_removed.emit("picoscope", SIM_PICOSCOPE_ID)
+
     def _try_reconnect(self) -> None:
         # Ein passender COM-Port (USB-VID/PID) kann existieren, ohne dass
         # dahinter tatsaechlich ein antwortendes Geraet haengt (z.B. wenn der
@@ -288,6 +501,8 @@ class DeviceWorker(QObject):
         self._reconnect_psus()
         self._reconnect_can()
         self._reconnect_hils()
+        # PicoScope NICHT hier: eigener, viel langsamerer Timer (siehe
+        # PICOSCOPE_RECONNECT_INTERVAL_MS / _picoscope_reconnect_timer).
 
     def _reconnect_loads(self) -> None:
         candidates = _resolve_device_ids("load", KoradKEL102.discover_ports())
@@ -427,6 +642,71 @@ class DeviceWorker(QObject):
         # Sofort abfragen statt auf den naechsten HIL_POLL_INTERVAL_MS-Zyklus
         # zu warten (analog zu _reconnect_loads/_reconnect_psus).
         self._poll_hil(device_id, candidate)
+
+    def _reconnect_picoscope(self) -> None:
+        """Aktualisiert Praesenz- und Belegt/Frei-Status des PicoScope.
+
+        Anders als bei Last/Netzteil/microHIL wird HIER bei jedem Tick neu
+        verbunden und sofort wieder getrennt (kein dauerhaft offenes Handle,
+        siehe picoscope2000/README.md) -- ps2000_open_unit() belegt das
+        Geraet exklusiv, ein dauerhaft offenes LabControl-Handle wuerde also
+        verhindern, dass die PicoScope-7-App (Start-Button im Dashboard,
+        siehe picoscope2000.driver.launch_app) das Geraet je selbst oeffnen
+        koennte.
+
+        usb_present() (Windows-SetupAPI, siehe driver.py) liefert die reine
+        physische Praesenz unabhaengig davon, wer das Geraet gerade haelt --
+        erst danach wird versucht, tatsaechlich zu oeffnen, um "frei" von
+        "belegt" (z.B. PicoScope-7-App laeuft) zu unterscheiden. Im
+        "belegt"-Fall bleiben variant/serial auf dem zuletzt bekannten Stand
+        (waren noch nie erfolgreich zu ermitteln, bleiben sie leer).
+
+        Pausiert komplett waehrend eines laufenden Testablaufs (siehe
+        set_test_running/_test_running) UND wenn bereits eine PICO_*-Aktion
+        oder ein anderer Reconnect-Tick laeuft (siehe _picoscope_busy) --
+        letzteres ist NICHT nur eine Vorsichtsmassnahme: an echter Hardware
+        beobachtet, dass ps2000_open_unit() (blockierend, ~3,5s) intern
+        Windows-Messages pumpt und dadurch eine ZWEITE, verschachtelte
+        Ausfuehrung eines Testablauf-Schritts auf demselben Worker-Thread
+        zulaesst, WAEHREND dieser Aufruf noch laeuft (per Log bestaetigt) --
+        ohne das Flag konkurrieren beide um das exklusive ps2000-Handle und
+        der Testschritt scheitert faelschlich mit "belegt", obwohl gar keine
+        externe App im Weg ist.
+        """
+        if self._test_running or self._picoscope_busy:
+            return
+        present = picoscope_usb_present()
+        if not present:
+            if self._picoscope_present:
+                self._picoscope_present = False
+                self._picoscope_variant = ""
+                self._picoscope_serial = ""
+                self.picoscope_connected.emit(PICOSCOPE_ID, False)
+                self.device_removed.emit("picoscope", PICOSCOPE_ID)
+            return
+
+        if not self._picoscope_present:
+            self._picoscope_present = True
+            logger.info("PicoScope erkannt (USB)")
+            self.device_added.emit("picoscope", PICOSCOPE_ID)
+            self.picoscope_connected.emit(PICOSCOPE_ID, True)
+
+        self._picoscope_busy = True
+        try:
+            scope = PicoScope2000.open_first()
+            try:
+                info = scope.get_info()
+            finally:
+                scope.close()
+                self._picoscope_last_close = time.monotonic()
+        except PicoScope2000Error:
+            self.picoscope_state.emit(PICOSCOPE_ID, "busy", self._picoscope_variant, self._picoscope_serial)
+            return
+        finally:
+            self._picoscope_busy = False
+        self._picoscope_variant = info.variant
+        self._picoscope_serial = info.serial
+        self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
 
     def _emit_psu_limits(self, device_id: str) -> None:
         """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.
@@ -949,4 +1229,96 @@ class DeviceWorker(QObject):
                 return ok, message, float(result.get("v", 0))
             return False, f"Unbekannte Aktion '{action}' fuer microHIL", 0.0
 
+        if kind == "picoscope":
+            return self._execute_picoscope_action(device_id, action, value, channel)
+
         return False, f"Unbekanntes Geraet '{kind}'", 0.0
+
+    def _execute_picoscope_action(
+        self, device_id: str, action: str, value: float, channel: int
+    ) -> tuple[bool, str, float]:
+        """Fuehrt eine einzelne PICO_*-Aktion aus (siehe testcase_model.
+        PICO_ACTIONS).
+
+        Ist fuer diesen device_id bereits eine Session offen (siehe
+        open_picoscope_session, main_window._on_run_requested -- der
+        Normalfall waehrend eines Testlaufs mit PICO_*-Schritten), wird sie
+        direkt fuer die Messung wiederverwendet: kein Oeffnen/Schliessen pro
+        Aktion mehr noetig. Ohne Session (Fallback, z.B. Session-Oeffnen ist
+        selbst an einer verschachtelten Reconnect-Probe gescheitert, siehe
+        open_picoscope_session-Docstring) wird -- wie bisher -- pro Aktion
+        verbunden, gemessen und sofort wieder getrennt, genau wie
+        _reconnect_picoscope() (siehe dessen Docstring -- ein dauerhaftes
+        Handle wuerde sonst die PicoScope-7-App aussperren). Das macht jede
+        einzelne PICO_*-Aktion in diesem Fallback-Fall ca. 4,5s teuer (siehe
+        picoscope2000/README.md) -- blockiert fuer diese Dauer den
+        DeviceWorker-Thread, exakt wie jede andere synchron ausgefuehrte
+        Testablauf-Aktion auch, nur laenger."""
+        field = PICO_ACTION_FIELDS.get(action)
+        if field is None:
+            return False, f"Unbekannte Aktion '{action}' fuer Oszilloskop", 0.0
+
+        pico_channel = "B" if channel == 2 else "A"
+        voltage_range = PICO_RANGE_BY_CODE.get(int(value), "2V")
+
+        session = self._picoscope_sessions.get(device_id)
+        if session is not None:
+            try:
+                measurement = session.measure(channel=pico_channel, voltage_range=voltage_range)
+            except PicoScope2000Error as exc:
+                return False, str(exc), 0.0
+            return True, "", getattr(measurement, field)
+
+        is_mock = device_id == SIM_PICOSCOPE_ID
+        if is_mock:
+            if not self._mock_picoscope_active:
+                return False, "Oszilloskop (Simulation) nicht verbunden", 0.0
+            driver_cls = MockPicoScope2000
+        else:
+            if not self._picoscope_present:
+                return False, "Oszilloskop nicht verbunden", 0.0
+            driver_cls = PicoScope2000
+
+        if is_mock:
+            try:
+                scope = driver_cls.open_first()
+                measurement = scope.measure(channel=pico_channel, voltage_range=voltage_range)
+            except PicoScope2000Error as exc:
+                return False, str(exc), 0.0
+            finally:
+                scope.close()
+            return True, "", getattr(measurement, field)
+
+        # Normalerweise verhindert set_test_running() (siehe main_window.
+        # _on_run_requested) neue Reconnect-Ticks waehrend eines Testlaufs --
+        # ein knapp VOR Testlaufstart bereits gestarteter Tick kann aber noch
+        # in-flight sein. Bewusst KEIN Warten hier (siehe PICOSCOPE_RETRY_
+        # MESSAGE-Kommentar oben: strukturell unmoeglich, der aeussere Aufruf
+        # kann nicht fertig werden, waehrend wir blockieren) -- stattdessen
+        # sofort mit einer fuer testcase_runner.py erkennbaren Retry-Meldung
+        # zurueckkehren.
+        if self._picoscope_busy:
+            return False, PICOSCOPE_RETRY_MESSAGE, 0.0
+        # Siehe PICOSCOPE_SETTLE_S: ein Reopen zu kurz nach dem letzten
+        # Schliessen (egal ob von _reconnect_picoscope() oder einer
+        # vorherigen Aktion) schlaegt an echter Hardware fehl.
+        elapsed = time.monotonic() - self._picoscope_last_close
+        if elapsed < PICOSCOPE_SETTLE_S:
+            time.sleep(PICOSCOPE_SETTLE_S - elapsed)
+
+        self._picoscope_busy = True
+        try:
+            try:
+                scope = driver_cls.open_first()
+            except PicoScope2000Error:
+                return False, "Oszilloskop belegt (vermutlich PicoScope-7-App offen)", 0.0
+            try:
+                measurement = scope.measure(channel=pico_channel, voltage_range=voltage_range)
+            except PicoScope2000Error as exc:
+                return False, str(exc), 0.0
+            finally:
+                scope.close()
+                self._picoscope_last_close = time.monotonic()
+        finally:
+            self._picoscope_busy = False
+        return True, "", getattr(measurement, field)

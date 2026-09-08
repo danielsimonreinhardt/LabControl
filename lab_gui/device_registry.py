@@ -22,6 +22,7 @@ KIND_DISPLAY = {
     "psu": "Netzteil",
     "can": "CAN-Bus",
     "hil": "HIL",
+    "picoscope": "Oszilloskop",
 }
 
 

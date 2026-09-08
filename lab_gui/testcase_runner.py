@@ -56,15 +56,17 @@ blockiert ihn aber nicht (Wartezeiten laufen ueber QTimer statt time.sleep).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from time import monotonic
 
 from PySide6.QtCore import QElapsedTimer, QObject, QTimer, Signal, Slot
 
+from device_worker import PICOSCOPE_RETRY_MESSAGE
 from i18n import tr
 from testcase_model import (
     COND_FIELD_UNITS,
-    HIL_READ_ACTIONS,
+    READ_ACTIONS,
     BlockMatch,
     TestStep,
     arb_value,
@@ -79,6 +81,19 @@ from testcase_model import (
 # gekoppelt, toleriert einzelne verpasste/verzoegerte Zyklen, ohne eine
 # tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
 MEASUREMENT_STALE_S = 2.0
+
+# Verzoegerung vor einem automatischen Retry nach PICOSCOPE_RETRY_MESSAGE
+# (siehe device_worker._execute_picoscope_action) -- muss laenger sein als
+# ein voller PicoScope-Reconnect-Zyklus (~4,5s, siehe device_worker.
+# PICOSCOPE_RECONNECT_INTERVAL_MS-Kommentar), damit der Retry mit hoher
+# Wahrscheinlichkeit NICHT mehr in denselben verschachtelten Aufruf laeuft,
+# der den ersten Versuch scheitern liess. Begrenzte Anzahl Versuche, damit
+# eine dauerhaft haengende Situation den Testlauf nicht endlos blockiert,
+# sondern irgendwann regulaer fehlschlaegt.
+PICOSCOPE_RETRY_DELAY_S = 6.0
+PICOSCOPE_MAX_RETRIES = 3
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -146,6 +161,15 @@ class TestRunner(QObject):
         self._arb_timer.setSingleShot(True)
         self._arb_timer.timeout.connect(self._send_arb_sample)
 
+        # Automatischer Retry nach PICOSCOPE_RETRY_MESSAGE (siehe deren
+        # Kommentar in device_worker.py) -- Anzahl bereits versuchter
+        # Wiederholungen fuer den AKTUELLEN Schritt, zurueckgesetzt bei jedem
+        # neuen Aktionsschritt (siehe _advance).
+        self._pico_retry_count = 0
+        self._pico_retry_timer = QTimer(self)
+        self._pico_retry_timer.setSingleShot(True)
+        self._pico_retry_timer.timeout.connect(self._retry_current_action)
+
         # -- Ablaufsteuerung ---------------------------------------------
         self._matching: dict[int, BlockMatch] = {}
         self._frames: list[_Frame] = []
@@ -153,12 +177,12 @@ class TestRunner(QObject):
         self._run_started = 0.0
         # device_id -> (voltage, current, power, monotonic-Zeitstempel).
         self._measurements: dict[str, tuple[float, float, float, float]] = {}
-        # Zuletzt von einer microHIL-Lese-Aktion (HIL_READ_ACTIONS) gelesener
-        # Wert -- anders als _measurements kein Cache mehrerer Geraete/Kanaele,
-        # da immer nur EIN Lese-Schritt gleichzeitig laufen kann und der Wert
-        # sofort (noch in derselben Ausfuehrung) durch _finish_step verbraucht
-        # wird (siehe dort).
-        self._last_hil_read_value = 0.0
+        # Zuletzt von einer Lese-Aktion (READ_ACTIONS -- microHIL oder
+        # PicoScope) gelesener Wert -- anders als _measurements kein Cache
+        # mehrerer Geraete/Kanaele, da immer nur EIN Lese-Schritt gleichzeitig
+        # laufen kann und der Wert sofort (noch in derselben Ausfuehrung)
+        # durch _finish_step verbraucht wird (siehe dort).
+        self._last_read_value = 0.0
 
     def is_running(self) -> bool:
         return self._running
@@ -193,6 +217,8 @@ class TestRunner(QObject):
         self._pending_check = None
         self._arb_timer.stop()
         self._arb_active = False
+        self._pico_retry_timer.stop()
+        self._pico_retry_count = 0
         self._running = False
         self._frames = []
         self._vars = {}
@@ -221,20 +247,55 @@ class TestRunner(QObject):
         if not self._running:
             return  # Ergebnis eines bereits gestoppten Laufs -- ignorieren
         if not success:
+            if message == PICOSCOPE_RETRY_MESSAGE:
+                self._retry_pico_action()
+                return
             self._fail_at(self._index, message)
             return
+        self._pico_retry_count = 0
         if self._arb_active:
             self._continue_arb()
             return
         step = self._steps[self._index]
-        if step.device_kind == "hil" and step.action in HIL_READ_ACTIONS:
-            self._last_hil_read_value = value
+        if step.action in READ_ACTIONS:
+            self._last_read_value = value
             if step.store_var:
-                # Macht die microHIL-Lesung als while/if-Bedingung nutzbar
-                # (dort cond_source="variable"), unabhaengig von der
-                # separaten Pass/Fail-Pruefung in _finish_step.
+                # Macht die Lesung (microHIL oder PicoScope) als while/if-
+                # Bedingung nutzbar (dort cond_source="variable"), unabhaengig
+                # von der separaten Pass/Fail-Pruefung in _finish_step.
                 self._vars[step.store_var] = value
         self._wait_timer.start(max(0, round(step.duration * 1000)))
+
+    def _retry_pico_action(self) -> None:
+        """Reagiert auf PICOSCOPE_RETRY_MESSAGE (siehe deren Kommentar in
+        device_worker.py): kein echter Fehler, sondern eine erkannte
+        Verschachtelung mit einem noch laufenden PicoScope-Reconnect-Tick --
+        nach PICOSCOPE_RETRY_DELAY_S automatisch derselbe Schritt erneut,
+        begrenzt auf PICOSCOPE_MAX_RETRIES Versuche, damit eine dauerhaft
+        haengende Situation den Lauf nicht endlos blockiert."""
+        self._pico_retry_count += 1
+        if self._pico_retry_count > PICOSCOPE_MAX_RETRIES:
+            self._pico_retry_count = 0
+            logger.warning(
+                "PicoScope-Schritt %d nach %d Versuchen aufgegeben (Reconnect-Kollision)",
+                self._index, PICOSCOPE_MAX_RETRIES,
+            )
+            self._fail_at(
+                self._index,
+                tr("Oszilloskop dauerhaft belegt (Reconnect kollidiert wiederholt)"),
+            )
+            return
+        logger.info(
+            "PicoScope-Schritt %d kollidierte mit Reconnect-Tick, Retry %d/%d in %.0fs",
+            self._index, self._pico_retry_count, PICOSCOPE_MAX_RETRIES, PICOSCOPE_RETRY_DELAY_S,
+        )
+        self._pico_retry_timer.start(round(PICOSCOPE_RETRY_DELAY_S * 1000))
+
+    def _retry_current_action(self) -> None:
+        if not self._running:
+            return
+        step = self._steps[self._index]
+        self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value, step.hil_channel)
 
     def _fail_at(self, index: int, message: str) -> None:
         self._running = False
@@ -242,6 +303,8 @@ class TestRunner(QObject):
         self._wait_timer.stop()
         self._check_timeout.stop()
         self._pending_check = None
+        self._pico_retry_timer.stop()
+        self._pico_retry_count = 0
         self.step_failed.emit(index, message)
 
     # -- Pass/Fail-Pruefung nach der Wartezeit ---------------------------------
@@ -257,13 +320,13 @@ class TestRunner(QObject):
         if not step.check_enabled:
             self._advance()
             return
-        if step.device_kind == "hil" and step.action in HIL_READ_ACTIONS:
+        if step.action in READ_ACTIONS:
             # Der Wert kam mit der Aktion selbst (siehe on_action_completed),
             # KEINE Messwert-Cache-Quelle wie bei Last/Netzteil -- also direkt
             # auswerten statt eine "pending"-Pruefung auf die naechste
-            # eintreffende Messung zu armieren (die es fuer microHIL-Kanaele
-            # hier gar nicht gibt).
-            value = self._last_hil_read_value
+            # eintreffende Messung zu armieren (die es fuer microHIL-/
+            # PicoScope-Kanaele hier gar nicht gibt).
+            value = self._last_read_value
             passed = step.check_min <= value <= step.check_max
             self.step_result.emit(self._index, passed, value)
             if not passed and step.check_abort:
@@ -359,6 +422,7 @@ class TestRunner(QObject):
             if t == "action":
                 if not step.enabled:
                     continue
+                self._pico_retry_count = 0
                 self.step_started.emit(self._index, step)
                 if is_arb_action(step.action):
                     self._start_arb(step)

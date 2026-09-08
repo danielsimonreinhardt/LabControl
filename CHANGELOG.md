@@ -7,6 +7,57 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **PicoScope 2204A/2205A: Dashboard-Kachel + Start-Button für PicoScope 7.**
+  Neues Treiber-Paket `picoscope2000/` (ps2000-API via `picosdk`, gegen
+  echte Hardware verifiziert -- trotz "A" im Namen brauchen 2204A/2205A die
+  ÄLTERE ps2000-API, nicht ps2000a, siehe `picoscope2000/README.md`).
+  LabControl kopiert bewusst NICHT den Funktionsumfang der PicoScope-7-App
+  (Kanäle, Trigger, Kurvenanzeige) -- die Dashboard-Kachel
+  (`lab_gui/picoscope_panel.py`) zeigt nur, ob das Gerät frei oder von einer
+  anderen App (typischerweise PicoScope 7 selbst) belegt ist, plus Variante/
+  Seriennummer, und bietet einen Button, der die PicoScope-7-App startet.
+  `device_worker._reconnect_picoscope()` verbindet dafür bei jedem
+  Reconnect-Tick neu und trennt sofort wieder (kein dauerhaft offenes
+  Handle, sonst könnte PicoScope 7 das Gerät nie selbst öffnen) und nutzt
+  `picoscope2000.driver.usb_present()` (Windows-SetupAPI, unabhängig von der
+  ps2000.dll), um "belegt" von "gar nicht angeschlossen" zu unterscheiden --
+  beides liefert bei `ps2000_open_unit()` denselben Fehlercode.
+- **PicoScope: Testablauf-Aktionen für Spitzenwert/Vpp/RMS.** Vier neue
+  Aktionen (`PICO_VMAX`/`PICO_VMIN`/`PICO_VPP`/`PICO_VRMS`, siehe
+  `testcase_model.PICO_ACTIONS`) führen eine einzelne Blockerfassung durch
+  (`PicoScope2000.measure()`, neu in `picoscope2000/driver.py`+`mock.py`)
+  und liefern einen Kennwert zurück -- nutzbar für Pass/Fail-Prüfungen und
+  `store_var` (als while/if-Bedingung), analog zu `HIL_AIN_READ`. Kanal
+  (A/B) und Spannungsbereich sind pro Testschritt einstellbar (neue
+  `picoscope_page` im Testcase-Editor, siehe `testcase_tab.py`).
+  **Wichtiger Fund dabei:** `ps2000_open_unit()` (blockierend, ~3,5s) pumpt
+  offenbar intern Windows-Messages, wodurch die Dashboard-Kachel ihre
+  periodische Reconnect-Probe VERSCHACHTELT mitten in einen laufenden
+  Testschritt hineinlaufen lassen kann (an echter Hardware reproduziert,
+  gleicher Thread) -- ein simples Flag+Warten löst das NICHT (der äußere
+  Aufruf kann erst zurückkehren, wenn der innere das tut). Behoben über
+  eigenen, deutlich langsameren Reconnect-Timer für das PicoScope (30s statt
+  3s, `device_worker.PICOSCOPE_RECONNECT_INTERVAL_MS`), Pause während eines
+  Testlaufs (`set_test_running()`) und einen automatischen Retry in
+  `testcase_runner.py`, falls trotzdem einmal eine Verschachtelung auftritt
+  (sofortiger Abbruch statt Warten + neuer, nicht verschachtelter Versuch
+  nach 6s, siehe `picoscope2000/README.md`).
+- **PicoScope: Verbindung bleibt für die gesamte Laufdauer offen statt pro
+  Aktion neu zu verbinden.** `main_window._on_run_requested()` öffnet vor
+  Laufstart einmalig eine Session (`device_worker.open_picoscope_session`),
+  falls Schritte tatsächlich PicoScope-Aktionen enthalten, und schließt sie
+  erst am Laufende (`close_picoscope_sessions`, bei fertig/gestoppt/
+  fehlgeschlagen). Läufe ohne PicoScope-Beteiligung öffnen gar nichts.
+  Gemessener Effekt (3 Aktionen, echte Hardware): 13,8s → 4,6s -- der
+  Vorteil wächst mit der Schrittzahl. Schlägt das Session-Öffnen selbst fehl
+  (z.B. verschachtelte Reconnect-Probe), fällt `_execute_picoscope_action`
+  automatisch auf den alten Pro-Aktion-Pfad zurück (inkl. Retry).
+  **Nebenbei gefundener Bug:** Der Safety-Watchdog (`begin_run_supervision`)
+  brach jeden Testlauf mit PicoScope-Schritt nach `STALE_TIMEOUT_S`
+  fälschlich als "Messwerte veraltet" ab, weil PicoScope (anders als PSU/
+  Last/HIL) keine periodischen Messwerte liefert -- PicoScope-device_ids
+  werden jetzt bewusst von der Watchdog-Überwachung ausgeschlossen (kein
+  steuerbarer Ausgang, daher auch keine Sicherheitsrelevanz).
 - **Testablauf: microHIL-Lesewert in Variable speichern (für Solange/Wenn-Bedingungen).**
   `HIL_IN_READ`/`HIL_AIN_READ`-Schritte im Testcase-Editor können den
   gelesenen Wert jetzt zusätzlich in eine benannte Variable schreiben

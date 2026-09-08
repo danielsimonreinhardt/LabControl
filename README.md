@@ -26,6 +26,10 @@ A new release is compiled after every master-push. Just download and run the .ex
 
 - KORAD KEL102 electronic load
 - MANSON HCS-3304 USB (all versions of the HCS family should work)
+- PicoScope 2204A/2205A USB oscilloscope (dashboard tile with free/busy
+  status + a button to launch the PicoScope 7 app; LabControl deliberately
+  does not replicate its channel/trigger/waveform UI, see
+  `picoscope2000/README.md`)
 
 ## Contributing
 

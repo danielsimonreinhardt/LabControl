@@ -26,6 +26,8 @@ from i18n import Translator, tr
 from icons import IconButton
 from microhil_panel import MicroHilPanel
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
+from picoscope2000.driver import launch_app as launch_picoscope_app
+from picoscope_panel import PicoscopePanel
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
@@ -540,6 +542,12 @@ class DashboardWidget(QGroupBox):
                 # Relais/8+8 Digital-IO/4+2 Analog-IO/2x12V-OUT passen nicht
                 # in eine einzelne Werteliste.
                 panel = MicroHilPanel(device_id, label)
+            elif kind == "picoscope":
+                # Eigenstaendiges Panel statt FIELD_DEFS -- Status (frei/
+                # belegt) + Start-Button passen nicht ins Messwerte-Schema
+                # (siehe picoscope_panel.py-Modul-Docstring).
+                panel = PicoscopePanel(device_id, label)
+                panel.launch_requested.connect(self._on_picoscope_launch_requested)
             else:
                 field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
                 panel = _DevicePanel(kind, device_id, label, field_keys)
@@ -603,6 +611,10 @@ class DashboardWidget(QGroupBox):
 
     @Slot(str, bool)
     def set_hil_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    @Slot(str, bool)
+    def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
     def _set_online(self, device_id: str, online: bool) -> None:
@@ -695,3 +707,20 @@ class DashboardWidget(QGroupBox):
         if panel is None:
             return
         panel.set_analog_out_value(channel, millivolts)
+
+    # -- PicoScope -------------------------------------------------------------
+
+    @Slot(str, str, str, str)
+    def update_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_state(status, variant, serial)
+
+    def _on_picoscope_launch_requested(self) -> None:
+        # Direkt hier statt ueber den DeviceWorker/Thread geroutet: reiner
+        # Prozessstart der PicoScope-7-App (kein Zugriff auf das offene
+        # Geraete-Handle, siehe picoscope2000.driver.launch_app), also ohne
+        # die Thread-Sicherheits-Gruende, die die uebrigen Steuerbefehle
+        # zwingend ueber den Worker laufen lassen.
+        launch_picoscope_app()

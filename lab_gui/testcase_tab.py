@@ -54,9 +54,13 @@ from testcase_model import (
     DEVICE_KIND_LABELS,
     HIL_CHANNEL_COUNTS,
     HIL_CHECK_FIELD_LABELS,
-    HIL_READ_ACTIONS,
     HIL_READ_CHECK_FIELD,
     MEASUREMENT_DEVICE_KINDS,
+    PICO_CHECK_FIELD_LABELS,
+    PICO_READ_ACTIONS,
+    PICO_READ_CHECK_FIELD,
+    PICO_VOLTAGE_RANGE_CODES,
+    READ_ACTIONS,
     STEP_TYPE_ACTION,
     VALUELESS_ACTIONS,
     TestStep,
@@ -77,6 +81,11 @@ from testcase_model import (
 # damit ein spaeteres Einfuegen/Umsortieren von Spalten nicht wieder alle
 # verstreuten Literalindizes brechen kann.
 COL_NUM, COL_DEVICE, COL_ACTION, COL_VALUE, COL_DURATION, COL_CHECK, COL_ENABLED = range(7)
+
+# Kehrwert von PICO_VOLTAGE_RANGE_CODES -- fuer die Lauf-Statuszeile
+# (_set_step_status), die aus TestStep.value (Zahlencode) wieder den
+# Anzeigenamen des Spannungsbereichs braucht.
+_PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.items()}
 
 # step_type -> welche Spalten eine Kontrollfluss-Zeile tatsaechlich mit einem
 # Widget belegt (COL_NUM = Zeilennummer ist immer vorhanden, COL_DEVICE immer
@@ -694,6 +703,13 @@ class TestcaseTab(QWidget):
             for kind in DEVICE_KIND_LABELS
         ]
         for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
+            if kind not in DEVICE_ACTIONS:
+                # z.B. "picoscope": hat bewusst keine Testablauf-Aktionen
+                # (siehe picoscope_panel.py-Modul-Docstring) -- ohne diesen
+                # Filter wuerde die Auswahl hier crashen, sobald eine Zeile
+                # damit eine Aktion bestuecken will (DEVICE_ACTIONS[kind] in
+                # _populate_action_combo hat keinen .get()-Fallback).
+                continue
             items.append((f"{label} ({kind_label(kind)})", _device_key(kind, device_id)))
         return items
 
@@ -872,11 +888,39 @@ class TestcaseTab(QWidget):
         hil_page._channel_spin = hil_channel_spin
         hil_page._value_spin = hil_value_spin
 
+        # PicoScope: Kanalauswahl (A/B, ueber denselben generischen
+        # Kanal-Slot wie microHIL -- siehe testcase_model.TestStep.
+        # hil_channel-Docstring, 1=A/2=B) + Spannungsbereich. Kein
+        # value_spin/hil_value_spin-Aequivalent: alle PICO_*-Aktionen sind
+        # reine Lese-Aktionen (siehe VALUELESS_ACTIONS), `value` traegt hier
+        # stattdessen den Range-Zahlencode (siehe TestStep.value-Docstring).
+        picoscope_page = QWidget()
+        picoscope_layout = QHBoxLayout(picoscope_page)
+        picoscope_layout.setContentsMargins(2, 0, 2, 0)
+        picoscope_channel_label = QLabel(tr("Kanal"))
+        picoscope_channel_combo = QComboBox()
+        picoscope_channel_combo.addItem("A", 1)
+        picoscope_channel_combo.addItem("B", 2)
+        picoscope_channel_combo.setCurrentIndex(1 if step.hil_channel == 2 else 0)
+        picoscope_range_label = QLabel(tr("Bereich"))
+        picoscope_range_combo = QComboBox()
+        for range_name, range_code in PICO_VOLTAGE_RANGE_CODES.items():
+            picoscope_range_combo.addItem(range_name, range_code)
+        range_index = picoscope_range_combo.findData(int(step.value)) if step.value else -1
+        picoscope_range_combo.setCurrentIndex(range_index if range_index >= 0 else picoscope_range_combo.findData(7))
+        picoscope_layout.addWidget(picoscope_channel_label)
+        picoscope_layout.addWidget(picoscope_channel_combo)
+        picoscope_layout.addWidget(picoscope_range_label)
+        picoscope_layout.addWidget(picoscope_range_combo, 1)
+        picoscope_page._channel_combo = picoscope_channel_combo
+        picoscope_page._range_combo = picoscope_range_combo
+
         value_stack = QStackedWidget()
-        value_stack.addWidget(value_spin)   # Index 0: normaler Zahlenwert
-        value_stack.addWidget(arb_page)     # Index 1: Arbiträrsignal-Zusammenfassung + Button
-        value_stack.addWidget(can_page)     # Index 2: CAN-Frame-Zusammenfassung + Button
-        value_stack.addWidget(hil_page)     # Index 3: microHIL Kanal + Wert
+        value_stack.addWidget(value_spin)       # Index 0: normaler Zahlenwert
+        value_stack.addWidget(arb_page)         # Index 1: Arbiträrsignal-Zusammenfassung + Button
+        value_stack.addWidget(can_page)         # Index 2: CAN-Frame-Zusammenfassung + Button
+        value_stack.addWidget(hil_page)         # Index 3: microHIL Kanal + Wert
+        value_stack.addWidget(picoscope_page)   # Index 4: PicoScope Kanal + Bereich
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -928,18 +972,20 @@ class TestcaseTab(QWidget):
         def open_check_dialog() -> None:
             code = action_combo.currentData() or ""
             field_choices = None
-            field_code = HIL_READ_CHECK_FIELD.get(code)
+            field_code = HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
             if field_code is not None:
-                # Nur der eine Wert, den HIL_AIN_READ/HIL_IN_READ tatsaechlich
-                # liefern -- die drei generischen Last/Netzteil-Messgroessen
-                # (Default in CheckDialog) waeren hier bedeutungslos.
+                # Nur der eine Wert, den die jeweilige Lese-Aktion (HIL_AIN_READ/
+                # HIL_IN_READ/PICO_*) tatsaechlich liefert -- die drei
+                # generischen Last/Netzteil-Messgroessen (Default in
+                # CheckDialog) waeren hier bedeutungslos.
                 unit = COND_FIELD_UNITS.get(field_code, "")
-                field_choices = {field_code: (HIL_CHECK_FIELD_LABELS[field_code], unit)}
-            # Nur eine microHIL-Lese-Aktion liefert ueberhaupt einen Wert, der
-            # sich sinnvoll in eine Variable schreiben laesst (siehe
-            # testcase_runner.on_action_completed) -- Last/Netzteil haben
-            # keinen entsprechenden Mechanismus.
-            var_store_supported = current_kind() == "hil" and code in HIL_READ_ACTIONS
+                label = HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS[field_code]
+                field_choices = {field_code: (label, unit)}
+            # Nur eine Lese-Aktion (microHIL oder PicoScope) liefert ueberhaupt
+            # einen Wert, der sich sinnvoll in eine Variable schreiben laesst
+            # (siehe testcase_runner.on_action_completed) -- Last/Netzteil
+            # haben keinen entsprechenden Mechanismus.
+            var_store_supported = code in READ_ACTIONS
             dialog = CheckDialog(
                 check_page._check_params,
                 is_arb=is_arb_action(code),
@@ -1058,6 +1104,8 @@ class TestcaseTab(QWidget):
                 hil_value_spin.setRange(lo, hi)
                 hil_value_spin.setEnabled(code not in VALUELESS_ACTIONS)
                 value_stack.setCurrentIndex(3)
+            elif kind == "picoscope":
+                value_stack.setCurrentIndex(4)
             else:
                 value_stack.setCurrentIndex(0)
             # Pass/Fail-Pruefung setzt eine Messung voraus, die der Runner
@@ -1067,7 +1115,7 @@ class TestcaseTab(QWidget):
             # dafuer; _finish_step wuerde sonst 2s auf eine nie eintreffende
             # Messung warten und den GESAMTEN Testlauf mit "keine aktuelle
             # Messung" abbrechen (siehe testcase_runner.MEASUREMENT_STALE_S).
-            checkable = kind in MEASUREMENT_DEVICE_KINDS or (kind == "hil" and code in HIL_READ_ACTIONS)
+            checkable = kind in MEASUREMENT_DEVICE_KINDS or code in READ_ACTIONS
             check_button.setEnabled(checkable)
             refresh_value_warning()
 
@@ -1743,6 +1791,7 @@ class TestcaseTab(QWidget):
         arb_page: QWidget = value_stack.widget(1)
         can_page: QWidget = value_stack.widget(2)
         hil_page: QWidget = value_stack.widget(3)
+        picoscope_page: QWidget = value_stack.widget(4)
         duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
         check_page = self._table.cellWidget(row, COL_CHECK)
         enabled_container = self._table.cellWidget(row, COL_ENABLED)
@@ -1754,14 +1803,25 @@ class TestcaseTab(QWidget):
         can_params = can_page._params
         check_params = check_page._check_params
         # microHIL-Aktionen tragen ihren Wert (nur HIL_AOUT) in der eigenen
-        # hil_page-Spinbox statt in value_spin (siehe _build_action_row).
-        value = hil_page._value_spin.value() if kind == "hil" else value_spin.value()
+        # hil_page-Spinbox statt in value_spin; PicoScope-Aktionen tragen den
+        # gewaehlten Spannungsbereichs-Code (siehe TestStep.value-Docstring)
+        # aus picoscope_page._range_combo (siehe _build_action_row).
+        if kind == "hil":
+            value = hil_page._value_spin.value()
+        elif kind == "picoscope":
+            value = float(picoscope_page._range_combo.currentData())
+        else:
+            value = value_spin.value()
+        # Kanal-Slot: microHIL nutzt hil_page, PicoScope picoscope_page --
+        # beide schreiben in dasselbe TestStep.hil_channel-Feld (siehe dessen
+        # Docstring: generischer Kanal-Slot, Name historisch gewachsen).
+        channel = picoscope_page._channel_combo.currentData() if kind == "picoscope" else hil_page._channel_spin.value()
         return TestStep(
             device_kind=kind,
             device_id=device_id,
             action=action_code,
             value=value,
-            hil_channel=hil_page._channel_spin.value(),
+            hil_channel=channel,
             duration=duration_spin.value(),
             enabled=enabled_check.isChecked(),
             arb_shape=params["shape"],
@@ -2126,6 +2186,10 @@ class TestcaseTab(QWidget):
                 detail = tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)
             else:
                 detail = tr("Kanal {ch}", ch=step.hil_channel)
+        elif step.device_kind == "picoscope":
+            ch = "A" if step.hil_channel != 2 else "B"
+            range_name = _PICO_RANGE_BY_CODE.get(int(step.value), "?")
+            detail = tr("Kanal {ch}, {range}", ch=ch, range=range_name)
         else:
             detail = f"{step.value}"
         self._set_status(
