@@ -328,10 +328,10 @@ class _RelayPwr12Grid(QWidget):
         for icon, on in zip(self._pwr12_icons, enabled):
             icon.setPixmap(_dot_pixmap(on, palette))
 
-    def set_pwr12_values(self, values_mv: list[int]) -> None:
+    def set_pwr12_values(self, values_ma: list[int]) -> None:
         # Siehe _Pwr12Row.set_values()-Kommentar: defekt markierte Kanaele
         # (set_defects()) werden hier bewusst nicht ueberschrieben.
-        for i, (label, value) in enumerate(zip(self._pwr12_value_labels, values_mv), start=1):
+        for i, (label, value) in enumerate(zip(self._pwr12_value_labels, values_ma), start=1):
             if i in self._defective_curr:
                 continue
             label.setText(f"{value} mA")
@@ -407,15 +407,13 @@ class _Pwr12Row(QWidget):
     """Eine Zeile je 12V-Ausgang: Punkt (Enable-Zustand) + Kanalnummer,
     durch ein Strom-Icon abgesetzt, dann die Stromangabe.
 
-    WICHTIG (Absprache): driver.get_current_sense_mv() liefert die ROHE
-    Sense-Spannung in mV, keine echten mA -- der Shunt-/Verstaerkungsfaktor
-    fehlt noch in der Firmware (siehe microHIL-Roadmap, "CURR? in mA
-    umrechnen"). Die Beschriftung hier zeigt trotzdem bewusst "mA" statt
-    "mV", auf ausdruecklichen Wunsch -- der intern durchgereichte Wert
-    bleibt bis zur Firmware-Umrechnung die rohe mV-Zahl, nur mit falscher
-    Einheit beschriftet. Bei der GUI-Integration (device_worker.py) auf
-    keinen Fall vergessen, das zu korrigieren, sobald die Firmware echte
-    mA liefert."""
+    driver.get_current_ma() liefert seit 2026-09-08 den kalibrierten,
+    gegen Amperemeter verifizierten Laststrom in mA (siehe
+    docs/calibration.md im microHIL-Repo) -- vorher lieferte das
+    zugrundeliegende Kommando nur die rohe, unkalibrierte Sense-Spannung
+    (weiterhin ueber get_current_sense_raw_mv() erreichbar), die
+    Beschriftung hier zeigte aber schon vorher "mA" auf ausdruecklichen
+    Wunsch."""
 
     def __init__(self, count: int, prefix: str = "") -> None:
         super().__init__()
@@ -465,15 +463,13 @@ class _Pwr12Row(QWidget):
             icon.setToolTip(tooltip)
             number.setToolTip(tooltip)
 
-    def set_values(self, values_mv: list[int]) -> None:
-        # Zahl bleibt der rohe mV-Wert vom Geraet (siehe Klassendocstring) --
-        # nur die Beschriftung sagt "mA". Kanaele mit bekanntem Hardware-
-        # Defekt (siehe set_defects()) werden NICHT ueberschrieben -- ihr
-        # Messwert ist nachweislich unzuverlaessig (docs/hardware-notes.md
-        # im microHIL-Repo), ein Poll-Update wuerde die "defekt"-Anzeige
-        # sonst bei jedem Zyklus wieder mit einer scheinbar gueltigen Zahl
-        # ueberschreiben.
-        for i, (label, value) in enumerate(zip(self._value_labels, values_mv), start=1):
+    def set_values(self, values_ma: list[int]) -> None:
+        # Kanaele mit bekanntem Hardware-Defekt (siehe set_defects()) werden
+        # NICHT ueberschrieben -- ihr Messwert ist nachweislich unzuverlaessig
+        # (docs/hardware-notes.md im microHIL-Repo), ein Poll-Update wuerde
+        # die "defekt"-Anzeige sonst bei jedem Zyklus wieder mit einer
+        # scheinbar gueltigen Zahl ueberschreiben.
+        for i, (label, value) in enumerate(zip(self._value_labels, values_ma), start=1):
             if i in self._defective_curr:
                 continue
             label.setText(f"{value} mA")
@@ -793,12 +789,12 @@ class MicroHilPanel(QGroupBox):
         self._aout_grid.set_value(f"AOUT{channel}", f"{millivolts} mV")
         self._compact_analog_grid.set_value(f"AOUT{channel}", f"{millivolts} mV")
 
-    def update_pwr12(self, enabled: list[bool], current_sense_mv: list[int]) -> None:
+    def update_pwr12(self, enabled: list[bool], current_ma: list[int]) -> None:
         self._last_pwr12_enabled = list(enabled)
         self._pwr12_row.set_states(enabled)
-        self._pwr12_row.set_values(current_sense_mv)
+        self._pwr12_row.set_values(current_ma)
         self._compact_relay_pwr12.set_pwr12_states(enabled)
-        self._compact_relay_pwr12.set_pwr12_values(current_sense_mv)
+        self._compact_relay_pwr12.set_pwr12_values(current_ma)
 
     def clear_values(self) -> None:
         self.update_inputs([False] * IN_COUNT)

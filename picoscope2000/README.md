@@ -91,21 +91,30 @@ with PicoScope2000.open_first() as scope:
   `mock.py` aus `driver.py` – sonst würde bereits das Importieren von
   `mock.py` (Simulationsmodus!) die DLL-Suche aus `driver.py` auslösen und
   auf Systemen ohne installierte PicoScope-Software fehlschlagen.
-- **Andere Geräteklasse als PSU/Last -- kein dauerhaft offenes Handle.**
-  `device_worker._reconnect_picoscope()` folgt NICHT dem
-  Last/Netzteil/microHIL-Muster aus `NEUEN_TREIBER_ANLEGEN.md` (Treiber-
-  Objekt im Dict halten, per `_poll()` befragen). Stattdessen wird bei
-  jedem Tick des EIGENEN, langsamen `PICOSCOPE_RECONNECT_INTERVAL_MS`-Timers
-  (30s, siehe device_worker.py) neu verbunden, `get_info()` abgefragt und
-  SOFORT wieder getrennt -- ein dauerhaft offenes Handle würde verhindern,
-  dass die PicoScope-7-App (Start-Button) das Gerät je selbst öffnen könnte,
-  da `ps2000_open_unit()` exklusiv ist. Der Timer läuft separat vom
-  gemeinsamen `RECONNECT_INTERVAL_MS` (3s) der übrigen Geräte, weil ein
-  einzelner PicoScope-Reconnect-Zyklus (open+close) real ~4,5s dauert --
-  BLOCKIEREND, da alles im selben DeviceWorker-Thread läuft; bei 3s würde
-  der Worker-Thread praktisch dauerhaft mit dem PicoScope beschäftigt sein
-  und PSU/Last/CAN/HIL regelmäßig einfrieren (an echter Hardware
-  reproduziert).
+- **Andere Geräteklasse als PSU/Last -- kein dauerhaft offenes Handle, UND
+  kein periodisches Öffnen mehr.** `device_worker._reconnect_picoscope()`
+  folgt NICHT dem Last/Netzteil/microHIL-Muster aus
+  `NEUEN_TREIBER_ANLEGEN.md` (Treiber-Objekt im Dict halten, per `_poll()`
+  befragen). Ursprünglich wurde bei jedem Tick des EIGENEN, langsamen
+  `PICOSCOPE_RECONNECT_INTERVAL_MS`-Timers (30s) neu verbunden, `get_info()`
+  abgefragt und sofort wieder getrennt -- an echter Hardware löste das bei
+  JEDEM Tick ein hörbares Relaisklicken im Gerät aus (Nutzerfeedback), auch
+  wenn sich am Status nichts geändert hatte. `_reconnect_picoscope()` prüft
+  seither nur noch die reine USB-Präsenz (`usb_present()`, ohne das Gerät zu
+  öffnen); das tatsächliche Öffnen (`_probe_picoscope()`, liefert
+  variant/serial + den anfänglichen Frei/Belegt-Status) läuft nur noch
+  EINMAL beim Erkennen eines (Wieder-)Anschlusses sowie einmalig am Ende
+  eines Testlaufs mit PicoScope-Beteiligung (`close_picoscope_sessions()`),
+  nicht mehr periodisch. Ein dauerhaft offenes Handle bliebe weiterhin
+  ausgeschlossen -- es würde verhindern, dass die PicoScope-7-App
+  (Start-Button) das Gerät je selbst öffnen könnte, da `ps2000_open_unit()`
+  exklusiv ist. Trade-off: belegt ein externes Programm (PicoScope 7) das
+  Gerät, NACHDEM die Kachel es bereits als "frei" gemeldet hat, bleibt die
+  Anzeige bis zum nächsten Ab-/Anstecken oder einer echten
+  Testablauf-Aktion optimistisch auf dem alten Stand -- ausdrücklich
+  gewünschter Trade-off gegen das Relaisklicken.
+  Ein einzelner PicoScope-Öffnen/Schließen-Zyklus dauert real ~4,5s --
+  BLOCKIEREND, da alles im selben DeviceWorker-Thread läuft.
 - **Testablauf-Integration (PICO_VMAX/PICO_VMIN/PICO_VPP/PICO_VRMS) --
   ohne Control-Tab-Abschnitt.** `measure()` liefert alle vier Kennwerte aus
   EINER Blockerfassung (eine zusätzliche Erfassung pro Kennwert wäre wegen

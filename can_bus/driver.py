@@ -10,13 +10,123 @@ sofern python-can sie unterstuetzt.
 """
 from __future__ import annotations
 
+import logging
+import os
+import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import can
 
+logger = logging.getLogger(__name__)
+
 INTERFACE_LIST = ["vector", "pcan"]
 DEFAULT_BITRATE = 500_000
+
+# Standard-Installationsort der Vector XL Driver Library (vxlapi64.dll landet
+# dort ueber den offiziellen Vector-Treiber-Installer) plus dem optionalen
+# SDK-Ordner, falls zusaetzlich die "XL Driver Library" separat installiert
+# wurde.
+_VECTOR_DLL_CANDIDATES = (
+    Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32",
+    Path(os.environ.get("PUBLIC", r"C:\Users\Public"))
+    / "Documents" / "Vector" / "XL Driver Library" / "bin",
+)
+
+
+def _ensure_vector_dll_findable() -> None:
+    """Rein defensiv, NICHT bestaetigt als Ursache des "keine Kanaele
+    gefunden"-Bugs an echter VN1610-Hardware (siehe unten) -- lediglich ein
+    zusaetzliches Sicherheitsnetz fuer den Fall, dass `System32` auf einem
+    bestimmten Rechner NICHT in PATH steht (waere sonst der einzige Fall, in
+    dem `ctypes.util.find_library()` unter Windows die Datei uebersieht --
+    es durchsucht ausschliesslich `os.environ["PATH"]`, siehe dessen
+    CPython-Quelltext, ohne eigenen Fallback auf die echte Windows-DLL-
+    Suchreihenfolge/System32-Automatik).
+
+    Direkt an echter VN1610-Hardware nachgemessen (sowohl per einfachem
+    `python`-Aufruf als auch aus dem gebauten LabControl_v0.9.16.exe
+    heraus): `find_library("vxlapi64")` fand die DLL in
+    `C:\\Windows\\System32` ZUVERLAESSIG, auch OHNE diese Funktion --
+    System32 stand in beiden Faellen bereits reguleaer in PATH. Der
+    eigentliche, einmal beobachtete "keine Kanaele gefunden"-Fall liess
+    sich bei mehreren Wiederholungen (mit und ohne manuelles Vorladen der
+    DLL) NICHT reproduzieren, alle lieferten korrekt alle VN1610-/virtuellen
+    Kanaele -- deutet eher auf ein einmaliges/zeitliches Problem hin (z.B.
+    die Vector-Treiber-Enumeration direkt nach Systemstart/Anstecken der
+    VN1610 noch nicht fertig) als auf einen deterministischen Code-Bug.
+    Diese Funktion bleibt trotzdem als billige, harmlose Absicherung stehen
+    -- schadet nicht, falls PATH auf einem anderen Rechner doch einmal kein
+    System32 enthaelt."""
+    path_env = os.environ.get("PATH", "")
+    for candidate in _VECTOR_DLL_CANDIDATES:
+        if candidate.is_dir() and str(candidate) not in path_env.split(os.pathsep):
+            path_env = str(candidate) + os.pathsep + path_env
+    os.environ["PATH"] = path_env
+
+
+_ensure_vector_dll_findable()
+
+
+# Kanal-Token fuer Vector-Interfaces: "<seriennummer>:<hw_kanal>", z.B.
+# "75816:0" fuer CAN 1 der VN1610 mit Seriennummer 75816. discover_configs()
+# liefert Kanaele ausschliesslich in dieser Form, siehe _vector_bus_kwargs()
+# fuer den Grund.
+_VECTOR_CHANNEL_TOKEN = re.compile(r"^\s*(\d+)\s*:\s*(\d+)\s*$")
+
+
+def _vector_bus_kwargs(channel: str) -> dict:
+    """Bindet einen Vector-Kanal an die PHYSISCHE Hardware statt an eine
+    Anwendung aus der Vector Hardware Config.
+
+    Hintergrund (an echter VN1610 nachgemessen, war die eigentliche Ursache
+    des lange gesuchten "CAN-Interface"-Bugs): python-cans `VectorBus`
+    defaultet `app_name` auf **"CANalyzer"**. Ohne explizites Ueberschreiben
+    bedeutet `channel=0` deshalb NICHT "Kanal 0 der angeschlossenen
+    Hardware", sondern "der Kanal, der in der Vector Hardware Config der
+    Anwendung namens *CANalyzer* auf Position 0 zugewiesen ist"
+    (`VectorBus._find_global_channel_idx` -> `xlGetApplConfig`). Damit haengt
+    die Verbindung an einer fremden, vom Nutzer unabhaengig veraenderbaren
+    CANalyzer-Konfiguration:
+
+    - Ist auf dem Rechner keine Anwendung "CANalyzer" eingerichtet (z.B. weil
+      nur der Vector-Treiber, aber kein CANalyzer/CANoe installiert ist),
+      schlaegt JEDER Verbindungsversuch mit "xlGetApplConfig failed" fehl --
+      im DeviceWorker nur als Log-Warnung sichtbar, das Interface taucht in
+      der GUI schlicht nie auf.
+    - Ist sie eingerichtet, aber auf ein anderes Geraet/einen anderen Kanal
+      gemappt, verbindet sich LabControl klaglos mit der FALSCHEN Hardware
+      (z.B. einem virtuellen Kanal): Status "verbunden", aber nie ein Frame.
+
+    Deshalb hier immer `app_name=None`. Damit interpretiert python-can den
+    Kanal entweder ueber die Seriennummer (bevorzugt, eindeutig) oder --
+    ohne Seriennummer -- als globalen Kanalindex ueber alle Vector-Geraete
+    hinweg.
+    """
+    token = str(channel).strip()
+    match = _VECTOR_CHANNEL_TOKEN.match(token)
+    if match:
+        # Bevorzugter Weg: eindeutig ueber Seriennummer + Hardware-Kanal,
+        # unabhaengig von Reihenfolge/Anzahl anderer Vector-Geraete.
+        return dict(channel=int(match.group(2)), serial=int(match.group(1)), app_name=None)
+    # Alt-Konfiguration aus der Zeit vor dem Token-Format (reine Zahl, z.B.
+    # "0"): als globaler Kanalindex behandeln. Bleibt fuer bestehende
+    # settings.json lauffaehig, ist aber nicht mehr eindeutig, sobald sich
+    # die Zusammenstellung der Vector-Geraete aendert -- der Kanal sollte im
+    # Settings-Tab einmal neu ausgewaehlt werden.
+    return dict(channel=token, app_name=None)
+
+
+def _vector_display_name(config: dict) -> str:
+    """Sprechender Name eines erkannten Vector-Kanals fuer die Auswahl im
+    Settings-Tab, z.B. "VN1610 Channel 1 (S/N 75816)". Ohne ihn zeigt die
+    Auswahl nur nackte Kanalnummern, die sich zwischen echter Hardware und
+    den immer vorhandenen virtuellen Kanaelen doppeln."""
+    channel_config = config.get("vector_channel_config")
+    name = getattr(channel_config, "name", "") or f"Kanal {config.get('hw_channel', '?')}"
+    serial = config.get("serial")
+    return f"{name} (S/N {serial})" if serial is not None else name
 
 
 class CanError(RuntimeError):
@@ -49,8 +159,11 @@ class CanBus:
         # Kanal: eigene *InitializationError-Klassen, ...) -- breit gefangen
         # und auf die App-eigene Exception-Hierarchie abgebildet, analog zum
         # SerialException-Fang in hcs34xx/driver.py.
+        kwargs: dict = dict(interface=interface, channel=channel, bitrate=bitrate)
+        if interface == "vector":
+            kwargs.update(_vector_bus_kwargs(channel))
         try:
-            self._bus = can.interface.Bus(interface=interface, channel=channel, bitrate=bitrate)
+            self._bus = can.interface.Bus(**kwargs)
         except Exception as exc:
             raise CanConnectionError(
                 f"Verbindung zu {interface}:{channel} fehlgeschlagen: {exc}"
@@ -61,7 +174,33 @@ class CanBus:
         self._opened = time.monotonic()
 
     @staticmethod
-    def discover_configs() -> list[dict]:
+    def backend_problem(interface: str) -> str:
+        """Leerer String, wenn das python-can-Backend fuer ``interface``
+        ueberhaupt ladbar ist, sonst eine Begruendung.
+
+        Existiert, weil `can.detect_available_configs()` NICHT zwischen
+        "Backend geladen, aber kein Geraet angeschlossen" und "Backend gar
+        nicht vorhanden" unterscheidet -- es liefert in beiden Faellen
+        wortlos eine leere Liste (`_get_class_for_interface` faengt den
+        ImportError als CanInterfaceNotImplementedError ab und ueberspringt
+        den Interface-Typ nur mit einer Log-Zeile). Genau daran hing ein
+        lange gesuchter Bug: in der von PyInstaller gebauten .exe fehlten
+        saemtliche Backends, weil python-can sie ueber Modulnamen als String
+        nachlaedt (can.interfaces.BACKENDS -> importlib.import_module) und
+        PyInstallers statische Analyse solche Importe nicht sieht. Sichtbar
+        war das nur als "Keine Kanäle gefunden" im Settings-Tab und liess
+        sich aus dem Quellcode heraus prinzipiell nie reproduzieren, weil
+        dort alle Backends normal importierbar sind (siehe LabControl.spec::
+        CAN_HIDDENIMPORTS).
+        """
+        try:
+            can.interface._get_class_for_interface(interface)
+        except Exception as exc:
+            return str(exc)
+        return ""
+
+    @staticmethod
+    def discover_configs(errors: dict[str, str] | None = None) -> list[dict]:
         """Verfuegbare Kanaele je unterstuetztem Interface-Typ.
 
         Liefert nur Kanaele, deren Vendor-Treiber tatsaechlich installiert
@@ -69,13 +208,50 @@ class CanBus:
         Exception (fehlende DLL o.ae.), die hier pro Interface-Typ
         uebersprungen wird, damit z.B. ein fehlendes PCAN-Basic nicht auch
         die Vector-Erkennung verhindert.
+
+        ``errors`` wird, falls uebergeben, mit ``interface -> Begruendung``
+        fuer jeden Interface-Typ gefuellt, der gar kein Ergebnis liefern
+        konnte -- damit der Aufrufer "kein Geraet angeschlossen" von
+        "Backend/Treiber fehlt" unterscheiden kann, statt beides als leere
+        Liste zu sehen (siehe backend_problem).
+
+        Jeder Eintrag traegt neben dem von python-can gelieferten Inhalt:
+
+        - ``channel``: immer ein String, und bei Vector das eindeutige Token
+          "<seriennummer>:<hw_kanal>" statt der rohen Kanalnummer. python-can
+          meldet beim Erkennen den HARDWARE-Kanal (0/1 je Geraet), erwartet
+          beim Verbinden ohne Seriennummer aber einen GLOBALEN Index ueber
+          alle Vector-Geraete -- zwei verschiedene Nummernkreise, die sich
+          nur zufaellig gleichen, solange genau ein Geraet angeschlossen ist
+          (siehe _vector_bus_kwargs). Das Token ist in beiden Richtungen
+          eindeutig und wird so auch in settings.json abgelegt.
+        - ``display_name``: sprechender Name fuer die Auswahl im
+          Settings-Tab (nicht zu verwechseln mit dem Feld ``label``, das dort
+          die frei vergebene Nutzer-Bezeichnung eines Interfaces meint).
         """
         configs: list[dict] = []
         for interface in INTERFACE_LIST:
-            try:
-                configs.extend(can.detect_available_configs(interfaces=[interface]))
-            except Exception:
+            problem = CanBus.backend_problem(interface)
+            if problem:
+                logger.warning("CAN-Backend '%s' nicht ladbar: %s", interface, problem)
+                if errors is not None:
+                    errors[interface] = problem
                 continue
+            try:
+                found = can.detect_available_configs(interfaces=[interface])
+            except Exception as exc:
+                logger.warning("CAN-Erkennung fuer '%s' fehlgeschlagen: %s", interface, exc)
+                if errors is not None:
+                    errors[interface] = str(exc)
+                continue
+            for config in found:
+                if interface == "vector":
+                    config["display_name"] = _vector_display_name(config)
+                    config["channel"] = f"{config.get('serial')}:{config.get('hw_channel')}"
+                else:
+                    config["channel"] = str(config.get("channel", ""))
+                    config.setdefault("display_name", config["channel"])
+                configs.append(config)
         return configs
 
     def close(self) -> None:

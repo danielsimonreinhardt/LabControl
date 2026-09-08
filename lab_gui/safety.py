@@ -150,6 +150,18 @@ class SafetyMonitor(QObject):
         psu_measurement."""
         self._last_seen[device_id] = time.monotonic()
 
+    @Slot(str, list, list)
+    def on_hil_digital_state(self, device_id: str, _inputs: list, _outputs: list) -> None:
+        """Heartbeat fuer die Verbindungsueberwachung (siehe _check_stale),
+        analog zu on_can_stats: microHIL hat keine SAFETY_LIMIT_FIELDS,
+        device_worker.py emittiert hil_digital_state aber bei jedem
+        HIL_POLL_INTERVAL_MS-Zyklus (1s), auch ohne Zustandsaenderung. Ohne
+        diesen Slot wurde ein waehrend eines Testlaufs supervisiertes
+        HIL-Geraet (z.B. bei einem HIL_OUT_ON/OFF-Schritt mit > 2s Dauer)
+        nach STALE_TIMEOUT_S faelschlich als "veraltet" abgebrochen, da gar
+        kein hil_* -Signal den Watchdog je erreichte."""
+        self._last_seen[device_id] = time.monotonic()
+
     @Slot(str, float, float, bool)
     def on_psu_measurement(
         self, device_id: str, voltage: float, current: float, _constant_current: bool

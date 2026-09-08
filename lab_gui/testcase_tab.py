@@ -1102,7 +1102,14 @@ class TestcaseTab(QWidget):
                 hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(code, 8))
                 hil_value_spin.setSuffix(f" {unit}" if unit else "")
                 hil_value_spin.setRange(lo, hi)
-                hil_value_spin.setEnabled(code not in VALUELESS_ACTIONS)
+                # Nicht nur deaktivieren, sondern ganz ausblenden: bei
+                # HIL_IN_READ/HIL_AIN_READ/HIL_OUT_ON/HIL_OUT_OFF/
+                # HIL_RELAY_ON/HIL_RELAY_OFF gibt es keinen Sollwert neben
+                # dem Kanal -- ein zusaetzliches, nur gegrautes Eingabefeld
+                # war irrefuehrend (Nutzerfeedback).
+                has_value = code not in VALUELESS_ACTIONS
+                hil_value_spin.setEnabled(has_value)
+                hil_value_spin.setVisible(has_value)
                 value_stack.setCurrentIndex(3)
             elif kind == "picoscope":
                 value_stack.setCurrentIndex(4)

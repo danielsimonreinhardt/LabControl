@@ -18,6 +18,7 @@ from microhil.driver import (
     AIN_COUNT,
     AOUT_COUNT,
     AOUT_MAX_MV,
+    AOUT_RAW_MAX_MV,
     CURR_COUNT,
     INTERLOCKED_CHANNELS,
     IN_COUNT,
@@ -27,6 +28,7 @@ from microhil.driver import (
     PWR12_COUNT,
     RELAY_COUNT,
     Pwr12Channel,
+    parse_idn_fields,
 )
 
 
@@ -38,8 +40,9 @@ class MockMicroHIL:
         self._analog_out = [0] * AOUT_COUNT
         self._analog_in = [0] * AIN_COUNT
         self._pwr12 = [False] * PWR12_COUNT
-        self._current_sense = [0] * CURR_COUNT
-        self._current_limits = [0] * PWR12_COUNT
+        self._current_ma = [0] * CURR_COUNT
+        self._current_limits = [1200] * PWR12_COUNT
+        self._pwr12_fault = [0] * PWR12_COUNT
         self._pwm = [0] * PWM_COUNT
 
     def close(self) -> None:
@@ -53,6 +56,9 @@ class MockMicroHIL:
 
     def identify(self) -> str:
         return "microHIL,fw=MOCK"
+
+    def get_firmware_version(self) -> str | None:
+        return parse_idn_fields(self.identify()).get("fw")
 
     # -- relays (1-4) --------------------------------------------------------
 
@@ -90,6 +96,9 @@ class MockMicroHIL:
     def set_analog_output(self, channel: int, millivolts: int) -> None:
         self._analog_out[channel - 1] = max(0, min(AOUT_MAX_MV, millivolts))
 
+    def set_analog_output_raw(self, channel: int, millivolts: int) -> None:
+        self._analog_out[channel - 1] = max(0, min(AOUT_RAW_MAX_MV, millivolts))
+
     # -- analog inputs (1-4, read-only am echten Geraet) -----------------------
 
     def set_analog_input(self, channel: int, millivolts: int) -> None:
@@ -97,6 +106,9 @@ class MockMicroHIL:
         self._analog_in[channel - 1] = millivolts
 
     def get_analog_input(self, channel: int) -> int:
+        return self._analog_in[channel - 1]
+
+    def get_analog_input_raw(self, channel: int) -> int:
         return self._analog_in[channel - 1]
 
     # -- switchable 12V outputs with current sense (1-2) ----------------------
@@ -107,26 +119,44 @@ class MockMicroHIL:
     def get_pwr12(self, channel: int) -> bool:
         return self._pwr12[channel - 1]
 
-    def set_current_sense_mv(self, channel: int, millivolts: int) -> None:
+    def set_current_ma(self, channel: int, milliamps: int) -> None:
         """Nur im Mock vorhanden, analog zu set_input()."""
-        self._current_sense[channel - 1] = millivolts
+        self._current_ma[channel - 1] = milliamps
 
-    def get_current_sense_mv(self, channel: int) -> int:
-        return self._current_sense[channel - 1]
+    def get_current_ma(self, channel: int) -> int:
+        return self._current_ma[channel - 1]
+
+    def get_current_sense_raw_mv(self, channel: int) -> int:
+        """Nur im Mock: liefert denselben Wert wie get_current_ma() zurueck
+        -- der Mock simuliert keine eigene Roh-/Kalibrierabweichung."""
+        return self._current_ma[channel - 1]
+
+    def set_pwr12_fault(self, channel: int, fault: int) -> None:
+        """Nur im Mock vorhanden, analog zu set_input() -- erlaubt, einen
+        PWR12FLT?-Zustand fuer GUI-Tests vorzugeben."""
+        self._pwr12_fault[channel - 1] = fault
+
+    def get_pwr12_fault(self, channel: int) -> int:
+        return self._pwr12_fault[channel - 1]
 
     def get_pwr12_channel(self, channel: int) -> Pwr12Channel:
         return Pwr12Channel(
             enabled=self.get_pwr12(channel),
-            current_sense_mv=self.get_current_sense_mv(channel),
+            current_ma=self.get_current_ma(channel),
+            fault=self.get_pwr12_fault(channel),
         )
 
     def set_current_limit(self, channel: int, milliamps: int) -> None:
-        """Haelt den Wert nur im Speicher -- anders als am realen Geraet
-        (siehe driver.py: set_current_limit()-Docstring) gibt es hier keine
-        tatsaechliche Begrenzungslogik, die Firmware-Arbeit ist. Erlaubt
-        trotzdem, die GUI-Anbindung (Eingabefeld -> Signal -> Treiber) im
-        Simulationsmodus durchzuklicken."""
+        """Haelt den Wert nur im Speicher -- der Mock bildet KEINE echte
+        Ueberstrom-Abschaltlogik nach (siehe driver.py:
+        set_current_limit()-Docstring fuer das reale Verhalten inkl.
+        Verriegelung), erlaubt aber die GUI-Anbindung (Eingabefeld ->
+        Signal -> Treiber) im Simulationsmodus durchzuklicken. Fuer einen
+        simulierten Fault-Zustand siehe set_pwr12_fault()."""
         self._current_limits[channel - 1] = milliamps
+
+    def get_current_limit(self, channel: int) -> int:
+        return self._current_limits[channel - 1]
 
     # -- PWM (1-4) -------------------------------------------------------------
 

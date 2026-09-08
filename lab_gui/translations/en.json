@@ -297,5 +297,8 @@
   "Grau": "Gray",
   "Hilfe": "Help",
   "Öffnet das Benutzerhandbuch": "Opens the user manual",
-  "Benutzerhandbuch": "User Manual"
+  "Benutzerhandbuch": "User Manual",
+  "Geräte-Info -- z. B. die aktuell geflashte Firmware-Version.": "Device info -- e.g. the currently flashed firmware version.",
+  "Firmware-Version:": "Firmware version:",
+  "unbekannt": "unknown"
 }

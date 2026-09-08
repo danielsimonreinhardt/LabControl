@@ -132,6 +132,40 @@ class _DeviceSafetyGroup(QGroupBox):
         self.limit_changed.emit(field, checkbox.isChecked(), spin.value())
 
 
+class _DeviceInfoGroup(QGroupBox):
+    """Geraete-Info-Sektion fuer EIN Geraet (aktuell nur microHIL, siehe
+    SettingsTab.on_device_known) -- zeigt die per `*IDN?` gemeldete
+    Firmwareversion (device_worker.DeviceWorker.hil_info ->
+    set_firmware_version())."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.setTitle(label)
+        self._version: str | None = None
+
+        form = QFormLayout(self)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self._firmware_row_label = QLabel()
+        self._firmware_value = QLabel()
+        form.addRow(self._firmware_row_label, self._firmware_value)
+
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        self._firmware_row_label.setText(tr("Firmware-Version:"))
+        self._refresh_value()
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def set_firmware_version(self, version: str | None) -> None:
+        self._version = version or None
+        self._refresh_value()
+
+    def _refresh_value(self) -> None:
+        self._firmware_value.setText(self._version if self._version else tr("unbekannt"))
+
+
 _CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "label", "remove")
 
 
@@ -209,26 +243,50 @@ class _CanConfigTable(QTableWidget):
         interface_combo: QComboBox = self.cellWidget(row, 0)
         channel_edit: QLineEdit = self.cellWidget(row, 1)
         interface = interface_combo.currentData()
+        errors: dict[str, str] = {}
         try:
-            configs = CanBus.discover_configs()
-        except Exception:
+            configs = CanBus.discover_configs(errors)
+        except Exception as exc:
             configs = []
-        channels = [c["channel"] for c in configs if c.get("interface") == interface]
-        if not channels:
-            QMessageBox.information(
-                self, tr("Keine Kanäle gefunden"),
-                tr(
-                    "Für Interface-Typ '{interface}' wurden keine Kanäle gefunden -- "
-                    "ist der zugehörige Vendor-Treiber installiert und das Gerät "
-                    "angeschlossen?", interface=interface,
-                ),
+            errors[interface] = str(exc)
+        matching = [c for c in configs if c.get("interface") == interface]
+        if not matching:
+            # Den konkreten Grund mitliefern, falls es einen gibt: ein nicht
+            # ladbares Backend (z.B. fehlender Vendor-Treiber, oder ein Build
+            # ohne die dynamisch nachgeladenen python-can-Backends) sieht
+            # sonst exakt aus wie "Geraet nicht angeschlossen" -- genau diese
+            # Ununterscheidbarkeit hat die Ursachensuche lange blockiert,
+            # siehe can_bus/driver.py::backend_problem.
+            reason = errors.get(interface, "")
+            message = tr(
+                "Für Interface-Typ '{interface}' wurden keine Kanäle gefunden -- "
+                "ist der zugehörige Vendor-Treiber installiert und das Gerät "
+                "angeschlossen?", interface=interface,
             )
+            if reason:
+                message += "\n\n" + tr("Grund: {reason}", reason=reason)
+            QMessageBox.information(self, tr("Keine Kanäle gefunden"), message)
             return
-        channel, ok = QInputDialog.getItem(
-            self, tr("Kanal wählen"), tr("Verfügbare Kanäle:"), channels, editable=False,
+        # Angezeigt wird der sprechende Name (z.B. "VN1610 Channel 1
+        # (S/N 75816)"), gespeichert das eindeutige Kanal-Token aus
+        # discover_configs() -- die rohen Kanalnummern doppeln sich zwischen
+        # echter Hardware und den virtuellen Vector-Kanaelen und waeren als
+        # Auswahl nicht unterscheidbar (siehe can_bus/driver.py).
+        by_name: dict[str, str] = {}
+        for config in matching:
+            name = str(config.get("display_name") or config["channel"])
+            # Gleichnamige Eintraege (theoretisch bei zwei baugleichen
+            # Geraeten ohne Seriennummer) bleiben durch das angehaengte Token
+            # unterscheidbar, statt sich gegenseitig zu ueberschreiben.
+            if name in by_name:
+                name = f"{name} [{config['channel']}]"
+            by_name[name] = str(config["channel"])
+        name, ok = QInputDialog.getItem(
+            self, tr("Kanal wählen"), tr("Verfügbare Kanäle:"),
+            list(by_name), editable=False,
         )
         if ok:
-            channel_edit.setText(channel)
+            channel_edit.setText(by_name[name])
             self.changed.emit()
 
     def configs(self) -> list[dict]:
@@ -338,6 +396,19 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
+        # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) --------------
+        self._info_hint = QLabel()
+        self._info_hint.setWordWrap(True)
+        self._info_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._info_hint)
+
+        self._info_sections_layout = QVBoxLayout()
+        layout.addLayout(self._info_sections_layout)
+        self._info_sections: dict[str, _DeviceInfoGroup] = {}
+        self._info_section_rows: dict[str, QWidget] = {}
+
+        layout.addWidget(_separator())
+
         # -- CAN-Interfaces ------------------------------------------------
         # Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
         # can_bus/README.md) -- der Nutzer konfiguriert hier explizit, welche
@@ -403,6 +474,9 @@ class SettingsTab(QWidget):
                 "Panel-Farben und setzt sie auf die Standardwerte zurück."
             )
         )
+        self._info_hint.setText(tr("Geräte-Info -- z. B. die aktuell geflashte Firmware-Version."))
+        for section in self._info_sections.values():
+            section.retranslate()
         self._safety_hint.setText(
             tr(
                 "Grenzwerte (Sicherheitsabschaltung) je Gerät -- bei Überschreitung werden "
@@ -448,9 +522,38 @@ class SettingsTab(QWidget):
         self._language_combo.setCurrentIndex(index)
         self._language_combo.blockSignals(False)
 
+    # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) -------------------
+
+    def _ensure_info_section(self, device_id: str, label: str) -> None:
+        section = self._info_sections.get(device_id)
+        if section is not None:
+            section.set_label(label)
+            return
+        section = _DeviceInfoGroup(label)
+        # Zeile mit Stretch statt direktem addWidget(), analog zu
+        # on_device_known/_safety_section_rows (siehe dort, BUGS.md #11).
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(section)
+        row.addStretch(1)
+        self._info_sections_layout.addWidget(row_widget)
+        self._info_sections[device_id] = section
+        self._info_section_rows[device_id] = row_widget
+
+    def set_hil_firmware_version(self, device_id: str, version: str) -> None:
+        """Verbunden mit device_worker.DeviceWorker.hil_info (siehe
+        main_window.py) -- zeigt die per `*IDN?` gemeldete Firmwareversion in
+        der Geraete-Info-Sektion des zugehoerigen microHIL an."""
+        section = self._info_sections.get(device_id)
+        if section is not None:
+            section.set_firmware_version(version)
+
     # -- geraete-individuelle Sicherheits-Grenzwerte -------------------------
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        if kind == "hil":
+            self._ensure_info_section(device_id, label)
         section = self._safety_sections.get(device_id)
         if section is not None:
             section.set_label(label)
@@ -474,15 +577,22 @@ class SettingsTab(QWidget):
         self._safety_section_rows[device_id] = row_widget
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        info_section = self._info_sections.get(device_id)
+        if info_section is not None:
+            info_section.set_label(label)
         section = self._safety_sections.get(device_id)
         if section is not None:
             section.set_label(label)
 
     def forget_device(self, device_id: str) -> None:
-        """Entfernt die Sicherheits-Grenzwert-Sektion eines Geraets
-        vollstaendig -- nur fuer den "Geraetezuordnung loeschen"-Button
+        """Entfernt die Geraete-Info- und Sicherheits-Grenzwert-Sektion eines
+        Geraets vollstaendig -- nur fuer den "Geraetezuordnung loeschen"-Button
         (main_window._on_reset_devices_requested) gedacht, siehe
         dashboard.DashboardWidget.forget_device fuer die Begruendung."""
+        self._info_sections.pop(device_id, None)
+        info_row_widget = self._info_section_rows.pop(device_id, None)
+        if info_row_widget is not None:
+            info_row_widget.deleteLater()
         self._safety_sections.pop(device_id, None)
         row_widget = self._safety_section_rows.pop(device_id, None)
         if row_widget is not None:

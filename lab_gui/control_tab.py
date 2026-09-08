@@ -9,7 +9,9 @@ keine eingestellten Werte verloren gehen.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Signal
+import qtawesome as qta
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -32,7 +35,17 @@ from PySide6.QtWidgets import (
 from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
-from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
+from microhil.driver import (
+    AOUT_COUNT,
+    AOUT_MAX_MV,
+    OUT_COUNT,
+    PWM_COUNT,
+    PWM_MAX_PERMILLE,
+    PWR12_COUNT,
+    RELAY_COUNT,
+    defects_for_device_id,
+)
+from microhil_panel import DOT_ICON_SIZE, DOT_OFF, DOT_ON
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from presets import PresetStore, SLOT_COUNT
@@ -140,26 +153,118 @@ def _style_toggle_buttons(
     off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
 
 
-def _channel_toggle(number: int) -> QPushButton:
-    """Ein einzelner, klickbarer Kanal-Schalter (checkable) fuer
-    HilControlGroup -- kompaktere Alternative zum EIN/AUS-Buttonpaar aus
-    _style_toggle_buttons: bei bis zu 8 gleichartigen Kanaelen (microHIL:
-    OUT1-8) waere ein Buttonpaar pro Kanal deutlich zu hoch. Text ist die
-    Kanalnummer, Zustand ueber checkable statt zweier getrennter Buttons."""
-    button = QPushButton(str(number))
+def _digital_out_toggle(number: int) -> QToolButton:
+    """Schalter fuer die Digitalausgaenge (OUT1-8) in HilControlGroup --
+    LED-Punkt + Kanalnummer, dieselbe Ikonografie wie im Dashboard
+    (microhil_panel.DOT_ON/DOT_OFF), hier zusaetzlich klickbar. Ersetzt den
+    ehemaligen _channel_toggle (blosse Farbfuellung ohne jede Kennzeichnung
+    im AUS-Zustand): Variante 04 aus dem Schalterkatalog, vom Nutzer
+    ausdruecklich fuer OUT1-8 gewaehlt. Vorteil gegenueber Farbfuellung
+    allein: identische Bildsprache in Dashboard und Control-Tab -- derselbe
+    Punkt bedeutet ueberall dasselbe.
+
+    QToolButton statt QPushButton: einziger Qt-Standard-Button mit
+    eingebauter Icon+Text-Anordnung (ToolButtonTextUnderIcon) bei sonst
+    identischem checkable/toggled/isChecked-Verhalten -- HilControlGroup
+    behandelt ihn dadurch wie jeden anderen checkbaren Button."""
+    button = QToolButton()
     button.setCheckable(True)
-    button.setFixedWidth(32)
+    button.setText(str(number))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+    button.setFixedSize(36, 40)
     return button
 
 
-def _style_channel_toggle(button: QPushButton, on: bool, pal: Palette) -> None:
-    """Faerbt einen _channel_toggle-Button passend zu seinem Checked-Zustand
-    -- gleiche Farblogik (gruen=ein) und Begruendung (check_pass statt
-    success, siehe dessen Docstring in theme.py) wie _style_toggle_buttons."""
-    if on:
-        button.setStyleSheet(f"background-color: {pal.check_pass}; color: {pal.surface}; font-weight: bold;")
-    else:
-        button.setStyleSheet("")
+def _style_digital_out_toggle(button: QToolButton, on: bool, pal: Palette) -> None:
+    """Setzt LED-Icon + Rahmen eines _digital_out_toggle passend zum
+    Checked-Zustand -- Icon/Farbe exakt wie microhil_panel._dot_pixmap
+    (check_pass statt success, siehe dessen Begruendung in theme.py: die
+    EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und muss deshalb
+    in beiden Themes gruen bleiben)."""
+    color = pal.check_pass if on else pal.text_muted
+    button.setIcon(qta.icon(DOT_ON if on else DOT_OFF, color=color))
+    button.setIconSize(QSize(DOT_ICON_SIZE, DOT_ICON_SIZE))
+    button.setStyleSheet(
+        f"QToolButton {{ border: 1px solid {pal.border}; border-radius: 6px; "
+        f"background-color: {pal.surface_alt}; }}"
+    )
+
+
+class _SegmentedToggle(QPushButton):
+    """Zweigeteilter AUS|EIN-Schalter fuer Relais und 12V-Ausgaenge in
+    HilControlGroup -- Variante 07 aus dem Schalterkatalog, vom Nutzer
+    ausdruecklich fuer diese beiden Gruppen gewaehlt (nur bis zu 4 Kanaele,
+    das rechtfertigt den zusaetzlichen Platzbedarf gegenueber der
+    kompakteren LED-Variante bei OUT1-8): ausgeschriebener Text statt
+    blosser Farbcodierung, wichtig bei Relais/12V, wo ein versehentlich
+    uebersehener EIN-Zustand echte Spannung am Ausgang bedeutet.
+
+    Eigener paintEvent statt QSS: ein Qt-Stylesheet kennt pro Widget-Zustand
+    nur EINE Hintergrundfarbe, kann also nicht zwei unabhaengig gefaerbte
+    Textbereiche in demselben Button gleichzeitig darstellen. isChecked()/
+    toggled/setChecked bleiben unveraendert (geerbt von QPushButton) --
+    HilControlGroup behandelt diesen Schalter dadurch identisch zum
+    ehemaligen _channel_toggle."""
+
+    SEGMENT_LABELS = ("AUS", "EIN")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setFixedSize(72, 30)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        pal = current_palette()
+        on = self.isChecked()
+        enabled = self.isEnabled()
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        half_width = rect.width() / 2
+        off_rect = QRectF(rect.left(), rect.top(), half_width, rect.height())
+        on_rect = QRectF(rect.left() + half_width, rect.top(), half_width, rect.height())
+
+        idle_bg = QColor(pal.surface_alt)
+        muted = QColor(pal.text_muted)
+        off_bg = QColor(pal.border) if (not on and enabled) else idle_bg
+        on_bg = QColor(pal.check_pass) if (on and enabled) else idle_bg
+        off_text = QColor(pal.text) if (not on and enabled) else muted
+        on_text = QColor(pal.surface) if (on and enabled) else muted
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rect, 6, 6)
+        painter.setClipPath(clip_path)
+        painter.fillRect(off_rect, off_bg)
+        painter.fillRect(on_rect, on_bg)
+        painter.setClipping(False)
+
+        painter.setPen(QPen(off_text))
+        painter.drawText(off_rect, Qt.AlignmentFlag.AlignCenter, tr(self.SEGMENT_LABELS[0]))
+        painter.setPen(QPen(on_text))
+        painter.drawText(on_rect, Qt.AlignmentFlag.AlignCenter, tr(self.SEGMENT_LABELS[1]))
+
+        painter.setPen(QPen(QColor(pal.border), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect, 6, 6)
+        painter.end()
+
+
+def _segmented_toggle_cell(label_text: str) -> tuple[QWidget, _SegmentedToggle, QLabel]:
+    """Ein _SegmentedToggle mit vorangestelltem Kanal-Label (z.B. "REL1") --
+    anders als bei _digital_out_toggle steckt die Kanalkennung hier NICHT im
+    Schalter selbst (kein Platz neben "AUS"/"EIN"), sondern in einem
+    separaten Label darueber (siehe Schalterkatalog, Variante 07: "Kanal-ID:
+    separates Label davor")."""
+    cell = QWidget()
+    layout = QVBoxLayout(cell)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(2)
+    caption = QLabel(label_text)
+    caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    toggle = _SegmentedToggle()
+    layout.addWidget(caption, alignment=Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(toggle, alignment=Qt.AlignmentFlag.AlignCenter)
+    return cell, toggle, caption
 
 
 class LoadControlGroup(QGroupBox):
@@ -769,15 +874,28 @@ class HilControlGroup(QGroupBox):
 
     Digitaleingaenge (IN1-8) sind absichtlich NICHT hier -- rein lesend, das
     Dashboard (microhil_panel.MicroHilPanel) zeigt sie bereits an, eine
-    zweite Anzeige derselben Werte im Control-Tab waere redundant. PWM1-4
-    ebenfalls nicht (siehe microhil_panel.py-Modul-Docstring): kein Teil
-    dieser Anfrage, und mit OUT1-4 hardwareseitig verriegelt (siehe
-    microhil/driver.py: INTERLOCKED_CHANNELS).
+    zweite Anzeige derselben Werte im Control-Tab waere redundant.
 
-    Kanal-Schalter als einzelne checkable Buttons (_channel_toggle) statt
-    EIN/AUS-Buttonpaaren wie bei LoadControlGroup/PsuControlGroup -- bei bis
-    zu 8 Kanaelen (OUT) waere ein Buttonpaar pro Kanal deutlich zu hoch. Ihr
-    Zustand wird bei jedem Poll-Zyklus mit der echten Hardware synchronisiert
+    PWM1-4 (Nutzerfeedback: fehlte hier komplett) wie AOUT als Sollwertfeld
+    + Uebernehmen-Button (0-1000 Promille Duty-Cycle, siehe microhil/
+    driver.py: set_pwm()/PWM_MAX_PERMILLE) statt als Kanal-Schalter -- kein
+    einfaches Ein/Aus wie OUT/Relais/PWR12, sondern ein kontinuierlicher
+    Wert, analog zu den AOUT-Feldern oben. Mit OUT1-4 hardwareseitig
+    verriegelt (siehe microhil/driver.py: INTERLOCKED_CHANNELS) -- ein
+    gesetzter PWM-Wert > 0 schaltet den gleichnamigen Digitalausgang
+    zwangsweise aus; der OUT-Schalter zeigt das beim naechsten Poll-Zyklus
+    korrekt an (set_output_states()), ohne dass PWM hier extra dagegen
+    verriegelt werden muesste.
+
+    Kanal-Schalter als einzelne checkable Buttons statt EIN/AUS-Buttonpaaren
+    wie bei LoadControlGroup/PsuControlGroup -- bei bis zu 8 Kanaelen (OUT)
+    waere ein Buttonpaar pro Kanal deutlich zu hoch. Zwei unterschiedliche
+    Auspraegungen je nach Kanalzahl (Absprache, siehe Schalterkatalog-
+    Artefakt): OUT1-8 nutzt _digital_out_toggle (LED-Punkt + Nummer, kompakt
+    genug fuer 8 Kanaele in einer Zeile), Relais/PWR12 (hoechstens 4 Kanaele)
+    nutzen _SegmentedToggle (ausgeschriebenes AUS|EIN) -- dort ist genug
+    Platz, und ein uebersehener EIN-Zustand bedeutet echte Spannung am
+    Ausgang. Ihr Zustand wird bei jedem Poll-Zyklus mit der echten Hardware synchronisiert
     (siehe set_output_states/set_relay_states/set_pwr12_states, gespeist von
     device_worker.hil_digital_state/hil_relay_state/hil_pwr12_state -- exakt
     dieselben Signale, die auch das Dashboard fuellen) -- anders als beim
@@ -806,6 +924,7 @@ class HilControlGroup(QGroupBox):
 
     set_output = Signal(str, int, bool)         # device_id, Kanal (1-8), ein
     set_analog_output = Signal(str, int, int)   # device_id, Kanal (1-2), mV
+    set_pwm = Signal(str, int, int)             # device_id, Kanal (1-4), Promille
     set_relay = Signal(str, int, bool)          # device_id, Kanal (1-4), ein
     set_pwr12 = Signal(str, int, bool)          # device_id, Kanal (1-2), ein
     set_current_limit = Signal(str, int, int)   # device_id, Kanal (1-2), mA
@@ -836,9 +955,12 @@ class HilControlGroup(QGroupBox):
         outer.addLayout(self._form)
 
         # -- Digitalausgaenge (OUT1-8) --
-        self._out_buttons = [_channel_toggle(ch) for ch in range(1, OUT_COUNT + 1)]
+        self._out_buttons = [_digital_out_toggle(ch) for ch in range(1, OUT_COUNT + 1)]
+        for button in self._out_buttons:
+            _style_digital_out_toggle(button, False, current_palette())
         for ch, button in enumerate(self._out_buttons, start=1):
             button.toggled.connect(lambda on, c=ch: self.set_output.emit(self._device_id, c, on))
+            button.toggled.connect(lambda on, b=button: _style_digital_out_toggle(b, on, current_palette()))
         self._out_row = _row(*self._out_buttons)
         self._form.addRow(" ", self._out_row)
         _detint_label(self._form, self._out_row)
@@ -862,11 +984,40 @@ class HilControlGroup(QGroupBox):
             self._aout_spins.append(spin)
             self._aout_rows.append(row)
 
-        # -- Relais (REL1-4) --
-        self._relay_buttons = [_channel_toggle(ch) for ch in range(1, RELAY_COUNT + 1)]
-        for ch, button in enumerate(self._relay_buttons, start=1):
-            button.toggled.connect(lambda on, c=ch: self.set_relay.emit(self._device_id, c, on))
-        self._relay_row = _row(*self._relay_buttons)
+        # -- PWM (PWM1-4) -- Sollwertfeld + Uebernehmen-Button wie AOUT
+        # (kontinuierlicher Wert, kein Kanal-Schalter). Verriegelung mit
+        # OUT1-4 passiert firmwareseitig, siehe Klassendocstring.
+        self._pwm_spins: list[SteppedSpinBox] = []
+        self._pwm_rows: list[QWidget] = []
+        for ch in range(1, PWM_COUNT + 1):
+            spin = SteppedSpinBox(small_step=10, large_step=100)
+            spin.setRange(0, PWM_MAX_PERMILLE)
+            spin.setSuffix(" ‰")
+            spin.setMaximumWidth(120)
+            button = IconButton("mdi.check", "")
+            button.clicked.connect(lambda _, c=ch, s=spin: self.set_pwm.emit(self._device_id, c, s.value()))
+            row = _row(spin, button)
+            self._form.addRow(" ", row)
+            _detint_label(self._form, row)
+            self._pwm_spins.append(spin)
+            self._pwm_rows.append(row)
+
+        # -- Relais (REL1-4) -- Segmented AUS|EIN statt blosser Farbfuellung
+        # (Absprache, Variante 07 im Schalterkatalog): anders als bei OUT1-8
+        # teilen sich hier alle Kanaele EINE Zeile mit einer gemeinsamen
+        # Formular-Beschriftung ("Relais:"), der Schalter selbst zeigt keine
+        # Kanalnummer -- deshalb je Kanal ein eigenes "REL{n}"-Caption-Label
+        # ueber dem Schalter (_segmented_toggle_cell), das PWR12-Aequivalent
+        # unten braucht das NICHT (dort hat jeder Kanal ohnehin schon eine
+        # eigene Formularzeile mit eigenem Label).
+        self._relay_buttons: list[_SegmentedToggle] = []
+        relay_cells: list[QWidget] = []
+        for ch in range(1, RELAY_COUNT + 1):
+            cell, toggle, _caption = _segmented_toggle_cell(f"REL{ch}")
+            toggle.toggled.connect(lambda on, c=ch: self.set_relay.emit(self._device_id, c, on))
+            self._relay_buttons.append(toggle)
+            relay_cells.append(cell)
+        self._relay_row = _row(*relay_cells)
         self._form.addRow(" ", self._relay_row)
         _detint_label(self._form, self._relay_row)
 
@@ -879,12 +1030,17 @@ class HilControlGroup(QGroupBox):
         # ("hil:<serial>"), identisch mit dem Firmware-seitigen *IDN?-
         # SN=-Feld, es braucht also keine zusaetzliche Geraeteabfrage hier.
         hil_defects = defects_for_device_id(device_id)
-        self._pwr12_buttons: list[QPushButton] = []
+        # Segmented AUS|EIN wie bei Relais oben (Absprache, Variante 07) --
+        # hier ohne _segmented_toggle_cell/Caption-Label: jeder Kanal hat
+        # bereits seine eigene Formularzeile mit eigenem Label
+        # ("12V-Ausgang {n}:", siehe _retranslate), eine zusaetzliche
+        # Kanalkennung am Schalter selbst waere redundant.
+        self._pwr12_buttons: list[_SegmentedToggle] = []
         self._limit_spins: list[SteppedSpinBox] = []
         self._pwr12_rows: list[QWidget] = []
         for ch in range(1, PWR12_COUNT + 1):
             broken = f"pwr12:{ch}" in hil_defects
-            toggle = _channel_toggle(ch)
+            toggle = _SegmentedToggle()
             toggle.toggled.connect(lambda on, c=ch: self.set_pwr12.emit(self._device_id, c, on))
             limit_spin = SteppedSpinBox(small_step=10, large_step=100)
             limit_spin.setRange(0, HIL_CURRENT_LIMIT_MAX_MA)
@@ -922,16 +1078,23 @@ class HilControlGroup(QGroupBox):
         self._form.labelForField(self._out_row).setText(tr("Digitalausgänge:"))
         for i, row in enumerate(self._aout_rows, start=1):
             self._form.labelForField(row).setText(tr("Analogausgang {n}:", n=i))
+        for i, row in enumerate(self._pwm_rows, start=1):
+            self._form.labelForField(row).setText(tr("PWM {n}:", n=i))
         self._form.labelForField(self._relay_row).setText(tr("Relais:"))
         for i, row in enumerate(self._pwr12_rows, start=1):
             self._form.labelForField(row).setText(tr("12V-Ausgang {n}:", n=i))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
-        for row in (self._out_row, self._relay_row, *self._aout_rows, *self._pwr12_rows):
+        for row in (self._out_row, self._relay_row, *self._aout_rows, *self._pwm_rows, *self._pwr12_rows):
             row.setStyleSheet(_row_stylesheet(palette))
-        for button in (*self._out_buttons, *self._relay_buttons, *self._pwr12_buttons):
-            _style_channel_toggle(button, button.isChecked(), palette)
+        for button in self._out_buttons:
+            _style_digital_out_toggle(button, button.isChecked(), palette)
+        for button in (*self._relay_buttons, *self._pwr12_buttons):
+            # _SegmentedToggle liest die Palette in seinem eigenen paintEvent
+            # jedes Mal frisch (current_palette()) -- ein update() reicht,
+            # um mit den neuen Farben neu zu zeichnen.
+            button.update()
         apply_panel_tint(self, self._color_key)
 
     def set_label(self, label: str) -> None:
@@ -955,16 +1118,23 @@ class HilControlGroup(QGroupBox):
         if ok and new_label.strip():
             self.rename_requested.emit("hil", self._device_id, new_label.strip())
 
-    def _sync_toggles(self, buttons: list[QPushButton], states: list[bool]) -> None:
+    def _sync_toggles(self, buttons: list[QWidget], states: list[bool], styler=None) -> None:
         pal = current_palette()
         for button, on in zip(buttons, states):
             button.blockSignals(True)
             button.setChecked(on)
             button.blockSignals(False)
-            _style_channel_toggle(button, on, pal)
+            if styler is not None:
+                styler(button, on, pal)
+            else:
+                # _SegmentedToggle braucht keinen externen Styler (siehe
+                # _on_theme_changed) -- setChecked() stoesst Qt-intern
+                # bereits ein Repaint an, ein zusaetzliches update() stellt
+                # das auch bei blockierten Signalen sicher.
+                button.update()
 
     def set_output_states(self, states: list[bool]) -> None:
-        self._sync_toggles(self._out_buttons, states)
+        self._sync_toggles(self._out_buttons, states, _style_digital_out_toggle)
 
     def set_relay_states(self, states: list[bool]) -> None:
         self._sync_toggles(self._relay_buttons, states)
@@ -977,6 +1147,7 @@ class HilControlGroup(QGroupBox):
         return {
             "outputs": [b.isChecked() for b in self._out_buttons],
             "analog_out": [s.value() for s in self._aout_spins],
+            "pwm": [s.value() for s in self._pwm_spins],
             "relays": [b.isChecked() for b in self._relay_buttons],
             "pwr12": [b.isChecked() for b in self._pwr12_buttons],
             "current_limits": [s.value() for s in self._limit_spins],
@@ -992,6 +1163,11 @@ class HilControlGroup(QGroupBox):
         for ch, mv in enumerate(state.get("analog_out", []), start=1):
             try:
                 self.set_analog_output.emit(self._device_id, ch, int(mv))
+            except (TypeError, ValueError):
+                pass
+        for ch, permille in enumerate(state.get("pwm", []), start=1):
+            try:
+                self.set_pwm.emit(self._device_id, ch, int(permille))
             except (TypeError, ValueError):
                 pass
         for ch, on in enumerate(state.get("relays", []), start=1):
@@ -1306,8 +1482,8 @@ class ControlTab(QWidget):
         if isinstance(section, HilControlGroup):
             section.set_relay_states(relays)
 
-    def set_hil_pwr12_state(self, device_id: str, enabled: list, current_sense_mv: list) -> None:
-        # current_sense_mv hier ungenutzt -- die Sektion synchronisiert nur
+    def set_hil_pwr12_state(self, device_id: str, enabled: list, current_ma: list) -> None:
+        # current_ma hier ungenutzt -- die Sektion synchronisiert nur
         # den Schaltzustand, die Strommessung zeigt bereits das Dashboard.
         section = self._sections.get(device_id)
         if isinstance(section, HilControlGroup):

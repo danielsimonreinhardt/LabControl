@@ -211,6 +211,10 @@ class DeviceWorker(QObject):
     can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
 
     hil_connected = Signal(str, bool)          # device_id, online
+    # device_id, Firmwareversion aus *IDN? (microhil.driver.MicroHIL.
+    # get_firmware_version(), z.B. "0.1.0") -- fuer die "Geraete-Info"-
+    # Sektion im Settings-Tab (settings_tab.SettingsTab.set_hil_firmware_version).
+    hil_info = Signal(str, str)
     hil_digital_state = Signal(str, list, list)  # device_id, inputs (IN1-8), outputs (OUT1-8)
     hil_relay_state = Signal(str, list)        # device_id, relays (RELAY1-4)
     hil_analog_input = Signal(str, list)       # device_id, AIN1-4 in mV
@@ -368,13 +372,16 @@ class DeviceWorker(QObject):
             if device_id != SIM_PICOSCOPE_ID:
                 self._picoscope_last_close = time.monotonic()
         self._picoscope_sessions.clear()
-        # Sofort einen frischen Status statt bis zu PICOSCOPE_RECONNECT_
-        # INTERVAL_MS (30s) auf die naechste periodische Probe zu warten --
-        # _test_running ist zu diesem Zeitpunkt bereits False (siehe
-        # main_window._wire_test_runner: set_test_running(False) wird VOR
-        # close_picoscope_sessions verdrahtet), _reconnect_picoscope() laeuft
-        # also nicht mehr ins Leere.
-        self._reconnect_picoscope()
+        # Sofort einen frischen Status statt auf die naechste tatsaechliche
+        # An-/Absteck-Erkennung zu warten (seit der Entfernung der
+        # periodischen Probe aus _reconnect_picoscope() gibt es sonst gar
+        # keinen automatischen Trigger mehr dafuer) -- _probe_picoscope()
+        # direkt statt _reconnect_picoscope(), das nur noch bei einer
+        # Praesenz-Transition probt. Nur wenn tatsaechlich ein reales Geraet
+        # angeschlossen ist (reine Simulation ohne echtes PicoScope soll
+        # nicht versuchen, eines zu oeffnen).
+        if self._picoscope_present:
+            self._probe_picoscope()
 
     # -- Simulationsmodus ----------------------------------------------------
 
@@ -464,6 +471,7 @@ class DeviceWorker(QObject):
         self._hils[SIM_HIL_ID] = MockMicroHIL()
         self.device_added.emit("hil", SIM_HIL_ID)
         self.hil_connected.emit(SIM_HIL_ID, True)
+        self.hil_info.emit(SIM_HIL_ID, self._hils[SIM_HIL_ID].get_firmware_version() or "")
         self._poll_hil(SIM_HIL_ID, self._hils[SIM_HIL_ID])
 
     def _remove_mock_hil(self) -> None:
@@ -639,39 +647,35 @@ class DeviceWorker(QObject):
         logger.info("microHIL verbunden: %s", device_id)
         self.device_added.emit("hil", device_id)
         self.hil_connected.emit(device_id, True)
+        self.hil_info.emit(device_id, candidate.get_firmware_version() or "")
         # Sofort abfragen statt auf den naechsten HIL_POLL_INTERVAL_MS-Zyklus
         # zu warten (analog zu _reconnect_loads/_reconnect_psus).
         self._poll_hil(device_id, candidate)
 
     def _reconnect_picoscope(self) -> None:
-        """Aktualisiert Praesenz- und Belegt/Frei-Status des PicoScope.
+        """Aktualisiert die reine USB-Praesenz des PicoScope, OHNE dafuer zu
+        oeffnen (siehe _probe_picoscope() fuer den einmaligen Open/Close-
+        Vorgang bei tatsaechlichem An-/Abstecken).
 
-        Anders als bei Last/Netzteil/microHIL wird HIER bei jedem Tick neu
-        verbunden und sofort wieder getrennt (kein dauerhaft offenes Handle,
-        siehe picoscope2000/README.md) -- ps2000_open_unit() belegt das
-        Geraet exklusiv, ein dauerhaft offenes LabControl-Handle wuerde also
-        verhindern, dass die PicoScope-7-App (Start-Button im Dashboard,
-        siehe picoscope2000.driver.launch_app) das Geraet je selbst oeffnen
-        koennte.
+        Frueher wurde HIER bei JEDEM Tick (alle PICOSCOPE_RECONNECT_INTERVAL_MS)
+        neu verbunden und sofort wieder getrennt, um "frei" von "belegt" zu
+        unterscheiden -- an echter Hardware loeste das bei jedem Tick ein
+        hoerbares Relaisklicken im Geraet aus (Nutzerfeedback), unabhaengig
+        davon, ob sich am Belegt-Status ueberhaupt etwas geaendert hatte.
+        `usb_present()` (Windows-SetupAPI, siehe driver.py) liefert die reine
+        physische Praesenz dagegen OHNE das Geraet zu beruehren -- reicht fuer
+        die laufende An-/Abstecken-Erkennung, das tatsaechliche Oeffnen (und
+        damit variant/serial + der initiale Frei/Belegt-Status) passiert nur
+        noch EINMAL beim Erkennen (siehe _probe_picoscope()), nicht mehr
+        periodisch. Ein waehrend des Betriebs von aussen (PicoScope-7-App)
+        belegtes Geraet zeigt die Kachel dadurch bewusst optimistisch weiter
+        als zuletzt bekannt an, bis zum naechsten Ab-/Anstecken oder einer
+        echten Testablauf-Aktion -- der Trade-off war ausdruecklich gewuenscht.
 
-        usb_present() (Windows-SetupAPI, siehe driver.py) liefert die reine
-        physische Praesenz unabhaengig davon, wer das Geraet gerade haelt --
-        erst danach wird versucht, tatsaechlich zu oeffnen, um "frei" von
-        "belegt" (z.B. PicoScope-7-App laeuft) zu unterscheiden. Im
-        "belegt"-Fall bleiben variant/serial auf dem zuletzt bekannten Stand
-        (waren noch nie erfolgreich zu ermitteln, bleiben sie leer).
-
-        Pausiert komplett waehrend eines laufenden Testablaufs (siehe
-        set_test_running/_test_running) UND wenn bereits eine PICO_*-Aktion
-        oder ein anderer Reconnect-Tick laeuft (siehe _picoscope_busy) --
-        letzteres ist NICHT nur eine Vorsichtsmassnahme: an echter Hardware
-        beobachtet, dass ps2000_open_unit() (blockierend, ~3,5s) intern
-        Windows-Messages pumpt und dadurch eine ZWEITE, verschachtelte
-        Ausfuehrung eines Testablauf-Schritts auf demselben Worker-Thread
-        zulaesst, WAEHREND dieser Aufruf noch laeuft (per Log bestaetigt) --
-        ohne das Flag konkurrieren beide um das exklusive ps2000-Handle und
-        der Testschritt scheitert faelschlich mit "belegt", obwohl gar keine
-        externe App im Weg ist.
+        Pausiert waehrend eines laufenden Testablaufs (siehe
+        set_test_running/_test_running) UND wenn eine PICO_*-Aktion oder ein
+        anderer Reconnect-Tick laeuft (siehe _picoscope_busy), analog zu
+        _probe_picoscope().
         """
         if self._test_running or self._picoscope_busy:
             return
@@ -690,7 +694,25 @@ class DeviceWorker(QObject):
             logger.info("PicoScope erkannt (USB)")
             self.device_added.emit("picoscope", PICOSCOPE_ID)
             self.picoscope_connected.emit(PICOSCOPE_ID, True)
+            self._probe_picoscope()
 
+    def _probe_picoscope(self) -> None:
+        """Oeffnet das PicoScope EINMALIG (nicht periodisch, siehe
+        _reconnect_picoscope-Docstring), um Frei/Belegt-Status + variant/
+        serial zu ermitteln -- ps2000_open_unit() belegt das Geraet exklusiv,
+        ein dauerhaft offenes LabControl-Handle wuerde also verhindern, dass
+        die PicoScope-7-App (Start-Button im Dashboard, siehe
+        picoscope2000.driver.launch_app) das Geraet je selbst oeffnen koennte,
+        daher wird sofort wieder geschlossen.
+
+        An echter Hardware beobachtet: ps2000_open_unit() (blockierend,
+        ~3,5s) pumpt intern Windows-Messages und liesse dadurch eine ZWEITE,
+        verschachtelte Ausfuehrung eines Testablauf-Schritts auf demselben
+        Worker-Thread zu, WAEHREND dieser Aufruf noch laeuft (per Log
+        bestaetigt) -- _picoscope_busy schuetzt davor, indem parallele
+        PICO_*-Aktionen currently busy sehen und auf ihren eigenen
+        Retry-Mechanismus zurueckfallen (siehe testcase_runner.py).
+        """
         self._picoscope_busy = True
         try:
             scope = PicoScope2000.open_first()
@@ -795,9 +817,11 @@ class DeviceWorker(QObject):
         dashboard.set_hil_analog_out, siehe main_window._on_control_
         section_created) -- am Worker/Poll-Zyklus hier komplett vorbei, da
         es sich um den zuletzt GESENDETEN Sollwert handelt, keine
-        Hardware-Bestaetigung. Aus demselben Grund auch PWM1-4 nicht (kein
-        Control-Tab-Abschnitt dafuer, ohnehin nicht im Dashboard, siehe
-        microhil_panel.py).
+        Hardware-Bestaetigung. PWM1-4 ebenfalls nicht abgefragt, aus
+        demselben Grund (kein `PWM?`-Aequivalent OHNE Kanalnummer wie bei
+        IN?, und PWM ist im Dashboard weiterhin nicht dargestellt) -- die
+        Control-Tab-Sektion (HilControlGroup) zeigt dort ebenfalls nur den
+        zuletzt gesendeten Sollwert, kein Poll-Readback.
         """
         try:
             inputs = hil.get_inputs()
@@ -805,7 +829,7 @@ class DeviceWorker(QObject):
             relays = [hil.get_relay(ch) for ch in range(1, HIL_RELAY_COUNT + 1)]
             ain_mv = [hil.get_analog_input(ch) for ch in range(1, HIL_AIN_COUNT + 1)]
             pwr12_enabled = [hil.get_pwr12(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
-            pwr12_current_mv = [hil.get_current_sense_mv(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
+            pwr12_current_ma = [hil.get_current_ma(ch) for ch in range(1, HIL_PWR12_COUNT + 1)]
         except HilError as exc:
             logger.warning("microHIL %s getrennt: %s", device_id, exc)
             hil.close()
@@ -816,7 +840,7 @@ class DeviceWorker(QObject):
         self.hil_digital_state.emit(device_id, inputs, outputs)
         self.hil_relay_state.emit(device_id, relays)
         self.hil_analog_input.emit(device_id, ain_mv)
-        self.hil_pwr12_state.emit(device_id, pwr12_enabled, pwr12_current_mv)
+        self.hil_pwr12_state.emit(device_id, pwr12_enabled, pwr12_current_ma)
 
     # -- gemeinsame Fehlerbehandlung ------------------------------------------
 
@@ -1121,6 +1145,10 @@ class DeviceWorker(QObject):
     @Slot(str, int, bool)
     def set_hil_pwr12(self, device_id: str, channel: int, on: bool) -> None:
         self._guard_hil(device_id, lambda hil: hil.set_pwr12(channel, on))
+
+    @Slot(str, int, int)
+    def set_hil_pwm(self, device_id: str, channel: int, permille: int) -> None:
+        self._guard_hil(device_id, lambda hil: hil.set_pwm(channel, permille))
 
     @Slot(str, int, int)
     def set_hil_current_limit(self, device_id: str, channel: int, milliamps: int) -> None:

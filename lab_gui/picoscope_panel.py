@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import qtawesome as qta
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from i18n import Translator, tr
+from icons import IconButton
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
@@ -64,7 +65,17 @@ class PicoscopePanel(QGroupBox):
         self._info_label = QLabel("--")
         outer.addWidget(self._info_label)
 
-        self._launch_button = QPushButton()
+        # Anders als die uebrigen Dashboard-Kacheln (reine Statusanzeige)
+        # erwartet diese Kachel aktive Bedienung -- ein normaler, neutral
+        # gestylter QPushButton ging darin optisch unter (Nutzerfeedback).
+        # Permanent accentfarben statt nur bei Hover, dieselbe Farbkombi wie
+        # theme.form_control_qss()s QPushButton:hover-Regel (accent-Hintergrund
+        # + surface-Vordergrund), die dank Palette-Design in beiden Themes
+        # kontrastiert (helle surface auf dunklerem Accent im Light-Theme,
+        # dunkle surface auf hellem Accent im Amber-Dark-Theme).
+        self._launch_button = IconButton("mdi.open-in-new", "", text=tr("PicoScope 7 öffnen"))
+        self._launch_button.setObjectName("picoscopeLaunchButton")
+        self._launch_button.set_color_override(current_palette().surface)
         self._launch_button.clicked.connect(self.launch_requested)
         outer.addWidget(self._launch_button)
 
@@ -81,6 +92,7 @@ class PicoscopePanel(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_style(palette)
         self._apply_status_icon(palette)
+        self._launch_button.set_color_override(palette.surface)
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")
@@ -94,19 +106,35 @@ class PicoscopePanel(QGroupBox):
         self._apply_style(current_palette())
 
     def _apply_style(self, palette: Palette) -> None:
+        # Der Launch-Button bekommt IMMER (auch offline/eingefaerbt) seine
+        # eigene, vom GroupBox-Hintergrund unabhaengige Akzentfaerbung --
+        # daher als eigener Selektor an jeden der drei Zweige unten angehaengt
+        # statt nur einmal am Ende gesetzt zu werden (setStyleSheet ersetzt
+        # das gesamte Stylesheet des Widgets inkl. aller Kind-Selektoren).
+        button_rule = (
+            f"QPushButton#picoscopeLaunchButton {{"
+            f" background-color: {palette.accent}; color: {palette.surface};"
+            f" border: 1px solid {palette.accent}; border-radius: 4px;"
+            f" font-weight: bold; padding: 6px 12px; }}"
+            f"QPushButton#picoscopeLaunchButton:hover {{"
+            f" background-color: {palette.accent_hover}; border-color: {palette.accent_hover}; }}"
+            f"QPushButton#picoscopeLaunchButton:pressed {{"
+            f" background-color: {palette.accent_hover}; }}"
+        )
         if not self._online:
             self.setStyleSheet(
                 f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
                 f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+                f"{button_rule}"
             )
             return
         border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
         if self._color_key is None:
-            self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
+            self.setStyleSheet(f"QGroupBox {{ {border_rule} }}{button_rule}")
             return
         hex_color = palette.panel_tints.get(self._color_key)
         bg_rule = f"background-color: {hex_color};" if hex_color else ""
-        self.setStyleSheet(f"QGroupBox {{ {border_rule} {bg_rule} }}")
+        self.setStyleSheet(f"QGroupBox {{ {border_rule} {bg_rule} }}{button_rule}")
 
     def set_online(self, online: bool) -> None:
         """online = physische USB-Praesenz (picoscope_connected-Signal), NICHT

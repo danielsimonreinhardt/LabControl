@@ -53,13 +53,15 @@ class MainWindow(QMainWindow):
     # Reconnect-Timer waehrend eines Testlaufs) -- eigenes Signal aus demselben
     # Grund wie _dispatch_test_action (Queued Connection in den Worker-Thread).
     _set_picoscope_test_running = Signal(bool)
-    # An DeviceWorker.open_picoscope_session weitergereicht -- einmal pro
-    # device_id, den ein Testlauf tatsaechlich braucht (siehe
-    # _on_run_requested), damit PICO_*-Schritte nicht bei JEDER Aktion erneut
-    # das exklusive Handle auf-/zumachen muessen (~4,5s Verbinden/Trennen pro
-    # Aktion, siehe picoscope2000/README.md). Eigenes Signal aus demselben
-    # Grund wie _dispatch_test_action.
-    _open_picoscope_session = Signal(str)
+    # DeviceWorker.open_picoscope_session() wird NICHT ueber ein eigenes
+    # Signal aufgerufen (anders als die uebrigen Worker-Aufrufe hier),
+    # sondern per QMetaObject.invokeMethod(..., BlockingQueuedConnection) in
+    # _on_run_requested -- ein einfaches emit() kehrt sofort zurueck, WAEHREND
+    # das Oeffnen (~4,5s) noch auf dem Worker-Thread laeuft, wodurch der
+    # direkt danach gestartete Testlauf seinen ersten PICO_*-Schritt schon
+    # vor Fertigstellung der Session ausfuehren konnte (an echter Hardware
+    # reproduziert). Die blockierende Variante wartet, bis die Session steht
+    # (oder das best-effort Oeffnen scheitert, siehe dortigen Docstring).
     # An DeviceWorker.close_picoscope_sessions weitergereicht -- am Laufende
     # (fertig/gestoppt/fehlgeschlagen), No-Op falls nie eine Session offen war.
     _close_picoscope_sessions = Signal()
@@ -80,6 +82,13 @@ class MainWindow(QMainWindow):
 
         self._safety_banner = QWidget()
         self._safety_banner.setObjectName("safetyBanner")
+        # Ohne dieses Attribut malt ein einfaches QWidget seinen per QSS
+        # gesetzten background-color NICHT (bekanntes Qt-Verhalten, siehe
+        # dasselbe Muster in testcase_tab.py) -- der Banner blieb dadurch
+        # transparent/auf dem normalen Fensterhintergrund, wodurch der
+        # hartkodiert weisse Label-Text im Light-Theme auf hellem statt
+        # rotem Grund unleserlich war.
+        self._safety_banner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         banner_layout = QHBoxLayout(self._safety_banner)
         banner_layout.setContentsMargins(8, 4, 8, 4)
         self._safety_banner_label = QLabel()
@@ -183,6 +192,7 @@ class MainWindow(QMainWindow):
         self._worker.psu_connected.connect(self._on_psu_connected)
         self._worker.can_connected.connect(self._on_can_connected)
         self._worker.hil_connected.connect(self._on_hil_connected)
+        self._worker.hil_info.connect(self.settings_tab.set_hil_firmware_version)
         self._worker.picoscope_connected.connect(self._on_picoscope_connected)
         self._worker.picoscope_state.connect(self.dashboard.update_picoscope_state)
         self._worker.load_measurement.connect(self.dashboard.update_load)
@@ -213,6 +223,7 @@ class MainWindow(QMainWindow):
         self._worker.load_measurement.connect(self._safety.on_load_measurement)
         self._worker.psu_measurement.connect(self._safety.on_psu_measurement)
         self._worker.can_stats.connect(self._safety.on_can_stats)
+        self._worker.hil_digital_state.connect(self._safety.on_hil_digital_state)
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
@@ -363,6 +374,7 @@ class MainWindow(QMainWindow):
             # stehen (siehe dashboard.set_hil_analog_out()-Docstring).
             section.set_analog_output.connect(self.dashboard.set_hil_analog_out)
             section.set_relay.connect(self._worker.set_hil_relay)
+            section.set_pwm.connect(self._worker.set_hil_pwm)
             section.set_pwr12.connect(self._worker.set_hil_pwr12)
             section.set_current_limit.connect(self._worker.set_hil_current_limit)
         else:
@@ -670,7 +682,6 @@ class MainWindow(QMainWindow):
         # SELBER emittierender Signal-Quelle), damit _reconnect_picoscope()
         # beim abschliessenden Status-Refresh in close_picoscope_sessions()
         # nicht mehr durch _test_running blockiert wird.
-        self._open_picoscope_session.connect(self._worker.open_picoscope_session)
         self._close_picoscope_sessions.connect(self._worker.close_picoscope_sessions)
         self._test_runner.run_finished.connect(lambda: self._close_picoscope_sessions.emit())
         self._test_runner.run_stopped.connect(lambda: self._close_picoscope_sessions.emit())
@@ -716,9 +727,25 @@ class MainWindow(QMainWindow):
         # enthaelt -- ein Lauf ohne Oszilloskop-Beteiligung soll weder die
         # ~4,5s Verbindungszeit noch die PicoScope-7-App fuer die gesamte
         # Laufdauer blockieren (siehe device_worker.open_picoscope_session).
+        #
+        # BLOCKIEREND (BlockingQueuedConnection) statt per Signal-emit(), wie
+        # bereits bei closeEvent()/all_outputs_off(): ein einfaches emit()
+        # gibt sofort zurueck, WAEHREND open_picoscope_session() auf dem
+        # Worker-Thread noch die ~4,5s Verbindung aufbaut -- der direkt
+        # danach gestartete Testlauf konnte dadurch bereits seinen ersten
+        # PICO_*-Schritt ausfuehren, bevor die Session ueberhaupt existierte
+        # (an echter Hardware reproduziert, Nutzerfeedback). Der Aufruf hier
+        # blockiert den GUI-Thread bewusst bis die Session steht (oder das
+        # Oeffnen best-effort scheitert, siehe open_picoscope_session-
+        # Docstring) -- exakt einmal pro Lauf mit PicoScope-Beteiligung.
         for device_id in step_device_ids:
             if device_id.startswith("picoscope:"):
-                self._open_picoscope_session.emit(device_id)
+                QMetaObject.invokeMethod(
+                    self._worker,
+                    "open_picoscope_session",
+                    Qt.ConnectionType.BlockingQueuedConnection,
+                    Q_ARG(str, device_id),
+                )
         self._test_runner.start(steps)
 
     def _resolve_step_device_ids(self, steps: list[TestStep]) -> set[str]:

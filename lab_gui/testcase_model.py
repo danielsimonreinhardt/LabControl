@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from i18n import tr
+from microhil.driver import AOUT_MAX_MV
 from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 
 # Interner Aktionscode -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
@@ -192,8 +193,11 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "HIL_OUT_OFF": ("", 0, 0),
     "HIL_RELAY_ON": ("", 0, 0),
     "HIL_RELAY_OFF": ("", 0, 0),
-    # 0-3300mV: AOUT_MAX_MV in microhil/driver.py (DAC-Referenzspannung).
-    "HIL_AOUT": ("mV", 0, 3300),
+    # Import statt Zahlenliteral, damit das nicht wieder aus dem Tritt
+    # geraet, sobald sich AOUT_MAX_MV aendert (siehe dortigen Docstring --
+    # ist bereits einmal passiert: AOUT wurde kalibriert, dieser Wert war
+    # noch auf dem alten rohen DAC-Bereich 0..3300 stehengeblieben).
+    "HIL_AOUT": ("mV", 0, AOUT_MAX_MV),
     "HIL_IN_READ": ("", 0, 0),
     "HIL_AIN_READ": ("", 0, 0),
     # value_spin (Seite 0) wird fuer PICO_*-Aktionen nie angezeigt (eigene

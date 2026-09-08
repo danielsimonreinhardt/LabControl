@@ -7,14 +7,20 @@ ueber USB-CDC (virtueller COM-Port), ASCII-Zeilenprotokoll.
 `MicroHIL.open_first()` findet den Port automatisch, unter Windows als
 `COMx`, unter Linux als `/dev/ttyACMx`.
 
-**Nicht gegen echte Hardware verifiziert** (kein Geraet verfuegbar) –
-ausschliesslich aus `docs/protocol.md`/`docs/can-usb.md` des microHIL-Repos
-implementiert. Anders als bei hcs34xx/korad_kel102 also ohne
-Hardware-Bestaetigung.
+**Gegen echte Hardware verifiziert** (Board-Seriennummer im Code-Kommentar
+bei `KNOWN_HARDWARE_DEFECTS`, siehe dort) und vollstaendig an
+`device_worker.py`/Dashboard/Control-Tab/Testablauf-Editor angeschlossen
+(siehe `lab_gui/microhil_panel.py`, `lab_gui/control_tab.py:
+HilControlGroup`). `mock.py` bildet dieselbe Schnittstelle fuer den
+Simulationsmodus nach.
 
-**Nicht in die GUI (`lab_gui/`) eingebunden.** Dieser Treiber ist bewusst
-eigenstaendig, analog zu den anderen Geraetetreibern nutzbar, aber (noch)
-nicht an `device_worker.py`/Dashboard/Testcase-Editor angeschlossen.
+AIN1-4/AOUT1-2/CURR1-2 sind seit 2026-09-08 real kalibriert (siehe
+`docs/calibration.md` im microHIL-Repo) -- `AIN?`/`AOUT`/`CURR?` liefern/
+erwarten dadurch physikalische Werte (mV/mA), nicht mehr die rohen ADC-/
+DAC-/Sense-Werte. Fuer Letztere gibt es weiterhin `AINRAW?`/`AOUTRAW`/
+`CURRRAW?` (siehe get_analog_input_raw()/set_analog_output_raw()/
+get_current_sense_raw_mv() unten), gedacht fuer die Kalibrierprozedur
+selbst und Diagnosezwecke.
 
 ## Verwendung
 
@@ -56,17 +62,29 @@ with MicroHIL.open_first() as hil:
   (`set_analog_output()`/`set_pwm()`), damit der hier sichtbare Sollwert
   mit dem tatsaechlich angewendeten uebereinstimmt. Fuer `PWM` existiert
   zusaetzlich `PWM?`/`get_pwm()` zum Zuruecklesen des tatsaechlichen
-  Werts vom Geraet, fuer `AOUT` nicht (kein `AOUT?`).
+  Werts vom Geraet, fuer `AOUT` nicht (kein `AOUT?`) -- der Sollwert wird
+  ausserdem seit 2026-09-08 kalibriert interpretiert (siehe unten), das
+  `AOUT_MAX_MV`-Client-Limit ist daher nur ein Richtwert, keine feste
+  Hardware-Spezifikation.
 - **Verriegelung PWM1-4 / OUT1-4.** Beide treiben laut Schaltplan dieselbe
   Endstufe: `set_output(n, True)` (n=1-4) schaltet PWM-Kanal n zwangsweise
   aus, `set_pwm(n, >0)` schaltet OUT n zwangsweise aus – ohne eigene
   Fehlermeldung.
-- **`get_current_sense_mv()` liefert keine mA.** Der Shunt-/
-  Verstaerkungsfaktor der Stromsense-Schaltung ist laut protocol.md noch
-  nicht in der Firmware hinterlegt, `CURR?` liefert die rohe
-  Sense-Spannung in mV. Der Methodenname spiegelt das bewusst wider.
-- **`AIN?`/`CURR?` bis zu ~10 ms.** Beide loesen eine
-  Single-Conversion-ADC-Messung aus, alle anderen Kommandos antworten
+- **`get_current_ma()`/`get_analog_input()`/`set_analog_output()` liefern/
+  erwarten seit 2026-09-08 kalibrierte physikalische Werte**, keine rohen
+  ADC-/DAC-/Sense-Werte mehr (siehe `docs/calibration.md` im
+  microHIL-Repo, real durchkalibriert und gegen Multimeter/Amperemeter
+  verifiziert). Die vorherigen rohen Werte bleiben ueber
+  `get_analog_input_raw()`/`set_analog_output_raw()`/
+  `get_current_sense_raw_mv()` erreichbar (fuer die Kalibrierprozedur
+  selbst und Diagnosezwecke).
+- **`set_current_limit()`/`ILIM` ist seit 2026-09-08 firmwareseitig aktiv**
+  (Default nach Reset: 1200mA, siehe `set_current_limit()`-Docstring) --
+  eine anhaltende Ueberschreitung schaltet den betroffenen PWR12-Kanal
+  selbststaendig ab (`get_pwr12_fault()`/`PWR12FLT?` zeigt den Grund), ein
+  einfaches erneutes Einschalten hebt das NICHT auf.
+- **`AIN?`/`AINRAW?`/`CURR?`/`CURRRAW?` bis zu ~10 ms.** Alle vier loesen
+  eine Single-Conversion-ADC-Messung aus, alle anderen Kommandos antworten
   praktisch sofort (GPIO-/Register-Operationen).
 - Kein eigener Exception-Typ pro Fehlergrund (`ARGS`/`RANGE`/`UNKNOWN`) –
   anders als `PowerSupplyValueError` bei hcs34xx zeigen alle drei einen
@@ -75,10 +93,3 @@ with MicroHIL.open_first() as hil:
   `HilError.reason` zur Verfuegung. Kanal-/Indexfehler werden vom Treiber
   ausserdem bereits client-seitig per `ValueError` abgefangen, bevor
   ueberhaupt ein `ERR RANGE` vom Geraet moeglich waere.
-
-## Naechste Schritte
-
-- GUI-Integration (`lab_gui/device_worker.py` + Dashboard/Control-Tab).
-- Verifikation gegen echte Hardware, sobald verfuegbar.
-- `mock.py` (Simulator wie bei hcs34xx/korad_kel102) fuer GUI-Tests ohne
-  Hardware, sobald die GUI-Integration ansteht.

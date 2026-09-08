@@ -32,6 +32,37 @@ sys.path.insert(0, str(Path(SPECPATH) / "tools"))
 import generate_splash  # noqa: E402
 generate_splash.main()
 
+# python-can laedt seine Interface-Backends NICHT per normalem import,
+# sondern zur Laufzeit ueber Modulnamen als String
+# (can.interfaces.BACKENDS -> importlib.import_module, siehe
+# can/interface.py::_get_class_for_interface). PyInstallers statische
+# Analyse sieht solche Importe grundsaetzlich nicht, und weder python-can
+# selbst noch pyinstaller-hooks-contrib liefern dafuer einen Hook -- ohne
+# die folgenden hiddenimports landet in der .exe nur das Paket
+# `can.interfaces`, aber KEIN einziges Backend.
+#
+# Die Auswirkung war lange nicht als Build-Problem erkennbar, weil beide
+# Fehlerpfade lautlos sind: `detect_available_configs()` verschluckt den
+# ImportError pro Interface-Typ (CanInterfaceNotImplementedError) und
+# liefert einfach eine leere Liste -- in der GUI sichtbar nur als
+# "Keine Kanäle gefunden" im Settings-Tab, in der Entwicklungsumgebung
+# (ungefroren) dagegen NIE reproduzierbar, weil dort alle Backends reguleaer
+# importierbar sind. Siehe can_bus/README.md.
+#
+# Aus INTERFACE_LIST abgeleitet statt hart verdrahtet, damit ein spaeter
+# ergaenzter Interface-Typ nicht erneut still aus dem Build faellt.
+sys.path.insert(0, str(SPECPATH))
+from can.interfaces import BACKENDS  # noqa: E402
+from can_bus.driver import INTERFACE_LIST  # noqa: E402
+
+CAN_HIDDENIMPORTS = []
+for _interface in INTERFACE_LIST:
+    _module = BACKENDS[_interface][0]
+    # Backend-Paket plus dessen Submodule: das Paket-__init__ importiert die
+    # eigentliche Implementierung (z.B. can.interfaces.vector.canlib) selbst,
+    # PyInstaller folgt ab hier aber wieder normalen Importen.
+    CAN_HIDDENIMPORTS.append(_module)
+
 a = Analysis(
     ['lab_gui/main.py'],
     pathex=['.'],
@@ -50,7 +81,7 @@ a = Analysis(
         ('lab_gui/translations', 'translations'),
         ('lab_gui/help', 'help'),
     ],
-    hiddenimports=[],
+    hiddenimports=CAN_HIDDENIMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

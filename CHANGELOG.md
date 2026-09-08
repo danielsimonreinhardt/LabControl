@@ -7,6 +7,12 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Settings-Tab: "Geräte-Info"-Sektion zeigt die microHIL-Firmwareversion.**
+  `microhil/driver.py` liest sie bereits über `*IDN?` mit (neu:
+  `MicroHIL.get_firmware_version()`, `parse_idn_fields()`), `device_worker.py`
+  meldet sie beim Verbinden über das neue `hil_info`-Signal an
+  `settings_tab.SettingsTab.set_hil_firmware_version()`. Analog für
+  `microhil/mock.py` im Simulationsmodus (liefert `"MOCK"`).
 - **PicoScope 2204A/2205A: Dashboard-Kachel + Start-Button für PicoScope 7.**
   Neues Treiber-Paket `picoscope2000/` (ps2000-API via `picosdk`, gegen
   echte Hardware verifiziert -- trotz "A" im Namen brauchen 2204A/2205A die
@@ -522,6 +528,51 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **CAN: In der gebauten .exe fehlten sämtliche python-can-Backends --
+  Ursache von "Keine Kanäle gefunden" (v0.9.17).** python-can lädt seine
+  Interface-Backends nicht per normalem `import`, sondern zur Laufzeit über
+  Modulnamen als String (`can.interfaces.BACKENDS` →
+  `importlib.import_module`). PyInstallers statische Analyse sieht solche
+  Importe nicht, und weder python-can noch pyinstaller-hooks-contrib liefern
+  dafür einen Hook -- in `LabControl_v0.9.16.exe` war nachweislich das Paket
+  `can.interfaces` enthalten, aber kein einziges Backend (`grep` auf die
+  .exe: 0 Treffer für `can.interfaces.vector`/`pcan`). `detect_available_
+  configs()` verschluckt den ImportError pro Interface-Typ und liefert
+  wortlos eine leere Liste, weshalb der Fehler nur als "Keine Kanäle
+  gefunden" sichtbar war -- und aus dem Quellcode heraus prinzipiell nie
+  reproduzierbar, weil dort alle Backends normal importierbar sind.
+  `LabControl.spec` setzt jetzt `hiddenimports` aus
+  `can_bus.driver.INTERFACE_LIST` ab (nicht hart verdrahtet, damit ein
+  später ergänzter Interface-Typ nicht erneut still aus dem Build fällt).
+- **CAN: "Keine Kanäle gefunden" nannte den Grund nicht.** Ein nicht
+  ladbares Backend sah exakt aus wie "kein Gerät angeschlossen" -- beide
+  Fehlerpfade waren lautlos, was die Ursachensuche oben lange blockiert hat.
+  Neu: `CanBus.backend_problem()` unterscheidet beides, `discover_configs()`
+  loggt den Grund und füllt optional ein `errors`-Dict, und der Settings-Tab
+  zeigt ihn in der Meldung an.
+- **CAN/Vector: Kanäle wurden über eine fremde CANalyzer-Konfiguration statt
+  über die Hardware aufgelöst.** `python-can`s `VectorBus` defaultet
+  `app_name` auf `"CANalyzer"`; da `can_bus/driver.py` das nie überschrieb,
+  bedeutete `channel=0` nicht "Kanal 0 des angeschlossenen Geräts", sondern
+  "der Kanal, den die Vector Hardware Config der Anwendung *CANalyzer* auf
+  Position 0 zugewiesen hat". Ohne eingerichtete CANalyzer-Anwendung
+  scheiterte damit jeder Verbindungsversuch (`xlGetApplConfig failed`, im
+  `DeviceWorker` nur als Log-Warnung sichtbar -- das Interface tauchte in der
+  GUI schlicht nie auf); war sie auf ein anderes Gerät gemappt, verband sich
+  LabControl klaglos mit der falschen Hardware (Status "verbunden", aber nie
+  ein Frame). `_vector_bus_kwargs()` setzt jetzt immer `app_name=None` und
+  bindet den Kanal über die Seriennummer.
+- **CAN/Vector: Kanalauswahl bot mehrdeutige, doppelte Nummern an.**
+  `discover_configs()` meldete den Hardware-Kanal (0/1 je Gerät), der
+  Verbindungsaufbau erwartete aber einen globalen Index über alle
+  Vector-Geräte -- an einer VN1610 samt virtuellen Kanälen ergab die Auswahl
+  dadurch viermal nur "0"/"1", ununterscheidbar, und die beiden virtuellen
+  Kanäle waren überhaupt nicht erreichbar. Kanäle werden jetzt als
+  eindeutiges Token `"<seriennummer>:<hw_kanal>"` geführt und im
+  Settings-Tab mit sprechendem Namen angeboten ("VN1610 Channel 1
+  (S/N 75816)"). Bestehende `settings.json` mit reiner Kanalnummer bleiben
+  lauffähig (als globaler Index). An echter VN1610 verifiziert: alle vier
+  Kanäle verbinden, Frame-Versand/-Empfang über `DeviceWorker` geprüft.
 - **microHIL: PWR12-1/CURR1/CURR2 blieben in der GUI gesperrt, obwohl das
   Board längst repariert ist.** `KNOWN_HARDWARE_DEFECTS["2065386A5631"]`
   (siehe `microhil/driver.py`) stammte aus einer Session, in der Q22+Q28

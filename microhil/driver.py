@@ -63,12 +63,25 @@ RELAY_COUNT = 4
 OUT_COUNT = 8
 IN_COUNT = 8
 AOUT_COUNT = 2
-AOUT_MAX_MV = 3300
+# Rohbereich des DAC (0..3300mV), fuer AOUTRAW/set_analog_output_raw().
+AOUT_RAW_MAX_MV = 3300
+# Nominaler KALIBRIERTER AOUT-Bereich (siehe docs/calibration.md im
+# microHIL-Repo) -- seit 2026-09-08 durchkalibriert, `AOUT` erwartet jetzt
+# die gewuenschte physikalische Ausgangsspannung statt eines rohen
+# DAC-Sollwerts. Rechnerisch aus Verstaerkung 3.7x auf den vollen
+# 0..3300mV-DAC-Bereich (siehe calibration.md, "Schaltungs-Herleitung"),
+# AENDERT SICH mit einer Neukalibrierung -- nur ein Richtwert fuer GUI-
+# Eingabefelder, keine harte Spezifikation.
+AOUT_MAX_MV = 12210
 AIN_COUNT = 4
 PWR12_COUNT = 2
 CURR_COUNT = 2
 PWM_COUNT = 4
 PWM_MAX_PERMILLE = 1000
+
+# PWR12FLT?-Bitmaske (siehe protocol.md, "Strombegrenzung PWR12-1/2").
+PWR12_FAULT_OWN_LIMIT = 0b01     # ILIM-Grenzwert dieses Kanals ausgeloest
+PWR12_FAULT_TOTAL_BUDGET = 0b10  # Gemeinsames 1500mA-Budget (Polyfuse F1) ausgeloest
 
 # PWM1-4 (TIM3, PC6-PC9) und OUT1-4 (PA10/PA15/PC10/PC11) treiben laut
 # Schaltplan dieselbe Endstufe und werden von der Firmware gegenseitig
@@ -92,15 +105,13 @@ INTERLOCKED_CHANNELS = 4
 # Tags: "pwr12:<1-2>" (12V-Ausgang liefert keine/keine verlaessliche Spannung),
 # "curr:<1-2>" (Stromsense liefert keine verlaesslichen Werte).
 KNOWN_HARDWARE_DEFECTS: dict[str, frozenset[str]] = {
-    # 2026-09-06: Q22 (PMT200EPEX, Verpolschutz-PMOS vor PWR12-1) hat eine
-    # defekte Body-Diode und blockiert den Strompfad vollstaendig (0V trotz
-    # `PWR12 1 1`), unabhaengig von der GPIO-Ansteuerung -- CURR1 ist damit
-    # ebenfalls nicht sinnvoll pruefbar (kein realer Laststrom moeglich, bis
-    # Q22 getauscht ist). U19 (INA240A1D, Stromsense CURR2) liefert bei
-    # echtem, per Amperemeter verifiziertem Laststrom nicht-monotone Werte
-    # (200mA->181, 1000mA->264, 2000mA->~221 Rohwert) -- unabhaengiger Defekt,
-    # PWR12-2 selbst liefert korrekt 12V.
-    "2065386A5631": frozenset({"pwr12:1", "curr:1", "curr:2"}),
+    # Board "2065386A5631" hatte 2026-09-06 bis 2026-09-08 einen Eintrag hier
+    # (PWR12-1: defekte Q22+Q28; CURR1/CURR2: U18/U19 nicht bestueckt) --
+    # alle drei Punkte sind repariert und real durchkalibriert (siehe
+    # microHIL-Repo, docs/hardware-notes.md/calibration.md), Eintrag deshalb
+    # entfernt. Neue Defekte hier nach demselben Muster eintragen, sobald sie
+    # an einem konkreten Board gefunden UND per docs/hardware-notes.md
+    # dokumentiert sind -- nicht spekulativ.
 }
 
 
@@ -149,7 +160,8 @@ class HilError(RuntimeError):
 @dataclass
 class Pwr12Channel:
     enabled: bool
-    current_sense_mv: int  # rohe Sense-Spannung, NICHT mA -- siehe get_current_sense_mv()
+    current_ma: int  # kalibrierter Laststrom, siehe get_current_ma()
+    fault: int = 0    # PWR12FLT?-Bitmaske, siehe PWR12_FAULT_*
 
 
 def _interface_number(info) -> int | None:
@@ -185,6 +197,18 @@ def _interface_number(info) -> int | None:
         return int(match.group(1))
 
     return None
+
+
+def parse_idn_fields(idn: str) -> dict[str, str]:
+    """Zerlegt eine `*IDN?`-Antwort wie "microHIL,fw=0.1.0,SN=2065386A5631"
+    in ihre "key=value"-Felder (z.B. {"fw": "0.1.0", "SN": "2065386A5631"}).
+    Felder ohne "=" (der fuehrende Geraetename "microHIL") werden ignoriert."""
+    fields: dict[str, str] = {}
+    for part in idn.split(","):
+        if "=" in part:
+            key, _, value = part.partition("=")
+            fields[key] = value
+    return fields
 
 
 def _device_sort_key(device: str):
@@ -372,10 +396,14 @@ class MicroHIL:
         dieses Feld (aeltere fw=0.1.0-Builds vor dem SN=-Zusatz) statt eines
         Fehlers -- siehe KNOWN_HARDWARE_DEFECTS/defects_for_serial() oben,
         die einen fehlenden Wert ebenfalls tolerieren."""
-        for field in self.identify().split(","):
-            if field.startswith("SN="):
-                return field[len("SN="):]
-        return None
+        return parse_idn_fields(self.identify()).get("SN")
+
+    def get_firmware_version(self) -> str | None:
+        """Firmwareversion aus dem fw=-Feld von *IDN? (z.B. "0.1.0") -- fuer
+        die "Geraete-Info"-Anzeige im Settings-Tab (device_worker.py:
+        hil_info). None bei einer Antwort ohne dieses Feld statt eines
+        Fehlers, analog zu get_serial()."""
+        return parse_idn_fields(self.identify()).get("fw")
 
     # -- relays (1-4) --------------------------------------------------------
 
@@ -424,26 +452,43 @@ class MicroHIL:
     # -- analog output / DAC (1-2) --------------------------------------------
 
     def set_analog_output(self, channel: int, millivolts: int) -> None:
-        """Setzt AOUT<channel> in mV (DAC-Referenz 0..3300 mV).
+        """Setzt AOUT<channel> auf die gewuenschte physikalische
+        Ausgangsspannung in mV -- seit 2026-09-08 kalibriert (siehe
+        docs/calibration.md im microHIL-Repo, `cal_aout`), vorher war dies
+        der rohe DAC-Sollwert (0..3300mV). Fuer den rohen DAC-Sollwert
+        direkt (Diagnose/Kalibrierprozedur) siehe set_analog_output_raw().
 
         Die Firmware klemmt einen ausserhalb liegenden Wert still auf den
-        gueltigen Bereich, statt ihn abzulehnen -- `OK` bestaetigt nur einen
-        gueltigen Kanalindex, NICHT den exakten uebernommenen Wert (siehe
-        protocol.md, "Wertebereiche: Index vs. Nutzwert"). Ein `AOUT?` zum
-        Zuruecklesen existiert nicht. Der Treiber klemmt den Wert deshalb
-        bereits hier client-seitig auf denselben Bereich, damit der hier
-        sichtbare Sollwert mit dem tatsaechlich angewendeten uebereinstimmt
-        -- ein Aufruf mit z.B. 99999 setzt also nachweisbar 3300, nicht
-        einen stillschweigend abweichenden Wert.
+        aktuell kalibrierten Ausgangsbereich, statt ihn abzulehnen -- `OK`
+        bestaetigt nur einen gueltigen Kanalindex, NICHT den exakten
+        uebernommenen Wert (siehe protocol.md, "Wertebereiche: Index vs.
+        Nutzwert"). Ein `AOUT?` zum Zuruecklesen existiert nicht. Der
+        Treiber klemmt den Wert deshalb bereits hier client-seitig auf
+        AOUT_MAX_MV, damit der hier sichtbare Sollwert mit dem
+        tatsaechlich angewendeten grob uebereinstimmt -- AOUT_MAX_MV ist
+        aber nur ein Richtwert (aendert sich mit der Kalibrierung), die
+        Firmware bleibt fuer die exakte Grenze massgeblich.
         """
         self._check_channel(channel, AOUT_COUNT, "AOUT")
         clamped = max(0, min(AOUT_MAX_MV, millivolts))
         self._command(f"AOUT {channel} {clamped}")
 
+    def set_analog_output_raw(self, channel: int, millivolts: int) -> None:
+        """Setzt AOUT<channel> direkt auf einen rohen DAC-Sollwert
+        (0..3300mV), OHNE die `cal_aout`-Kalibrierung anzuwenden --
+        `AOUTRAW`, siehe docs/calibration.md im microHIL-Repo. Fuer die
+        Kalibrierprozedur selbst und Diagnosezwecke, im Normalbetrieb
+        set_analog_output() (kalibrierte physikalische Spannung) nutzen.
+        """
+        self._check_channel(channel, AOUT_COUNT, "AOUT")
+        clamped = max(0, min(AOUT_RAW_MAX_MV, millivolts))
+        self._command(f"AOUTRAW {channel} {clamped}")
+
     # -- analog inputs (1-4, read-only) ---------------------------------------
 
     def get_analog_input(self, channel: int) -> int:
-        """Liest AIN<channel> in mV.
+        """Liest AIN<channel> in mV -- kalibriert (siehe docs/calibration.md
+        im microHIL-Repo, `cal_ain`) seit 2026-09-08.
 
         Loest im Geraet eine Single-Conversion-ADC-Messung aus und kann
         laut protocol.md bis zu ~10 ms dauern (HAL_ADC_PollForConversion-
@@ -453,6 +498,16 @@ class MicroHIL:
         """
         self._check_channel(channel, AIN_COUNT, "AIN")
         return int(self._query(f"AIN? {channel}").strip())
+
+    def get_analog_input_raw(self, channel: int) -> int:
+        """Liest den rohen ADC-Wert von AIN<channel> in mV (`raw*3300/4095`),
+        OHNE die `cal_ain`-Kalibrierung -- `AINRAW?`, siehe
+        docs/calibration.md im microHIL-Repo. Fuer die Kalibrierprozedur
+        selbst und Diagnosezwecke, im Normalbetrieb get_analog_input()
+        (kalibrierter Wert) nutzen. Gleiche ~10ms-ADC-Anmerkung wie bei
+        get_analog_input()."""
+        self._check_channel(channel, AIN_COUNT, "AIN")
+        return int(self._query(f"AINRAW? {channel}").strip())
 
     # -- switchable 12V outputs with current sense (1-2) ----------------------
 
@@ -464,46 +519,68 @@ class MicroHIL:
         self._check_channel(channel, PWR12_COUNT, "PWR12")
         return self._query(f"PWR12? {channel}").strip() != "0"
 
-    def get_current_sense_mv(self, channel: int) -> int:
-        """Liest die rohe Sense-Spannung von PWR12<channel> in mV.
-
-        KEINE Umrechnung in mA -- der Shunt-/Verstaerkungsfaktor der
-        Stromsense-Schaltung (AIN_12VOUT1/2_CURRSENSE, PA6/PA7) ist laut
-        protocol.md ("Bekannte Luecke") noch nicht in der Firmware
-        hinterlegt. Der Methodenname spiegelt das bewusst wider (keine
-        `_ma`-Methode, um keine falsche mA-Genauigkeit vorzutaeuschen).
+    def get_current_ma(self, channel: int) -> int:
+        """Liest den kalibrierten Laststrom von PWR12<channel> in mA
+        (`CURR?`) -- seit 2026-09-08 real durchkalibriert und gegen
+        Amperemeter verifiziert (siehe docs/calibration.md im
+        microHIL-Repo, `cal_curr`; vorher lieferte dieses Kommando nur die
+        rohe, unkalibrierte Sense-Spannung, siehe get_current_sense_raw_mv()
+        fuer das weiterhin vorhandene rohe Gegenstueck).
         Dieselbe ~10ms-ADC-Anmerkung wie bei get_analog_input() gilt auch
         hier.
         """
         self._check_channel(channel, CURR_COUNT, "CURR")
         return int(self._query(f"CURR? {channel}").strip())
 
+    def get_current_sense_raw_mv(self, channel: int) -> int:
+        """Liest die rohe, unkalibrierte Sense-Spannung von PWR12<channel>
+        in mV (`CURRRAW?`, siehe docs/calibration.md im microHIL-Repo) --
+        OHNE die `cal_curr`-Kalibrierung. Fuer die Kalibrierprozedur selbst
+        und Diagnosezwecke, im Normalbetrieb get_current_ma() (kalibrierter
+        Strom) nutzen."""
+        self._check_channel(channel, CURR_COUNT, "CURR")
+        return int(self._query(f"CURRRAW? {channel}").strip())
+
+    def get_pwr12_fault(self, channel: int) -> int:
+        """Liest die PWR12FLT?-Bitmaske fuer PWR12<channel> (siehe
+        PWR12_FAULT_OWN_LIMIT/PWR12_FAULT_TOTAL_BUDGET, protocol.md
+        "Strombegrenzung PWR12-1/2"): 0 = kein Fault, sonst Grund, warum
+        der Kanal trotz anstehender Schaltanforderung aus ist. Eine
+        Verriegelung erlischt erst nach `PWR12 <n> 0` (eigenes Limit) bzw.
+        wenn BEIDE Kanaele zurueckgenommen wurden (Gesamtbudget) --
+        `set_pwr12(channel, True)` allein reicht danach nicht."""
+        self._check_channel(channel, PWR12_COUNT, "PWR12FLT")
+        return int(self._query(f"PWR12FLT? {channel}").strip())
+
     def get_pwr12_channel(self, channel: int) -> Pwr12Channel:
-        """Komfort: Schaltzustand + Sense-Spannung von PWR12<channel> in einem Aufruf."""
+        """Komfort: Schaltzustand + kalibrierter Strom + Fault-Status von
+        PWR12<channel> in einem Aufruf."""
         return Pwr12Channel(
             enabled=self.get_pwr12(channel),
-            current_sense_mv=self.get_current_sense_mv(channel),
+            current_ma=self.get_current_ma(channel),
+            fault=self.get_pwr12_fault(channel),
         )
 
     def set_current_limit(self, channel: int, milliamps: int) -> None:
-        """Setzt eine Strombegrenzung fuer PWR12<channel>.
-
-        ACHTUNG -- FIRMWARE-SEITIG NOCH NICHT UMGESETZT: protocol.md kennt
-        aktuell nur `CURR?`/`CURRRAW?` zum reinen AUSLESEN der Stromsense,
-        aber kein Kommando zum SETZEN einer Begrenzung. Die eigentliche
-        Begrenzungslogik (Abschalten/Klemmen bei Ueberstrom) ist geplante
-        Arbeit im microHIL-Firmware-Repo, nicht Teil dieses Treibers. Diese
-        Methode existiert bereits jetzt, damit GUI/device_worker fertig
-        verdrahtet sind, sobald die Firmware nachzieht -- bis dahin liefert
-        ein Aufruf gegen echte Hardware `ERR UNKNOWN` (HilError), gegen
-        microhil.mock (haelt den Wert nur im Speicher) funktioniert er bereits.
-
-        Kommandoname/-syntax (`ILIM <1-2> <mA>`) ist ein Vorschlag in
-        Analogie zu PWR12/AOUT, NICHT mit der Firmware abgestimmt -- bei
-        Bedarf beim tatsaechlichen Firmware-Update anpassen.
+        """Setzt die Ueberstrom-Abschaltschwelle fuer PWR12<channel>
+        (`ILIM`, Default nach Reset: 1200mA) -- seit 2026-09-08
+        firmwareseitig implementiert (`protocol.c`, `pwr12_guard_poll()`):
+        wird der Grenzwert ununterbrochen laenger als 100ms ueberschritten,
+        schaltet die Firmware den Kanal selbststaendig ab, unabhaengig von
+        der zuletzt per set_pwr12() gesetzten Schaltanforderung (siehe
+        get_pwr12_fault()). Ein simples set_pwr12(channel, True) hebt diese
+        Verriegelung NICHT auf -- siehe get_pwr12_fault()-Docstring.
+        Zusaetzlich gibt es ein gemeinsames 1500mA-Budget beider Kanaele
+        (Polyfuse F1), unabhaengig von den Einzellimits.
         """
         self._check_channel(channel, PWR12_COUNT, "ILIM")
         self._command(f"ILIM {channel} {milliamps}")
+
+    def get_current_limit(self, channel: int) -> int:
+        """Liest die aktuell gesetzte Ueberstrom-Abschaltschwelle von
+        PWR12<channel> in mA (`ILIM?`)."""
+        self._check_channel(channel, PWR12_COUNT, "ILIM")
+        return int(self._query(f"ILIM? {channel}").strip())
 
     # -- PWM (1-4) -------------------------------------------------------------
 

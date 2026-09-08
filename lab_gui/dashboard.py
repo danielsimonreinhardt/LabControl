@@ -690,11 +690,11 @@ class DashboardWidget(QGroupBox):
         panel.update_analog_in(values_mv)
 
     @Slot(str, list, list)
-    def update_hil_pwr12(self, device_id: str, enabled: list, current_sense_mv: list) -> None:
+    def update_hil_pwr12(self, device_id: str, enabled: list, current_ma: list) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
             return
-        panel.update_pwr12(enabled, current_sense_mv)
+        panel.update_pwr12(enabled, current_ma)
 
     @Slot(str, int, int)
     def set_hil_analog_out(self, device_id: str, channel: int, millivolts: int) -> None:
