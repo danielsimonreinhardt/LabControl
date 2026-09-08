@@ -522,6 +522,26 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **microHIL: PWR12-1/CURR1/CURR2 blieben in der GUI gesperrt, obwohl das
+  Board längst repariert ist.** `KNOWN_HARDWARE_DEFECTS["2065386A5631"]`
+  (siehe `microhil/driver.py`) stammte aus einer Session, in der Q22+Q28
+  (PWR12-1) und U18/U19 (CURR1/CURR2) am realen Board tatsächlich defekt
+  bzw. nicht bestückt waren -- alle drei sind seit 2026-09-08 repariert
+  und real kalibriert (microHIL-Repo, `docs/hardware-notes.md`/
+  `calibration.md`), der Eintrag war seitdem veraltet und sperrte
+  funktionierende Kanäle grundlos. Eintrag entfernt.
+- **CAN-Bus: „Zeit (s)"-Spalte im Control-Tab-Traffic-Log zeigte an echter
+  Hardware eine riesige, abgeschnittene Zahl statt einer kleinen
+  Sekundenangabe.** Ursache: `CanBus.recv()` reichte `msg.timestamp` von
+  `python-can` unveraendert durch -- dessen Referenzpunkt ist
+  backend-abhaengig; beim Vector-Backend (an echter VN1610-Hardware
+  verifiziert, Loopback-Test Kanal 0↔Kanal 1) ist das Unix-Epoch-Zeit
+  (~1,79 Mrd.), nicht die vom `CanControlGroup.append_frame`-Tabellenkopf
+  ("Zeit (s)") und von `MockCanBus` (liefert kleine
+  `time.monotonic()`-relative Werte) erwartete kleine Zahl -- im Mock-Modus
+  daher nie aufgefallen. `CanBus` merkt sich jetzt den Verbindungszeitpunkt
+  (`_opened`) und liefert `timestamp` als Sekunden seit dem Oeffnen, wie
+  `MockCanBus` es bereits tat (`can_bus/driver.py`).
 - **Testablauf-Editor: Pfeil-Buttons schoben eine Zeile in einen
   eingeklappten Baustein hinein statt ihn zu überspringen**:
   `_move_selected_row()` kannte Bausteine bisher gar nicht und verschob

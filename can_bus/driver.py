@@ -10,6 +10,7 @@ sofern python-can sie unterstuetzt.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import can
@@ -31,6 +32,13 @@ class CanFrame:
     arbitration_id: int
     data: bytes
     extended: bool
+    # Sekunden seit dem Oeffnen dieses CanBus (siehe CanBus._opened), NICHT
+    # der von python-can gelieferte msg.timestamp: dessen Referenzpunkt ist
+    # backend-abhaengig (z.B. beim Vector-Backend Unix-Epoch statt eines
+    # kleinen, fuer die Anzeige sinnvollen Werts -- an echter VN1610-Hardware
+    # beobachtet, siehe control_tab.CanControlGroup.append_frame, dessen
+    # "Zeit (s)"-Spalte kleine Werte erwartet, wie MockCanBus sie auch schon
+    # liefert).
     timestamp: float
 
 
@@ -50,6 +58,7 @@ class CanBus:
         self.interface = interface
         self.channel = channel
         self.bitrate = bitrate
+        self._opened = time.monotonic()
 
     @staticmethod
     def discover_configs() -> list[dict]:
@@ -98,5 +107,5 @@ class CanBus:
             arbitration_id=msg.arbitration_id,
             data=bytes(msg.data),
             extended=msg.is_extended_id,
-            timestamp=msg.timestamp,
+            timestamp=time.monotonic() - self._opened,
         )
