@@ -52,18 +52,29 @@ class PicoscopePanel(QGroupBox):
         self.setTitle(label)
         outer = QVBoxLayout(self)
 
+        # Status + Typenbezeichnung in EINER Zeile statt zwei (Nutzerfeedback:
+        # die Kachel wirkte in der Kompaktansicht unnoetig hoch, siehe
+        # set_compact()-Docstring -- diese Kachel hat ohnehin keine eigene
+        # Kompaktansicht, die Ersparnis kommt also in BEIDEN Ansichten an).
+        # self._variant_label sitzt bewusst IM SELBEN no_own_background()-
+        # Wrapper wie Status-Icon/-Text -- eine fruehere Fassung haengte die
+        # Typenbezeichnung als eigenes QLabel DIREKT in outer, das dadurch
+        # (siehe theme.no_own_background-Docstring, exakt derselbe Bug wie
+        # BUGS.md #8/#9) die globale QWidget{background-color: pal.bg}-Regel
+        # erbte und als sichtbar andersfarbiger Kasten von der individuellen
+        # Panel-Faerbung absetzte (Nutzer-Screenshot: weisses Rechteck auf
+        # sonst pfirsichfarbener Kachel).
         status_row = no_own_background(QWidget())
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
         self._status_icon = QLabel()
         self._status_text = QLabel()
+        self._variant_label = QLabel()
         status_layout.addWidget(self._status_icon)
         status_layout.addWidget(self._status_text)
+        status_layout.addWidget(self._variant_label)
         status_layout.addStretch()
         outer.addWidget(status_row)
-
-        self._info_label = QLabel("--")
-        outer.addWidget(self._info_label)
 
         # Anders als die uebrigen Dashboard-Kacheln (reine Statusanzeige)
         # erwartet diese Kachel aktive Bedienung -- ein normaler, neutral
@@ -84,6 +95,7 @@ class PicoscopePanel(QGroupBox):
         self._retranslate()
         self._apply_style(current_palette())
         self._apply_status_icon(current_palette())
+        self._apply_variant_style(current_palette())
 
     def _retranslate(self) -> None:
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
@@ -92,7 +104,11 @@ class PicoscopePanel(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_style(palette)
         self._apply_status_icon(palette)
+        self._apply_variant_style(palette)
         self._launch_button.set_color_override(palette.surface)
+
+    def _apply_variant_style(self, palette: Palette) -> None:
+        self._variant_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")
@@ -144,7 +160,8 @@ class PicoscopePanel(QGroupBox):
             self._status = "busy"
             self._variant = ""
             self._serial = ""
-            self._info_label.setText("--")
+            self._variant_label.setText("")
+            self._variant_label.setToolTip("")
         self.setVisible(True)
         self._apply_style(current_palette())
         self._apply_status_icon(current_palette())
@@ -156,10 +173,15 @@ class PicoscopePanel(QGroupBox):
         self._serial = serial
         self._apply_status_icon(current_palette())
         self._retranslate()
+        # Nur die kurze Typenbezeichnung sichtbar (Nutzerfeedback: "reicht
+        # das kompakte Format, z.B. nur 2204A") -- die Seriennummer bleibt
+        # als Tooltip erreichbar statt die Zeile zu verlaengern.
         if variant:
-            self._info_label.setText(f"{variant}  ({serial})" if serial else variant)
+            self._variant_label.setText(f"· {variant}")
+            self._variant_label.setToolTip(f"{variant} ({serial})" if serial else variant)
         else:
-            self._info_label.setText("--")
+            self._variant_label.setText("")
+            self._variant_label.setToolTip("")
 
     def set_label(self, label: str) -> None:
         self.setTitle(label)

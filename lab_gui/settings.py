@@ -1,6 +1,6 @@
 """Persistente App-Einstellungen (Simulationsmodus, Dark Mode, Sprache,
 geraete-individuelle Sicherheits-Grenzwerte, Desktop-Benachrichtigungen,
-geraete-individuelle Panel-Hintergrundfarben).
+geraete-individuelle Panel-Hintergrundfarben, Dashboard-Kachel-Reihenfolge).
 
 Analog zu device_registry.py lokal als JSON-Datei gespeichert, damit die
 Einstellung Neustarts uebersteht.
@@ -128,6 +128,23 @@ class Settings(QObject):
         self._data["panel_colors"] = colors
         self._save()
         self.panel_color_changed.emit(device_id, color_key)
+
+    @property
+    def panel_order(self) -> list[str]:
+        """Zuletzt per Drag&Drop gewaehlte Dashboard-Kachel-Reihenfolge
+        (Liste von device_ids, links nach rechts) -- siehe dashboard.py:
+        DashboardWidget.set_panel_order()/panel_order_changed. Kein
+        Live-Signal wie bei panel_color: die Reihenfolge betrifft nur das
+        Dashboard selbst, kein zweiter Ort (Control-Tab o.ae.) muss
+        synchron gehalten werden."""
+        stored = self._data.get("panel_order")
+        return list(stored) if isinstance(stored, list) else []
+
+    def set_panel_order(self, order: list[str]) -> None:
+        if order == self.panel_order:
+            return
+        self._data["panel_order"] = list(order)
+        self._save()
 
     @property
     def can_configs(self) -> list[dict]:

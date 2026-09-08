@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         self._wire_dashboard_view()
         self._wire_notifications()
         self._wire_panel_colors()
+        self._wire_panel_order()
         self._replay_known_devices()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
@@ -273,7 +274,13 @@ class MainWindow(QMainWindow):
         self._safety_banner.setStyleSheet(
             f"#safetyBanner {{ background-color: {pal.danger}; border-radius: 4px; }}"
         )
-        self._safety_banner_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+        # background: transparent noetig, sonst uebernimmt das Label (eigenes
+        # Instanz-Stylesheet) die globale "QWidget { background-color: pal.bg }"-
+        # Regel statt den roten Banner-Hintergrund durchscheinen zu lassen --
+        # weisser Text auf fast-weissem Grund (siehe BUGS_OFFEN.md #26).
+        self._safety_banner_label.setStyleSheet(
+            "color: #ffffff; font-weight: bold; background: transparent;"
+        )
 
     def _style_all_off_button(self) -> None:
         pal = ThemeManager.instance().palette
@@ -589,6 +596,19 @@ class MainWindow(QMainWindow):
         # vergebene Farbe bleibt beim erneuten Ein-/Ausschalten erhalten.
         self._settings.panel_colors_enabled_changed.connect(self._on_panel_colors_enabled_changed)
 
+    def _wire_panel_order(self) -> None:
+        """Dashboard-Kachel-Reihenfolge (Drag&Drop, siehe dashboard.py:
+        DashboardWidget.panel_order_changed/set_panel_order) persistent
+        machen -- analog zu _wire_panel_colors, aber ohne Live-Signal in die
+        Gegenrichtung: die Reihenfolge wird nur einmal beim Start aus
+        Settings geladen (muss VOR _replay_known_devices() passieren, damit
+        schon die ersten wiederhergestellten Panels an der richtigen Stelle
+        landen, siehe DashboardWidget.set_panel_order()-Docstring), danach
+        schreibt ausschliesslich das Dashboard selbst (per Drag) in
+        Settings zurueck."""
+        self.dashboard.set_panel_order(self._settings.panel_order)
+        self.dashboard.panel_order_changed.connect(self._settings.set_panel_order)
+
     def _assign_free_panel_colors(self, device_ids: list[str]) -> None:
         """Vergibt an jedes device_id in device_ids (ohne bereits gespeicherte
         Farbe) die naechste freie Farbe aus PANEL_COLOR_ORDER, unter allen
@@ -794,7 +814,19 @@ class MainWindow(QMainWindow):
 
     def _resolve_device_id(self, kind: str, device_id: str) -> tuple[str | None, str]:
         if device_id:
-            return device_id, ""
+            # Gegen die aktuell verbundenen Geraete dieser Art pruefen, statt
+            # jede nicht-leere ID blind zu akzeptieren -- sonst wird ein
+            # veralteter/nie existenter device_id-Wert aus einer gespeicherten
+            # Testablauf-Datei (z.B. durch manuelles Bearbeiten oder einen
+            # Import) unbemerkt in die Watchdog-Ueberwachung uebernommen
+            # (siehe BUGS_OFFEN.md #28: "psu0001" ohne ":"-Trenner passt zu
+            # keinem von _resolve_device_ids() je erzeugten Format und war nie
+            # ein reales Geraet -- der Watchdog wartete trotzdem dauerhaft
+            # vergeblich auf dessen erste Messung und loeste nach
+            # STALE_TIMEOUT_S faelschlich "veraltet" aus).
+            if device_id in self._online_devices.get(kind, set()):
+                return device_id, ""
+            return None, tr("Gerät '{device_id}' nicht verbunden", device_id=device_id)
         candidates = self._online_devices.get(kind, set())
         if len(candidates) == 1:
             return next(iter(candidates)), ""

@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -153,7 +152,7 @@ def _style_toggle_buttons(
     off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
 
 
-def _digital_out_toggle(number: int) -> QToolButton:
+class _DigitalOutToggle(QPushButton):
     """Schalter fuer die Digitalausgaenge (OUT1-8) in HilControlGroup --
     LED-Punkt + Kanalnummer, dieselbe Ikonografie wie im Dashboard
     (microhil_panel.DOT_ON/DOT_OFF), hier zusaetzlich klickbar. Ersetzt den
@@ -163,29 +162,48 @@ def _digital_out_toggle(number: int) -> QToolButton:
     allein: identische Bildsprache in Dashboard und Control-Tab -- derselbe
     Punkt bedeutet ueberall dasselbe.
 
-    QToolButton statt QPushButton: einziger Qt-Standard-Button mit
-    eingebauter Icon+Text-Anordnung (ToolButtonTextUnderIcon) bei sonst
-    identischem checkable/toggled/isChecked-Verhalten -- HilControlGroup
-    behandelt ihn dadurch wie jeden anderen checkbaren Button."""
-    button = QToolButton()
-    button.setCheckable(True)
-    button.setText(str(number))
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-    button.setFixedSize(36, 40)
-    return button
+    Dot-Icon als QLabel-Pixmap (wie microhil_panel._dot_cell), NICHT ueber
+    QToolButton.setIcon()/setIconSize(): eine erste Fassung nutzte genau das
+    und produzierte in der echten App (nicht im Offscreen-Preview-Skript!)
+    einen auf einen Strich zusammengequetschten Punkt -- QToolButtons interne
+    Icon-Rect-Berechnung fuer ToolButtonTextUnderIcon skaliert das Icon
+    offenbar nicht immer seitenverhaeltnistreu, wenn das Widget insgesamt
+    sehr klein ist. Zwei echte QLabel in einer QVBoxLayout (wie im Dashboard
+    seit je bewaehrt) umgehen dieses Problem, weil QLabel.setPixmap() das
+    Bild unveraendert zeichnet, ohne eigene Skalierungslogik."""
+
+    def __init__(self, number: int) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.setFixedSize(36, 44)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 4, 2, 4)
+        layout.setSpacing(2)
+        self.dot_label = QLabel()
+        self.dot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dot_label.setStyleSheet("background: transparent; border: none;")
+        self.number_label = QLabel(str(number))
+        self.number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.number_label.setStyleSheet("background: transparent; border: none;")
+        layout.addWidget(self.dot_label)
+        layout.addWidget(self.number_label)
 
 
-def _style_digital_out_toggle(button: QToolButton, on: bool, pal: Palette) -> None:
-    """Setzt LED-Icon + Rahmen eines _digital_out_toggle passend zum
-    Checked-Zustand -- Icon/Farbe exakt wie microhil_panel._dot_pixmap
-    (check_pass statt success, siehe dessen Begruendung in theme.py: die
-    EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und muss deshalb
-    in beiden Themes gruen bleiben)."""
+def _digital_out_toggle(number: int) -> _DigitalOutToggle:
+    return _DigitalOutToggle(number)
+
+
+def _style_digital_out_toggle(button: _DigitalOutToggle, on: bool, pal: Palette) -> None:
+    """Setzt LED-Pixmap, Zahlenfarbe und Rahmen eines _DigitalOutToggle
+    passend zum Checked-Zustand -- Icon/Farbe exakt wie microhil_panel.
+    _dot_pixmap (check_pass statt success, siehe dessen Begruendung in
+    theme.py: die EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und
+    muss deshalb in beiden Themes gruen bleiben)."""
     color = pal.check_pass if on else pal.text_muted
-    button.setIcon(qta.icon(DOT_ON if on else DOT_OFF, color=color))
-    button.setIconSize(QSize(DOT_ICON_SIZE, DOT_ICON_SIZE))
+    button.dot_label.setPixmap(qta.icon(DOT_ON if on else DOT_OFF, color=color).pixmap(DOT_ICON_SIZE, DOT_ICON_SIZE))
+    button.number_label.setStyleSheet(f"background: transparent; border: none; color: {pal.text};")
     button.setStyleSheet(
-        f"QToolButton {{ border: 1px solid {pal.border}; border-radius: 6px; "
+        f"QPushButton {{ border: 1px solid {pal.border}; border-radius: 6px; "
         f"background-color: {pal.surface_alt}; }}"
     )
 

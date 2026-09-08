@@ -189,6 +189,7 @@
   "verbunden": "verbunden",
   "getrennt": "getrennt",
   "Kein Gerät des Typs '{label}' verbunden": "Kein Gerät des Typs '{label}' verbunden",
+  "Gerät '{device_id}' nicht verbunden": "Gerät '{device_id}' nicht verbunden",
   "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen": "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
   "Prüfung": "Prüfung",
   "Prüfung…": "Prüfung…",
@@ -297,5 +298,9 @@
   "Benutzerhandbuch": "Benutzerhandbuch",
   "Geräte-Info -- z. B. die aktuell geflashte Firmware-Version.": "Geräte-Info -- z. B. die aktuell geflashte Firmware-Version.",
   "Firmware-Version:": "Firmware-Version:",
-  "unbekannt": "unbekannt"
+  "unbekannt": "unbekannt",
+  "Allgemein": "Allgemein",
+  "Geräte": "Geräte",
+  "CAN-Bus": "CAN-Bus",
+  "Sicherheit": "Sicherheit"
 }

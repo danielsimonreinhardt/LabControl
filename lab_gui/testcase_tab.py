@@ -100,6 +100,28 @@ _PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.ite
 CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait"}
 
 
+class _NoWheelComboBox(QComboBox):
+    """QComboBox, die Mausrad-Events ohne Fokus ignoriert statt die Auswahl
+    zu aendern -- fuer die Zeilen-Widgets der Testablauf-Tabelle (device_
+    combo/action_combo/PicoScope-Kanal-/Bereich-Combo): reines Scrollen der
+    Zeilenliste soll nicht versehentlich die Auswahl in einer der vielen
+    dicht gepackten Comboboxen pro Zeile verstellen (siehe BUGS_OFFEN.md
+    #27, analog zu _SteppedSpinMixin.wheelEvent in step_spinbox.py).
+    StrongFocus statt Qt-Default WheelFocus, aus demselben Grund wie dort:
+    sonst wuerde Qt beim ersten Mausrad-Event selbst schon den Fokus
+    vergeben, bevor hasFocus() unten geprueft wird."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
 def _cond_params_to_step(params: dict) -> TestStep:
     return TestStep(
         cond_source=params["cond_source"],
@@ -820,10 +842,10 @@ class TestcaseTab(QWidget):
         self._renumber_rows()
 
     def _build_action_row(self, row_index: int, step: TestStep) -> None:
-        device_combo = QComboBox()
+        device_combo = _NoWheelComboBox()
         self._table.setCellWidget(row_index, COL_DEVICE, device_combo)
 
-        action_combo = QComboBox()
+        action_combo = _NoWheelComboBox()
         self._table.setCellWidget(row_index, COL_ACTION, action_combo)
 
         value_spin = SteppedDoubleSpinBox()
@@ -898,12 +920,12 @@ class TestcaseTab(QWidget):
         picoscope_layout = QHBoxLayout(picoscope_page)
         picoscope_layout.setContentsMargins(2, 0, 2, 0)
         picoscope_channel_label = QLabel(tr("Kanal"))
-        picoscope_channel_combo = QComboBox()
+        picoscope_channel_combo = _NoWheelComboBox()
         picoscope_channel_combo.addItem("A", 1)
         picoscope_channel_combo.addItem("B", 2)
         picoscope_channel_combo.setCurrentIndex(1 if step.hil_channel == 2 else 0)
         picoscope_range_label = QLabel(tr("Bereich"))
-        picoscope_range_combo = QComboBox()
+        picoscope_range_combo = _NoWheelComboBox()
         for range_name, range_code in PICO_VOLTAGE_RANGE_CODES.items():
             picoscope_range_combo.addItem(range_name, range_code)
         range_index = picoscope_range_combo.findData(int(step.value)) if step.value else -1

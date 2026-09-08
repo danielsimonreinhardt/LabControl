@@ -484,6 +484,17 @@ Semantic Versioning (`lab_gui/version.py`).
   verifizierte Fixes, siehe [BUGS_GESCHLOSSEN.md](BUGS_GESCHLOSSEN.md)).
 
 ### Geändert
+- **Einstellungen-Tab in Unterreiter aufgeteilt (Allgemein/Geräte/CAN-Bus/
+  Sicherheit)**: Die bisher rein durch Trennlinien gegliederte, mit
+  wachsender Geräteanzahl unübersichtlich gewordene lange Liste ist jetzt ein
+  verschachteltes `QTabWidget` (`SettingsTab._build_*_page()`), jeder
+  Unterreiter einzeln scrollbar (neuer Helfer `settings_tab._scrollable()`,
+  analog zur bestehenden `QScrollArea` in `control_tab.py`) statt den
+  gesamten Tab bei vielen Geräten (Sicherheits-Grenzwerte, Geräte-Info)
+  vertikal wachsen zu lassen. Rein interne Umstrukturierung — die öffentliche
+  Schnittstelle von `SettingsTab` (Signale, `on_device_known()`/
+  `set_*()`-Methoden) ist unverändert, `main_window.py` musste nicht
+  angepasst werden.
 - **Simulationsmodus nur noch im Dev-Betrieb verfügbar**: In der von
   PyInstaller gebauten Release-`.exe` ist die Option im Einstellungen-Tab
   jetzt komplett ausgeblendet, `Settings.simulation_mode` liefert dort
@@ -827,6 +838,45 @@ Semantic Versioning (`lab_gui/version.py`).
   datenführenden) Zellen-Widgets ein — `steps()`/`_row_to_step` lesen
   dadurch unverändert die echten Werte, unabhängig vom Ein-/Ausklapp-Zustand
   (`lab_gui/testcase_tab.py`).
+- **[BUGS_GESCHLOSSEN.md #24] Einstellungen „Sicherheit": leere
+  Grenzwert-Panels für CAN, Oszilloskop und microHIL**: `SAFETY_LIMIT_
+  FIELDS` (`lab_gui/safety.py`) definiert Grenzwertfelder nur für
+  `"psu"`/`"load"` — für die anderen Gerätearten legte
+  `SettingsTab.on_device_known()` trotzdem eine leere `_DeviceSafetyGroup`
+  an. Wird jetzt übersprungen, wenn keine Felder definiert sind
+  (`lab_gui/settings_tab.py`).
+- **[BUGS_GESCHLOSSEN.md #26] Sicherheitsbanner („Messwerte veraltet…"):
+  weißer Text auf weißem statt rotem Grund**: Das Banner-Label übernahm
+  mangels eigener `background-color` die globale
+  `QWidget { background-color: pal.bg }`-Regel statt den roten
+  Container-Hintergrund durchscheinen zu lassen. `_style_safety_banner()`
+  setzt am Label jetzt zusätzlich `background: transparent`
+  (`lab_gui/main_window.py`).
+- **[BUGS_GESCHLOSSEN.md #27] Testablauf-Editor: Mausrad über einem
+  Eingabefeld verstellte dessen Wert statt die Zeilenliste zu scrollen**:
+  `QAbstractSpinBox`/`QComboBox` verarbeiten ein Mausrad-Event unabhängig
+  vom Fokus, sobald der Mauszeiger darüber steht. `_SteppedSpinMixin`
+  (`lab_gui/step_spinbox.py`, wirkt app-weit auf `SteppedDoubleSpinBox`/
+  `SteppedSpinBox`) und die neue `_NoWheelComboBox`
+  (`lab_gui/testcase_tab.py`, für die Geräte-/Aktions-/PicoScope-Comboboxen
+  der Testablauf-Tabelle) ignorieren Mausrad-Events jetzt ohne Fokus —
+  inkl. `setFocusPolicy(Qt.StrongFocus)`, da Qt sonst beim ersten
+  Mausrad-Event selbst schon fokussieren würde, bevor die
+  Fokus-Prüfung greift.
+- **[BUGS_GESCHLOSSEN.md #28] Watchdog löste bei Testlaufstart fälschlich
+  „Messwerte veraltet" für ein nie existierendes Gerät aus**:
+  `MainWindow._resolve_device_id()` reichte einen nicht-leeren `device_id`
+  aus einem Testablauf-Schritt bisher ungeprüft durch, ohne Abgleich gegen
+  tatsächlich verbundene Geräte. Ein veralteter/nie realer `device_id`-Wert
+  in einer gespeicherten Testablauf-Datei (z. B. `"psu0001"`, ein Format,
+  das der Verbindungscode nie selbst erzeugt) wurde dadurch als „aufgelöst"
+  behandelt und in die Watchdog-Überwachung aufgenommen, bekam aber nie
+  einen Messwert — der Watchdog löste deshalb zuverlässig genau
+  `STALE_TIMEOUT_S` nach Laufstart aus, unabhängig vom tatsächlichen
+  Testfortschritt. `_resolve_device_id()` prüft einen expliziten
+  `device_id` jetzt gegen `self._online_devices` und lehnt ihn mit klarer
+  Fehlermeldung ab, wenn kein passendes Gerät online ist
+  (`lab_gui/main_window.py`).
 
 ## [0.6.2]
 

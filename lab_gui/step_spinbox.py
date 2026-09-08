@@ -15,7 +15,7 @@ z.B. Durchlaufzahl, max. Iterationen, Intervall, Zeilenbereich).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox, QStyle, QStyleOptionSpinBox
 
 _DOUBLE_SMALL_STEP = 0.1
@@ -36,6 +36,14 @@ class _SteppedSpinMixin:
         self._small_step = small_step
         self._large_step = large_step
         self.setSingleStep(small_step)
+        # StrongFocus statt Qt-Default WheelFocus: Qt wuerde bei WheelFocus
+        # einem noch unfokussierten Feld beim ERSTEN Mausrad-Event selbst
+        # sofort den Fokus geben (noch bevor unser wheelEvent() unten
+        # hasFocus() prueft) -- die hasFocus()-Abfrage dort waere dann
+        # wirkungslos, weil das Feld in dem Moment bereits "fokussiert"
+        # waere. Mit StrongFocus gibt nur ein Klick/Tab Fokus, Scrollen
+        # allein nicht (siehe BUGS_OFFEN.md #27).
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._pressed_control = QStyle.SubControl.SC_None
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
@@ -88,6 +96,20 @@ class _SteppedSpinMixin:
             event.accept()
             return
         super().mouseMoveEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        # Ohne Fokus ignorieren statt Wert zu aendern, sonst verstellt reines
+        # Ueber-das-Feld-Scrollen (z.B. beim Scrollen einer Liste/Tabelle mit
+        # vielen dicht gepackten Feldern) versehentlich den Wert (siehe
+        # BUGS_OFFEN.md #27) -- das Event bleibt dadurch unbehandelt und
+        # wandert zum Elternwidget weiter (z.B. Tabelle/Scrollbereich), statt
+        # verschluckt zu werden. Tastatur-Pfeiltasten bleiben unveraendert
+        # (siehe Modul-Docstring), ein Klick zum Fokussieren reicht, danach
+        # funktioniert das Mausrad wie gewohnt.
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
     def _start_repeat(self) -> None:
         if self._pressed_control == QStyle.SubControl.SC_None:

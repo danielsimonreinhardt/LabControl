@@ -2,7 +2,12 @@
 Sprache, geraete-individuelle Sicherheits-Grenzwerte (Watchdog, siehe
 safety.py). Jedes verbundene/bekannte Geraet bekommt eine eigene
 Grenzwert-Sektion (analog zu control_tab.py: eine Sektion pro Geraete-ID),
-statt einer gemeinsamen Einstellung je Geraeteart."""
+statt einer gemeinsamen Einstellung je Geraeteart.
+
+Intern in vier Unterreiter gegliedert (Allgemein/Geraete/CAN-Bus/Sicherheit,
+siehe SettingsTab._build_*_page) statt einer einzigen langen Liste -- die
+oeffentliche Schnittstelle (Signale, on_device_known()/set_*()-Methoden)
+bleibt dabei unveraendert, main_window.py kennt die Unterreiter nicht."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -20,9 +25,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -56,6 +63,18 @@ def _separator() -> QFrame:
     line.setFixedHeight(1)
     line.setStyleSheet(f"background-color: {current_palette().border};")
     return line
+
+
+def _scrollable(content: QWidget) -> QScrollArea:
+    """Wrappt eine Unterreiter-Seite in eine QScrollArea (setWidgetResizable),
+    analog zu control_tab.py -- einzelne Reiter (v.a. Sicherheit/Geraete-Info
+    mit ihren dynamisch je Geraet hinzukommenden Sektionen) koennen die
+    verfuegbare Hoehe des 1024x600-Kiosk-Displays leicht ueberschreiten."""
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setWidget(content)
+    return scroll
 
 
 def _button_row(button: QPushButton) -> QHBoxLayout:
@@ -329,13 +348,32 @@ class SettingsTab(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._subtabs = QTabWidget()
+        outer_layout.addWidget(self._subtabs)
+
+        self._subtabs.addTab(_scrollable(self._build_general_page()), "")
+        self._subtabs.addTab(_scrollable(self._build_devices_page()), "")
+        self._subtabs.addTab(_scrollable(self._build_can_page()), "")
+        self._subtabs.addTab(_scrollable(self._build_safety_page()), "")
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    def _build_general_page(self) -> QWidget:
+        """Reiter "Allgemein": Simulationsmodus, Darstellung/Verhalten,
+        Sprache, Hilfe -- alles ohne Geraetebezug."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         self._sim_checkbox = QCheckBox()
         self._sim_checkbox.toggled.connect(self.simulation_mode_toggled)
         layout.addWidget(self._sim_checkbox)
 
         self._hint = QLabel()
+        self._hint.setWordWrap(True)
         self._hint.setStyleSheet(f"color: {current_palette().text_muted};")
         layout.addWidget(self._hint)
 
@@ -387,7 +425,14 @@ class SettingsTab(QWidget):
         self._help_button.clicked.connect(self._on_help_clicked)
         layout.addLayout(_button_row(self._help_button))
 
-        layout.addWidget(_separator())
+        layout.addStretch()
+        return page
+
+    def _build_devices_page(self) -> QWidget:
+        """Reiter "Geräte": Geraeteverwaltung (Reset) und Geraete-Info
+        (aktuell nur microHIL-Firmwareversion)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         # -- Geraeteverwaltung ---------------------------------------------
         self._reset_devices_button = QPushButton()
@@ -407,12 +452,15 @@ class SettingsTab(QWidget):
         self._info_sections: dict[str, _DeviceInfoGroup] = {}
         self._info_section_rows: dict[str, QWidget] = {}
 
-        layout.addWidget(_separator())
+        layout.addStretch()
+        return page
 
-        # -- CAN-Interfaces ------------------------------------------------
-        # Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
-        # can_bus/README.md) -- der Nutzer konfiguriert hier explizit, welche
-        # Interfaces device_worker.py ueberhaupt verbinden soll.
+    def _build_can_page(self) -> QWidget:
+        """Reiter "CAN-Bus": explizit konfigurierte CAN-Interfaces (siehe
+        can_bus/README.md, keine Hotplug-Autodiscovery wie bei Last/Netzteil)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
         self._can_hint = QLabel()
         self._can_hint.setWordWrap(True)
         self._can_hint.setStyleSheet(f"color: {current_palette().text_muted};")
@@ -426,9 +474,14 @@ class SettingsTab(QWidget):
         self._can_add_button.clicked.connect(self._on_can_add_clicked)
         layout.addLayout(_button_row(self._can_add_button))
 
-        layout.addWidget(_separator())
+        return page
 
-        # -- Sicherheit (geraete-individuelle Grenzwerte) ---------------------
+    def _build_safety_page(self) -> QWidget:
+        """Reiter "Sicherheit": geraete-individuelle Grenzwerte (Watchdog,
+        siehe safety.py)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
         self._safety_hint = QLabel()
         self._safety_hint.setWordWrap(True)
         self._safety_hint.setStyleSheet(f"color: {current_palette().text_muted};")
@@ -448,9 +501,7 @@ class SettingsTab(QWidget):
         self._safety_section_rows: dict[str, QWidget] = {}
 
         layout.addStretch()
-
-        Translator.instance().language_changed.connect(self._retranslate)
-        self._retranslate()
+        return page
 
     def _retranslate(self) -> None:
         self._sim_checkbox.setText(tr("Simulationsmodus (simulierte Geräte statt Hardware)"))
@@ -493,6 +544,11 @@ class SettingsTab(QWidget):
         )
         self._can_table.retranslate()
         self._can_add_button.setText(tr("Interface hinzufügen"))
+
+        self._subtabs.setTabText(0, tr("Allgemein"))
+        self._subtabs.setTabText(1, tr("Geräte"))
+        self._subtabs.setTabText(2, tr("CAN-Bus"))
+        self._subtabs.setTabText(3, tr("Sicherheit"))
 
     def set_simulation_mode(self, enabled: bool) -> None:
         self._sim_checkbox.blockSignals(True)
@@ -554,6 +610,11 @@ class SettingsTab(QWidget):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         if kind == "hil":
             self._ensure_info_section(device_id, label)
+        if not SAFETY_LIMIT_FIELDS.get(kind):
+            # CAN/Oszilloskop/HIL sind nicht sicherheitsrelevant (keine
+            # Watchdog-Grenzwerte, siehe SAFETY_LIMIT_FIELDS) -- keine leere
+            # Sektion im Sicherheit-Reiter anlegen (siehe BUGS_OFFEN.md #24).
+            return
         section = self._safety_sections.get(device_id)
         if section is not None:
             section.set_label(label)

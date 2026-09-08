@@ -10,8 +10,10 @@ sein eigenes Panel mit eindeutigem, umbenennbarem Label.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRectF, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -41,6 +43,27 @@ _WIDGET_SIZE_MAX = 16777215
 # Zusätzlicher Platz für die Scrollleiste am unteren Rand (falls horizontal
 # gescrollt werden muss) sowie den Rahmen der ScrollArea.
 SCROLL_AREA_MARGIN = 24
+
+# Drag & Drop: Reihenfolge der Dashboard-Kacheln per Ziehen aendern
+# (Absprache) -- eigener MIME-Typ statt text/plain, damit dragEnterEvent
+# zuverlaessig nur eigene Panel-Drags akzeptiert und nichts, das zufaellig
+# aus einer anderen Anwendung hereingezogen wird.
+PANEL_DRAG_MIME_TYPE = "application/x-lab-gui-panel-device-id"
+# Nur der obere Streifen (Rahmentitel) startet einen Drag -- Panels haben
+# sonst keine eigenen Klickziele (Werte sind reine QLabels), bis auf den
+# "PicoScope 7 oeffnen"-Button im Oszilloskop-Panel, der dadurch unberuehrt
+# bleibt. Hoehe orientiert sich an OFFLINE_ICON_MARGIN/-SIZE (5+22=27), die
+# dieselbe Zone bereits als "Kopfbereich" behandeln.
+PANEL_DRAG_HANDLE_HEIGHT = 28
+# Optik des schwebenden Abbilds waehrend des Ziehens (Nutzerfeedback: ein
+# direkt durchgereichtes panel.grab() erschien beim Ziehen deutlich
+# vergroessert -- siehe _drag_pixmap()-Docstring). Fester Blauton statt
+# palette.accent: die Akzentfarbe ist im Amber-Industrial-Theme selbst
+# gelb/amber und auf einer ebenfalls amberfarbenen Kachel kaum zu erkennen,
+# waehrend Blau in beiden Themes zuverlaessig als "hier wird gerade gezogen"
+# heraussticht (Assoziation mit dem blauen Auswahlrahmen aus Datei-Explorern).
+PANEL_DRAG_BORDER_COLOR = "#2f7dfd"
+PANEL_DRAG_OPACITY = 0.55
 
 # field_key -> (deutscher Basis-Anzeigename, Einheit); Einheit ist
 # sprachunabhaengig und wird nicht ueber i18n.tr uebersetzt.
@@ -356,6 +379,10 @@ class DashboardWidget(QGroupBox):
     # Klick auf den Ansicht-Umschalter unten rechts; MainWindow verdrahtet ihn
     # mit der persistierten Einstellung, die dann set_compact zurueckruft.
     compact_toggle_requested = Signal()
+    # Neue Kachel-Reihenfolge nach einem Drag&Drop (Liste von device_ids,
+    # links nach rechts) -- MainWindow verdrahtet das mit Settings.
+    # set_panel_order() zur Persistenz, analog zu panel_color_requested.
+    panel_order_changed = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -421,10 +448,52 @@ class DashboardWidget(QGroupBox):
         # Panels dort bewusst unterschiedlich breit sind.
         self._panel_width = 0
         self._compact_widths: dict[str, int] = {}
+
+        # Drag & Drop (Kachel-Reihenfolge, siehe eventFilter/_start_panel_
+        # drag/_drop_panel weiter unten). _container ist das Drop-Ziel (dort
+        # sitzen alle Panels nebeneinander in _panel_layout), einzelne Panels
+        # sind die Drag-Quellen -- beide werden ueber installEventFilter(self)
+        # bedient statt eigener Subklassen, dieselbe Technik wie schon fuer
+        # das LayoutRequest-Handling des Containers.
+        self._container.setAcceptDrops(True)
+        self._drag_device_id: str | None = None
+        self._drag_start_pos = None
+        # Gewuenschte Reihenfolge (device_id-Liste), die noch nicht (voll-
+        # staendig) angewendet werden konnte, weil die betroffenen Geraete
+        # beim Aufruf von set_panel_order() noch nicht verbunden waren --
+        # wird bei jedem neuen Panel erneut versucht (siehe on_device_known).
+        self._pending_panel_order: list[str] = []
+
         self._relayout_panels()
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
+
+    def set_panel_order(self, order: list[str]) -> None:
+        """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
+        Settings.panel_order) -- von MainWindow einmalig beim Start
+        aufgerufen, i.d.R. BEVOR die zugehoerigen Geraete ueberhaupt bekannt
+        sind. Noch unbekannte device_ids werden vorgemerkt (siehe
+        _pending_panel_order) und ziehen ihr Panel an die richtige Stelle,
+        sobald es in on_device_known() entsteht."""
+        self._pending_panel_order = list(order)
+        self._apply_pending_order()
+
+    def _apply_pending_order(self) -> None:
+        """Schiebt jedes bereits bekannte Panel aus _pending_panel_order der
+        Reihe nach ans Ende (vor den Stretch) -- danach stehen alle darin
+        genannten, bereits verbundenen Panels in genau der gewuenschten
+        Reihenfolge, unabhaengig davon, in welcher Reihenfolge ihre Geraete
+        tatsaechlich verbunden wurden. Noch nicht verbundene device_ids
+        werden uebersprungen, nicht genannte (z.B. brandneue Geraetearten)
+        bleiben unangetastet, wo sie gerade stehen."""
+        for device_id in self._pending_panel_order:
+            panel = self._panels.get(device_id)
+            if panel is None:
+                continue
+            self._panel_layout.removeWidget(panel)
+            insert_at = self._panel_layout.count() - 1  # vor dem Stretch
+            self._panel_layout.insertWidget(insert_at, panel, alignment=Qt.AlignmentFlag.AlignTop)
 
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
@@ -464,9 +533,136 @@ class DashboardWidget(QGroupBox):
         self._relayout_panels(reset_width=True)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
-        if obj is self._container and event.type() == QEvent.Type.LayoutRequest:
-            self._relayout_panels()
+        if obj is self._container:
+            event_type = event.type()
+            if event_type == QEvent.Type.LayoutRequest:
+                self._relayout_panels()
+            elif event_type == QEvent.Type.DragEnter or event_type == QEvent.Type.DragMove:
+                if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
+                    event.acceptProposedAction()
+                    return True
+            elif event_type == QEvent.Type.Drop:
+                if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
+                    dragged_id = bytes(event.mimeData().data(PANEL_DRAG_MIME_TYPE)).decode("utf-8")
+                    self._drop_panel(dragged_id, event.position())
+                    event.acceptProposedAction()
+                    return True
+            return False
+        if obj in self._panels.values():
+            self._handle_panel_drag_event(obj, event)
+            return False
         return super().eventFilter(obj, event)
+
+    def _device_id_for_panel(self, panel: QWidget) -> str | None:
+        for device_id, candidate in self._panels.items():
+            if candidate is panel:
+                return device_id
+        return None
+
+    def _handle_panel_drag_event(self, panel: QWidget, event) -> None:
+        """Erkennt den Beginn eines Kachel-Drags -- nur wenn der Druckpunkt
+        im oberen Rahmentitel-Streifen liegt (siehe PANEL_DRAG_HANDLE_HEIGHT),
+        und erst nach QApplication.startDragDistance() Bewegung (Qt-Standard-
+        Schwelle, verhindert versehentliches Ziehen bei einem blossen Tipp/
+        Klick, wichtig auf dem touchbedienten Kiosk-Display)."""
+        event_type = event.type()
+        if event_type == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT:
+                self._drag_device_id = self._device_id_for_panel(panel)
+                self._drag_start_pos = event.position()
+            return
+        if event_type == QEvent.Type.MouseMove:
+            if self._drag_device_id is None or self._drag_start_pos is None:
+                return
+            if (event.position() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+                return
+            device_id = self._drag_device_id
+            press_pos = self._drag_start_pos
+            self._drag_device_id = None
+            self._drag_start_pos = None
+            self._start_panel_drag(panel, device_id, press_pos)
+            return
+        if event_type in (QEvent.Type.MouseButtonRelease, QEvent.Type.Leave):
+            self._drag_device_id = None
+            self._drag_start_pos = None
+
+    def _start_panel_drag(self, panel: QWidget, device_id: str, press_pos) -> None:
+        drag = QDrag(panel)
+        mime = QMimeData()
+        mime.setData(PANEL_DRAG_MIME_TYPE, device_id.encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.setPixmap(self._drag_pixmap(panel))
+        # Hotspot = urspruenglicher Druckpunkt (relativ zum Panel): ohne das
+        # faellt Qt auf (0, 0) zurueck, die Kachel "springt" beim Drag-Start
+        # sichtbar so, dass ihre Ecke statt des gegriffenen Punkts unter dem
+        # Cursor/Finger sitzt.
+        drag.setHotSpot(press_pos.toPoint())
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def _drag_pixmap(self, panel: QWidget) -> QPixmap:
+        """Baut das schwebende Abbild waehrend des Ziehens: leicht
+        durchsichtig mit blauem Rahmen, in EXAKT der Groesse des Panels
+        (Nutzerfeedback) -- ein direkt an QDrag.setPixmap() durchgereichtes
+        panel.grab() erschien beim Ziehen deutlich vergroessert, vermutlich
+        weil Qts Drag-Compositing das devicePixelRatio von grab() (bei
+        Windows-Anzeigeskalierung > 100%) nicht korrekt beruecksichtigt. Ein
+        selbst zusammengesetztes Pixmap mit explizit auf 1.0 gesetztem
+        devicePixelRatio umgeht das zuverlaessig, unabhaengig vom Skalierungs-
+        faktor des Bildschirms."""
+        size = panel.size()
+        pixmap = QPixmap(size)
+        pixmap.setDevicePixelRatio(1.0)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(PANEL_DRAG_OPACITY)
+        panel.render(painter, QPoint(0, 0))
+        painter.setOpacity(1.0)
+        pen = QPen(QColor(PANEL_DRAG_BORDER_COLOR))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(1, 1, size.width() - 2, size.height() - 2), 6, 6)
+        painter.end()
+        return pixmap
+
+    def _drop_panel(self, dragged_id: str, drop_pos) -> None:
+        """Setzt die gezogene Kachel an die Position, an der sie fallen
+        gelassen wurde -- Zielindex ueber die Mittelpunkte aller anderen,
+        aktuell platzierten Panels (Stretch-Element am Ende ausgenommen):
+        eingefuegt wird vor dem ersten Panel, dessen Mitte rechts vom
+        Drop-Punkt liegt, sonst ganz ans Ende."""
+        dragged_panel = self._panels.get(dragged_id)
+        if dragged_panel is None:
+            return
+        old_index = self._panel_layout.indexOf(dragged_panel)
+        if old_index == -1:
+            return
+        insert_at = self._panel_layout.count() - 1
+        for i in range(self._panel_layout.count() - 1):
+            if i == old_index:
+                continue
+            widget = self._panel_layout.itemAt(i).widget()
+            if widget is None:
+                continue
+            if drop_pos.x() < widget.geometry().center().x():
+                insert_at = i
+                break
+        self._panel_layout.removeWidget(dragged_panel)
+        if old_index < insert_at:
+            insert_at -= 1
+        self._panel_layout.insertWidget(insert_at, dragged_panel, alignment=Qt.AlignmentFlag.AlignTop)
+        self._persist_panel_order()
+
+    def _persist_panel_order(self) -> None:
+        order = []
+        for i in range(self._panel_layout.count() - 1):
+            widget = self._panel_layout.itemAt(i).widget()
+            device_id = self._device_id_for_panel(widget) if widget is not None else None
+            if device_id is not None:
+                order.append(device_id)
+        self._pending_panel_order = order
+        self.panel_order_changed.emit(order)
 
     def _relayout_panels(self, reset_width: bool = False) -> None:
         # Panel-Breite/-Hoehe ergeben sich aus dem tatsaechlichen Inhalt
@@ -554,8 +750,24 @@ class DashboardWidget(QGroupBox):
             if self._compact:
                 panel.set_compact(True)
             panel.hide()
-            self._panel_layout.insertWidget(self._panel_layout.count() - 1, panel)
+            # AlignTop: ohne diese Ausrichtung streckt QHBoxLayout jedes Panel
+            # auf die Hoehe des hoechsten Panels in der Reihe (Qt-Default fuer
+            # Box-Layouts ohne Alignment-Flag) -- sichtbar unnoetig viel Leer-
+            # raum unterhalb kuerzerer Panels (z.B. microHIL-Kompaktansicht
+            # neben Last-/Netzteil-Panels). Mit AlignTop endet der Rahmen
+            # jedes Panels bei seiner eigenen sizeHint()-Hoehe, wie es der
+            # Kommentar in _relayout_panels ("Hoehe ergibt sich aus dem
+            # tatsaechlichen Inhalt") ohnehin schon vorsieht.
+            self._panel_layout.insertWidget(
+                self._panel_layout.count() - 1, panel, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            panel.installEventFilter(self)
             self._panels[device_id] = panel
+            # Zieht das neue Panel sofort an die vom Nutzer zuletzt
+            # gewaehlte Position, falls fuer dieses Geraet schon eine
+            # gespeicherte Reihenfolge vorliegt (siehe set_panel_order) --
+            # sonst bliebe es einfach am Ende, egal wo es hingehoert.
+            self._apply_pending_order()
             self._update_empty_tile()
             self._relayout_panels()
         else:
