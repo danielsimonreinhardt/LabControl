@@ -10,11 +10,14 @@ oeffentliche Schnittstelle (Signale, on_device_known()/set_*()-Methoden)
 bleibt dabei unveraendert, main_window.py kennt die Unterreiter nicht."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -34,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from can_bus.dbc import DbcError, load_dbc
 from can_bus.driver import INTERFACE_LIST as CAN_INTERFACE_LIST, CanBus, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
@@ -185,7 +189,83 @@ class _DeviceInfoGroup(QGroupBox):
         self._firmware_value.setText(self._version if self._version else tr("unbekannt"))
 
 
-_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "label", "remove")
+_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "label", "dbc", "remove")
+
+
+class _DbcFileCell(QWidget):
+    """Zelle fuer die optionale DBC-Datei eines CAN-Interfaces (siehe
+    settings.py::can_configs, Schluessel "dbc_path") -- FEATURES.md Punkt 3.
+
+    Zeigt nur den Dateinamen an (voller Pfad als Tooltip, sonst sprengt ein
+    langer Pfad die Spaltenbreite), ein "..."-Button oeffnet einen
+    Dateiauswahl-Dialog, ein "x"-Button entfernt die Zuordnung wieder
+    (deaktiviert, solange keine Datei hinterlegt ist). Die gewaehlte Datei
+    wird beim Auswaehlen sofort probeweise geladen (can_bus.dbc.load_dbc) --
+    eine kaputte/falsche Datei wird so schon hier abgefangen statt erst
+    beim naechsten empfangenen CAN-Frame lautlos im DeviceWorker-Log zu
+    verschwinden (siehe device_worker.DeviceWorker._reload_can_dbcs)."""
+
+    changed = Signal()
+
+    def __init__(self, path: str = "") -> None:
+        super().__init__()
+        self._path = ""
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._label = QLineEdit()
+        self._label.setReadOnly(True)
+        layout.addWidget(self._label, 1)
+        self._browse_button = IconButton("mdi.file-search-outline", "")
+        self._browse_button.clicked.connect(self._on_browse_clicked)
+        layout.addWidget(self._browse_button)
+        self._clear_button = IconButton("mdi.close", "")
+        self._clear_button.clicked.connect(self._on_clear_clicked)
+        layout.addWidget(self._clear_button)
+        self.set_path(path)
+
+    def retranslate(self) -> None:
+        self._browse_button.setToolTip(tr("DBC-Datei wählen…"))
+        self._clear_button.setToolTip(tr("DBC-Zuordnung entfernen"))
+        self._refresh_label()
+
+    def path(self) -> str:
+        return self._path
+
+    def set_path(self, path: str) -> None:
+        self._path = path or ""
+        self._refresh_label()
+
+    def _refresh_label(self) -> None:
+        if self._path:
+            self._label.setText(Path(self._path).name)
+            self._label.setToolTip(self._path)
+        else:
+            self._label.setText("")
+            self._label.setToolTip(
+                tr("Keine DBC-Datei hinterlegt -- Frames werden nur als Rohdaten angezeigt.")
+            )
+        self._clear_button.setEnabled(bool(self._path))
+
+    def _on_browse_clicked(self) -> None:
+        start_dir = str(Path(self._path).parent) if self._path else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("DBC-Datei wählen"), start_dir, tr("DBC-Dateien (*.dbc);;Alle Dateien (*)"),
+        )
+        if not path:
+            return
+        try:
+            load_dbc(path)
+        except DbcError as exc:
+            QMessageBox.warning(self, tr("DBC-Datei ungültig"), str(exc))
+            return
+        self.set_path(path)
+        self.changed.emit()
+
+    def _on_clear_clicked(self) -> None:
+        if not self._path:
+            return
+        self.set_path("")
+        self.changed.emit()
 
 
 class _CanConfigTable(QTableWidget):
@@ -193,23 +273,29 @@ class _CanConfigTable(QTableWidget):
     can_configs). Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
     can_bus/README.md) -- der Nutzer traegt Interface-Typ/Kanal/Bitrate hier
     explizit ein, ein "..."-Button pro Zeile bietet ueber CanBus.
-    discover_configs() gefundene Kanaele als Auswahl an."""
+    discover_configs() gefundene Kanaele als Auswahl an. Optional laesst
+    sich pro Zeile zusaetzlich eine DBC-Datei hinterlegen (siehe
+    _DbcFileCell), fuer die Signal-Decodierung empfangener CAN-Frames in
+    control_tab.CanControlGroup (FEATURES.md Punkt 3)."""
 
     changed = Signal()  # irgendeine Zeile wurde hinzugefuegt/entfernt/bearbeitet
 
     def __init__(self) -> None:
         super().__init__(0, len(_CAN_TABLE_COLUMNS))
         self.verticalHeader().setVisible(False)
-        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        for col in (0, 2, 3, 5):
+        for col in (1, 4, 5):
+            self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        for col in (0, 2, 3, 6):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
-            [tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Bezeichnung"), ""]
+            [tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Bezeichnung"), tr("DBC-Datei"), ""]
         )
+        for row in range(self.rowCount()):
+            dbc_cell: _DbcFileCell = self.cellWidget(row, 5)
+            dbc_cell.retranslate()
 
     def add_row(self, cfg: dict | None = None) -> None:
         cfg = cfg or {}
@@ -247,13 +333,18 @@ class _CanConfigTable(QTableWidget):
         label_edit.editingFinished.connect(lambda: self.changed.emit())
         self.setCellWidget(row, 4, label_edit)
 
+        dbc_cell = _DbcFileCell(str(cfg.get("dbc_path", "")))
+        dbc_cell.changed.connect(lambda: self.changed.emit())
+        dbc_cell.retranslate()
+        self.setCellWidget(row, 5, dbc_cell)
+
         remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
         remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
-        self.setCellWidget(row, 5, remove_button)
+        self.setCellWidget(row, 6, remove_button)
 
     def _remove_row_of(self, widget: QWidget) -> None:
         for row in range(self.rowCount()):
-            if self.cellWidget(row, 5) is widget:
+            if self.cellWidget(row, 6) is widget:
                 self.removeRow(row)
                 self.changed.emit()
                 return
@@ -315,6 +406,7 @@ class _CanConfigTable(QTableWidget):
             channel_edit: QLineEdit = self.cellWidget(row, 1)
             bitrate_spin: QSpinBox = self.cellWidget(row, 3)
             label_edit: QLineEdit = self.cellWidget(row, 4)
+            dbc_cell: _DbcFileCell = self.cellWidget(row, 5)
             channel = channel_edit.text().strip()
             if not channel:
                 continue
@@ -323,6 +415,7 @@ class _CanConfigTable(QTableWidget):
                 channel=channel,
                 bitrate=bitrate_spin.value(),
                 label=label_edit.text().strip(),
+                dbc_path=dbc_cell.path(),
             ))
         return result
 
@@ -339,7 +432,7 @@ class SettingsTab(QWidget):
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
-    can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label
+    can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label/dbc_path
     # Nutzer hat die Rueckfrage in _on_reset_devices_clicked bereits mit Ja
     # bestaetigt -- main_window._on_reset_devices_requested fuehrt den
     # eigentlichen Reset aus (DeviceRegistry/Settings kennt dieses Widget
@@ -539,7 +632,10 @@ class SettingsTab(QWidget):
         self._can_hint.setText(
             tr(
                 "CAN-Interfaces (Vector, PEAK/PCAN) -- werden hier explizit konfiguriert, "
-                "da anders als bei Last/Netzteil keine automatische Erkennung möglich ist."
+                "da anders als bei Last/Netzteil keine automatische Erkennung möglich ist. "
+                "Optional lässt sich je Interface eine DBC-Datei hinterlegen: empfangene "
+                "Frames werden dann im Control-Tab zusätzlich zu den Rohdaten als benannte, "
+                "skalierte Signale angezeigt."
             )
         )
         self._can_table.retranslate()

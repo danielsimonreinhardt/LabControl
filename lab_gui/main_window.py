@@ -217,6 +217,7 @@ class MainWindow(QMainWindow):
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
         self._worker.can_frame_received.connect(self.control_tab.on_can_frame)
+        self._worker.can_signals_decoded.connect(self.control_tab.on_can_signals_decoded)
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()

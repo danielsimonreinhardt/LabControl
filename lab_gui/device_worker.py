@@ -25,6 +25,7 @@ from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
+from can_bus.dbc import DbcError, decode_frame, load_dbc
 from microhil.driver import (
     AIN_COUNT as HIL_AIN_COUNT,
     AOUT_COUNT as HIL_AOUT_COUNT,
@@ -209,6 +210,18 @@ class DeviceWorker(QObject):
     # device_id, arbitration_id, data (Hex-String z.B. "01 A2 FF"), extended, timestamp (s)
     can_frame_received = Signal(str, int, str, bool, float)
     can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
+    # device_id, arbitration_id, can_bus.dbc.DecodedFrame -- NUR emittiert,
+    # wenn fuer dieses Interface eine DBC-Datei hinterlegt ist (siehe
+    # settings.py::can_configs, Schluessel "dbc_path") UND diese eine
+    # Message-Definition fuer die arbitration_id enthaelt (siehe
+    # can_bus/dbc.py::decode_frame). can_frame_received (Rohdaten) wird
+    # davon UNABHAENGIG immer weiter emittiert -- Rohdaten bleiben wichtig
+    # fuers Debugging, siehe FEATURES.md Punkt 3. Bewusst ein eigenes
+    # Signal statt eines zusaetzlichen Parameters an can_frame_received:
+    # ein spaeterer weiterer Abnehmer (z.B. testcase_runner fuer Solange/
+    # Wenn-Bedingungen, siehe can_bus/dbc.py-Docstring) kann sich hier
+    # unabhaengig von der GUI-Rohdaten-Anzeige einklinken.
+    can_signals_decoded = Signal(str, int, object)
 
     hil_connected = Signal(str, bool)          # device_id, online
     # device_id, Firmwareversion aus *IDN? (microhil.driver.MicroHIL.
@@ -240,6 +253,16 @@ class DeviceWorker(QObject):
         self._can_buses: dict[str, CanBus] = {}
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
+        # device_id -> geladene cantools-Datenbank, nur fuer Interfaces mit
+        # hinterlegter "dbc_path" (siehe _reload_can_dbcs). Getrennt von
+        # _can_buses gehalten: die DBC-Datei soll unabhaengig vom aktuellen
+        # Verbindungsstatus geladen bleiben (z.B. bereits vor dem ersten
+        # erfolgreichen Connect).
+        self._can_dbcs: dict[str, object] = {}
+        # device_id -> zuletzt geladener dbc_path, verhindert unnoetiges
+        # Neuparsen bei jedem _reconnect_can()-Tick, wenn sich nur ein
+        # anderes Feld (z.B. Bezeichnung) geaendert hat.
+        self._can_dbc_paths: dict[str, str] = {}
         self._hils: dict[str, MicroHIL] = {}
         # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
         # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
@@ -606,6 +629,7 @@ class DeviceWorker(QObject):
         naechsten RECONNECT_INTERVAL_MS-Tick erneut versucht, analog zu
         _reconnect_psus/_reconnect_loads.
         """
+        self._reload_can_dbcs()
         for cfg in self._can_configs:
             device_id = _can_device_id(cfg)
             if device_id in self._can_buses:
@@ -620,6 +644,48 @@ class DeviceWorker(QObject):
             logger.info("CAN-Interface verbunden: %s", device_id)
             self.device_added.emit("can", device_id)
             self.can_connected.emit(device_id, True)
+
+    def _reload_can_dbcs(self) -> None:
+        """Haelt self._can_dbcs/self._can_dbc_paths mit der aktuellen
+        self._can_configs-Liste synchron (siehe set_can_configs/
+        settings.py::can_configs, Schluessel "dbc_path").
+
+        Laedt/parst eine DBC-Datei nur, wenn sich ihr Pfad seit dem letzten
+        Aufruf geaendert hat (siehe _can_dbc_paths-Docstring in __init__) --
+        _reconnect_can() (und damit dieser Aufruf) laeuft alle
+        RECONNECT_INTERVAL_MS erneut, ein wiederholtes Neuparsen bei
+        unveraendertem Pfad waere unnoetige Arbeit im selben Worker-Thread,
+        der auch Last/Netzteil/microHIL bedient.
+
+        Ein Parse-Fehler (fehlende/kaputte Datei) wird nur geloggt, nicht
+        als Exception weitergereicht -- das CAN-Interface bleibt trotzdem
+        nutzbar, es fehlt dann lediglich die Signal-Decodierung
+        (can_signals_decoded), die Rohdaten-Anzeige (can_frame_received)
+        ist davon unberuehrt.
+        """
+        wanted_ids = {_can_device_id(cfg) for cfg in self._can_configs}
+        for device_id in list(self._can_dbcs):
+            if device_id not in wanted_ids:
+                del self._can_dbcs[device_id]
+                self._can_dbc_paths.pop(device_id, None)
+        for cfg in self._can_configs:
+            device_id = _can_device_id(cfg)
+            dbc_path = cfg.get("dbc_path") or None
+            if dbc_path is None:
+                if device_id in self._can_dbcs:
+                    del self._can_dbcs[device_id]
+                    self._can_dbc_paths.pop(device_id, None)
+                continue
+            if self._can_dbc_paths.get(device_id) == dbc_path:
+                continue
+            try:
+                self._can_dbcs[device_id] = load_dbc(dbc_path)
+                self._can_dbc_paths[device_id] = dbc_path
+                logger.info("DBC-Datei fuer %s geladen: %s", device_id, dbc_path)
+            except DbcError as exc:
+                logger.warning("CAN-Interface %s: %s", device_id, exc)
+                self._can_dbcs.pop(device_id, None)
+                self._can_dbc_paths.pop(device_id, None)
 
     def _reconnect_hils(self) -> None:
         """Verbindet den microHIL, falls noch nicht verbunden.
@@ -816,6 +882,11 @@ class DeviceWorker(QObject):
                         device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
                         frame.extended, frame.timestamp,
                     )
+                    db = self._can_dbcs.get(device_id)
+                    if db is not None:
+                        decoded = decode_frame(db, frame)
+                        if decoded is not None:
+                            self.can_signals_decoded.emit(device_id, frame.arbitration_id, decoded)
                     drained += 1
             except CanError as exc:
                 logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
