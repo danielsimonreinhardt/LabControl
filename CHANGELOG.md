@@ -1039,6 +1039,18 @@ Semantic Versioning (`lab_gui/version.py`).
   steht, führte zu `KeyError`. Beide Stellen nutzen jetzt `.get()` mit
   Fallback (leere Aktionsliste bzw. unveränderter Aktionscode), analog
   zum bereits vorhandenen Fallback in `kind_label()`.
+- **[BUGS_GESCHLOSSEN.md #25] microHIL-Control-Kachel: PWM1-4 optisch
+  nicht als zu OUT1-4 zugehörig erkennbar, Einheit Promille statt
+  Prozent**: `HilControlGroup` (`lab_gui/control_tab.py`) ordnet die
+  PWM1-4-Formularzeilen jetzt direkt unter OUT1-8 ein (vorher zwischen den
+  AOUT-Zeilen, weit weg von OUT1-8, mit dem PWM hardwareseitig verriegelt
+  ist -- `microhil/driver.py: INTERLOCKED_CHANNELS`), Zeilenlabel jetzt
+  `"PWM {n} (→ OUT{n}):"`. Die Sollwertfelder zeigen/nehmen jetzt Prozent
+  (0,0-100,0 %, `SteppedDoubleSpinBox`) statt Promille entgegen; die
+  Umrechnung (`permille = round(percent * 10)`) passiert nur an der
+  GUI-Grenze, das Geräteprotokoll (`set_pwm()`) bleibt Promille, und
+  bestehende Presets (`capture_state()`/`apply_state()`) bleiben unverändert
+  kompatibel.
 
 ## [0.6.2]
 

@@ -40,7 +40,6 @@ from microhil.driver import (
     AOUT_MAX_MV,
     OUT_COUNT,
     PWM_COUNT,
-    PWM_MAX_PERMILLE,
     PWR12_COUNT,
     RELAY_COUNT,
     defects_for_device_id,
@@ -977,15 +976,23 @@ class HilControlGroup(QGroupBox):
     zweite Anzeige derselben Werte im Control-Tab waere redundant.
 
     PWM1-4 (Nutzerfeedback: fehlte hier komplett) wie AOUT als Sollwertfeld
-    + Uebernehmen-Button (0-1000 Promille Duty-Cycle, siehe microhil/
-    driver.py: set_pwm()/PWM_MAX_PERMILLE) statt als Kanal-Schalter -- kein
-    einfaches Ein/Aus wie OUT/Relais/PWR12, sondern ein kontinuierlicher
-    Wert, analog zu den AOUT-Feldern oben. Mit OUT1-4 hardwareseitig
-    verriegelt (siehe microhil/driver.py: INTERLOCKED_CHANNELS) -- ein
-    gesetzter PWM-Wert > 0 schaltet den gleichnamigen Digitalausgang
-    zwangsweise aus; der OUT-Schalter zeigt das beim naechsten Poll-Zyklus
-    korrekt an (set_output_states()), ohne dass PWM hier extra dagegen
-    verriegelt werden muesste.
+    + Uebernehmen-Button statt als Kanal-Schalter -- kein einfaches Ein/Aus
+    wie OUT/Relais/PWR12, sondern ein kontinuierlicher Wert, analog zu den
+    AOUT-Feldern oben. Mit OUT1-4 hardwareseitig verriegelt (siehe microhil/
+    driver.py: INTERLOCKED_CHANNELS) -- ein gesetzter PWM-Wert > 0 schaltet
+    den gleichnamigen Digitalausgang zwangsweise aus; der OUT-Schalter zeigt
+    das beim naechsten Poll-Zyklus korrekt an (set_output_states()), ohne
+    dass PWM hier extra dagegen verriegelt werden muesste. Deshalb stehen die
+    PWM-Zeilen im Formular direkt unter der OUT-Zeile statt bei AOUT (BUGS_
+    OFFEN.md #25) -- die Zeilenlabels ("PWM {n} (→ OUT{n})", siehe
+    _retranslate) machen den Zusammenhang zusaetzlich textlich klar.
+
+    PWM-Sollwert wird als Prozent (0,0-100,0 %, eine Nachkommastelle)
+    eingegeben/angezeigt (BUGS_OFFEN.md #25) -- das Geraeteprotokoll
+    (microhil/driver.py: set_pwm()/PWM_MAX_PERMILLE) bleibt bei Promille
+    (0-1000), die Umrechnung (`permille = round(percent * 10)`) passiert
+    ausschliesslich an der GUI-Grenze beim Absenden (set_pwm-Signal) bzw.
+    beim Ablegen in einem Preset (capture_state, siehe dort).
 
     Kanal-Schalter als einzelne checkable Buttons statt EIN/AUS-Buttonpaaren
     wie bei LoadControlGroup/PsuControlGroup -- bei bis zu 8 Kanaelen (OUT)
@@ -1065,6 +1072,30 @@ class HilControlGroup(QGroupBox):
         self._form.addRow(" ", self._out_row)
         _detint_label(self._form, self._out_row)
 
+        # -- PWM (PWM1-4) -- Sollwertfeld + Uebernehmen-Button wie AOUT
+        # (kontinuierlicher Wert, kein Kanal-Schalter). Direkt unter der
+        # OUT-Zeile statt bei AOUT platziert, weil PWM1-4 hardwareseitig mit
+        # OUT1-4 verriegelt ist (siehe Klassendocstring, BUGS_OFFEN.md #25).
+        # Eingabe/Anzeige in Prozent (0,0-100,0 %); das Geraeteprotokoll
+        # bleibt Promille, Umrechnung nur an dieser GUI-Grenze.
+        self._pwm_spins: list[SteppedDoubleSpinBox] = []
+        self._pwm_rows: list[QWidget] = []
+        for ch in range(1, PWM_COUNT + 1):
+            spin = SteppedDoubleSpinBox()
+            spin.setDecimals(1)
+            spin.setRange(0, 100)
+            spin.setSuffix(" %")
+            spin.setMaximumWidth(120)
+            button = IconButton("mdi.check", "")
+            button.clicked.connect(
+                lambda _, c=ch, s=spin: self.set_pwm.emit(self._device_id, c, round(s.value() * 10))
+            )
+            row = _row(spin, button)
+            self._form.addRow(" ", row)
+            _detint_label(self._form, row)
+            self._pwm_spins.append(spin)
+            self._pwm_rows.append(row)
+
         # -- Analogausgaenge (AOUT1-2) -- je Kanal ein eigenes Sollwert-Feld
         # + Uebernehmen-Button (kein Massen-"Setzen" wie bei den Schaltern
         # oben: ein Zahlenwert braucht einen expliziten Bestaetigungs-Klick,
@@ -1083,24 +1114,6 @@ class HilControlGroup(QGroupBox):
             _detint_label(self._form, row)
             self._aout_spins.append(spin)
             self._aout_rows.append(row)
-
-        # -- PWM (PWM1-4) -- Sollwertfeld + Uebernehmen-Button wie AOUT
-        # (kontinuierlicher Wert, kein Kanal-Schalter). Verriegelung mit
-        # OUT1-4 passiert firmwareseitig, siehe Klassendocstring.
-        self._pwm_spins: list[SteppedSpinBox] = []
-        self._pwm_rows: list[QWidget] = []
-        for ch in range(1, PWM_COUNT + 1):
-            spin = SteppedSpinBox(small_step=10, large_step=100)
-            spin.setRange(0, PWM_MAX_PERMILLE)
-            spin.setSuffix(" ‰")
-            spin.setMaximumWidth(120)
-            button = IconButton("mdi.check", "")
-            button.clicked.connect(lambda _, c=ch, s=spin: self.set_pwm.emit(self._device_id, c, s.value()))
-            row = _row(spin, button)
-            self._form.addRow(" ", row)
-            _detint_label(self._form, row)
-            self._pwm_spins.append(spin)
-            self._pwm_rows.append(row)
 
         # -- Relais (REL1-4) -- Segmented AUS|EIN statt blosser Farbfuellung
         # (Absprache, Variante 07 im Schalterkatalog): anders als bei OUT1-8
@@ -1176,10 +1189,10 @@ class HilControlGroup(QGroupBox):
         self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         self._form.labelForField(self._out_row).setText(tr("Digitalausgänge:"))
+        for i, row in enumerate(self._pwm_rows, start=1):
+            self._form.labelForField(row).setText(tr("PWM {n} (→ OUT{n}):", n=i))
         for i, row in enumerate(self._aout_rows, start=1):
             self._form.labelForField(row).setText(tr("Analogausgang {n}:", n=i))
-        for i, row in enumerate(self._pwm_rows, start=1):
-            self._form.labelForField(row).setText(tr("PWM {n}:", n=i))
         self._form.labelForField(self._relay_row).setText(tr("Relais:"))
         for i, row in enumerate(self._pwr12_rows, start=1):
             self._form.labelForField(row).setText(tr("12V-Ausgang {n}:", n=i))
@@ -1247,7 +1260,10 @@ class HilControlGroup(QGroupBox):
         return {
             "outputs": [b.isChecked() for b in self._out_buttons],
             "analog_out": [s.value() for s in self._aout_spins],
-            "pwm": [s.value() for s in self._pwm_spins],
+            # Weiterhin in Promille abgelegt (nicht im UI-Prozent des Spins),
+            # damit bestehende Presets unveraendert kompatibel bleiben --
+            # siehe Klassendocstring/BUGS_OFFEN.md #25.
+            "pwm": [round(s.value() * 10) for s in self._pwm_spins],
             "relays": [b.isChecked() for b in self._relay_buttons],
             "pwr12": [b.isChecked() for b in self._pwr12_buttons],
             "current_limits": [s.value() for s in self._limit_spins],

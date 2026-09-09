@@ -78,6 +78,17 @@ PWR12_COUNT = 2
 CURR_COUNT = 2
 PWM_COUNT = 4
 PWM_MAX_PERMILLE = 1000
+# Gilt fuer PWM1-4 gemeinsam (ein Timer, TIM3, siehe protocol.md, "PWM-
+# Frequenz") -- anders als bei den anderen PWM_*-Konstanten oben gibt es
+# hier KEINEN Kanalindex. Default nach Reset ist KEIN 1000 Hz, sondern
+# ca. 1098 Hz (Firmware-Hardcodierung PSC=0/ARR=65535 vor PWMFREQ). Obere
+# Grenze ist oszilloskopisch verifiziert (microHIL-Repo, docs/hardware-
+# notes.md, 2026-09-09): bei 100 kHz zeigt die Ausgangsstufe (PUSH-PULL
+# OUTPUT DRIVER, BC807/BC817) bereits deutlich verschliffene Flanken, bei
+# 20 kHz noch sauber -- die Firmware kappt PWMFREQ deshalb hart auf diesen
+# Bereich, keine willkuerliche Sicherheitsmarge.
+PWM_FREQ_MIN_HZ = 1
+PWM_FREQ_MAX_HZ = 20000
 
 # PWR12FLT?-Bitmaske (siehe protocol.md, "Strombegrenzung PWR12-1/2").
 PWR12_FAULT_OWN_LIMIT = 0b01     # ILIM-Grenzwert dieses Kanals ausgeloest
@@ -606,6 +617,28 @@ class MicroHIL:
         self._check_channel(channel, PWM_COUNT, "PWM")
         return int(self._query(f"PWM? {channel}").strip())
 
+    def set_pwm_frequency(self, hz: int) -> None:
+        """Setzt die PWM-Frequenz (`PWMFREQ`) -- gilt fuer PWM1-4 GEMEINSAM,
+        kein Kanalindex (ein Timer fuer alle 4 Kanaele, siehe protocol.md,
+        "PWM-Frequenz"). Ein bereits per set_pwm() gesetzter Duty Cycle
+        bleibt beim Frequenzwechsel prozentual erhalten (rechnet die
+        Firmware um).
+
+        Wie bei set_pwm()/set_analog_output() klemmt die Firmware still auf
+        PWM_FREQ_MIN_HZ..PWM_FREQ_MAX_HZ statt den Wert abzulehnen -- `OK`
+        besitzt hier ohnehin keinen Kanalindex zum Bestaetigen. Der Treiber
+        klemmt deshalb auch hier bereits client-seitig; den tatsaechlich
+        uebernommenen Wert (kann durch Ganzzahl-Teiler leicht abweichen)
+        liefert get_pwm_frequency() zurueck.
+        """
+        clamped = max(PWM_FREQ_MIN_HZ, min(PWM_FREQ_MAX_HZ, hz))
+        self._command(f"PWMFREQ {clamped}")
+
+    def get_pwm_frequency(self) -> int:
+        """Liest die aktuell gesetzte PWM-Frequenz in Hz (`PWMFREQ?`,
+        gemeinsam fuer PWM1-4)."""
+        return int(self._query("PWMFREQ?").strip())
+
 
 if __name__ == "__main__":
     with MicroHIL.open_first() as hil:
@@ -617,3 +650,4 @@ if __name__ == "__main__":
         for ch in range(1, PWR12_COUNT + 1):
             print(f"PWR12 {ch}:", hil.get_pwr12_channel(ch))
         print("PWM (permille):", [hil.get_pwm(ch) for ch in range(1, PWM_COUNT + 1)])
+        print("PWM-Frequenz (Hz):", hil.get_pwm_frequency())

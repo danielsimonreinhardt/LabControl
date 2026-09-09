@@ -24,12 +24,20 @@ from microhil.driver import (
     IN_COUNT,
     OUT_COUNT,
     PWM_COUNT,
+    PWM_FREQ_MAX_HZ,
+    PWM_FREQ_MIN_HZ,
     PWM_MAX_PERMILLE,
     PWR12_COUNT,
     RELAY_COUNT,
     Pwr12Channel,
     parse_idn_fields,
 )
+
+# Default-Frequenz eines echten, gerade gebooteten microHIL vor dem ersten
+# PWMFREQ (PSC=0/ARR=65535 bei 72 MHz Timertakt, siehe protocol.md) --
+# NICHT 1000, damit ein Mock-basierter Test denselben Ausgangswert wie die
+# reale Hardware sieht.
+_PWM_FREQ_DEFAULT_HZ = 1098
 
 
 class MockMicroHIL:
@@ -44,6 +52,7 @@ class MockMicroHIL:
         self._current_limits = [1200] * PWR12_COUNT
         self._pwr12_fault = [0] * PWR12_COUNT
         self._pwm = [0] * PWM_COUNT
+        self._pwm_freq_hz = _PWM_FREQ_DEFAULT_HZ
 
     def close(self) -> None:
         pass
@@ -168,3 +177,9 @@ class MockMicroHIL:
 
     def get_pwm(self, channel: int) -> int:
         return self._pwm[channel - 1]
+
+    def set_pwm_frequency(self, hz: int) -> None:
+        self._pwm_freq_hz = max(PWM_FREQ_MIN_HZ, min(PWM_FREQ_MAX_HZ, hz))
+
+    def get_pwm_frequency(self) -> int:
+        return self._pwm_freq_hz
