@@ -1058,13 +1058,39 @@ Semantic Versioning (`lab_gui/version.py`).
   bestehende Presets (`capture_state()`/`apply_state()`) bleiben unverändert
   kompatibel.
 - **[BUGS_GESCHLOSSEN.md #30] Dashboard-Drag&Drop "Platz machen"
-  funktionierte nicht, Kachel landete immer am Ende**:
-  `DashboardWidget._order_with_dragged_at()` (`lab_gui/dashboard.py`) brach
-  die Einfügeposition-Suche beim ERSTEN Treffer in Listenreihenfolge ab --
-  das dichte Packing (`tile_grid.pack_tiles_by_row`) ordnet bei gemischten
-  Kachelhöhen (z. B. eine doppelt hohe microHIL-Kachel neben einfachen
-  PSU/Load-Kacheln) aber nicht monoton zur Listenreihenfolge. Sucht jetzt
-  über alle Kacheln den kleinsten Positions-Schlüssel ≥ Zielschlüssel.
+  funktionierte nicht, Kachel landete immer am Ende** -- der Anlauf in
+  v0.10.1 hat den Bug NICHT behoben (an der laufenden 0.10.1 weiterhin
+  reproduziert); damals wurde nur die Fix-Logik nachgerechnet, nie ein Drag
+  gegen die echte Widget-Geometrie gefahren. Tatsächlich waren es drei
+  Ursachen in `lab_gui/dashboard.py`:
+  - `_order_with_dragged_at()` bestimmte die Zielzelle aus der Mausposition
+    gegen das Bild auf dem Schirm (mit gezogener Kachel), die
+    Kachelpositionen dagegen aus einem `pack_tiles_by_row()` OHNE sie --
+    das Entfernen packt aber alles neu, dieselbe Zellkoordinate meint in
+    beiden Anordnungen etwas anderes. In der Kompaktansicht (einzelne
+    Zeile, je Kachel eigene Breite) rechnete die Formel zudem mit
+    `_panel_width`/`_cell_height` aus der Normalansicht und schickte
+    ausnahmslos JEDE Kachel ans Ende. Die Zielbestimmung arbeitet jetzt auf
+    den echten Rasterzellen der angezeigten Anordnung (neu: `_tile_rects()`
+    über `QGridLayout.cellRect()`, unbeeinflusst von laufenden
+    Einrutsch-Animationen) und sortiert die Kachel als Listenindex vor bzw.
+    hinter der getroffenen Kachel ein.
+  - `_drop_panel()` rechnete die Zielposition beim Loslassen erneut aus,
+    obwohl die Live-Vorschau die Kacheln längst umsortiert hatte -- die
+    Kachel sprang dadurch woandershin als angezeigt. Der Drop übernimmt
+    jetzt die zuletzt vorgeschaute Reihenfolge.
+  - Die ausgeblendete gezogene Kachel belegte ihre Rasterzelle NICHT
+    weiter: `QGridLayout` ignoriert versteckte Widgets und zog ihre Spalte
+    auf Breite 0 zusammen -- es entstand gar keine Lücke, und die
+    Zielbestimmung lieferte für denselben ruhig gehaltenen Mauspunkt
+    abwechselnd zwei Reihenfolgen (Flackern). Behoben über
+    `QSizePolicy.setRetainSizeWhenHidden(True)` für die Dauer des Drags.
+
+  Verifiziert per Offscreen-Test mit echten Qt-Drag-Events
+  (`QDragEnter`/`QDragMove`/`QDropEvent`): alle 24 Kachelkombinationen in
+  Normal- und die 24 in Kompaktansicht landen an der erwarteten Stelle, die
+  Vorschau stimmt jeweils mit dem Ergebnis nach dem Loslassen überein, dazu
+  Ablegen ins Leere, Flacker-Test und Abbruch-Pfad.
 - **[BUGS_GESCHLOSSEN.md #33] Verlaufs-Anzeige: fehlende Kanäle für
   microHIL und CAN** (Oszi bewusst nicht umgesetzt, kein kontinuierlicher
   Live-Messwert vorhanden, siehe BUGS_OFFEN.md #39): `lab_gui/

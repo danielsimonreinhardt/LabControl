@@ -10,7 +10,18 @@ sein eigenes Panel mit eindeutigem, umbenennbarem Label.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QPropertyAnimation, QSize, Qt, Signal, Slot
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QMimeData,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QSize,
+    Qt,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -114,6 +125,15 @@ FIELD_ICONS: dict[str, str] = {
     "tx_count": "mdi.upload-outline",
     "rx_count": "mdi.download-outline",
 }
+
+
+def _rect_distance(rect: QRect, point: QPoint) -> int:
+    """Quadrierter Abstand von `point` zum naechsten Punkt von `rect`
+    (0, wenn `point` darin liegt) -- nur zum Vergleichen gedacht
+    (siehe _order_with_dragged_at), die Wurzel waere dafuer ueberfluessig."""
+    dx = max(rect.left() - point.x(), 0, point.x() - rect.right())
+    dy = max(rect.top() - point.y(), 0, point.y() - rect.bottom())
+    return dx * dx + dy * dy
 
 
 def _field_display(field_key: str) -> str:
@@ -655,6 +675,7 @@ class DashboardWidget(QGroupBox):
         # Abbild sichtbar und wuerde bei jeder Vorschau selbst mit an ihre
         # neue Position springen -- zwei sich ueberlagernde, gegenlaeufig
         # bewegte Abbilder.
+        self._set_keeps_space_when_hidden(panel, True)
         panel.hide()
         self._drag_hidden_panel = panel
         self._drag_preview_order = None
@@ -667,10 +688,56 @@ class DashboardWidget(QGroupBox):
             # zurueckkehren (_drag_preview_order = None laesst
             # _current_order() wieder auf _pending_panel_order zurueckfallen,
             # also den Stand VOR diesem Drag).
+            self._set_keeps_space_when_hidden(panel, False)
             panel.show()
             self._drag_hidden_panel = None
             self._drag_preview_order = None
             self._relayout_panels()
+
+    @staticmethod
+    def _set_keeps_space_when_hidden(panel: QWidget, keep: bool) -> None:
+        """Laesst `panel` seine Rasterzelle auch im ausgeblendeten Zustand
+        belegen (oder wieder freigeben). Fuer die Dauer eines Drags gesetzt:
+        das QGridLayout ignoriert ausgeblendete Widgets sonst vollstaendig
+        und zieht ihre Spalte auf Breite 0 zusammen, sobald keine sichtbare
+        Kachel mehr darin liegt -- die gezogene Kachel hinterlaesst dann gar
+        keine Luecke ("Platz machen" bleibt unsichtbar), und schlimmer: die
+        Zielbestimmung (siehe _order_with_dragged_at) rechnet gegen eine
+        Anordnung ohne diese Luecke und liefert fuer denselben Mauspunkt
+        abwechselnd zwei verschiedene Reihenfolgen -- die Kacheln flackern
+        bei ruhig gehaltener Maus zwischen beiden hin und her."""
+        policy = panel.sizePolicy()
+        policy.setRetainSizeWhenHidden(keep)
+        panel.setSizePolicy(policy)
+
+    def _tile_rects(self, order: list[str]) -> dict[str, QRect]:
+        """Rasterzellen der Kacheln in `order`, so wie sie GERADE auf dem
+        Bildschirm liegen -- gelesen aus dem QGridLayout selbst
+        (cellRect(), doppelt hohe Kacheln als Vereinigung ihrer beiden
+        Zeilen) statt aus panel.geometry(). Zwei Gruende dafuer:
+
+        * cellRect() liefert die vom Layout festgelegte ENDposition. Waehrend
+          eines Drags gleiten die Kacheln per QPropertyAnimation an ihren
+          neuen Platz (siehe _animate_relayout); panel.geometry() zeigt
+          dabei die momentane Zwischenposition und wuerde die Zielbestimmung
+          waehrend jeder laufenden Animation verfaelschen.
+        * Die tatsaechlichen Zellgrenzen beruecksichtigen automatisch die
+          Layout-Raender, GRID_SPACING und -- in der Kompaktansicht -- die
+          je Kachel unterschiedlichen Breiten (siehe _relayout_panels)."""
+        if self._compact:
+            positions = {device_id: (0, col) for col, device_id in enumerate(order)}
+            spans = {device_id: (1, 1) for device_id in order}
+        else:
+            spans = {device_id: self._tile_span(device_id) for device_id in order}
+            positions = pack_tiles_by_row(order, spans, max_rows=2)
+        rects: dict[str, QRect] = {}
+        for device_id, (row, col) in positions.items():
+            rect = self._panel_layout.cellRect(row, col)
+            row_span = spans[device_id][1]
+            if row_span > 1:
+                rect = rect.united(self._panel_layout.cellRect(row + row_span - 1, col))
+            rects[device_id] = rect
+        return rects
 
     def _order_with_dragged_at(self, dragged_id: str, pos) -> list[str]:
         """Baut die Anzeigereihenfolge, WENN die gezogene Kachel jetzt an der
@@ -680,55 +747,80 @@ class DashboardWidget(QGroupBox):
         (siehe _drop_panel), damit beide exakt denselben Zielindex ermitteln
         und die Kachel beim Loslassen nicht nochmal springt.
 
-        Zielzelle aus `pos` ueber Breiten-/Hoehenratsche bestimmt.
-        Lesereihenfolge ist SPALTENweise (Kacheln fuellen eine Spalte, bevor
-        die naechste beginnt, siehe pack_tiles_by_row): Schluessel daher
-        Spalte zuerst, dann Zeile. Eingefuegt wird vor der Kachel mit dem
-        KLEINSTEN Positions-Schluessel, der nicht vor der Zielzelle liegt,
-        sonst ans Ende.
+        Gearbeitet wird direkt auf den Rasterzellen der GERADE angezeigten
+        Anordnung (siehe _tile_rects): gesucht wird die Kachel unter `pos`
+        (bzw. bei einem Drop ins Leere die naechstgelegene), die gezogene
+        Kachel wird davor oder dahinter in die LISTE einsortiert -- vor ihr,
+        wenn `pos` in der ersten Haelfte liegt, sonst dahinter. Massgeblich
+        ist die Leserichtung: in der Normalansicht fuellen die Kacheln erst
+        eine Spalte von oben nach unten (siehe pack_tiles_by_row), die
+        Haelften liegen dort also uebereinander; die Kompaktansicht ist eine
+        einzelne Zeile, dort nebeneinander. Liegt `pos` ausserhalb der
+        Spalte der Treffer-Kachel, entscheidet stattdessen die x-Richtung
+        (relevant beim Ablegen rechts neben der letzten Spalte -- die Kachel
+        gehoert dann ans Ende).
 
-        Wichtig: die Suche nach dieser Kachel darf NICHT einfach die
-        Listenreihenfolge (`order`) durchgehen und beim ersten Treffer
-        abbrechen (frueherer Bug, BUGS_OFFEN.md #30) -- das dichte Packing
-        (pack_tiles_by_row) ordnet bei gemischten Kachelhoehen (z.B. eine
-        doppelt hohe microHIL-Kachel neben einfachen PSU/Load-Kacheln) NICHT
-        monoton zur Listenreihenfolge: eine spaeter in `order` genannte
-        Kachel kann eine Luecke auffuellen, die eine frueher genannte,
-        aber groessere Kachel ausgelassen hat, und landet dadurch visuell
-        VOR ihr. Ein Abbruch beim ersten in Listenreihenfolge gefundenen
-        Treffer traf dadurch oft die falsche (zu weit hinten liegende)
-        Kachel oder gar keine -- die gezogene Kachel wanderte beim Loslassen
-        praktisch immer ans Ende statt an die gewuenschte Stelle. Reproduziert
-        mit `pack_tiles_by_row(["A", "M", "B"], {"A": (1, 1), "M": (1, 2),
-        "B": (1, 1)}, max_rows=2)`: Schluessel in Listenreihenfolge sind
-        [0, 2, 1] -- nicht aufsteigend, "B" (Schluessel 1) liegt VOR "M"
-        (Schluessel 2), obwohl "M" frueher in `order` steht."""
-        unit_w = self._panel_width + GRID_SPACING
-        unit_h = self._cell_height + GRID_SPACING
+        Wichtig ist dabei, die Zielbestimmung an der ANGEZEIGTEN Anordnung
+        (also inklusive der gezogenen Kachel, die waehrend des Drags nur
+        ausgeblendet ist, ihre Rasterzelle aber weiterhin belegt, siehe
+        _start_panel_drag) auszurichten und die Einfuegestelle als
+        LISTENindex neben der Treffer-Kachel zu bestimmen (BUGS_OFFEN.md
+        #30). Zwei Fallen, in die die frueheren Anlaeufe getappt sind:
+
+        * Die Zielzelle aus `pos` und die Kachelpositionen duerfen nicht aus
+          zwei VERSCHIEDENEN Anordnungen stammen. Frueher wurde `pos` gegen
+          das Bild auf dem Schirm (mit gezogener Kachel) gerechnet, die
+          Kachelpositionen dagegen aus einem Packing OHNE sie -- das
+          Entfernen der gezogenen Kachel packt aber alles neu, dieselbe
+          Zellkoordinate meint in beiden Anordnungen etwas anderes. Beispiel
+          (real nachgemessen): PSU/Last (Spalte 0), doppelt hohe microHIL
+          (Spalte 1), CAN (Spalte 2); PSU auf die Mitte der microHIL-Kachel
+          gezogen ergab die Zielzelle (Spalte 1, Zeile 1), im Packing ohne
+          PSU liegt dort aber gar keine Kachel mehr -- die gezogene Kachel
+          landete am Ende statt an der Zielstelle.
+        * Ueber die Kachelpositionen nach einem Positions-Schluessel zu
+          SUCHEN ist ohnehin unnoetig heikel: das dichte Packing ordnet bei
+          gemischten Kachelhoehen NICHT monoton zur Listenreihenfolge (eine
+          spaeter genannte kleine Kachel fuellt eine Luecke, die eine
+          frueher genannte doppelt hohe ausgelassen hat, und liegt visuell
+          VOR ihr). Der Listenindex der tatsaechlich getroffenen Kachel ist
+          davon unabhaengig immer richtig."""
         order = [d for d in self._current_order() if d != dragged_id]
-        if unit_w <= 0 or unit_h <= 0:
-            order.append(dragged_id)
-            return order
-        target_col = max(0, int(pos.x()) // unit_w)
-        target_row = max(0, int(pos.y()) // unit_h)
-        target_key = target_col * 2 + target_row
+        if not order:
+            return [dragged_id]
 
-        spans = {d: self._tile_span(d) for d in order}
-        positions = pack_tiles_by_row(order, spans, max_rows=2)
+        point = pos.toPoint()
+        # Rasterzellen der ANGEZEIGTEN Anordnung, also einschliesslich der
+        # gezogenen (nur ausgeblendeten) Kachel.
+        rects = self._tile_rects(self._current_order())
 
-        insert_before = None
-        insert_before_key = None
+        own_rect = rects.get(dragged_id)
+        if own_rect is not None and own_rect.contains(point):
+            # Zeiger noch ueber der eigenen Luecke -- nichts umsortieren,
+            # sonst zappelt die Vorschau beim Anheben der Kachel.
+            return list(self._current_order())
+
+        target = None
         for device_id in order:
-            row, col = positions[device_id]
-            key = col * 2 + row
-            if key >= target_key and (insert_before_key is None or key < insert_before_key):
-                insert_before = device_id
-                insert_before_key = key
+            if rects[device_id].contains(point):
+                target = device_id
+                break
+        if target is None:
+            # Abgelegt zwischen/neben den Kacheln (Zwischenraum, freie
+            # Flaeche rechts der letzten Spalte): naechstgelegene Kachel.
+            target = min(order, key=lambda d: _rect_distance(rects[d], point))
 
-        if insert_before is None:
-            order.append(dragged_id)
+        rect = rects[target]
+        if self._compact:
+            after = point.x() >= rect.center().x()
+        elif point.x() > rect.right():
+            after = True
+        elif point.x() < rect.left():
+            after = False
         else:
-            order.insert(order.index(insert_before), dragged_id)
+            after = point.y() >= rect.center().y()
+
+        order.insert(order.index(target) + (1 if after else 0), dragged_id)
         return order
 
     def _preview_panel_drag(self, dragged_id: str, pos) -> None:
@@ -773,12 +865,24 @@ class DashboardWidget(QGroupBox):
     def _drop_panel(self, dragged_id: str, drop_pos) -> None:
         if dragged_id not in self._panels:
             return
-        order = self._order_with_dragged_at(dragged_id, drop_pos)
+        # Bewusst die zuletzt VORGESCHAUTE Reihenfolge uebernehmen, statt sie
+        # aus drop_pos neu zu rechnen: die Vorschau hat die Kacheln waehrend
+        # des Ziehens laengst umsortiert, derselbe Bildschirmpunkt bezeichnet
+        # in dieser neuen Anordnung also eine andere Stelle als noch beim
+        # letzten DragMove. Ein Neuberechnen liesse die Kachel beim Loslassen
+        # deshalb nochmal woanders hin springen als angezeigt -- genau das
+        # sichtbare Fehlverhalten aus BUGS_OFFEN.md #30. Nur wenn ueberhaupt
+        # keine Vorschau zustande kam (Drop ohne vorangegangenes DragMove),
+        # wird aus drop_pos gerechnet.
+        order = self._drag_preview_order
+        if order is None:
+            order = self._order_with_dragged_at(dragged_id, drop_pos)
         panel = self._drag_hidden_panel
         self._drag_hidden_panel = None
         self._drag_preview_order = None
         self._persist_panel_order(order)
         if panel is not None:
+            self._set_keeps_space_when_hidden(panel, False)
             panel.show()
 
     def _persist_panel_order(self, order: list[str]) -> None:
