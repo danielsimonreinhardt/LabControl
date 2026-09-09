@@ -50,21 +50,20 @@ Semantic Versioning (`lab_gui/version.py`).
     gespiegeltes Attribut) für Drop-in-Kompatibilität im Simulationsmodus.
   - `LabControl.spec::CAN_HIDDENIMPORTS` (aus `INTERFACE_LIST` abgeleitet)
     zieht `can.interfaces.slcan` automatisch mit, keine Änderung dort nötig.
-  - **Nur im Mock/ohne Hardware verifiziert** (kein microHIL an dieser
-    Session angeschlossen, siehe FEATURES.md Punkt 2/Aufgaben-Kontext):
-    Konstruktor-kwargs-Aufbau (`tty_baudrate` korrekt gesetzt/Default),
-    `_slcan_serial_configs()`-Filterlogik mit simulierten
-    `serial.tools.list_ports`-Einträgen (microHIL-Composite-Fall
-    nachgestellt: HIL-Port ohne LOCATION-Kennung korrekt herausgefiltert,
-    CAN1-Port korrekt erkannt/benannt), `Settings.can_configs`-Persistenz-
-    Roundtrip, `_CanConfigTable`-Spalten-Verhalten (offscreen), `MockCanBus`.
-    **Noch an echter Hardware zu verifizieren:** tatsächliche SLCAN-
-    Verbindung zum microHIL-CAN1-Port (`CanBus(interface="slcan", ...)`
-    gegen echten Adapter), reales CAN1-Traffic über diesen Port, ob Windows
-    den microHIL-HIL-Port in der Praxis tatsächlich ohne MI_xx/LOCATION-
-    Kennung meldet (bisher nur aus `microhil/driver.py`-Kommentaren
-    übernommen, dort selbst als an echter Hardware beobachtet dokumentiert,
-    hier aber nicht erneut nachgemessen).
+  - Zunächst nur im Mock verifiziert (Konstruktor-kwargs-Aufbau, simulierte
+    `serial.tools.list_ports`-Einträge, `Settings.can_configs`-Roundtrip,
+    `_CanConfigTable`-Spalten offscreen, `MockCanBus`). **Am 2026-09-09
+    zusätzlich an echter Hardware verifiziert** (microHIL am selben PC,
+    HIL-Port COM6 dabei von einer anderen Session belegt): Windows meldet
+    den HIL-Port tatsächlich ohne, den CAN1-Port mit LOCATION-Marker
+    (`...x.2`) -- `discover_configs()` erkennt/benennt `COM7` korrekt und
+    filtert das belegte `COM6` richtig heraus. Echte SLCAN-Verbindung
+    öffnet/schließt wiederholt sauber, Senden von Standard- und
+    Extended-Frames ohne Fehler, kompletter Produktionspfad
+    `DeviceWorker._reconnect_can()` -> Signale -> `_poll()` lief fehlerfrei.
+    **Weiterhin offen:** Empfang/RX-Traffic mangels zweiter CAN-Gegenstelle
+    am Bus nicht geprüft (eigene gesendete Frames werden ohne ACK/Gegenstelle
+    nicht zurückgespiegelt -- normales CAN-Verhalten, kein Fehlerhinweis).
 - **CAN-Bus: DBC-Datei-Import + Signal-Decodierung.** Siehe
   [FEATURES.md](FEATURES.md) Punkt 3. Neues Modul `can_bus/dbc.py`
   (`load_dbc()`/`decode_frame()`, basiert auf neuer Abhängigkeit
@@ -96,8 +95,13 @@ Semantic Versioning (`lab_gui/version.py`).
   `MockCanBus` und einer selbst geschriebenen Test-DBC (zwei Botschaften,
   eine mit `VAL_`-Enum-Wertetabelle) end-to-end gegen `DeviceWorker`,
   `_CanConfigTable`/`_DbcFileCell` und `ControlTab`/`CanControlGroup`
-  geprüft (Simulationsmodus, offscreen); reale Vector-/PCAN-Hardware und
-  reale, herstellerspezifische DBC-Dateien noch nicht verifiziert.
+  geprüft (Simulationsmodus, offscreen). Am 2026-09-09 zusätzlich gegen den
+  echten microHIL-SLCAN-Port verifiziert: `DeviceWorker._reload_can_dbcs()`
+  lädt eine echte DBC-Datei erfolgreich für ein reales, verbundenes
+  CAN-Interface. **Weiterhin offen:** Decodierung tatsächlich empfangener
+  Frames an echter Hardware (mangels zweiter CAN-Gegenstelle am Bus nicht
+  prüfbar), reale Vector-/PCAN-Hardware, reale herstellerspezifische
+  DBC-Dateien (Multiplex-Signale, Byte-Order-Sonderfälle, größere Dateien).
 - **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
   `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
   (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als
