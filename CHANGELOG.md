@@ -1057,6 +1057,32 @@ Semantic Versioning (`lab_gui/version.py`).
   GUI-Grenze, das Geräteprotokoll (`set_pwm()`) bleibt Promille, und
   bestehende Presets (`capture_state()`/`apply_state()`) bleiben unverändert
   kompatibel.
+- **[BUGS_GESCHLOSSEN.md #30] Dashboard-Drag&Drop "Platz machen"
+  funktionierte nicht, Kachel landete immer am Ende**:
+  `DashboardWidget._order_with_dragged_at()` (`lab_gui/dashboard.py`) brach
+  die Einfügeposition-Suche beim ERSTEN Treffer in Listenreihenfolge ab --
+  das dichte Packing (`tile_grid.pack_tiles_by_row`) ordnet bei gemischten
+  Kachelhöhen (z. B. eine doppelt hohe microHIL-Kachel neben einfachen
+  PSU/Load-Kacheln) aber nicht monoton zur Listenreihenfolge. Sucht jetzt
+  über alle Kacheln den kleinsten Positions-Schlüssel ≥ Zielschlüssel.
+- **[BUGS_GESCHLOSSEN.md #33] Verlaufs-Anzeige: fehlende Kanäle für
+  microHIL und CAN** (Oszi bewusst nicht umgesetzt, kein kontinuierlicher
+  Live-Messwert vorhanden, siehe BUGS_OFFEN.md #39): `lab_gui/
+  timeline_tab.py` zeigt jetzt alle microHIL-Kanäle (AIN1-4, PWR12-Strom,
+  IN1-8/OUT1-8/REL1-4) sowie dynamisch entstehende DBC-decodierte
+  CAN-Signale.
+- **[BUGS_GESCHLOSSEN.md #34] CAN-Bus-Einstellungen: Kanal-Spalte zeigte
+  nur "Seriennummer:Index" statt sprechendem Namen aus dem Auswahl-Popup**:
+  `settings_tab.py: _CanConfigTable` zeigt nach der Kanalauswahl jetzt den
+  sprechenden Namen an, verbindet intern aber weiterhin über das
+  tatsächliche Kanal-Token.
+- **[BUGS_GESCHLOSSEN.md #35] While/If-Bausteine: microHIL/CAN nicht
+  direkt als Messquelle wählbar** (Oszi bewusst nicht umgesetzt, siehe
+  BUGS_OFFEN.md #39): `condition_dialog.py`/`testcase_runner.py` erlauben
+  jetzt microHIL-Analog-/Digitaleingänge (mit Kanalauswahl) und
+  DBC-decodierte CAN-Signale (freier Signalpfad "Nachricht.Signal") direkt
+  als while/if-Bedingungsquelle, ohne Umweg über einen vorgeschalteten
+  Lese-Schritt mit "In Variable speichern".
 
 ## [0.6.2]
 

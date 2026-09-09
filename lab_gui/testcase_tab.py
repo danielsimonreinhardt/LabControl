@@ -49,6 +49,7 @@ from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
     COND_FIELD_UNITS,
+    COND_DEVICE_KINDS,
     CONTROL_STEP_LABELS,
     DEVICE_ACTIONS,
     DEVICE_KIND_LABELS,
@@ -132,6 +133,10 @@ def _cond_params_to_step(params: dict) -> TestStep:
         cond_value=params["cond_value"],
         cond_time_ref=params["cond_time_ref"],
         cond_var=params["cond_var"],
+        # Nur bei cond_device_kind=="hil" relevant (Kanalindex AIN/IN, siehe
+        # condition_dialog.ConditionDialog), Default 1 fuer aeltere, ohne
+        # dieses Feld gespeicherte Bedingungen (BUGS_GESCHLOSSEN.md #35).
+        hil_channel=params.get("hil_channel", 1),
     )
 
 
@@ -711,10 +716,10 @@ class TestcaseTab(QWidget):
         testcase_tab._device_key/_parse_device_key haben soll."""
         items = [
             (tr("{kind} (automatisch)", kind=kind_label(kind)), kind, "")
-            for kind in MEASUREMENT_DEVICE_KINDS
+            for kind in COND_DEVICE_KINDS
         ]
         for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
-            if kind not in MEASUREMENT_DEVICE_KINDS:
+            if kind not in COND_DEVICE_KINDS:
                 continue
             items.append((f"{label} ({kind_label(kind)})", kind, device_id))
         return items
@@ -1203,6 +1208,7 @@ class TestcaseTab(QWidget):
                 cond_value=step.cond_value,
                 cond_time_ref=step.cond_time_ref,
                 cond_var=step.cond_var,
+                hil_channel=step.hil_channel,
             )
             if t == "while":
                 container._cond_params["max_iterations"] = step.max_iterations
@@ -1903,6 +1909,7 @@ class TestcaseTab(QWidget):
                 cond_value=params["cond_value"],
                 cond_time_ref=params["cond_time_ref"],
                 cond_var=params["cond_var"],
+                hil_channel=params.get("hil_channel", 1),
             )
 
         if step_type in ("set_var", "inc_var"):

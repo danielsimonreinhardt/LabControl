@@ -331,6 +331,20 @@ class _CanConfigTable(QTableWidget):
         # der Nutzer den Kanalnamen noch tippt.
         channel_edit = QLineEdit(str(cfg.get("channel", "")))
         channel_edit.editingFinished.connect(lambda: self.changed.emit())
+        # Property "_channel_token" (siehe _pick_channel/configs(), BUGS_
+        # GESCHLOSSEN.md #34): haelt das tatsaechliche Kanal-Token fest, wenn
+        # das Feld gerade den sprechenden Namen aus dem Auswahl-Popup zeigt
+        # statt des Tokens selbst. textEdited (nur bei TASTATUR-Eingabe, im
+        # Gegensatz zu textChanged/setText()) verwirft die Property wieder,
+        # sobald der Nutzer den Text von Hand aendert -- ab dann gilt wieder
+        # der reine Feldinhalt als Kanalwert, wie schon immer bei
+        # manuell eingetragenen Kanaelen (z.B. slcan-Portnamen ohne
+        # sprechenden Namen).
+        def _clear_channel_token(_text=None, e=channel_edit) -> None:
+            e.setProperty("_channel_token", None)
+            e.setToolTip("")
+
+        channel_edit.textEdited.connect(_clear_channel_token)
         self.setCellWidget(row, 1, channel_edit)
 
         pick_button = IconButton("mdi.magnify", tr("Verfügbare Kanäle suchen…"))
@@ -424,7 +438,16 @@ class _CanConfigTable(QTableWidget):
             list(by_name), editable=False,
         )
         if ok:
-            channel_edit.setText(by_name[name])
+            # Anzeige: sprechender Name wie im Popup (z.B. "CANcaseXL Ch1
+            # (S/N 59177)") statt des rohen Tokens (BUGS_GESCHLOSSEN.md
+            # #34) -- das tatsaechlich zu verwendende Token bleibt ueber die
+            # Property erhalten (siehe add_row/configs()), der Tooltip zeigt
+            # es zusaetzlich fuer alle, die z.B. beim Nachschauen in
+            # settings.json den rohen Wert sehen wollen.
+            token = by_name[name]
+            channel_edit.setText(name)
+            channel_edit.setProperty("_channel_token", token)
+            channel_edit.setToolTip(token)
             self.changed.emit()
 
     def configs(self) -> list[dict]:
@@ -436,7 +459,12 @@ class _CanConfigTable(QTableWidget):
             serial_baud_spin: QSpinBox = self.cellWidget(row, 4)
             label_edit: QLineEdit = self.cellWidget(row, 5)
             dbc_cell: _DbcFileCell = self.cellWidget(row, 6)
-            channel = channel_edit.text().strip()
+            # Zeigt das Feld gerade den sprechenden Namen aus dem
+            # Auswahl-Popup an (siehe _pick_channel/add_row, BUGS_
+            # GESCHLOSSEN.md #34), gilt weiterhin das dort hinterlegte
+            # tatsaechliche Kanal-Token -- NICHT der angezeigte Text.
+            token = channel_edit.property("_channel_token")
+            channel = str(token).strip() if token else channel_edit.text().strip()
             if not channel:
                 continue
             interface = interface_combo.currentData()

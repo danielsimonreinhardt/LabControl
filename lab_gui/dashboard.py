@@ -683,9 +683,26 @@ class DashboardWidget(QGroupBox):
         Zielzelle aus `pos` ueber Breiten-/Hoehenratsche bestimmt.
         Lesereihenfolge ist SPALTENweise (Kacheln fuellen eine Spalte, bevor
         die naechste beginnt, siehe pack_tiles_by_row): Schluessel daher
-        Spalte zuerst, dann Zeile. Eingefuegt wird vor der ersten aktuell
-        platzierten Kachel, deren Zelle nicht vor der Zielzelle liegt, sonst
-        ans Ende."""
+        Spalte zuerst, dann Zeile. Eingefuegt wird vor der Kachel mit dem
+        KLEINSTEN Positions-Schluessel, der nicht vor der Zielzelle liegt,
+        sonst ans Ende.
+
+        Wichtig: die Suche nach dieser Kachel darf NICHT einfach die
+        Listenreihenfolge (`order`) durchgehen und beim ersten Treffer
+        abbrechen (frueherer Bug, BUGS_OFFEN.md #30) -- das dichte Packing
+        (pack_tiles_by_row) ordnet bei gemischten Kachelhoehen (z.B. eine
+        doppelt hohe microHIL-Kachel neben einfachen PSU/Load-Kacheln) NICHT
+        monoton zur Listenreihenfolge: eine spaeter in `order` genannte
+        Kachel kann eine Luecke auffuellen, die eine frueher genannte,
+        aber groessere Kachel ausgelassen hat, und landet dadurch visuell
+        VOR ihr. Ein Abbruch beim ersten in Listenreihenfolge gefundenen
+        Treffer traf dadurch oft die falsche (zu weit hinten liegende)
+        Kachel oder gar keine -- die gezogene Kachel wanderte beim Loslassen
+        praktisch immer ans Ende statt an die gewuenschte Stelle. Reproduziert
+        mit `pack_tiles_by_row(["A", "M", "B"], {"A": (1, 1), "M": (1, 2),
+        "B": (1, 1)}, max_rows=2)`: Schluessel in Listenreihenfolge sind
+        [0, 2, 1] -- nicht aufsteigend, "B" (Schluessel 1) liegt VOR "M"
+        (Schluessel 2), obwohl "M" frueher in `order` steht."""
         unit_w = self._panel_width + GRID_SPACING
         unit_h = self._cell_height + GRID_SPACING
         order = [d for d in self._current_order() if d != dragged_id]
@@ -700,11 +717,13 @@ class DashboardWidget(QGroupBox):
         positions = pack_tiles_by_row(order, spans, max_rows=2)
 
         insert_before = None
+        insert_before_key = None
         for device_id in order:
             row, col = positions[device_id]
-            if col * 2 + row >= target_key:
+            key = col * 2 + row
+            if key >= target_key and (insert_before_key is None or key < insert_before_key):
                 insert_before = device_id
-                break
+                insert_before_key = key
 
         if insert_before is None:
             order.append(dragged_id)

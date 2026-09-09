@@ -138,11 +138,25 @@ DEVICE_KIND_LABELS = {
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
-# on_load_measurement/on_psu_measurement) -- fuer die Bedingungs-Geraeteauswahl
-# (cond_source == "measurement", siehe condition_dialog.py) relevant. CAN-Bus
-# hat keine solchen Messwerte, daher hier bewusst ausgeschlossen statt wie bei
-# DEVICE_KIND_LABELS/DEVICE_ACTIONS jede Geraeteart zu listen.
+# on_load_measurement/on_psu_measurement) -- steuert NEBEN der Bedingungs-
+# Geraeteauswahl (siehe COND_DEVICE_KINDS unten) auch, ob eine Aktionszeile im
+# Testablauf-Editor eine Pass/Fail-Pruefung anbietet (testcase_tab.py:
+# `checkable = kind in MEASUREMENT_DEVICE_KINDS or code in READ_ACTIONS`) --
+# deshalb bewusst NICHT um "hil"/"can" erweitert, auch wenn beide inzwischen
+# als Bedingungsquelle waehlbar sind (siehe COND_DEVICE_KINDS): eine
+# Schaltaktion wie HIL_OUT_ON haette sonst faelschlich einen aktivierten
+# Pruef-Button, ohne dass der Runner dafuer je eine Messung liefert.
 MEASUREMENT_DEVICE_KINDS = ("load", "psu")
+
+# Geraetearten, die als while/if-Bedingungsquelle waehlbar sind (BUGS_
+# GESCHLOSSEN.md #35, siehe condition_dialog.py: ConditionDialog). microHIL
+# (Analog-/Digitaleingang) und CAN (DBC-decodierte Signale) liefern ihre
+# Werte ueber eigene Cache-Strukturen im Runner (testcase_runner.py:
+# TestRunner._hil_measurements/_can_signals, siehe _eval_hil_condition/
+# _eval_can_condition) statt ueber _measurements wie load/psu, und sind
+# deshalb bewusst NICHT auch in MEASUREMENT_DEVICE_KINDS selbst (siehe
+# dessen Docstring).
+COND_DEVICE_KINDS = MEASUREMENT_DEVICE_KINDS + ("hil", "can")
 
 # Alte Testablauf-Dateien speichern die Geraeteart noch unter dem Feldnamen
 # "device" mit den frueheren deutschen Anzeigenamen als Wert.
@@ -248,10 +262,16 @@ COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistu
 # check_field-Codes fuer HIL_AIN_READ/HIL_IN_READ/PICO_* (siehe
 # HIL_READ_ACTIONS/PICO_READ_ACTIONS) -- eigene Einheit/Symbol statt
 # Spannung/Strom/Leistung, da eine Lese-Aktion nur EINEN Wert liefert (kein
-# Auswahlfeld noetig, siehe testcase_tab.py: open_check_dialog()). Bewusst
-# NICHT Teil von COND_FIELDS/COND_FIELD_LABELS (die sind fuer die
-# while/if-Bedingungsauswahl aller Geraete, diese Codes sollen dort nicht
-# als Option auftauchen).
+# Auswahlfeld noetig, siehe testcase_tab.py: open_check_dialog()). Die
+# HIL-Codes ("hil_ain"/"hil_in") sind seit BUGS_GESCHLOSSEN.md #35 AUCH als
+# cond_field bei cond_device_kind=="hil" gueltig (siehe condition_dialog.py:
+# ConditionDialog._populate_field_combo/testcase_runner._eval_hil_condition)
+# -- deshalb bewusst NICHT auch in COND_FIELDS/COND_FIELD_LABELS selbst (die
+# sind fuer die device-uebergreifende Spannung/Strom/Leistung-Auswahl, die
+# HIL-Codes brauchen zusaetzlich einen Kanalindex, siehe TestStep.hil_channel).
+# Die PICO-Codes sind (noch) nirgends als cond_field nutzbar -- PicoScope
+# liefert nur punktuelle Lese-Aktions-Werte, keinen kontinuierlichen
+# Live-Messwert wie load/psu/hil (siehe BUGS_OFFEN.md #33/#35, "Oszi").
 HIL_CHECK_FIELD_LABELS = {"hil_ain": "Analogwert", "hil_in": "Zustand (0/1)"}
 PICO_CHECK_FIELD_LABELS = {
     "pico_vmax": "Maximum", "pico_vmin": "Minimum",
@@ -511,8 +531,18 @@ def condition_summary(step: TestStep) -> str:
             if step.cond_device_id
             else tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind))
         )
-        field = tr(COND_FIELD_LABELS.get(step.cond_field, step.cond_field))
-        unit = COND_FIELD_UNITS.get(step.cond_field, "")
+        if step.cond_device_kind == "can":
+            # cond_field ist hier kein fester Code, sondern der frei
+            # eingegebene Signalpfad "Nachricht.Signal" (BUGS_GESCHLOSSEN.md
+            # #35) -- bereits menschenlesbar, keine Uebersetzung/Einheit.
+            field = step.cond_field or "?"
+            unit = ""
+        else:
+            field_labels = COND_FIELD_LABELS if step.cond_device_kind != "hil" else HIL_CHECK_FIELD_LABELS
+            field = tr(field_labels.get(step.cond_field, step.cond_field))
+            if step.cond_device_kind == "hil":
+                field = f"{field} {step.hil_channel}"
+            unit = COND_FIELD_UNITS.get(step.cond_field, "")
         return tr(
             "{device}: {field} {op} {value:g} {unit}",
             device=device, field=field, op=op, value=step.cond_value, unit=unit,

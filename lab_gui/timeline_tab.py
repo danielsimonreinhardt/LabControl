@@ -72,6 +72,7 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
+from microhil.driver import AIN_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT
 from paths import app_dir
 from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, no_own_background
@@ -94,7 +95,22 @@ PSU_SIGNAL_FIELDS = {
     "voltage": ("Spannung", "V"),
     "current": ("Strom", "A"),
 }
-KIND_FIELDS = {"load": LOAD_SIGNAL_FIELDS, "psu": PSU_SIGNAL_FIELDS}
+# microHIL-Kanaele (BUGS_GESCHLOSSEN.md #33: fehlten bisher komplett in der
+# Verlaufs-Anzeige) -- Kanalzahlen aus microhil/driver.py statt hart
+# verdrahtet, damit eine spaetere Aenderung dort nicht hier separat
+# nachgezogen werden muss. Digitalkanaele (IN/OUT/REL) sind 0/1-Werte ohne
+# Einheit, geplottet als Stufenkurve -- fuer Timing-Fragen (z.B. "wann genau
+# hat OUT3 geschaltet") ist das trotz des schon vorhandenen Live-Status in
+# Dashboard/Control-Tab zusaetzlich nuetzlich, weil dort kein Verlauf sichtbar
+# ist.
+HIL_SIGNAL_FIELDS = {
+    **{f"ain{n}": (f"Analogeingang {n}", "mV") for n in range(1, AIN_COUNT + 1)},
+    **{f"pwr12_{n}_current": (f"12V-Ausgang {n} Strom", "mA") for n in range(1, PWR12_COUNT + 1)},
+    **{f"in{n}": (f"Digitaleingang {n}", "") for n in range(1, IN_COUNT + 1)},
+    **{f"out{n}": (f"Digitalausgang {n}", "") for n in range(1, OUT_COUNT + 1)},
+    **{f"rel{n}": (f"Relais {n}", "") for n in range(1, RELAY_COUNT + 1)},
+}
+KIND_FIELDS = {"load": LOAD_SIGNAL_FIELDS, "psu": PSU_SIGNAL_FIELDS, "hil": HIL_SIGNAL_FIELDS}
 
 # Bevorzugte Achsen-Reihenfolge: die linke Achse nimmt die erste hier
 # vorhandene Einheit unter den einem Diagramm zugeordneten Signalen, die
@@ -164,7 +180,14 @@ class SignalSeries:
 
     @property
     def label(self) -> str:
-        return f"{self.device_label} – {_field_name(self.kind, self.field)}"
+        # CAN-Signale (kind="can") stehen nicht in KIND_FIELDS -- ihr Name
+        # kommt erst zur Laufzeit aus der DBC-Datei (siehe
+        # TimelineTab.on_can_signals_decoded) und ist bereits
+        # menschenlesbar, keine Uebersetzung noetig.
+        fields = KIND_FIELDS.get(self.kind)
+        if fields is not None and self.field in fields:
+            return f"{self.device_label} – {_field_name(self.kind, self.field)}"
+        return f"{self.device_label} – {self.field}"
 
 
 class _ScopeChart(QWidget):
@@ -612,6 +635,12 @@ class TimelineTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._series: dict[str, SignalSeries] = {}
+        # Geraete-Label je device_id, FUER ALLE Geraetearten (nicht nur die in
+        # KIND_FIELDS bekannten) -- wird fuer dynamisch zur Laufzeit angelegte
+        # CAN-Signal-Serien gebraucht (siehe on_can_signals_decoded), deren
+        # SignalSeries anders als bei load/psu/hil nicht schon in
+        # on_device_known entsteht.
+        self._device_labels: dict[str, str] = {}
         self._color_index = 0
         self._charts: list[_ChartRow] = []
         self._next_chart_id = 1
@@ -745,6 +774,7 @@ class TimelineTab(QWidget):
 
     @Slot(str, str, str)
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        self._device_labels[device_id] = label
         fields = KIND_FIELDS.get(kind)
         if fields is None:
             return
@@ -767,6 +797,7 @@ class TimelineTab(QWidget):
 
     @Slot(str, str, str)
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        self._device_labels[device_id] = label
         for key, series in self._series.items():
             if series.device_id != device_id:
                 continue
@@ -791,11 +822,68 @@ class TimelineTab(QWidget):
         series = self._series.get(signal_key(device_id, field_key))
         if series is None:
             return
+        self._record_value(series, value)
+
+    @staticmethod
+    def _record_value(series: SignalSeries, value: float) -> None:
         now = time.time()
         series.data.append((now, value))
         cutoff = now - MAX_WINDOW_S
         while series.data and series.data[0][0] < cutoff:
             series.data.popleft()
+
+    @Slot(str, list, list)
+    def update_hil_digital(self, device_id: str, inputs: list, outputs: list) -> None:
+        for i, value in enumerate(inputs, start=1):
+            self._append(device_id, f"in{i}", 1.0 if value else 0.0)
+        for i, value in enumerate(outputs, start=1):
+            self._append(device_id, f"out{i}", 1.0 if value else 0.0)
+
+    @Slot(str, list)
+    def update_hil_relays(self, device_id: str, relays: list) -> None:
+        for i, value in enumerate(relays, start=1):
+            self._append(device_id, f"rel{i}", 1.0 if value else 0.0)
+
+    @Slot(str, list)
+    def update_hil_analog_in(self, device_id: str, values_mv: list) -> None:
+        for i, value in enumerate(values_mv, start=1):
+            self._append(device_id, f"ain{i}", float(value))
+
+    @Slot(str, list, list)
+    def update_hil_pwr12(self, device_id: str, enabled: list, current_ma: list) -> None:
+        for i, value in enumerate(current_ma, start=1):
+            self._append(device_id, f"pwr12_{i}_current", float(value))
+
+    @Slot(str, int, object)
+    def on_can_signals_decoded(self, device_id: str, arbitration_id: int, decoded) -> None:
+        """Legt fuer jedes DBC-decodierte CAN-Signal bei Bedarf eine eigene
+        SignalSeries an (BUGS_GESCHLOSSEN.md #33) -- anders als bei
+        load/psu/hil ist der Signalname erst zur Laufzeit bekannt (kommt aus
+        der im Einstellungen-Tab hinterlegten DBC-Datei, siehe
+        can_bus/dbc.py), daher hier dynamisch statt ueber KIND_FIELDS/
+        on_device_known. `decoded` ist ein can_bus.dbc.DecodedFrame (device_
+        worker.DeviceWorker.can_signals_decoded, siehe dort und control_tab.
+        ControlTab.on_can_signals_decoded fuer den zweiten Abnehmer desselben
+        Signals). DBC-Value-Table-Signale (`DecodedSignal.value` als `str`,
+        z.B. Enum-Choices) sind nicht plottbar und werden ignoriert."""
+        for sig in decoded.signals:
+            if isinstance(sig.value, str):
+                continue
+            field_key = f"{decoded.message_name}.{sig.name}"
+            key = signal_key(device_id, field_key)
+            series = self._series.get(key)
+            if series is None:
+                series = SignalSeries(
+                    device_id=device_id,
+                    kind="can",
+                    field=field_key,
+                    device_label=self._device_labels.get(device_id, device_id),
+                    unit=sig.unit or "",
+                    color=self._next_color(),
+                )
+                self._series[key] = series
+                self._resolve_pending(key)
+            self._record_value(series, float(sig.value))
 
     # -- Diagramme: hinzufuegen/entfernen ---------------------------------------
 

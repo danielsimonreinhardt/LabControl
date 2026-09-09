@@ -22,8 +22,16 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import Translator, tr
+from microhil.driver import AIN_COUNT, IN_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from testcase_model import COND_FIELD_LABELS, COND_FIELD_UNITS, COND_OPS, TestStep, condition_summary
+from testcase_model import (
+    COND_FIELD_LABELS,
+    COND_FIELD_UNITS,
+    COND_OPS,
+    HIL_CHECK_FIELD_LABELS,
+    TestStep,
+    condition_summary,
+)
 from theme import current as current_palette
 
 _SOURCE_BASE_LABELS = {"measurement": "Messwert", "time": "Zeit", "variable": "Variable"}
@@ -82,6 +90,14 @@ class ConditionDialog(QDialog):
         self._device_combo = QComboBox()
         self._field_combo = QComboBox()
         self._populate_field_combo()
+        # Nur sichtbar bei device_kind=="hil" (Kanalindex fuer AIN/IN, siehe
+        # _update_measurement_visibility) bzw. =="can" (freier Signalpfad
+        # "Nachricht.Signal" statt Auswahlfeld, da DBC-Signalnamen erst zur
+        # Laufzeit bekannt sind, siehe testcase_runner._eval_can_condition) --
+        # BUGS_GESCHLOSSEN.md #35.
+        self._m_channel_spin = SteppedSpinBox()
+        self._m_channel_spin.setRange(1, AIN_COUNT)
+        self._m_can_signal_edit = QLineEdit()
         self._m_op_combo = QComboBox()
         self._populate_op_combo(self._m_op_combo)
         self._m_value_spin = SteppedDoubleSpinBox()
@@ -89,6 +105,8 @@ class ConditionDialog(QDialog):
         self._m_value_spin.setRange(-100000, 100000)
         m_form.addRow(" ", self._device_combo)
         m_form.addRow(" ", self._field_combo)
+        m_form.addRow(" ", self._m_channel_spin)
+        m_form.addRow(" ", self._m_can_signal_edit)
         m_form.addRow(" ", self._m_op_combo)
         m_form.addRow(" ", self._m_value_spin)
         self._pages.addWidget(self._measurement_page)
@@ -143,8 +161,10 @@ class ConditionDialog(QDialog):
         layout.addWidget(buttons)
 
         self._source_combo.currentIndexChanged.connect(self._on_source_changed)
-        self._device_combo.currentIndexChanged.connect(self._update_summary)
-        self._field_combo.currentIndexChanged.connect(self._update_summary)
+        self._device_combo.currentIndexChanged.connect(self._on_device_changed)
+        self._field_combo.currentIndexChanged.connect(self._on_field_changed)
+        self._m_channel_spin.valueChanged.connect(self._update_summary)
+        self._m_can_signal_edit.textChanged.connect(self._update_summary)
         self._m_op_combo.currentIndexChanged.connect(self._update_summary)
         self._m_value_spin.valueChanged.connect(self._update_summary)
         self._time_ref_combo.currentIndexChanged.connect(self._update_summary)
@@ -156,6 +176,7 @@ class ConditionDialog(QDialog):
 
         self._load_params(params)
         self._on_source_changed()
+        self._update_measurement_visibility()
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -172,16 +193,52 @@ class ConditionDialog(QDialog):
         self._source_combo.setCurrentIndex(max(index, 0))
         self._source_combo.blockSignals(False)
 
+    def _current_device_kind(self) -> str:
+        kind, _device_id = _decode_device_key(self._device_combo.currentData())
+        return kind
+
     def _populate_field_combo(self) -> None:
+        # Feldauswahl haengt von der Geraeteart ab (BUGS_GESCHLOSSEN.md #35):
+        # microHIL bietet Analog-/Digitaleingang statt Spannung/Strom/
+        # Leistung, CAN blendet dieses Combo ganz aus (siehe
+        # _update_measurement_visibility/_m_can_signal_edit).
+        kind = self._current_device_kind()
+        field_labels = HIL_CHECK_FIELD_LABELS if kind == "hil" else COND_FIELD_LABELS
         current = self._field_combo.currentData() if self._field_combo.count() else None
         self._field_combo.blockSignals(True)
         self._field_combo.clear()
-        for code, base in COND_FIELD_LABELS.items():
+        for code, base in field_labels.items():
             unit = COND_FIELD_UNITS.get(code, "")
             self._field_combo.addItem(f"{tr(base)} ({unit})" if unit else tr(base), code)
         index = self._field_combo.findData(current) if current else 0
         self._field_combo.setCurrentIndex(max(index, 0))
         self._field_combo.blockSignals(False)
+
+    def _on_device_changed(self) -> None:
+        self._populate_field_combo()
+        self._update_measurement_visibility()
+        self._update_summary()
+
+    def _on_field_changed(self) -> None:
+        self._update_measurement_visibility()
+        self._update_summary()
+
+    def _update_measurement_visibility(self) -> None:
+        """Blendet Kanal-Feld (microHIL) bzw. Signal-Feld (CAN) je
+        Geraeteart ein/aus und passt den Kanal-Wertebereich an die gewaehlte
+        HIL-Messgroesse an (AIN1-4 vs. IN1-8) -- BUGS_GESCHLOSSEN.md #35."""
+        kind = self._current_device_kind()
+        is_hil = kind == "hil"
+        is_can = kind == "can"
+        m_form = self._measurement_page.layout()
+        m_form.setRowVisible(self._field_combo, not is_can)
+        m_form.setRowVisible(self._m_channel_spin, is_hil)
+        m_form.setRowVisible(self._m_can_signal_edit, is_can)
+        if is_hil:
+            max_channel = AIN_COUNT if self._field_combo.currentData() == "hil_ain" else IN_COUNT
+            self._m_channel_spin.setRange(1, max_channel)
+            if self._m_channel_spin.value() > max_channel:
+                self._m_channel_spin.setValue(max_channel)
 
     def _populate_time_ref_combo(self) -> None:
         current = self._time_ref_combo.currentData() if self._time_ref_combo.count() else None
@@ -225,14 +282,17 @@ class ConditionDialog(QDialog):
     def _retranslate(self) -> None:
         self.setWindowTitle(tr("Bedingung"))
         self._populate_source_combo()
-        self._populate_field_combo()
         self._populate_time_ref_combo()
         self._populate_device_combo()
+        self._populate_field_combo()
         for combo in (self._m_op_combo, self._t_op_combo, self._v_op_combo):
             self._populate_op_combo(combo)
         self._form.labelForField(self._source_combo).setText(tr("Quelle:"))
         self._measurement_page.layout().labelForField(self._device_combo).setText(tr("Gerät:"))
         self._measurement_page.layout().labelForField(self._field_combo).setText(tr("Messgröße:"))
+        self._measurement_page.layout().labelForField(self._m_channel_spin).setText(tr("Kanal:"))
+        self._measurement_page.layout().labelForField(self._m_can_signal_edit).setText(tr("Signal:"))
+        self._m_can_signal_edit.setPlaceholderText(tr("Nachricht.Signal, z. B. EngineData.RPM"))
         self._measurement_page.layout().labelForField(self._m_op_combo).setText(tr("Vergleich:"))
         self._measurement_page.layout().labelForField(self._m_value_spin).setText(tr("Wert:"))
         self._time_page.layout().labelForField(self._time_ref_combo).setText(tr("Referenz:"))
@@ -247,6 +307,7 @@ class ConditionDialog(QDialog):
         self._max_iter_spin.setToolTip(
             tr("Sicherheitsabbruch gegen eine Endlosschleife (Bedingung, die nie falsch wird) -- 0 = unbegrenzt.")
         )
+        self._update_measurement_visibility()
         self._update_summary()
 
     def _load_params(self, params: dict) -> None:
@@ -256,8 +317,20 @@ class ConditionDialog(QDialog):
             params.get("cond_device_kind", "load"), params.get("cond_device_id", "")
         )
         self._populate_device_combo()
-        field_index = self._field_combo.findData(params.get("cond_field", "voltage"))
-        self._field_combo.setCurrentIndex(max(field_index, 0))
+        # ERST NACH _populate_device_combo(): die Feldauswahl haengt von der
+        # gerade geladenen Geraeteart ab (BUGS_GESCHLOSSEN.md #35) -- ohne
+        # diese Reihenfolge stuende hier noch die Feldliste der zuvor (im
+        # __init__ mit device_kind="load") befuellten Combo, und ein
+        # gespeichertes cond_field="hil_ain" faende darin keinen Treffer.
+        self._populate_field_combo()
+        kind = self._current_device_kind()
+        if kind == "can":
+            self._m_can_signal_edit.setText(params.get("cond_field", ""))
+        else:
+            field_index = self._field_combo.findData(params.get("cond_field", "voltage"))
+            self._field_combo.setCurrentIndex(max(field_index, 0))
+        self._m_channel_spin.setValue(int(params.get("hil_channel", 1)))
+        self._update_measurement_visibility()
         self._m_op_combo.setCurrentIndex(max(self._m_op_combo.findData(params.get("cond_op", "<")), 0))
         self._m_value_spin.setValue(params.get("cond_value", 0.0))
         ref_index = self._time_ref_combo.findData(params.get("cond_time_ref", "block"))
@@ -281,10 +354,13 @@ class ConditionDialog(QDialog):
         source = self._source_combo.currentData()
         if source == "measurement":
             kind, device_id = _decode_device_key(self._device_combo.currentData())
+            # CAN: freier Signalpfad statt Combo-Auswahl; microHIL: zusaetzlich
+            # der Kanalindex -- beide BUGS_GESCHLOSSEN.md #35.
+            field = self._m_can_signal_edit.text().strip() if kind == "can" else self._field_combo.currentData()
             return TestStep(
                 cond_source="measurement", cond_device_kind=kind, cond_device_id=device_id,
-                cond_field=self._field_combo.currentData(), cond_op=self._m_op_combo.currentData(),
-                cond_value=self._m_value_spin.value(),
+                cond_field=field, cond_op=self._m_op_combo.currentData(),
+                cond_value=self._m_value_spin.value(), hil_channel=self._m_channel_spin.value(),
             )
         if source == "time":
             return TestStep(
@@ -306,6 +382,7 @@ class ConditionDialog(QDialog):
             cond_device_id=step.cond_device_id, cond_field=step.cond_field,
             cond_op=step.cond_op, cond_value=step.cond_value,
             cond_time_ref=step.cond_time_ref, cond_var=step.cond_var,
+            hil_channel=step.hil_channel,
         )
         if self._is_while:
             result["max_iterations"] = self._max_iter_spin.value()

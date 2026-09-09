@@ -209,6 +209,11 @@ class MainWindow(QMainWindow):
         self._worker.hil_pwr12_state.connect(self.control_tab.set_hil_pwr12_state)
         self._worker.load_measurement.connect(self.timeline_tab.update_load)
         self._worker.psu_measurement.connect(self.timeline_tab.update_psu)
+        self._worker.hil_digital_state.connect(self.timeline_tab.update_hil_digital)
+        self._worker.hil_relay_state.connect(self.timeline_tab.update_hil_relays)
+        self._worker.hil_analog_input.connect(self.timeline_tab.update_hil_analog_in)
+        self._worker.hil_pwr12_state.connect(self.timeline_tab.update_hil_pwr12)
+        self._worker.can_signals_decoded.connect(self.timeline_tab.on_can_signals_decoded)
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
         self._worker.psu_measurement.connect(self._recorder.on_psu_measurement)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
@@ -664,6 +669,13 @@ class MainWindow(QMainWindow):
         self._worker.action_completed.connect(self._test_runner.on_action_completed)
         self._worker.load_measurement.connect(self._test_runner.on_load_measurement)
         self._worker.psu_measurement.connect(self._test_runner.on_psu_measurement)
+        # microHIL/CAN als while/if-Bedingungsquelle (BUGS_GESCHLOSSEN.md
+        # #35): fuettert die Cache-Strukturen, gegen die TestRunner.
+        # _eval_hil_condition/_eval_can_condition auswerten, genau wie
+        # load_measurement/psu_measurement oben es fuer _measurements tun.
+        self._worker.hil_analog_input.connect(self._test_runner.on_hil_analog_input)
+        self._worker.hil_digital_state.connect(self._test_runner.on_hil_digital_state)
+        self._worker.can_signals_decoded.connect(self._test_runner.on_can_signals_decoded)
         self._worker.device_removed.connect(self._test_runner.on_device_removed)
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
         self._test_runner.step_result.connect(self.testcase_tab.on_step_result)

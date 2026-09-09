@@ -177,6 +177,20 @@ class TestRunner(QObject):
         self._run_started = 0.0
         # device_id -> (voltage, current, power, monotonic-Zeitstempel).
         self._measurements: dict[str, tuple[float, float, float, float]] = {}
+        # microHIL-Kanaele als while/if-Bedingungsquelle (BUGS_GESCHLOSSEN.md
+        # #35) -- device_id -> (AIN1-4 in mV, IN1-8, monotonic-Zeitstempel),
+        # analog zu _measurements oben, aber ueber eigene Signale gefuellt
+        # (on_hil_analog_input/on_hil_digital_state) statt load_measurement/
+        # psu_measurement, siehe _eval_hil_condition.
+        self._hil_measurements: dict[str, tuple[list[float], list[bool], float]] = {}
+        # CAN-Signale als while/if-Bedingungsquelle (BUGS_GESCHLOSSEN.md #35)
+        # -- Schluessel "{device_id}:{message_name}.{signal_name}" (Punkt
+        # trennt Nachricht/Signal, Doppelpunkt Geraet/Signalpfad, siehe
+        # on_can_signals_decoded/_eval_can_condition), Wert (dekodierter
+        # Zahlenwert, monotonic-Zeitstempel). Nicht-numerische DBC-Value-
+        # Table-Signale (str) werden nicht aufgenommen, sind als Bedingung
+        # nicht sinnvoll vergleichbar.
+        self._can_signals: dict[str, tuple[float, float]] = {}
         # Zuletzt von einer Lese-Aktion (READ_ACTIONS -- microHIL oder
         # PicoScope) gelesener Wert -- anders als _measurements kein Cache
         # mehrerer Geraete/Kanaele, da immer nur EIN Lese-Schritt gleichzeitig
@@ -238,9 +252,34 @@ class TestRunner(QObject):
         self._measurements[device_id] = (voltage, current, voltage * current, monotonic())
         self._maybe_complete_check(device_id)
 
+    @Slot(str, list)
+    def on_hil_analog_input(self, device_id: str, values_mv: list) -> None:
+        _ain, digital_in, _ts = self._hil_measurements.get(device_id, ([], [], 0.0))
+        self._hil_measurements[device_id] = (list(values_mv), digital_in, monotonic())
+
+    @Slot(str, list, list)
+    def on_hil_digital_state(self, device_id: str, inputs: list, outputs: list) -> None:
+        # outputs bewusst NICHT gecacht -- BUGS_OFFEN.md #35 fragte nur nach
+        # Digital-/AnalogEINgang als Bedingungsquelle (der Ausgangszustand
+        # ist ohnehin von der App selbst gesetzt, also bereits bekannt).
+        ain, _digital_in, _ts = self._hil_measurements.get(device_id, ([], [], 0.0))
+        self._hil_measurements[device_id] = (ain, list(inputs), monotonic())
+
+    @Slot(str, int, object)
+    def on_can_signals_decoded(self, device_id: str, arbitration_id: int, decoded) -> None:
+        now = monotonic()
+        for sig in decoded.signals:
+            if isinstance(sig.value, str):
+                continue  # DBC-Value-Table-Enum, nicht sinnvoll vergleichbar
+            self._can_signals[f"{device_id}:{decoded.message_name}.{sig.name}"] = (float(sig.value), now)
+
     @Slot(str, str)
     def on_device_removed(self, _kind: str, device_id: str) -> None:
         self._measurements.pop(device_id, None)
+        self._hil_measurements.pop(device_id, None)
+        prefix = f"{device_id}:"
+        for key in [k for k in self._can_signals if k.startswith(prefix)]:
+            del self._can_signals[key]
 
     @Slot(bool, str, float)
     def on_action_completed(self, success: bool, message: str, value: float) -> None:
@@ -584,6 +623,13 @@ class TestRunner(QObject):
         statt eine Bedingung stillschweigend als falsch zu behandeln.
         """
         if step.cond_source == "measurement":
+            # microHIL/CAN haben eigene Cache-Strukturen (siehe __init__/
+            # on_hil_analog_input/on_can_signals_decoded) statt _measurements
+            # -- BUGS_GESCHLOSSEN.md #35.
+            if step.cond_device_kind == "hil":
+                return self._eval_hil_condition(step)
+            if step.cond_device_kind == "can":
+                return self._eval_can_condition(step)
             device_id = step.cond_device_id
             if device_id:
                 entry = self._measurements.get(device_id)
@@ -620,20 +666,101 @@ class TestRunner(QObject):
 
         return None, tr("Unbekannte Bedingungsquelle '{source}'", source=step.cond_source)
 
-    def _resolve_fresh_device(self, kind: str) -> tuple[str | None, str]:
+    def _eval_hil_condition(self, step: TestStep) -> tuple[bool | None, str]:
+        """microHIL-Kanal (Analog- oder Digitaleingang) als while/if-
+        Bedingungsquelle (BUGS_GESCHLOSSEN.md #35) -- liest aus
+        _hil_measurements statt _measurements, sonst analog zum measurement-
+        Zweig oben (gleiche "automatisch"-Aufloesung/Frische-Pruefung)."""
+        device_id = step.cond_device_id
+        if device_id:
+            entry = self._hil_measurements.get(device_id)
+            if entry is None or (monotonic() - entry[2]) > MEASUREMENT_STALE_S:
+                return None, tr(
+                    "Keine aktuelle Messung für Gerät '{device_id}'", device_id=device_id
+                )
+        else:
+            device_id, status = self._resolve_fresh_device("hil", self._hil_measurements)
+            if device_id is None:
+                if status == "ambiguous":
+                    return None, tr(
+                        "Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät "
+                        "in der Bedingung auswählen", kind=kind_label("hil"),
+                    )
+                return None, tr(
+                    "Keine aktuelle Messung für ein Gerät vom Typ '{kind}'", kind=kind_label("hil"),
+                )
+        ain, digital_in, _ts = self._hil_measurements[device_id]
+        values = ain if step.cond_field == "hil_ain" else digital_in if step.cond_field == "hil_in" else None
+        if values is None:
+            return None, tr("Unbekannte Messgröße '{field}' für microHIL", field=step.cond_field)
+        channel = step.hil_channel
+        if not (1 <= channel <= len(values)):
+            return None, tr("Ungültiger Kanal {channel} für microHIL", channel=channel)
+        return self._compare(float(values[channel - 1]), step.cond_op, step.cond_value), ""
+
+    def _eval_can_condition(self, step: TestStep) -> tuple[bool | None, str]:
+        """DBC-decodiertes CAN-Signal als while/if-Bedingungsquelle
+        (BUGS_GESCHLOSSEN.md #35) -- `cond_field` ist hier (anders als bei
+        load/psu/hil) keiner der festen COND_FIELDS-Codes, sondern der frei
+        eingegebene Signalpfad "Nachricht.Signal" (siehe condition_dialog.py:
+        ConditionDialog, Feld nur fuer cond_device_kind=="can" sichtbar).
+        Liest aus _can_signals (gefuellt von on_can_signals_decoded)."""
+        signal = step.cond_field.strip()
+        if not signal:
+            return None, tr("Kein CAN-Signal angegeben (Format: Nachricht.Signal)")
+        device_id = step.cond_device_id
+        if device_id:
+            entry = self._can_signals.get(f"{device_id}:{signal}")
+            if entry is None or (monotonic() - entry[1]) > MEASUREMENT_STALE_S:
+                return None, tr(
+                    "Kein aktueller Wert für CAN-Signal '{signal}' auf Gerät '{device_id}'",
+                    signal=signal, device_id=device_id,
+                )
+        else:
+            suffix = f":{signal}"
+            fresh = [
+                (key, entry) for key, entry in self._can_signals.items()
+                if key.startswith("can:") and key.endswith(suffix)
+                and (monotonic() - entry[1]) <= MEASUREMENT_STALE_S
+            ]
+            if not fresh:
+                return None, tr(
+                    "Kein aktueller Wert für CAN-Signal '{signal}' auf einem verbundenen "
+                    "CAN-Interface", signal=signal,
+                )
+            device_ids = {key[: -len(suffix)] for key, _entry in fresh}
+            if len(device_ids) > 1:
+                return None, tr(
+                    "CAN-Signal '{signal}' auf mehreren verbundenen Interfaces gesehen -- "
+                    "bitte Zielgerät in der Bedingung auswählen", signal=signal,
+                )
+            entry = fresh[0][1]
+        value, _ts = entry
+        return self._compare(value, step.cond_op, step.cond_value), ""
+
+    def _resolve_fresh_device(
+        self, kind: str, measurements: dict | None = None
+    ) -> tuple[str | None, str]:
         """Loest device_id=="" ("automatisch") auf das einzige Geraet der Art
         auf, von dem eine frische Messung vorliegt.
+
+        `measurements` erlaubt die Wiederverwendung fuer _hil_measurements
+        (BUGS_GESCHLOSSEN.md #35, siehe _eval_hil_condition) -- default
+        bleibt _measurements (load/psu). Beide Cache-Formen tragen den
+        monotonic-Zeitstempel als LETZTES Tupel-Element (entry[-1]).
 
         Rueckgabe (device_id, "") bei Erfolg, sonst (None, "missing") wenn
         kein Kandidat bzw. (None, "ambiguous") bei mehreren -- die
         Fehlermeldung baut der Aufrufer, weil der passende Loesungshinweis
         vom Kontext abhaengt (Bedingungs-Dialog vs. Testcase-Zeile).
         """
+        if measurements is None:
+            measurements = self._measurements
         prefix = f"{kind}:"
         candidates = [
             did
-            for did, entry in self._measurements.items()
-            if did.startswith(prefix) and (monotonic() - entry[3]) <= MEASUREMENT_STALE_S
+            for did, entry in measurements.items()
+            if did.startswith(prefix) and (monotonic() - entry[-1]) <= MEASUREMENT_STALE_S
         ]
         if not candidates:
             return None, "missing"
