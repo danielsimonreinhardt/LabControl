@@ -121,10 +121,16 @@ Semantic Versioning (`lab_gui/version.py`).
   Rohwert 1000 fürs Signal `Speed`) lief durch den kompletten
   `DeviceWorker`-Pfad -- sowohl `can_frame_received` (Rohdaten) als auch
   `can_signals_decoded` (DBC) feuerten korrekt, decodierter Wert exakt
-  `Speed=100.0 km/h` wie erwartet (1000 · 0,1). **Weiterhin offen:** reale
-  Vector-/PCAN-Hardware mit größeren/herstellerspezifischen DBC-Dateien
-  (Multiplex-Signale, Byte-Order-Sonderfälle) -- bisher nur eine kleine
-  selbst geschriebene Test-DBC verwendet.
+  `Speed=100.0 km/h` wie erwartet (1000 · 0,1). **Zusätzlich mit einer
+  echten, produktiven Fahrzeug-DBC verifiziert**
+  (`FLEXDRIVE__A_CAN_25KW35.dbc`, Longboard-Projekt des Nutzers,
+  21 Nachrichten mit nicht-byte-ausgerichteten Bitfeldern, negativen
+  Skalierungsfaktoren, Offsets und `VAL_`-Enum-Wertetabellen): Laden/
+  Decodieren korrekt (u.a. Enum-Werte als String statt Rohzahl, z.B.
+  `BCU_M_DISP_STAT` -> `"showroom mode"`), voller Hardware-Roundtrip mit
+  einer echten `FLXDRV_BCU_M_STATUS`-Botschaft (VN1610 -> microHIL ->
+  `DeviceWorker`) inkl. mehrerer korrekt decodierter Enum-Felder. Nur
+  Multiplex-Signale kamen in dieser DBC nicht vor -- weiterhin ungetestet.
 - **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
   `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
   (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als
