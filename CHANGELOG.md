@@ -7,6 +7,18 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **microHIL: einstellbare PWM-Frequenz.** `microhil/driver.py` um
+  `set_pwm_frequency(hz)`/`get_pwm_frequency()` erweitert (`PWMFREQ`/
+  `PWMFREQ?`, microHIL-Firmware seit 2026-09-09) -- gilt für PWM1-4
+  GEMEINSAM, kein Kanalindex (ein Timer, TIM3). Treiber klemmt
+  client-seitig auf `PWM_FREQ_MIN_HZ..PWM_FREQ_MAX_HZ` (1-20000 Hz), die
+  Obergrenze ist oszilloskopisch verifiziert (microHIL-Repo,
+  `docs/hardware-notes.md`): ab ca. 100 kHz zeigt die Ausgangsstufe
+  (PUSH-PULL OUTPUT DRIVER, BC807/BC817) bereits deutlich verschliffene
+  Flanken, bei 20 kHz noch sauber. `microhil/mock.py` entsprechend ergänzt
+  (Default-Frequenz 1098 Hz, wie ein frisch gebootetes reales Gerät vor dem
+  ersten `PWMFREQ`). GUI-Anbindung (Frequenzfeld in `control_tab.py`)
+  bewusst noch nicht gemacht -- bisher nur der Treiber, wie angefragt.
 - **CAN-Bus: SLCAN-Interface (microHIL CAN1/zweiter COM-Port).** Siehe
   [FEATURES.md](FEATURES.md) Punkt 2. Bisher unterstützte `can_bus/driver.py`
   nur `interface="vector"`/`"pcan"` (Fremd-Software/Vendor-DLLs) --
@@ -61,9 +73,17 @@ Semantic Versioning (`lab_gui/version.py`).
     öffnet/schließt wiederholt sauber, Senden von Standard- und
     Extended-Frames ohne Fehler, kompletter Produktionspfad
     `DeviceWorker._reconnect_can()` -> Signale -> `_poll()` lief fehlerfrei.
-    **Weiterhin offen:** Empfang/RX-Traffic mangels zweiter CAN-Gegenstelle
-    am Bus nicht geprüft (eigene gesendete Frames werden ohne ACK/Gegenstelle
-    nicht zurückgespiegelt -- normales CAN-Verhalten, kein Fehlerhinweis).
+    **Bidirektional an echtem CAN-Bus-Traffic verifiziert** (zweite Session
+    desselben Tages, Vector VN1610 Kanal 1 physisch an den microHIL-CAN1-Port
+    angeschlossen): erste Verkabelung zeigte durchgehend `Bus Error`/`Error
+    Passive`/`Error Warning` (SLCAN-Statusflags `0xA4`) und null empfangene
+    Rohbytes auf `COM7`, während der interne Loopback-Selbsttest (`Y`)
+    weiterhin sauber lief -- klar als Verkabelungs-/Terminierungsproblem statt
+    Software-Fehler identifiziert (direkt über die serielle Schnittstelle
+    verifiziert, unabhängig von python-can). Nach Korrektur der Verkabelung
+    liefen Standard- und Extended-Frames in beiden Richtungen fehlerfrei
+    durch, inkl. vollem `DeviceWorker`-Pfad mit korrekter DBC-Decodierung
+    eines real gesendeten Frames (siehe DBC-Eintrag unten).
 - **CAN-Bus: DBC-Datei-Import + Signal-Decodierung.** Siehe
   [FEATURES.md](FEATURES.md) Punkt 3. Neues Modul `can_bus/dbc.py`
   (`load_dbc()`/`decode_frame()`, basiert auf neuer Abhängigkeit
@@ -95,13 +115,16 @@ Semantic Versioning (`lab_gui/version.py`).
   `MockCanBus` und einer selbst geschriebenen Test-DBC (zwei Botschaften,
   eine mit `VAL_`-Enum-Wertetabelle) end-to-end gegen `DeviceWorker`,
   `_CanConfigTable`/`_DbcFileCell` und `ControlTab`/`CanControlGroup`
-  geprüft (Simulationsmodus, offscreen). Am 2026-09-09 zusätzlich gegen den
-  echten microHIL-SLCAN-Port verifiziert: `DeviceWorker._reload_can_dbcs()`
-  lädt eine echte DBC-Datei erfolgreich für ein reales, verbundenes
-  CAN-Interface. **Weiterhin offen:** Decodierung tatsächlich empfangener
-  Frames an echter Hardware (mangels zweiter CAN-Gegenstelle am Bus nicht
-  prüfbar), reale Vector-/PCAN-Hardware, reale herstellerspezifische
-  DBC-Dateien (Multiplex-Signale, Byte-Order-Sonderfälle, größere Dateien).
+  geprüft (Simulationsmodus, offscreen). **Vollständig an echter Hardware
+  verifiziert** (Vector VN1610 Kanal 1 als reale Gegenstelle am
+  microHIL-CAN1-Port): ein real gesendeter Frame (Arbitration-ID 0x123,
+  Rohwert 1000 fürs Signal `Speed`) lief durch den kompletten
+  `DeviceWorker`-Pfad -- sowohl `can_frame_received` (Rohdaten) als auch
+  `can_signals_decoded` (DBC) feuerten korrekt, decodierter Wert exakt
+  `Speed=100.0 km/h` wie erwartet (1000 · 0,1). **Weiterhin offen:** reale
+  Vector-/PCAN-Hardware mit größeren/herstellerspezifischen DBC-Dateien
+  (Multiplex-Signale, Byte-Order-Sonderfälle) -- bisher nur eine kleine
+  selbst geschriebene Test-DBC verwendet.
 - **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
   `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
   (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als
