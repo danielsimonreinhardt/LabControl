@@ -147,6 +147,22 @@ class Settings(QObject):
         self._save()
 
     @property
+    def control_tile_order(self) -> list[str]:
+        """Zuletzt per Drag&Drop gewaehlte Control-Tab-Kachel-Reihenfolge
+        (Liste von device_ids) -- siehe control_tab.py: ControlTab.
+        set_tile_order()/tile_order_changed. Kein Live-Signal, exakt
+        analog zu panel_order oben (nur der Control-Tab selbst liest/
+        schreibt diese Reihenfolge)."""
+        stored = self._data.get("control_tile_order")
+        return list(stored) if isinstance(stored, list) else []
+
+    def set_control_tile_order(self, order: list[str]) -> None:
+        if order == self.control_tile_order:
+            return
+        self._data["control_tile_order"] = list(order)
+        self._save()
+
+    @property
     def can_configs(self) -> list[dict]:
         """Konfigurierte CAN-Interfaces: [{interface, channel, bitrate, label}, ...].
 

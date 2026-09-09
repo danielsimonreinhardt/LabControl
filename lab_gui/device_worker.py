@@ -525,6 +525,23 @@ class DeviceWorker(QObject):
                 if candidate is not None:
                     candidate.close()
                 continue
+            except OSError:
+                # KoradKEL102(info.device) oeffnet den seriellen Port direkt
+                # und wirft dabei KEIN LoadError, sondern pyserial's rohe
+                # SerialException (Unterklasse von OSError) -- z.B. wenn der
+                # Port gerade von einem anderen Prozess/einer zweiten
+                # App-Instanz gehalten wird ("Zugriff verweigert"). Ungefangen
+                # wuerde das hier die Schleife ueber ALLE Last-Kandidaten
+                # abbrechen (nicht nur die Wiederverbindung von PSU/CAN/HIL im
+                # selben Zyklus wie beim analogen microHIL-Fix -- siehe
+                # _reconnect_hils -- sondern zusaetzlich auch die noch nicht
+                # geprueften Last-Kandidaten in DIESER Schleife). Naechster
+                # RECONNECT_INTERVAL_MS-Tick versucht es einfach erneut,
+                # analog zum LoadError-Fall oben.
+                logger.warning("Last-Port %s konnte nicht geoeffnet werden", info.device)
+                if candidate is not None:
+                    candidate.close()
+                continue
             self._loads[device_id] = candidate
             logger.info("Last verbunden: %s", device_id)
             self.device_added.emit("load", device_id)
@@ -557,6 +574,17 @@ class DeviceWorker(QObject):
                 # so ist der reale Zustand garantiert mit der Anzeige synchron.
                 candidate.set_current(0.0)
             except PowerSupplyError:
+                if candidate is not None:
+                    candidate.close()
+                continue
+            except OSError:
+                # HCS34xx(info.device) oeffnet den seriellen Port direkt und
+                # wirft dabei KEIN PowerSupplyError, sondern pyserial's rohe
+                # SerialException (Unterklasse von OSError) -- analog zum
+                # Last-Fall oben und zum bereits gefixten microHIL-Fall
+                # (siehe _reconnect_hils). Naechster RECONNECT_INTERVAL_MS-
+                # Tick versucht es einfach erneut.
+                logger.warning("Netzteil-Port %s konnte nicht geoeffnet werden", info.device)
                 if candidate is not None:
                     candidate.close()
                 continue

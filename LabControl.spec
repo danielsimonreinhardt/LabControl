@@ -32,6 +32,11 @@ sys.path.insert(0, str(Path(SPECPATH) / "tools"))
 import generate_splash  # noqa: E402
 generate_splash.main()
 
+# App-Icon (Taskleiste/Explorer der gebauten .exe) ebenso frisch erzeugen,
+# siehe tools/generate_icon.py und lab_gui/app_icon.py.
+import generate_icon  # noqa: E402
+generate_icon.main()
+
 # python-can laedt seine Interface-Backends NICHT per normalem import,
 # sondern zur Laufzeit ueber Modulnamen als String
 # (can.interfaces.BACKENDS -> importlib.import_module, siehe
@@ -146,4 +151,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='lab_gui/icons/app_icon.ico',
 )

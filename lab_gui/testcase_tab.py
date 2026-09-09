@@ -810,7 +810,12 @@ class TestcaseTab(QWidget):
         kind, _device_id = _parse_device_key(device_combo.currentData())
         action_combo.blockSignals(True)
         action_combo.clear()
-        for code in DEVICE_ACTIONS[kind]:
+        # .get() statt Subscript: kind kann bei einem aus einer gespeicherten
+        # Testablauf-Datei geladenen, aktuell unbekannten Geraet (z.B. neuere
+        # Geraeteart, oder beschaedigtes device_kind-Feld) nicht in
+        # DEVICE_ACTIONS stehen -- die Action-Combo bleibt dann leer statt zu
+        # crashen (siehe BUGS_OFFEN.md #29).
+        for code in DEVICE_ACTIONS.get(kind, []):
             action_combo.addItem(action_label(kind, code), code)
         index = action_combo.findData(current_action)
         action_combo.setCurrentIndex(max(index, 0))

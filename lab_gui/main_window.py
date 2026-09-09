@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         self._wire_notifications()
         self._wire_panel_colors()
         self._wire_panel_order()
+        self._wire_control_tile_order()
         self._replay_known_devices()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
@@ -608,6 +609,19 @@ class MainWindow(QMainWindow):
         Settings zurueck."""
         self.dashboard.set_panel_order(self._settings.panel_order)
         self.dashboard.panel_order_changed.connect(self._settings.set_panel_order)
+
+    def _wire_control_tile_order(self) -> None:
+        """Control-Tab-Kachel-Reihenfolge im festen Raster (Drag&Drop, siehe
+        control_tab.py: ControlTab.tile_order_changed/set_tile_order)
+        persistent machen -- wortwoertlich dasselbe Muster wie
+        _wire_panel_order() oben, nur fuer den Control-Tab: einmalig beim
+        Start aus Settings geladen (muss ebenfalls VOR
+        _replay_known_devices() passieren, da ControlTab.on_device_known()
+        ueber dasselbe DeviceRegistry.device_known-Signal laeuft wie beim
+        Dashboard), danach schreibt ausschliesslich der Control-Tab selbst
+        (per Drag) in Settings zurueck."""
+        self.control_tab.set_tile_order(self._settings.control_tile_order)
+        self.control_tab.tile_order_changed.connect(self._settings.set_control_tile_order)
 
     def _assign_free_panel_colors(self, device_ids: list[str]) -> None:
         """Vergibt an jedes device_id in device_ids (ohne bereits gespeicherte

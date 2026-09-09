@@ -10,12 +10,14 @@ keine eingestellten Werte verloren gehen.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QMimeData, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -31,7 +33,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from flow_layout import FlowLayout
 from i18n import Translator, tr
 from icons import IconButton
 from microhil.driver import (
@@ -51,6 +52,13 @@ from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
+from tile_grid import (
+    CONTROL_TILE_DRAG_MIME_TYPE,
+    PANEL_DRAG_HANDLE_HEIGHT,
+    cell_size_ratchet,
+    make_drag_pixmap,
+    pack_tiles,
+)
 
 # Obergrenze der im Live-Traffic-Tisch angezeigten Zeilen (siehe
 # CanControlGroup.append_frame) -- reine GUI-Anzeige, kein Log/Export, daher
@@ -58,6 +66,23 @@ from theme import current as current_palette
 CAN_TRAFFIC_ROW_LIMIT = 50
 CAN_STANDARD_ID_MAX = 0x7FF
 CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
+
+# Feste Kachelgroessen im Control-Tab-Raster (FEATURES.md Punkt 4), als
+# Vielfache einer Basiszelle (siehe ControlTab._relayout_grid): Small ist
+# 1x1, die uebrigen sind Vielfache davon. Werte sind (col_span, row_span).
+TILE_SPANS: dict[str, tuple[int, int]] = {
+    "small": (1, 1),
+    "mid_h": (2, 1),
+    "mid_v": (1, 2),
+    "big": (2, 2),
+}
+# kind -> Kachelgroesse. Small fuer Last/Netzteil (wenige Formularzeilen),
+# Big fuer microHIL (mit Abstand die meisten Bedienelemente), alles andere
+# (aktuell nur "can", das analog zum bestehenden `else: CanControlGroup`-
+# Zweig in on_device_known behandelt wird) bekommt Mid_v -- der Live-
+# Traffic-Tisch (CanControlGroup._traffic_table) braucht mehr Hoehe als
+# Breite.
+TILE_SIZE_BY_KIND: dict[str, str] = {"load": "small", "psu": "small", "hil": "big"}
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
 # provisorisch: die Firmware kennt aktuell noch kein Kommando dafuer (siehe
@@ -342,7 +367,7 @@ class LoadControlGroup(QGroupBox):
 
         # Ausgang-Schalter sitzen ganz unten im Panel -- der Stretch drueckt
         # sie an den unteren Rand, auch wenn das Panel (siehe ControlTab.
-        # _equalize_sections) auf die Hoehe des groessten Panels gebracht wird.
+        # _relayout_grid) auf die Hoehe seiner Rasterzelle gebracht wird.
         outer.addStretch(1)
         self._output_form = QFormLayout()
         self._input_layout = input_layout = QHBoxLayout()
@@ -581,7 +606,7 @@ class PsuControlGroup(QGroupBox):
 
         # Ausgang-Schalter ganz unten im Panel (siehe LoadControlGroup) -- der
         # Stretch drueckt sie an den unteren Rand, auch bei angeglichener
-        # Panel-Hoehe (ControlTab._equalize_sections).
+        # Panel-Hoehe (ControlTab._relayout_grid).
         outer.addStretch(1)
         self._output_form = QFormLayout()
         self._output_layout = QHBoxLayout()
@@ -1341,6 +1366,10 @@ class ControlTab(QWidget):
     section_created = Signal(str, str, QWidget)
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
+    # device_ids) -- MainWindow verdrahtet das mit Settings.
+    # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
+    tile_order_changed = Signal(list)
 
     def __init__(self, presets: PresetStore) -> None:
         super().__init__()
@@ -1355,35 +1384,71 @@ class ControlTab(QWidget):
         outer_layout.addWidget(self._preset_bar)
 
         content = QWidget()
-        self._content_layout = FlowLayout(content)
-        # FlowLayout zeroet standardmaessig seine Aussenraender (siehe
-        # flow_layout.py), damit die Geraete-Panels hier nicht direkt am
-        # Fensterrand anstossen: gleicher Aussenabstand wie der Innenabstand
-        # (spacing) zwischen den einzelnen Panels.
-        spacing = self._content_layout.spacing()
-        self._content_layout.setContentsMargins(spacing, spacing, spacing, spacing)
+        self._grid_container = content
+        self._grid = QGridLayout(content)
+        # Fester Abstand zwischen den Kacheln UND zum Rand (wie zuvor bei
+        # FlowLayout: gleicher Aussen- wie Innenabstand), da QGridLayout
+        # (anders als FlowLayout) seine Aussenraender nicht selbst nullt.
+        self._grid_spacing = 12
+        self._grid.setSpacing(self._grid_spacing)
+        self._grid.setContentsMargins(
+            self._grid_spacing, self._grid_spacing, self._grid_spacing, self._grid_spacing
+        )
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(content)
-        outer_layout.addWidget(scroll_area)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setWidget(content)
+        # Loest bei jeder Breitenaenderung des sichtbaren Ausschnitts einen
+        # Umbruch des Rasters aus (siehe eventFilter/_relayout_grid) -- das
+        # Pendant zu FlowLayouts eingebautem Umbruch bei Groessenaenderung,
+        # den QGridLayout nicht von sich aus bietet.
+        self._scroll_area.viewport().installEventFilter(self)
+        outer_layout.addWidget(self._scroll_area)
 
         # Platzhalter, solange kein Geraet verbunden ist (siehe
         # _update_empty_tile) -- von Anfang an sichtbar, da beim Start noch
         # keine Sektion existiert.
         self._empty_tile = NoDeviceTile()
-        self._content_layout.addWidget(self._empty_tile)
+        self._grid.addWidget(self._empty_tile, 0, 0)
 
         self._sections: dict[str, QWidget] = {}
+        self._section_kind: dict[str, str] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
         # deaktivierte Auswahl beim Wieder-Aktivieren erhalten bleibt.
         self._panel_colors: dict[str, str | None] = {}
         self._colors_enabled = False
 
+        # Kachel-Reihenfolge (device_id-Liste), aus der _relayout_grid() per
+        # pack_tiles() die tatsaechlichen Rasterpositionen berechnet -- fuer
+        # den Control-Tab bislang gar nicht vorhanden (bisher bestimmte
+        # allein die Verbindungsreihenfolge die Anzeigereihenfolge).
+        self._tile_order: list[str] = []
+        # Gewuenschte Reihenfolge (device_id-Liste), die noch nicht (voll-
+        # staendig) angewendet werden konnte, weil die betroffenen Geraete
+        # beim Aufruf von set_tile_order() noch nicht verbunden waren --
+        # wird bei jedem neuen Geraet erneut versucht (siehe on_device_known,
+        # exakt das Muster aus dashboard.py: _pending_panel_order).
+        self._pending_tile_order: list[str] = []
+        # Aktuell angeglichene Basiszellgroesse (0 = noch keine gesetzt) --
+        # als Ratsche gefuehrt, analog zu DashboardWidget._panel_width.
+        self._cell_width = 0
+        self._cell_height = 0
+        self._max_cols = 1
+
+        # Drag & Drop (Kachel-Reihenfolge im Raster) -- dieselbe Technik wie
+        # in dashboard.py (DashboardWidget), nur mit eigenem MIME-Typ
+        # (CONTROL_TILE_DRAG_MIME_TYPE) und 2D-Zielzellen-Berechnung statt
+        # der dortigen 1D-x-Koordinate.
+        content.setAcceptDrops(True)
+        content.installEventFilter(self)
+        self._drag_device_id: str | None = None
+        self._drag_start_pos = None
+
         # Nach einem Sprachwechsel aendern sich Label-Breiten/-Hoehen -- die
-        # Panel-Groessen muessen dann neu angeglichen werden.
-        Translator.instance().language_changed.connect(self._equalize_sections)
+        # Kachelgroessen muessen dann neu angeglichen werden.
+        Translator.instance().language_changed.connect(self._relayout_grid)
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         if kind == "picoscope":
@@ -1417,9 +1482,17 @@ class ControlTab(QWidget):
         section.set_colors_enabled(self._colors_enabled)
         section.panel_color_requested.connect(self.panel_color_requested)
         section.rename_requested.connect(self.rename_requested)
-        self._content_layout.addWidget(section)
+        section.installEventFilter(self)
         self._sections[device_id] = section
-        self._equalize_sections()
+        self._section_kind[device_id] = kind
+        if device_id not in self._tile_order:
+            self._tile_order.append(device_id)
+        # Zieht die neue Kachel sofort an die vom Nutzer zuletzt gewaehlte
+        # Position, falls fuer dieses Geraet schon eine gespeicherte
+        # Reihenfolge vorliegt (siehe set_tile_order) -- sonst bliebe sie
+        # einfach am Ende, egal wo sie hingehoert.
+        self._apply_pending_tile_order()
+        self._relayout_grid()
         self.section_created.emit(kind, device_id, section)
 
     def forget_device(self, device_id: str) -> None:
@@ -1432,10 +1505,13 @@ class ControlTab(QWidget):
         section = self._sections.pop(device_id, None)
         if section is None:
             return
-        self._content_layout.removeWidget(section)
+        self._grid.removeWidget(section)
         section.deleteLater()
         self._panel_colors.pop(device_id, None)
-        self._equalize_sections()
+        self._section_kind.pop(device_id, None)
+        if device_id in self._tile_order:
+            self._tile_order.remove(device_id)
+        self._relayout_grid()
         self._update_empty_tile()
 
     def set_panel_color(self, device_id: str, color_key: str | None) -> None:
@@ -1450,21 +1526,193 @@ class ControlTab(QWidget):
             section.set_panel_color(self._panel_colors.get(device_id) if enabled else None)
             section.set_colors_enabled(enabled)
 
-    def _equalize_sections(self) -> None:
-        """Bringt alle Panels auf Hoehe und Breite des groessten Panels.
+    def set_tile_order(self, order: list[str]) -> None:
+        """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
+        Settings.control_tile_order) -- von MainWindow einmalig beim Start
+        aufgerufen, i.d.R. BEVOR die zugehoerigen Geraete ueberhaupt bekannt
+        sind (exakt das Muster aus dashboard.DashboardWidget.set_panel_order).
+        Noch unbekannte device_ids werden vorgemerkt (siehe
+        _pending_tile_order) und ziehen ihre Kachel an die richtige Stelle,
+        sobald sie in on_device_known() entsteht."""
+        self._pending_tile_order = list(order)
+        self._apply_pending_tile_order()
+        self._relayout_grid()
 
-        Ueber die Mindestgroesse statt einer festen Groesse: erscheint z.B. die
-        OVP/OCP-Warnung im Netzteil-Panel, darf dieses eine Panel noch
-        wachsen, statt den Warntext abzuschneiden.
+    def _apply_pending_tile_order(self) -> None:
+        known = [d for d in self._pending_tile_order if d in self._sections]
+        unknown_existing = [d for d in self._tile_order if d not in known]
+        self._tile_order = known + unknown_existing
+
+    def _relayout_grid(self) -> None:
+        """Packt alle aktuell VERBUNDENEN Sektionen dicht in ein Raster mit
+        fester Basiszellgroesse (siehe TILE_SPANS/TILE_SIZE_BY_KIND). Getrennte
+        Geraete werden uebersprungen -- ihre Sektion bleibt versteckt (siehe
+        _set_online) und nimmt keinen Platz im Raster ein, genau wie zuvor bei
+        FlowLayout (das unsichtbare Widgets ebenfalls ueberspringt, siehe
+        flow_layout.py).
+
+        Groesse ist ueber setMinimumSize (nicht setFixedSize) erzwungen,
+        analog zur bisherigen _equalize_sections(): eine wachsende OVP/OCP-
+        Warnung im Netzteil-Panel darf weiterhin lokal mehr Platz beanspruchen,
+        statt abgeschnitten zu werden.
         """
-        if not self._sections:
+        self._update_empty_tile()
+        visible_order = [
+            d for d in self._tile_order if d in self._sections and not self._sections[d].isHidden()
+        ]
+        if not visible_order:
             return
+        spans = {device_id: self._tile_span(device_id) for device_id in visible_order}
+
+        # Basiszellgroesse: Ratsche ueber alle sichtbaren Sektionen, gewichtet
+        # nach Spannweite (siehe cell_size_ratchet) -- stellt sicher, dass
+        # z.B. eine "Big"-Kachel (2x2) im Normalfall die deutlich groessere
+        # HilControlGroup bequem fasst, ohne dass 2x Zellgroesse kleiner als
+        # deren natuerliche sizeHint() ausfaellt.
+        width_sizes = [(self._sections[d].sizeHint().width(), spans[d][0]) for d in visible_order]
+        height_sizes = [(self._sections[d].sizeHint().height(), spans[d][1]) for d in visible_order]
+        self._cell_width = cell_size_ratchet(self._cell_width, width_sizes)
+        self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
+
+        unit = self._cell_width + self._grid_spacing
+        viewport_width = self._scroll_area.viewport().width()
+        self._max_cols = max(1, viewport_width // unit) if unit > 0 else 1
+
+        positions = pack_tiles(visible_order, spans, self._max_cols)
         for section in self._sections.values():
-            section.setMinimumSize(0, 0)
-        max_width = max(s.sizeHint().width() for s in self._sections.values())
-        max_height = max(s.sizeHint().height() for s in self._sections.values())
-        for section in self._sections.values():
-            section.setMinimumSize(max_width, max_height)
+            self._grid.removeWidget(section)
+        for device_id, (row, col) in positions.items():
+            section = self._sections[device_id]
+            col_span, row_span = spans[device_id]
+            min_width = col_span * self._cell_width + (col_span - 1) * self._grid_spacing
+            min_height = row_span * self._cell_height + (row_span - 1) * self._grid_spacing
+            section.setMinimumSize(min_width, min_height)
+            self._grid.addWidget(
+                section, row, col, row_span, col_span,
+                alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+            )
+
+    def _tile_span(self, device_id: str) -> tuple[int, int]:
+        kind = self._section_kind.get(device_id, "")
+        size_key = TILE_SIZE_BY_KIND.get(kind, "mid_v")
+        return TILE_SPANS[size_key]
+
+    # -- Drag & Drop (Kachel-Anordnung im Raster) -----------------------------
+    # Dieselbe Technik wie in dashboard.py (DashboardWidget), nur mit eigenem
+    # MIME-Typ (CONTROL_TILE_DRAG_MIME_TYPE) und 2D-Zielzellen-Berechnung
+    # statt der dortigen 1D-x-Koordinate (siehe pack_tiles/tile_grid.py).
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if obj is self._scroll_area.viewport():
+            if event.type() == QEvent.Type.Resize:
+                unit = self._cell_width + self._grid_spacing
+                if unit > 0:
+                    new_max_cols = max(1, self._scroll_area.viewport().width() // unit)
+                    if new_max_cols != self._max_cols:
+                        self._relayout_grid()
+            return False
+        if obj is self._grid_container:
+            event_type = event.type()
+            if event_type == QEvent.Type.DragEnter or event_type == QEvent.Type.DragMove:
+                if event.mimeData().hasFormat(CONTROL_TILE_DRAG_MIME_TYPE):
+                    event.acceptProposedAction()
+                    return True
+            elif event_type == QEvent.Type.Drop:
+                if event.mimeData().hasFormat(CONTROL_TILE_DRAG_MIME_TYPE):
+                    dragged_id = bytes(event.mimeData().data(CONTROL_TILE_DRAG_MIME_TYPE)).decode("utf-8")
+                    self._drop_tile(dragged_id, event.position())
+                    event.acceptProposedAction()
+                    return True
+            return False
+        if obj in self._sections.values():
+            self._handle_tile_drag_event(obj, event)
+            return False
+        return super().eventFilter(obj, event)
+
+    def _device_id_for_section(self, section: QWidget) -> str | None:
+        for device_id, candidate in self._sections.items():
+            if candidate is section:
+                return device_id
+        return None
+
+    def _handle_tile_drag_event(self, section: QWidget, event) -> None:
+        """Erkennt den Beginn eines Kachel-Drags -- nur wenn der Druckpunkt im
+        oberen Rahmentitel-Streifen liegt (siehe PANEL_DRAG_HANDLE_HEIGHT), und
+        erst nach QApplication.startDragDistance() Bewegung (Qt-Standard-
+        Schwelle, verhindert versehentliches Ziehen bei einem blossen Tipp/
+        Klick, wichtig auf dem touchbedienten Kiosk-Display)."""
+        event_type = event.type()
+        if event_type == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT:
+                self._drag_device_id = self._device_id_for_section(section)
+                self._drag_start_pos = event.position()
+            return
+        if event_type == QEvent.Type.MouseMove:
+            if self._drag_device_id is None or self._drag_start_pos is None:
+                return
+            if (event.position() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+                return
+            device_id = self._drag_device_id
+            press_pos = self._drag_start_pos
+            self._drag_device_id = None
+            self._drag_start_pos = None
+            self._start_tile_drag(section, device_id, press_pos)
+            return
+        if event_type in (QEvent.Type.MouseButtonRelease, QEvent.Type.Leave):
+            self._drag_device_id = None
+            self._drag_start_pos = None
+
+    def _start_tile_drag(self, section: QWidget, device_id: str, press_pos) -> None:
+        drag = QDrag(section)
+        mime = QMimeData()
+        mime.setData(CONTROL_TILE_DRAG_MIME_TYPE, device_id.encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.setPixmap(make_drag_pixmap(section))
+        # Hotspot = urspruenglicher Druckpunkt (relativ zur Sektion): ohne
+        # das faellt Qt auf (0, 0) zurueck, die Kachel "springt" beim
+        # Drag-Start sichtbar so, dass ihre Ecke statt des gegriffenen Punkts
+        # unter dem Cursor/Finger sitzt.
+        drag.setHotSpot(press_pos.toPoint())
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def _drop_tile(self, dragged_id: str, drop_pos) -> None:
+        """Ordnet die gezogene Kachel an ihrer neuen Position in _tile_order
+        ein -- Zielzelle aus drop_pos (Position relativ zum Raster-Container)
+        ueber die Basiszellgroesse bestimmt, eingefuegt wird vor der ersten
+        aktuell platzierten Kachel, deren Zelle in Lesereihenfolge (Zeile,
+        dann Spalte) nicht vor der Zielzelle liegt (sonst ans Ende)."""
+        if dragged_id not in self._sections:
+            return
+        unit_w = self._cell_width + self._grid_spacing
+        unit_h = self._cell_height + self._grid_spacing
+        if unit_w <= 0 or unit_h <= 0 or self._max_cols <= 0:
+            return
+        target_col = max(0, int(drop_pos.x()) // unit_w)
+        target_row = max(0, int(drop_pos.y()) // unit_h)
+        target_key = target_row * self._max_cols + target_col
+
+        visible_order = [
+            d for d in self._tile_order if d in self._sections and not self._sections[d].isHidden()
+        ]
+        if dragged_id in visible_order:
+            visible_order.remove(dragged_id)
+        spans = {device_id: self._tile_span(device_id) for device_id in visible_order}
+        positions = pack_tiles(visible_order, spans, self._max_cols)
+
+        insert_before = None
+        for device_id in visible_order:
+            row, col = positions[device_id]
+            if row * self._max_cols + col >= target_key:
+                insert_before = device_id
+                break
+
+        self._tile_order.remove(dragged_id)
+        if insert_before is None:
+            self._tile_order.append(dragged_id)
+        else:
+            self._tile_order.insert(self._tile_order.index(insert_before), dragged_id)
+        self._relayout_grid()
+        self.tile_order_changed.emit(list(self._tile_order))
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         section = self._sections.get(device_id)
@@ -1535,7 +1783,7 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if section is not None:
             section.setVisible(online)
-        self._update_empty_tile()
+        self._relayout_grid()
 
     def set_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         section = self._sections.get(device_id)

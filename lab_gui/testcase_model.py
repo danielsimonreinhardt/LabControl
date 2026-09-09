@@ -613,5 +613,10 @@ def kind_label(device_kind: str) -> str:
 
 
 def action_label(device_kind: str, action_code: str) -> str:
-    base_label = DEVICE_ACTIONS[device_kind].get(action_code)
+    # .get(device_kind, {}) statt Subscript: analog zu kind_label() oben --
+    # device_kind kann bei einem aus einer gespeicherten Testablauf-Datei
+    # geladenen, aktuell unbekannten Geraet nicht in DEVICE_ACTIONS stehen
+    # (siehe BUGS_OFFEN.md #29). action_code kommt dann unveraendert zurueck,
+    # genau wie beim bestehenden Fallback fuer einen unbekannten Aktionscode.
+    base_label = DEVICE_ACTIONS.get(device_kind, {}).get(action_code)
     return tr(base_label) if base_label is not None else action_code

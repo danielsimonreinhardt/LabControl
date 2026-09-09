@@ -7,6 +7,29 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
+  `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
+  (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als
+  gepflegte Bilddatei. `main.py` setzt es zur Laufzeit über
+  `QApplication.setWindowIcon()` (bestimmt das Taskleisten-Symbol der
+  laufenden App); `tools/generate_icon.py` rendert dieselben Pixmaps in
+  `lab_gui/icons/app_icon.ico` (mehrere Auflösungen, PNG-in-ICO), das
+  `LabControl.spec` per `EXE(icon=...)` einbettet -- vorher fehlte der
+  EXE ein Icon komplett (generischer Windows-Platzhalter in Taskleiste/
+  Explorer).
+- **Control-Tab: festes Kachelraster (4 Größen) + Drag&Drop; Dashboard-Tab:
+  feste Kachelhöhen (einfach/doppelt).** Siehe [FEATURES.md](FEATURES.md)
+  Punkt 4/5. Neues gemeinsames Modul `lab_gui/tile_grid.py`
+  (`pack_tiles()`/`pack_tiles_by_row()`, dichtes Greedy-Packen wie CSS-Grid
+  `auto-flow: dense`, plus geteilte Drag-Pixmap-Erzeugung). Control-Tab:
+  `FlowLayout` abgelöst durch `QGridLayout`, vier feste Kachelgrößen
+  (Small/Mid_h/Mid_v/Big, kind-abhängig, `TILE_SIZE_BY_KIND`), neu
+  persistierte Reihenfolge `Settings.control_tile_order` (analog
+  `panel_order`). Dashboard-Tab: `QHBoxLayout` abgelöst durch `QGridLayout`
+  mit max. 2 Zeilen, nur `hil` bekommt doppelte Höhe
+  (`TILE_HEIGHT_BY_KIND`), zwei einfache Kacheln stapeln sich automatisch
+  in einer Spalte -- bestehende `Settings.panel_order`-Persistenz
+  unverändert weiterverwendet.
 - **Settings-Tab: "Geräte-Info"-Sektion zeigt die microHIL-Firmwareversion.**
   `microhil/driver.py` liest sie bereits über `*IDN?` mit (neu:
   `MicroHIL.get_firmware_version()`, `parse_idn_fields()`), `device_worker.py`
@@ -877,6 +900,27 @@ Semantic Versioning (`lab_gui/version.py`).
   `device_id` jetzt gegen `self._online_devices` und lehnt ihn mit klarer
   Fehlermeldung ab, wenn kein passendes Gerät online ist
   (`lab_gui/main_window.py`).
+- **[BUGS_GESCHLOSSEN.md #23] `_reconnect_psus`/`_reconnect_loads`: rohe
+  `SerialException` beim Portöffnen ungefangen**: `HCS34xx.__init__`/
+  `KoradKEL102.__init__` öffnen den seriellen Port direkt und werfen dabei
+  kein `PowerSupplyError`/`LoadError`, sondern pyserials rohe
+  `SerialException` (`OSError`-Unterklasse), z. B. wenn eine zweite
+  App-Instanz den Port bereits hält. Ungefangen riss das den kompletten
+  `_try_reconnect()`-Zyklus ab und verhinderte damit auch die
+  Wiederverbindung anderer, bereits erkannter Geräte im selben Tick --
+  derselbe Fehler, der für den microHIL bereits zuvor behoben wurde.
+  `_reconnect_psus()`/`_reconnect_loads()` fangen `OSError` jetzt analog
+  zu `_reconnect_hils()` zusätzlich ab (`lab_gui/device_worker.py`).
+- **[BUGS_GESCHLOSSEN.md #29] Testablauf-Editor: `DEVICE_ACTIONS[kind]`
+  ohne Fallback konnte bei unbekannter/veralteter Geräteart in einer
+  geladenen Testablauf-Datei crashen**: `_refresh_actions_for_row()`
+  (`lab_gui/testcase_tab.py`) und `action_label()`
+  (`lab_gui/testcase_model.py`) griffen mit einem ungeschützten
+  Dict-Subscript auf `DEVICE_ACTIONS[kind]` zu -- eine Geräteart, die
+  (aktuell oder in einer künftigen App-Version) nicht in `DEVICE_ACTIONS`
+  steht, führte zu `KeyError`. Beide Stellen nutzen jetzt `.get()` mit
+  Fallback (leere Aktionsliste bzw. unveränderter Aktionscode), analog
+  zum bereits vorhandenen Fallback in `kind_label()`.
 
 ## [0.6.2]
 

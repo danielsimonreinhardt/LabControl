@@ -10,11 +10,12 @@ sein eigenes Panel mit eindeutigem, umbenennbarem Label.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QRectF, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QPropertyAnimation, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -32,6 +33,13 @@ from picoscope2000.driver import launch_app as launch_picoscope_app
 from picoscope_panel import PicoscopePanel
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
+from tile_grid import (
+    PANEL_DRAG_HANDLE_HEIGHT,
+    PANEL_DRAG_MIME_TYPE,
+    cell_size_ratchet,
+    make_drag_pixmap,
+    pack_tiles_by_row,
+)
 
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
 COMPACT_VALUE_STYLE = "font-size: 16px; font-weight: bold;"
@@ -43,27 +51,14 @@ _WIDGET_SIZE_MAX = 16777215
 # Zusätzlicher Platz für die Scrollleiste am unteren Rand (falls horizontal
 # gescrollt werden muss) sowie den Rahmen der ScrollArea.
 SCROLL_AREA_MARGIN = 24
+# Abstand zwischen den Kacheln im Raster (siehe DashboardWidget._relayout_panels).
+GRID_SPACING = 12
 
-# Drag & Drop: Reihenfolge der Dashboard-Kacheln per Ziehen aendern
-# (Absprache) -- eigener MIME-Typ statt text/plain, damit dragEnterEvent
-# zuverlaessig nur eigene Panel-Drags akzeptiert und nichts, das zufaellig
-# aus einer anderen Anwendung hereingezogen wird.
-PANEL_DRAG_MIME_TYPE = "application/x-lab-gui-panel-device-id"
-# Nur der obere Streifen (Rahmentitel) startet einen Drag -- Panels haben
-# sonst keine eigenen Klickziele (Werte sind reine QLabels), bis auf den
-# "PicoScope 7 oeffnen"-Button im Oszilloskop-Panel, der dadurch unberuehrt
-# bleibt. Hoehe orientiert sich an OFFLINE_ICON_MARGIN/-SIZE (5+22=27), die
-# dieselbe Zone bereits als "Kopfbereich" behandeln.
-PANEL_DRAG_HANDLE_HEIGHT = 28
-# Optik des schwebenden Abbilds waehrend des Ziehens (Nutzerfeedback: ein
-# direkt durchgereichtes panel.grab() erschien beim Ziehen deutlich
-# vergroessert -- siehe _drag_pixmap()-Docstring). Fester Blauton statt
-# palette.accent: die Akzentfarbe ist im Amber-Industrial-Theme selbst
-# gelb/amber und auf einer ebenfalls amberfarbenen Kachel kaum zu erkennen,
-# waehrend Blau in beiden Themes zuverlaessig als "hier wird gerade gezogen"
-# heraussticht (Assoziation mit dem blauen Auswahlrahmen aus Datei-Explorern).
-PANEL_DRAG_BORDER_COLOR = "#2f7dfd"
-PANEL_DRAG_OPACITY = 0.55
+# kind -> Kachelhoehe (FEATURES.md Punkt 5): nur microHIL (deutlich mehr
+# Inhalt als die uebrigen Panels, siehe microhil_panel.py) bekommt die
+# doppelte Hoehe, alles andere (auch "picoscope" -- laut picoscope_panel.py
+# nur Statuszeile + Button, also kurz) bleibt einfach.
+TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double"}
 
 # field_key -> (deutscher Basis-Anzeigename, Einheit); Einheit ist
 # sprachunabhaengig und wird nicht ueber i18n.tr uebersetzt.
@@ -397,14 +392,20 @@ class DashboardWidget(QGroupBox):
         outer.setContentsMargins(4, 4, 4, 4)
 
         self._container = QWidget()
-        self._panel_layout = QHBoxLayout(self._container)
-        self._panel_layout.addStretch()
+        # Raster mit max. 2 Zeilen (einfache/doppelte Kachelhoehe, siehe
+        # TILE_HEIGHT_BY_KIND/_relayout_panels) -- waechst nach rechts, kein
+        # Spalten-Stretch-Faktor gesetzt, damit die natuerliche Breite gleich
+        # der Summe der belegten Spalten bleibt (fuer das horizontale
+        # Scrollen der umschliessenden ScrollArea, siehe unten).
+        self._panel_layout = QGridLayout(self._container)
+        self._panel_layout.setSpacing(GRID_SPACING)
+        self._panel_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # Platzhalter, solange kein Geraet verbunden ist (siehe
         # _update_empty_tile) -- von Anfang an sichtbar, da beim Start noch
         # kein Panel existiert.
         self._empty_tile = NoDeviceTile()
-        self._panel_layout.insertWidget(0, self._empty_tile)
+        self._panel_layout.addWidget(self._empty_tile, 0, 0)
 
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
@@ -436,6 +437,12 @@ class DashboardWidget(QGroupBox):
         outer.addLayout(body)
 
         self._panels: dict[str, _DevicePanel] = {}
+        # kind je device_id -- fuer die Kachelhoehe (siehe TILE_HEIGHT_BY_KIND/
+        # _tile_span), da _DevicePanel zwar ein eigenes self._kind hat,
+        # MicroHilPanel/PicoscopePanel aber nicht (eigenstaendige Panel-
+        # Klassen ohne das generische FIELD_DEFS-Schema, siehe deren
+        # Modul-Docstrings).
+        self._panel_kind: dict[str, str] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
         # deaktivierte Auswahl beim Wieder-Aktivieren erhalten bleibt.
@@ -448,6 +455,10 @@ class DashboardWidget(QGroupBox):
         # Panels dort bewusst unterschiedlich breit sind.
         self._panel_width = 0
         self._compact_widths: dict[str, int] = {}
+        # Basis-Zellhoehe (einfache Hoehe), ebenfalls als Ratsche (siehe
+        # TILE_HEIGHT_BY_KIND/_relayout_panels) -- doppelte Kacheln
+        # bekommen 2*_cell_height + Spacing.
+        self._cell_height = 0
 
         # Drag & Drop (Kachel-Reihenfolge, siehe eventFilter/_start_panel_
         # drag/_drop_panel weiter unten). _container ist das Drop-Ziel (dort
@@ -458,6 +469,16 @@ class DashboardWidget(QGroupBox):
         self._container.setAcceptDrops(True)
         self._drag_device_id: str | None = None
         self._drag_start_pos = None
+        # Waehrend eines laufenden Drags ausgeblendete Kachel (siehe
+        # _start_panel_drag) -- bleibt bekannt, damit _drop_panel sie am Ende
+        # wieder einblenden kann und ein abgebrochener Drag (kein Drop) sie
+        # ebenfalls zurueckbekommt.
+        self._drag_hidden_panel: QWidget | None = None
+        # Zuletzt live vorgeschlagene Reihenfolge waehrend DragMove (siehe
+        # _preview_panel_drag) -- verhindert unnoetige Relayouts/Animationen,
+        # wenn sich der Zielindex zwischen zwei Mausereignissen nicht
+        # geaendert hat.
+        self._drag_preview_order: list[str] | None = None
         # Gewuenschte Reihenfolge (device_id-Liste), die noch nicht (voll-
         # staendig) angewendet werden konnte, weil die betroffenen Geraete
         # beim Aufruf von set_panel_order() noch nicht verbunden waren --
@@ -473,27 +494,45 @@ class DashboardWidget(QGroupBox):
         """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
         Settings.panel_order) -- von MainWindow einmalig beim Start
         aufgerufen, i.d.R. BEVOR die zugehoerigen Geraete ueberhaupt bekannt
-        sind. Noch unbekannte device_ids werden vorgemerkt (siehe
-        _pending_panel_order) und ziehen ihr Panel an die richtige Stelle,
-        sobald es in on_device_known() entsteht."""
+        sind. Noch unbekannte device_ids bleiben in _pending_panel_order
+        vorgemerkt (siehe _current_order()) und ziehen ihr Panel an die
+        richtige Stelle, sobald es in on_device_known() entsteht."""
         self._pending_panel_order = list(order)
-        self._apply_pending_order()
+        self._relayout_panels()
 
-    def _apply_pending_order(self) -> None:
-        """Schiebt jedes bereits bekannte Panel aus _pending_panel_order der
-        Reihe nach ans Ende (vor den Stretch) -- danach stehen alle darin
-        genannten, bereits verbundenen Panels in genau der gewuenschten
-        Reihenfolge, unabhaengig davon, in welcher Reihenfolge ihre Geraete
-        tatsaechlich verbunden wurden. Noch nicht verbundene device_ids
-        werden uebersprungen, nicht genannte (z.B. brandneue Geraetearten)
-        bleiben unangetastet, wo sie gerade stehen."""
-        for device_id in self._pending_panel_order:
-            panel = self._panels.get(device_id)
-            if panel is None:
-                continue
-            self._panel_layout.removeWidget(panel)
-            insert_at = self._panel_layout.count() - 1  # vor dem Stretch
-            self._panel_layout.insertWidget(insert_at, panel, alignment=Qt.AlignmentFlag.AlignTop)
+    def _current_order(self) -> list[str]:
+        """Aktuelle Anzeigereihenfolge alle bekannten Panels: erst alle in
+        _pending_panel_order genannten (Wunschreihenfolge aus Settings bzw.
+        letztem Drag, siehe set_panel_order/_persist_panel_order), danach
+        alle uebrigen bekannten Panels (z.B. brandneue, noch nie einsortierte
+        Geraete) in ihrer Erstverbindungsreihenfolge. _pending_panel_order
+        selbst bleibt dabei unveraendert -- noch nicht verbundene device_ids
+        bleiben darin vorgemerkt, bis ihr Panel entsteht.
+
+        Waehrend eines laufenden Drags hat _drag_preview_order (siehe
+        _preview_panel_drag) Vorrang vor _pending_panel_order: JEDE
+        Geometrieaenderung (auch die durch die Live-Vorschau selbst
+        ausgeloeste) erzeugt ein LayoutRequest-Event, dessen Handler
+        _relayout_panels() -- und damit _current_order() -- erneut aufruft
+        (siehe eventFilter). Ohne diesen Vorrang wuerde genau dieser
+        automatische Folgeaufruf die Live-Vorschau sofort wieder auf den
+        zuletzt PERSISTIERTEN Stand zuruecksetzen, noch bevor der Nutzer
+        ueberhaupt loslassen konnte (an echter Hardware/Interaktion
+        reproduziert -- ohne diesen Vorrang blieb die Vorschau wirkungslos)."""
+        if self._drag_preview_order is not None:
+            return [d for d in self._drag_preview_order if d in self._panels]
+        known_ordered = [d for d in self._pending_panel_order if d in self._panels]
+        remaining = [d for d in self._panels if d not in self._pending_panel_order]
+        return known_ordered + remaining
+
+    def _tile_span(self, device_id: str) -> tuple[int, int]:
+        """(col_span, row_span) in Rastereinheiten -- die Breite ist im
+        Dashboard (anders als im Control-Tab) nie klassifiziert, nur die
+        Hoehe (siehe TILE_HEIGHT_BY_KIND, FEATURES.md Punkt 5: "es wird
+        allerdings nur die Hoehe fest vorgegeben")."""
+        kind = self._panel_kind.get(device_id, "")
+        row_span = 2 if TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1
+        return (1, row_span)
 
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
@@ -537,9 +576,15 @@ class DashboardWidget(QGroupBox):
             event_type = event.type()
             if event_type == QEvent.Type.LayoutRequest:
                 self._relayout_panels()
-            elif event_type == QEvent.Type.DragEnter or event_type == QEvent.Type.DragMove:
+            elif event_type == QEvent.Type.DragEnter:
                 if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
                     event.acceptProposedAction()
+                    return True
+            elif event_type == QEvent.Type.DragMove:
+                if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
+                    event.acceptProposedAction()
+                    dragged_id = bytes(event.mimeData().data(PANEL_DRAG_MIME_TYPE)).decode("utf-8")
+                    self._preview_panel_drag(dragged_id, event.position())
                     return True
             elif event_type == QEvent.Type.Drop:
                 if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
@@ -591,77 +636,135 @@ class DashboardWidget(QGroupBox):
         mime = QMimeData()
         mime.setData(PANEL_DRAG_MIME_TYPE, device_id.encode("utf-8"))
         drag.setMimeData(mime)
-        drag.setPixmap(self._drag_pixmap(panel))
+        drag.setPixmap(make_drag_pixmap(panel))
         # Hotspot = urspruenglicher Druckpunkt (relativ zum Panel): ohne das
         # faellt Qt auf (0, 0) zurueck, die Kachel "springt" beim Drag-Start
         # sichtbar so, dass ihre Ecke statt des gegriffenen Punkts unter dem
         # Cursor/Finger sitzt.
         drag.setHotSpot(press_pos.toPoint())
-        drag.exec(Qt.DropAction.MoveAction)
 
-    def _drag_pixmap(self, panel: QWidget) -> QPixmap:
-        """Baut das schwebende Abbild waehrend des Ziehens: leicht
-        durchsichtig mit blauem Rahmen, in EXAKT der Groesse des Panels
-        (Nutzerfeedback) -- ein direkt an QDrag.setPixmap() durchgereichtes
-        panel.grab() erschien beim Ziehen deutlich vergroessert, vermutlich
-        weil Qts Drag-Compositing das devicePixelRatio von grab() (bei
-        Windows-Anzeigeskalierung > 100%) nicht korrekt beruecksichtigt. Ein
-        selbst zusammengesetztes Pixmap mit explizit auf 1.0 gesetztem
-        devicePixelRatio umgeht das zuverlaessig, unabhaengig vom Skalierungs-
-        faktor des Bildschirms."""
-        size = panel.size()
-        pixmap = QPixmap(size)
-        pixmap.setDevicePixelRatio(1.0)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setOpacity(PANEL_DRAG_OPACITY)
-        panel.render(painter, QPoint(0, 0))
-        painter.setOpacity(1.0)
-        pen = QPen(QColor(PANEL_DRAG_BORDER_COLOR))
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(QRectF(1, 1, size.width() - 2, size.height() - 2), 6, 6)
-        painter.end()
-        return pixmap
+        # Die echte Kachel wird fuer die Dauer des Ziehens ausgeblendet --
+        # bleibt aber in self._panels/_current_order() bekannt und belegt
+        # dadurch weiterhin eine Rasterzelle (siehe _order_with_dragged_at/
+        # pack_tiles_by_row), nur unsichtbar. Sichtbar ist waehrenddessen nur
+        # noch das schwebende Abbild unter dem Cursor (make_drag_pixmap); die
+        # uebrigen Kacheln ruecken bei jeder Vorschau-Aktualisierung
+        # (_preview_panel_drag) live an ihre neue Position, als haette die
+        # gezogene Kachel dort bereits eine Luecke geoeffnet. Ohne dieses
+        # Ausblenden waere die ECHTE Kachel zusaetzlich zum schwebenden
+        # Abbild sichtbar und wuerde bei jeder Vorschau selbst mit an ihre
+        # neue Position springen -- zwei sich ueberlagernde, gegenlaeufig
+        # bewegte Abbilder.
+        panel.hide()
+        self._drag_hidden_panel = panel
+        self._drag_preview_order = None
+        action = drag.exec(Qt.DropAction.MoveAction)
+        if action == Qt.DropAction.IgnoreAction:
+            # Kein gueltiger Drop (z.B. ausserhalb des Dashboards
+            # losgelassen oder mit Escape abgebrochen) -- dropEvent() hat
+            # dann NICHT gefeuert, also hier selbst aufraeumen: Kachel
+            # wieder einblenden und zur unveraenderten Reihenfolge
+            # zurueckkehren (_drag_preview_order = None laesst
+            # _current_order() wieder auf _pending_panel_order zurueckfallen,
+            # also den Stand VOR diesem Drag).
+            panel.show()
+            self._drag_hidden_panel = None
+            self._drag_preview_order = None
+            self._relayout_panels()
+
+    def _order_with_dragged_at(self, dragged_id: str, pos) -> list[str]:
+        """Baut die Anzeigereihenfolge, WENN die gezogene Kachel jetzt an der
+        durch `pos` (Position relativ zum Raster-Container) markierten
+        Stelle fallen wuerde -- gemeinsame Berechnung fuer die Live-Vorschau
+        waehrend DragMove (siehe _preview_panel_drag) und den finalen Drop
+        (siehe _drop_panel), damit beide exakt denselben Zielindex ermitteln
+        und die Kachel beim Loslassen nicht nochmal springt.
+
+        Zielzelle aus `pos` ueber Breiten-/Hoehenratsche bestimmt.
+        Lesereihenfolge ist SPALTENweise (Kacheln fuellen eine Spalte, bevor
+        die naechste beginnt, siehe pack_tiles_by_row): Schluessel daher
+        Spalte zuerst, dann Zeile. Eingefuegt wird vor der ersten aktuell
+        platzierten Kachel, deren Zelle nicht vor der Zielzelle liegt, sonst
+        ans Ende."""
+        unit_w = self._panel_width + GRID_SPACING
+        unit_h = self._cell_height + GRID_SPACING
+        order = [d for d in self._current_order() if d != dragged_id]
+        if unit_w <= 0 or unit_h <= 0:
+            order.append(dragged_id)
+            return order
+        target_col = max(0, int(pos.x()) // unit_w)
+        target_row = max(0, int(pos.y()) // unit_h)
+        target_key = target_col * 2 + target_row
+
+        spans = {d: self._tile_span(d) for d in order}
+        positions = pack_tiles_by_row(order, spans, max_rows=2)
+
+        insert_before = None
+        for device_id in order:
+            row, col = positions[device_id]
+            if col * 2 + row >= target_key:
+                insert_before = device_id
+                break
+
+        if insert_before is None:
+            order.append(dragged_id)
+        else:
+            order.insert(order.index(insert_before), dragged_id)
+        return order
+
+    def _preview_panel_drag(self, dragged_id: str, pos) -> None:
+        """Waehrend DragMove kontinuierlich aufgerufen: lasst die uebrigen
+        Kacheln bereits so anordnen, als waere an der aktuellen Cursor-/
+        Fingerposition schon losgelassen worden -- das ist das eigentliche
+        "Nachbarn ruecken zur Seite und machen Platz"-Verhalten
+        (Nutzerfeedback). Wird uebersprungen, wenn sich der Zielindex seit
+        dem letzten Aufruf nicht geaendert hat (haeufigster Fall: der
+        Cursor bewegt sich innerhalb derselben Zielzelle)."""
+        if dragged_id not in self._panels:
+            return
+        order = self._order_with_dragged_at(dragged_id, pos)
+        if order == self._drag_preview_order:
+            return
+        self._drag_preview_order = order
+        self._animate_relayout()
+
+    def _animate_relayout(self) -> None:
+        """Wie _relayout_panels(), laesst aber jede Kachel, deren Position
+        sich dadurch aendert, sanft an ihren neuen Platz gleiten statt
+        instantan zu springen -- der "leicht zur Seite rutschen"-Effekt aus
+        dem Nutzerfeedback. Positionen VOR dem Relayout festhalten, danach
+        (nach _panel_layout.activate(), siehe dort) die neuen Positionen
+        auslesen und nur bei tatsaechlicher Verschiebung animieren. Nutzt
+        _current_order() (ueber _relayout_panels()) wie jeder andere
+        Relayout-Aufruf auch -- _drag_preview_order (siehe _preview_panel_
+        drag) hat dort waehrend eines laufenden Drags automatisch Vorrang."""
+        old_positions = {panel: panel.pos() for panel in self._panels.values() if panel.isVisible()}
+        self._relayout_panels()
+        for panel, old_pos in old_positions.items():
+            new_pos = panel.pos()
+            if new_pos == old_pos:
+                continue
+            animation = QPropertyAnimation(panel, b"pos", panel)
+            animation.setDuration(140)
+            animation.setStartValue(old_pos)
+            animation.setEndValue(new_pos)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _drop_panel(self, dragged_id: str, drop_pos) -> None:
-        """Setzt die gezogene Kachel an die Position, an der sie fallen
-        gelassen wurde -- Zielindex ueber die Mittelpunkte aller anderen,
-        aktuell platzierten Panels (Stretch-Element am Ende ausgenommen):
-        eingefuegt wird vor dem ersten Panel, dessen Mitte rechts vom
-        Drop-Punkt liegt, sonst ganz ans Ende."""
-        dragged_panel = self._panels.get(dragged_id)
-        if dragged_panel is None:
+        if dragged_id not in self._panels:
             return
-        old_index = self._panel_layout.indexOf(dragged_panel)
-        if old_index == -1:
-            return
-        insert_at = self._panel_layout.count() - 1
-        for i in range(self._panel_layout.count() - 1):
-            if i == old_index:
-                continue
-            widget = self._panel_layout.itemAt(i).widget()
-            if widget is None:
-                continue
-            if drop_pos.x() < widget.geometry().center().x():
-                insert_at = i
-                break
-        self._panel_layout.removeWidget(dragged_panel)
-        if old_index < insert_at:
-            insert_at -= 1
-        self._panel_layout.insertWidget(insert_at, dragged_panel, alignment=Qt.AlignmentFlag.AlignTop)
-        self._persist_panel_order()
+        order = self._order_with_dragged_at(dragged_id, drop_pos)
+        panel = self._drag_hidden_panel
+        self._drag_hidden_panel = None
+        self._drag_preview_order = None
+        self._persist_panel_order(order)
+        if panel is not None:
+            panel.show()
 
-    def _persist_panel_order(self) -> None:
-        order = []
-        for i in range(self._panel_layout.count() - 1):
-            widget = self._panel_layout.itemAt(i).widget()
-            device_id = self._device_id_for_panel(widget) if widget is not None else None
-            if device_id is not None:
-                order.append(device_id)
+    def _persist_panel_order(self, order: list[str]) -> None:
         self._pending_panel_order = order
+        self._relayout_panels()
         self.panel_order_changed.emit(order)
 
     def _relayout_panels(self, reset_width: bool = False) -> None:
@@ -671,7 +774,7 @@ class DashboardWidget(QGroupBox):
         # der untere Teil der Panels abgeschnitten.
         #
         # Breite (nur Normalansicht): alle Panels auf die breiteste
-        # Anforderung angleichen (analog zu ControlTab._equalize_sections) --
+        # Anforderung angleichen (analog zu ControlTab._relayout_grid) --
         # Last- und Netzteil-Panels brauchen unterschiedlich viel Platz (z.B.
         # 3 statt 2 Nachkommastellen), aber sollen optisch gleich breit
         # bleiben. Zwei Regeln halten die Panels dabei ruhig, statt sie bei
@@ -712,8 +815,68 @@ class DashboardWidget(QGroupBox):
                     if panel.minimumWidth() != self._panel_width or panel.maximumWidth() != self._panel_width:
                         panel.setFixedWidth(self._panel_width)
 
+            order = self._current_order()
+            for panel in self._panels.values():
+                self._panel_layout.removeWidget(panel)
+            if self._compact:
+                # Kompaktansicht bleibt ein einzeiliges Regal wie bisher (nur
+                # jetzt ueber QGridLayout statt QHBoxLayout platziert) -- die
+                # neuen Hoehenklassen (TILE_HEIGHT_BY_KIND) gelten bewusst nur
+                # fuer die Normalansicht, dort wo FEATURES.md Punkt 5 die
+                # doppelte Hoehe ueberhaupt erst herleitet (heutiges
+                # microHIL-Panel in der NORMALEN Ansicht). Zeile 1 (fuer
+                # doppelte Kacheln) bleibt deshalb ungenutzt/ungereserviert.
+                self._panel_layout.setRowMinimumHeight(0, 0)
+                self._panel_layout.setRowMinimumHeight(1, 0)
+                for col, device_id in enumerate(order):
+                    panel = self._panels[device_id]
+                    # Loest eine aus der Normalansicht uebernommene
+                    # setFixedHeight() (siehe unten) wieder -- sonst bliebe
+                    # z.B. eine microHIL-Kachel beim Umschalten in die
+                    # Kompaktansicht auf ihrer doppelten Normalansicht-Hoehe
+                    # eingefroren, obwohl ihr einzeiliger Kompaktinhalt
+                    # deutlich weniger Platz braucht.
+                    if panel.maximumHeight() != _WIDGET_SIZE_MAX:
+                        panel.setMinimumHeight(0)
+                        panel.setMaximumHeight(_WIDGET_SIZE_MAX)
+                    self._panel_layout.addWidget(panel, 0, col, alignment=Qt.AlignmentFlag.AlignTop)
+            else:
+                # Hoehen-Ratsche (analog zur Breiten-Ratsche oben): stellt
+                # sicher, dass die Basis-Zellhoehe im Normalfall auch die
+                # deutlich groessere microHIL-Kachel (doppelte Hoehe) bequem
+                # fasst.
+                height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
+                self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
+                # Erzwingt die volle Doppelzeilen-Hoehe auch dann, wenn
+                # aktuell gar keine doppelt hohe Kachel verbunden ist (siehe
+                # FEATURES.md Punkt 5: "doppelte Hoehe als maximale
+                # Ausdehnung") -- sonst wuerde die ScrollArea unten kleiner
+                # ausfallen und beim naechsten Verbinden einer microHIL
+                # sichtbar in der Hoehe springen.
+                self._panel_layout.setRowMinimumHeight(0, self._cell_height)
+                self._panel_layout.setRowMinimumHeight(1, self._cell_height)
+                spans = {d: self._tile_span(d) for d in order}
+                positions = pack_tiles_by_row(order, spans, max_rows=2)
+                for device_id, (row, col) in positions.items():
+                    panel = self._panels[device_id]
+                    row_span = spans[device_id][1]
+                    panel.setFixedHeight(row_span * self._cell_height + (row_span - 1) * GRID_SPACING)
+                    self._panel_layout.addWidget(
+                        panel, row, col, row_span, 1, alignment=Qt.AlignmentFlag.AlignTop
+                    )
+
+            # Erzwingt die sofortige Geometrie-Neuberechnung, statt auf die
+            # naechste Event-Loop-Runde zu warten -- _animate_relayout()
+            # liest direkt im Anschluss panel.pos() aus, das ohne dieses
+            # activate() noch die ALTE Position zeigen wuerde (Qt legt neue
+            # Layout-Geometrie sonst erst beim naechsten verarbeiteten
+            # Event fest).
+            self._panel_layout.activate()
+
         # Hoehe: etwas Rand fuer eine ggf. sichtbare horizontale Scrollleiste
-        # einrechnen.
+        # einrechnen. sizeHint() spiegelt in der Normalansicht wegen der
+        # oben erzwungenen setRowMinimumHeight()-Werte bereits zuverlaessig
+        # die volle Doppelzeilen-Hoehe wider.
         content_height = self._container.sizeHint().height()
         self._scroll_area.setFixedHeight(content_height + SCROLL_AREA_MARGIN)
 
@@ -750,24 +913,13 @@ class DashboardWidget(QGroupBox):
             if self._compact:
                 panel.set_compact(True)
             panel.hide()
-            # AlignTop: ohne diese Ausrichtung streckt QHBoxLayout jedes Panel
-            # auf die Hoehe des hoechsten Panels in der Reihe (Qt-Default fuer
-            # Box-Layouts ohne Alignment-Flag) -- sichtbar unnoetig viel Leer-
-            # raum unterhalb kuerzerer Panels (z.B. microHIL-Kompaktansicht
-            # neben Last-/Netzteil-Panels). Mit AlignTop endet der Rahmen
-            # jedes Panels bei seiner eigenen sizeHint()-Hoehe, wie es der
-            # Kommentar in _relayout_panels ("Hoehe ergibt sich aus dem
-            # tatsaechlichen Inhalt") ohnehin schon vorsieht.
-            self._panel_layout.insertWidget(
-                self._panel_layout.count() - 1, panel, alignment=Qt.AlignmentFlag.AlignTop
-            )
             panel.installEventFilter(self)
             self._panels[device_id] = panel
-            # Zieht das neue Panel sofort an die vom Nutzer zuletzt
-            # gewaehlte Position, falls fuer dieses Geraet schon eine
-            # gespeicherte Reihenfolge vorliegt (siehe set_panel_order) --
-            # sonst bliebe es einfach am Ende, egal wo es hingehoert.
-            self._apply_pending_order()
+            self._panel_kind[device_id] = kind
+            # Tatsaechliche Platzierung im Raster (Reihenfolge + Kachelgroesse)
+            # uebernimmt komplett _relayout_panels() (_current_order() setzt
+            # ein neues Panel automatisch ans Ende, falls fuer dieses Geraet
+            # noch keine gespeicherte Position vorliegt, siehe set_panel_order).
             self._update_empty_tile()
             self._relayout_panels()
         else:
@@ -789,6 +941,7 @@ class DashboardWidget(QGroupBox):
         panel.deleteLater()
         self._panel_colors.pop(device_id, None)
         self._compact_widths.pop(device_id, None)
+        self._panel_kind.pop(device_id, None)
         self._update_empty_tile()
         self._relayout_panels()
 
