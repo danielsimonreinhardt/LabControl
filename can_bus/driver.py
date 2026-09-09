@@ -2,11 +2,13 @@
 
 Unterstuetzt aktuell Vector- (z.B. CANcase XL, benoetigt die Vector XL
 Driver Library) und PEAK-Interfaces (z.B. PCAN-USB, benoetigt PCAN-Basic) --
-beides Fremd-Software, die separat installiert sein muss (siehe README.md).
-Ausserhalb dieses Moduls ist nie von einem konkreten Hersteller die Rede,
-nur noch von interface/channel/bitrate (siehe device_worker.py) -- neue
-Interface-Typen lassen sich durch Ergaenzen von INTERFACE_LIST anbinden,
-sofern python-can sie unterstuetzt.
+beides Fremd-Software, die separat installiert sein muss (siehe README.md) --
+sowie SLCAN (serielles/USB-CDC-Protokoll, u.a. vom microHIL-CAN1-Port
+gesprochen, siehe _slcan_serial_configs() unten). Ausserhalb dieses Moduls
+ist nie von einem konkreten Hersteller die Rede, nur noch von
+interface/channel/bitrate (siehe device_worker.py) -- neue Interface-Typen
+lassen sich durch Ergaenzen von INTERFACE_LIST anbinden, sofern python-can
+sie unterstuetzt.
 """
 from __future__ import annotations
 
@@ -18,11 +20,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import can
+from serial.tools import list_ports
 
 logger = logging.getLogger(__name__)
 
-INTERFACE_LIST = ["vector", "pcan"]
+INTERFACE_LIST = ["vector", "pcan", "slcan"]
 DEFAULT_BITRATE = 500_000
+# Baudrate der seriellen/USB-Verbindung ZUM Adapter (python-can-Parameter
+# `tty_baudrate`) -- zu unterscheiden von obigem DEFAULT_BITRATE, der
+# Bitrate AUF dem CAN-Bus selbst. Bei USB-CDC-Adaptern wie dem microHIL-
+# CAN1-Port wird dieser Wert vom virtuellen COM-Port ignoriert (analog zur
+# Anmerkung in microhil/driver.py), pyserial/python-can verlangen aber
+# trotzdem einen Wert -- 115200 ist der python-can-Standardwert und passt
+# zufaellig auch zu microhil/driver.py::DEFAULT_BAUDRATE.
+DEFAULT_SLCAN_SERIAL_BAUDRATE = 115200
 
 # Standard-Installationsort der Vector XL Driver Library (vxlapi64.dll landet
 # dort ueber den offiziellen Vector-Treiber-Installer) plus dem optionalen
@@ -129,6 +140,52 @@ def _vector_display_name(config: dict) -> str:
     return f"{name} (S/N {serial})" if serial is not None else name
 
 
+def _slcan_serial_configs() -> list[dict]:
+    """Verfuegbare serielle Ports als SLCAN-Kandidaten.
+
+    Anders als Vector/PCAN kennt python-can fuer SLCAN keine eigene
+    Geraete-Erkennung (`can.interfaces.slcan.slcanBus` implementiert kein
+    eigenes `_detect_available_configs()`, `can.detect_available_configs
+    (interfaces=["slcan"])` liefert deshalb immer eine leere Liste -- nach-
+    geprueft gegen python-can 4.6.1). Jeder serielle Port ist grundsaetzlich
+    ein moeglicher SLCAN-Adapter (generisches Protokoll, kein fester
+    VID/PID wie bei den uebrigen Treibern dieses Repos), daher hier direkt
+    ueber `serial.tools.list_ports` statt ueber python-can.
+
+    Sonderfall microHIL: dessen USB-Composite meldet zwei Ports unter
+    identischer VID:PID -- Interface 0 spricht das HIL-Kommandoprotokoll
+    (siehe microhil/driver.py), NICHT SLCAN, und wuerde hier ohne Filterung
+    als (nutzloser, weil falsches Protokoll) Kanal-Kandidat auftauchen.
+    `microhil.driver.MicroHIL.discover()` hat diese Unterscheidung (Interface
+    0 vs. 2 anhand hwid/LOCATION) bereits geloest -- wird hier wiederverwendet
+    statt neu erfunden, um den HIL-Port herauszufiltern und den CAN1-Port
+    (falls eindeutig bestimmbar) sprechend zu benennen. Bleibt die
+    Zuordnung mehrdeutig (HilError), wird NICHTS herausgefiltert -- lieber
+    alle Kandidaten zeigen als einen echten SLCAN-Port faelschlich zu
+    verstecken.
+    """
+    from microhil.driver import MicroHIL, HilError, CAN_INTERFACE_NUMBER as MICROHIL_CAN_INTERFACE
+    from microhil.driver import _interface_number as _microhil_interface_number
+
+    try:
+        hil_port = MicroHIL.discover()
+    except HilError:
+        hil_port = None
+    microhil_ports = {info.device: info for info in MicroHIL.discover_ports()}
+
+    configs: list[dict] = []
+    for info in list_ports.comports():
+        if info.device == hil_port:
+            continue  # microHIL HIL-Protokoll-Port, spricht kein SLCAN
+        display_name = info.description or info.device
+        if info.device in microhil_ports:
+            iface = _microhil_interface_number(microhil_ports[info.device])
+            if iface == MICROHIL_CAN_INTERFACE:
+                display_name = f"microHIL CAN1 ({info.device})"
+        configs.append(dict(interface="slcan", channel=info.device, display_name=display_name))
+    return configs
+
+
 class CanError(RuntimeError):
     """Fehler bei der Kommunikation ueber den CAN-Bus."""
 
@@ -153,7 +210,13 @@ class CanFrame:
 
 
 class CanBus:
-    def __init__(self, interface: str, channel: str, bitrate: int = DEFAULT_BITRATE):
+    def __init__(
+        self,
+        interface: str,
+        channel: str,
+        bitrate: int = DEFAULT_BITRATE,
+        serial_baudrate: int | None = None,
+    ):
         # python-can wirft je nach Backend/Fehlerursache sehr unterschiedliche
         # Exception-Typen (fehlende Vendor-DLL: OSError/ImportError, falscher
         # Kanal: eigene *InitializationError-Klassen, ...) -- breit gefangen
@@ -162,6 +225,10 @@ class CanBus:
         kwargs: dict = dict(interface=interface, channel=channel, bitrate=bitrate)
         if interface == "vector":
             kwargs.update(_vector_bus_kwargs(channel))
+        elif interface == "slcan":
+            # serial_baudrate ist fuer vector/pcan bedeutungslos (dort nie
+            # gesetzt) -- nur hier verwendet, siehe DEFAULT_SLCAN_SERIAL_BAUDRATE.
+            kwargs["tty_baudrate"] = serial_baudrate or DEFAULT_SLCAN_SERIAL_BAUDRATE
         try:
             self._bus = can.interface.Bus(**kwargs)
         except Exception as exc:
@@ -171,6 +238,7 @@ class CanBus:
         self.interface = interface
         self.channel = channel
         self.bitrate = bitrate
+        self.serial_baudrate = kwargs.get("tty_baudrate")
         self._opened = time.monotonic()
 
     @staticmethod
@@ -238,13 +306,20 @@ class CanBus:
                     errors[interface] = problem
                 continue
             try:
-                found = can.detect_available_configs(interfaces=[interface])
+                if interface == "slcan":
+                    # can.detect_available_configs() liefert fuer SLCAN immer
+                    # [] (siehe _slcan_serial_configs()-Docstring) -- eigene
+                    # Erkennung ueber serielle Ports statt python-can.
+                    found = _slcan_serial_configs()
+                else:
+                    found = can.detect_available_configs(interfaces=[interface])
             except Exception as exc:
                 logger.warning("CAN-Erkennung fuer '%s' fehlgeschlagen: %s", interface, exc)
                 if errors is not None:
                     errors[interface] = str(exc)
                 continue
             for config in found:
+                config.setdefault("interface", interface)
                 if interface == "vector":
                     config["display_name"] = _vector_display_name(config)
                     config["channel"] = f"{config.get('serial')}:{config.get('hw_channel')}"

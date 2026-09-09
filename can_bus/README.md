@@ -31,11 +31,43 @@ Code. Aktuell unterstützt (siehe `INTERFACE_LIST` in `driver.py`):
   werden.
 - `"pcan"` – PEAK-Interfaces (z.B. PCAN-USB). Benötigt **PCAN-Basic**
   (separat vom Hersteller installieren).
+- `"slcan"` – serielles/USB-CDC-Protokoll (`can.interfaces.slcan`), braucht
+  **keine** Vendor-DLL (pure Python + `pyserial`, bereits Projekt-Abhängigkeit).
+  Hauptanwendungsfall: der zweite COM-Port des microHIL (CAN1, siehe
+  `microhil/driver.py`-Moduldocstring und `docs/can-usb.md` im microHIL-Repo) –
+  funktioniert aber mit jedem SLCAN-fähigen Adapter.
 
-Beides ist Fremd-Software (Windows-Treiber/DLLs), die `python-can`
+  **Kanal = Name des seriellen Ports** (z.B. `"COM5"`), keine eigene
+  Kodierung wie bei Vector. Zwei Besonderheiten:
+  - `python-can`s `slcanBus` implementiert **keine eigene
+    `_detect_available_configs()`** – `can.detect_available_configs
+    (interfaces=["slcan"])` liefert deshalb immer `[]`. `discover_configs()`
+    nutzt für `"slcan"` stattdessen die eigene `_slcan_serial_configs()`
+    (direkt über `serial.tools.list_ports`, jeder serielle Port ist
+    grundsätzlich ein möglicher Kandidat).
+  - Der microHIL meldet HIL-Protokoll-Port (Interface 0) und CAN1/SLCAN-Port
+    (Interface 2) unter **identischer VID:PID** – `_slcan_serial_configs()`
+    filtert den HIL-Port über `microhil.driver.MicroHIL.discover()` heraus
+    (dieselbe hwid/LOCATION-Interface-Erkennung, die dort bereits für den
+    umgekehrten Fall gelöst ist) und benennt den CAN1-Port sprechend, statt
+    beide ununterscheidbar als rohen COM-Port-Namen zu zeigen.
+
+  Zusätzlich zu `bitrate` (Bus-Bitrate) kennt `CanBus` für `"slcan"` den
+  optionalen Konstruktor-Parameter `serial_baudrate`
+  (`DEFAULT_SLCAN_SERIAL_BAUDRATE = 115200`) – die Baudrate der seriellen/
+  USB-Verbindung ZUM Adapter (python-can-Parameter `tty_baudrate`), NICHT
+  die CAN-Bus-Bitrate. Bei USB-CDC-Adaptern wie dem microHIL ignoriert der
+  virtuelle COM-Port diesen Wert (analog zur Anmerkung in
+  `microhil/driver.py`), pyserial verlangt aber trotzdem einen. Wird im
+  Settings-Tab als eigene Spalte "Serial-Baudrate" konfiguriert (nur für
+  `"slcan"`-Zeilen aktiv) und in `settings.py::can_configs` als
+  `serial_baudrate` persistiert.
+
+Vector/PCAN sind Fremd-Software (Windows-Treiber/DLLs), die `python-can`
 voraussetzt – ohne installierten Vendor-Treiber liefert `discover_configs()`
 für den jeweiligen Interface-Typ einfach keine Kanäle (Fehler wird intern
-abgefangen), es gibt keine Fehlermeldung beim Programmstart.
+abgefangen), es gibt keine Fehlermeldung beim Programmstart. SLCAN braucht
+das nicht, kann daher nie an einem fehlenden Vendor-Treiber scheitern.
 
 ## Fallstrick beim .exe-Bau (war ein realer Bug)
 

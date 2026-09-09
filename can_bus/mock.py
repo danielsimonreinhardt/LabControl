@@ -22,10 +22,22 @@ DEMO_FRAMES: list[tuple[int, bytes]] = [
 
 
 class MockCanBus:
-    def __init__(self, interface: str = "mock", channel: str = "SIM", bitrate: int = 500_000):
+    def __init__(
+        self,
+        interface: str = "mock",
+        channel: str = "SIM",
+        bitrate: int = 500_000,
+        serial_baudrate: int | None = None,
+    ):
+        # serial_baudrate nur der Vollstaendigkeit halber angenommen (gleiche
+        # Konstruktor-Signatur wie CanBus.__init__, siehe driver.py) -- ein
+        # simulierter Bus hat keine echte serielle Verbindung, der Wert bleibt
+        # ungenutzt, wird aber wie bei CanBus als Attribut gespiegelt, falls
+        # aufrufender Code (z.B. eine Statusanzeige) ihn einmal abfragen will.
         self.interface = interface
         self.channel = channel
         self.bitrate = bitrate
+        self.serial_baudrate = serial_baudrate
         self.sent_frames: list[CanFrame] = []
         self._demo_index = count()
         self._start = time.monotonic()

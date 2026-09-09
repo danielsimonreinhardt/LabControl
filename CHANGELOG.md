@@ -7,6 +7,64 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **CAN-Bus: SLCAN-Interface (microHIL CAN1/zweiter COM-Port).** Siehe
+  [FEATURES.md](FEATURES.md) Punkt 2. Bisher unterstützte `can_bus/driver.py`
+  nur `interface="vector"`/`"pcan"` (Fremd-Software/Vendor-DLLs) --
+  `INTERFACE_LIST` um `"slcan"` ergänzt (`can.interfaces.slcan`, pure Python
+  + `pyserial`, keine Vendor-DLL nötig). Hauptanwendungsfall: der zweite
+  USB-COM-Port des microHIL (CAN1, Interface 2 des USB-Composite-Geräts,
+  siehe `microhil/driver.py`-Moduldocstring), der bisher bewusst außerhalb
+  des HIL-Treibers lag und dadurch nicht nutzbar war -- funktioniert aber
+  mit jedem SLCAN-fähigen Adapter.
+  - **Discovery:** `python-can`s `slcanBus` implementiert keine eigene
+    Kanal-Erkennung (`can.detect_available_configs(interfaces=["slcan"])`
+    liefert immer `[]`, gegen python-can 4.6.1 nachgeprüft) -- neue Funktion
+    `can_bus/driver.py::_slcan_serial_configs()` erkennt Kandidaten stattdessen
+    direkt über `serial.tools.list_ports` (jeder serielle Port ist ein
+    möglicher SLCAN-Adapter) und filtert dabei den microHIL-HIL-Protokoll-Port
+    (Interface 0, identische VID:PID wie der CAN1-Port) heraus, indem sie den
+    bereits gelösten Fall aus `microhil/driver.py::MicroHIL.discover()`
+    wiederverwendet (hwid/LOCATION-Interface-Erkennung), statt ihn neu zu
+    erfinden -- bei Mehrdeutigkeit (`HilError`) wird lieber nichts gefiltert,
+    als einen echten SLCAN-Kandidaten fälschlich zu verstecken. `CanBus.
+    discover_configs()` ruft für `"slcan"` diese Funktion statt
+    `can.detect_available_configs()` auf, unverändert für vector/pcan.
+  - **Serielle Baudrate:** `CanBus.__init__` bekommt einen neuen optionalen
+    Parameter `serial_baudrate` (nur für `"slcan"` wirksam, baut daraus den
+    python-can-Parameter `tty_baudrate`; Default `DEFAULT_SLCAN_SERIAL_
+    BAUDRATE = 115200`) -- zu unterscheiden von der CAN-Bus-`bitrate`, die
+    für alle Interface-Typen gilt. `device_worker.py::_reconnect_can()`
+    reicht `cfg.get("serial_baudrate")` durch. `requirements.txt` von
+    `python-can>=4.3` auf `>=4.5` angehoben (der Parametername
+    `tty_baudrate` existiert erst ab 4.5.0, davor `ttyBaudrate`).
+  - **Settings-Tab:** `_CanConfigTable` (`settings_tab.py`) bekommt eine
+    neue Spalte "Serial-Baudrate" (`SteppedSpinBox`, 1200-2.000.000 Bd) --
+    nur für `"slcan"`-Zeilen aktiv, bei Vector/PCAN deaktiviert (bewusst nicht
+    versteckt, damit keine je Zeile verschwindende Spalte verwirrt), live
+    umgeschaltet über `interface_combo.currentIndexChanged`. Wird in
+    `settings.py::can_configs` nur für `"slcan"`-Einträge mit persistiert
+    (`serial_baudrate`-Feld), um bestehende Vector/PCAN-Konfigurationen nicht
+    mit einem für sie bedeutungslosen Feld zu füllen.
+  - **Mock:** `can_bus/mock.py::MockCanBus` übernimmt dieselbe
+    Konstruktor-Signatur (`serial_baudrate`-Parameter, ungenutzt außer als
+    gespiegeltes Attribut) für Drop-in-Kompatibilität im Simulationsmodus.
+  - `LabControl.spec::CAN_HIDDENIMPORTS` (aus `INTERFACE_LIST` abgeleitet)
+    zieht `can.interfaces.slcan` automatisch mit, keine Änderung dort nötig.
+  - **Nur im Mock/ohne Hardware verifiziert** (kein microHIL an dieser
+    Session angeschlossen, siehe FEATURES.md Punkt 2/Aufgaben-Kontext):
+    Konstruktor-kwargs-Aufbau (`tty_baudrate` korrekt gesetzt/Default),
+    `_slcan_serial_configs()`-Filterlogik mit simulierten
+    `serial.tools.list_ports`-Einträgen (microHIL-Composite-Fall
+    nachgestellt: HIL-Port ohne LOCATION-Kennung korrekt herausgefiltert,
+    CAN1-Port korrekt erkannt/benannt), `Settings.can_configs`-Persistenz-
+    Roundtrip, `_CanConfigTable`-Spalten-Verhalten (offscreen), `MockCanBus`.
+    **Noch an echter Hardware zu verifizieren:** tatsächliche SLCAN-
+    Verbindung zum microHIL-CAN1-Port (`CanBus(interface="slcan", ...)`
+    gegen echten Adapter), reales CAN1-Traffic über diesen Port, ob Windows
+    den microHIL-HIL-Port in der Praxis tatsächlich ohne MI_xx/LOCATION-
+    Kennung meldet (bisher nur aus `microhil/driver.py`-Kommentaren
+    übernommen, dort selbst als an echter Hardware beobachtet dokumentiert,
+    hier aber nicht erneut nachgemessen).
 - **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
   `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
   (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als

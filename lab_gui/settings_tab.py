@@ -34,7 +34,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from can_bus.driver import INTERFACE_LIST as CAN_INTERFACE_LIST, CanBus, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
+from can_bus.driver import (
+    INTERFACE_LIST as CAN_INTERFACE_LIST,
+    CanBus,
+    DEFAULT_BITRATE as CAN_DEFAULT_BITRATE,
+    DEFAULT_SLCAN_SERIAL_BAUDRATE as CAN_DEFAULT_SLCAN_SERIAL_BAUDRATE,
+)
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import IconButton
@@ -185,7 +190,7 @@ class _DeviceInfoGroup(QGroupBox):
         self._firmware_value.setText(self._version if self._version else tr("unbekannt"))
 
 
-_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "label", "remove")
+_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "serial_baudrate", "label", "remove")
 
 
 class _CanConfigTable(QTableWidget):
@@ -193,7 +198,14 @@ class _CanConfigTable(QTableWidget):
     can_configs). Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
     can_bus/README.md) -- der Nutzer traegt Interface-Typ/Kanal/Bitrate hier
     explizit ein, ein "..."-Button pro Zeile bietet ueber CanBus.
-    discover_configs() gefundene Kanaele als Auswahl an."""
+    discover_configs() gefundene Kanaele als Auswahl an.
+
+    Die Spalte "Serial-Baudrate" ist nur fuer Interface-Typ "slcan" relevant
+    (Baudrate der seriellen/USB-Verbindung ZUM Adapter, siehe
+    can_bus/driver.py::DEFAULT_SLCAN_SERIAL_BAUDRATE) -- bei Vector/PCAN
+    bedeutungslos, daher fuer diese Zeilen deaktiviert statt versteckt (eine
+    verschwindende Spalte je Zeile waere verwirrender als ein blosses
+    deaktiviertes Feld)."""
 
     changed = Signal()  # irgendeine Zeile wurde hinzugefuegt/entfernt/bearbeitet
 
@@ -201,14 +213,14 @@ class _CanConfigTable(QTableWidget):
         super().__init__(0, len(_CAN_TABLE_COLUMNS))
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        for col in (0, 2, 3, 5):
+        self.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        for col in (0, 2, 3, 4, 6):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
-            [tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Bezeichnung"), ""]
+            [tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Serial-Baudrate"), tr("Bezeichnung"), ""]
         )
 
     def add_row(self, cfg: dict | None = None) -> None:
@@ -243,17 +255,30 @@ class _CanConfigTable(QTableWidget):
         bitrate_spin.valueChanged.connect(lambda _=None: self.changed.emit())
         self.setCellWidget(row, 3, bitrate_spin)
 
+        serial_baud_spin = SteppedSpinBox(small_step=1200, large_step=57_600)
+        serial_baud_spin.setRange(1200, 2_000_000)
+        serial_baud_spin.setSuffix(" Bd")
+        serial_baud_spin.setValue(int(cfg.get("serial_baudrate", CAN_DEFAULT_SLCAN_SERIAL_BAUDRATE)))
+        serial_baud_spin.valueChanged.connect(lambda _=None: self.changed.emit())
+        self.setCellWidget(row, 4, serial_baud_spin)
+
+        def _update_serial_baud_enabled(_index=None, spin=serial_baud_spin, combo=interface_combo) -> None:
+            spin.setEnabled(combo.currentData() == "slcan")
+
+        interface_combo.currentIndexChanged.connect(_update_serial_baud_enabled)
+        _update_serial_baud_enabled()
+
         label_edit = QLineEdit(str(cfg.get("label", "")))
         label_edit.editingFinished.connect(lambda: self.changed.emit())
-        self.setCellWidget(row, 4, label_edit)
+        self.setCellWidget(row, 5, label_edit)
 
         remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
         remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
-        self.setCellWidget(row, 5, remove_button)
+        self.setCellWidget(row, 6, remove_button)
 
     def _remove_row_of(self, widget: QWidget) -> None:
         for row in range(self.rowCount()):
-            if self.cellWidget(row, 5) is widget:
+            if self.cellWidget(row, 6) is widget:
                 self.removeRow(row)
                 self.changed.emit()
                 return
@@ -314,16 +339,25 @@ class _CanConfigTable(QTableWidget):
             interface_combo: QComboBox = self.cellWidget(row, 0)
             channel_edit: QLineEdit = self.cellWidget(row, 1)
             bitrate_spin: QSpinBox = self.cellWidget(row, 3)
-            label_edit: QLineEdit = self.cellWidget(row, 4)
+            serial_baud_spin: QSpinBox = self.cellWidget(row, 4)
+            label_edit: QLineEdit = self.cellWidget(row, 5)
             channel = channel_edit.text().strip()
             if not channel:
                 continue
-            result.append(dict(
-                interface=interface_combo.currentData(),
+            interface = interface_combo.currentData()
+            cfg = dict(
+                interface=interface,
                 channel=channel,
                 bitrate=bitrate_spin.value(),
                 label=label_edit.text().strip(),
-            ))
+            )
+            # serial_baudrate nur bei "slcan" mit abspeichern -- fuer
+            # vector/pcan bedeutungslos (siehe can_bus/README.md), wuerde
+            # settings.json sonst mit einem fuer diese Zeile irrelevanten
+            # Feld fuellen.
+            if interface == "slcan":
+                cfg["serial_baudrate"] = serial_baud_spin.value()
+            result.append(cfg)
         return result
 
     def set_configs(self, configs: list[dict]) -> None:
@@ -538,8 +572,10 @@ class SettingsTab(QWidget):
             section.retranslate()
         self._can_hint.setText(
             tr(
-                "CAN-Interfaces (Vector, PEAK/PCAN) -- werden hier explizit konfiguriert, "
-                "da anders als bei Last/Netzteil keine automatische Erkennung möglich ist."
+                "CAN-Interfaces (Vector, PEAK/PCAN, SLCAN -- z.B. der CAN1-Port des microHIL) "
+                "-- werden hier explizit konfiguriert, da anders als bei Last/Netzteil keine "
+                "automatische Erkennung möglich ist. \"Serial-Baudrate\" gilt nur für SLCAN "
+                "(Baudrate der seriellen/USB-Verbindung zum Adapter, nicht die CAN-Bitrate)."
             )
         )
         self._can_table.retranslate()

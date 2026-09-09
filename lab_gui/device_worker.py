@@ -611,7 +611,10 @@ class DeviceWorker(QObject):
             if device_id in self._can_buses:
                 continue
             try:
-                bus = CanBus(cfg["interface"], cfg["channel"], cfg.get("bitrate", CAN_DEFAULT_BITRATE))
+                bus = CanBus(
+                    cfg["interface"], cfg["channel"], cfg.get("bitrate", CAN_DEFAULT_BITRATE),
+                    serial_baudrate=cfg.get("serial_baudrate"),
+                )
             except CanConnectionError as exc:
                 logger.warning("CAN-Interface %s nicht erreichbar: %s", device_id, exc)
                 continue
