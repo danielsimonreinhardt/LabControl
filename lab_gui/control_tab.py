@@ -67,6 +67,20 @@ CAN_TRAFFIC_ROW_LIMIT = 50
 CAN_STANDARD_ID_MAX = 0x7FF
 CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
 
+
+def _format_decoded_value(value: object) -> str:
+    """Anzeige-Text eines einzelnen DBC-decodierten Signalwerts (siehe
+    CanControlGroup.append_decoded_signals) -- cantools liefert je nach
+    Signaldefinition int/float (skalierter Messwert) oder str (VAL_-Enum-
+    Choice, z.B. "CHARGING" statt der rohen Zahl). Floats werden ohne
+    unnoetige Nachkommastellen dargestellt (z.B. "12.3" statt "12.300000000000001",
+    ein bekanntes Rundungsartefakt reiner IEEE-754-Multiplikation bei der
+    Skalierung)."""
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
 # Feste Kachelgroessen im Control-Tab-Raster (FEATURES.md Punkt 4), als
 # Vielfache einer Basiszelle (siehe ControlTab._relayout_grid): Small ist
 # 1x1, die uebrigen sind Vielfache davon. Werte sind (col_span, row_span).
@@ -794,6 +808,11 @@ class CanControlGroup(QGroupBox):
         super().__init__()
         self._device_id = device_id
         self._color_key: str | None = None
+        # arbitration_id der zuletzt per append_frame eingefuegten Zeile --
+        # append_decoded_signals gleicht damit ab, dass eine spaeter
+        # eintreffende Decodierung wirklich noch zur zuletzt eingefuegten
+        # Zeile gehoert (siehe dort).
+        self._last_frame_id: int | None = None
         self.setTitle(label)
 
         outer = QVBoxLayout(self)
@@ -831,13 +850,20 @@ class CanControlGroup(QGroupBox):
         self._form.addRow(" ", self._data_row)
         _detint_label(self._form, self._data_row)
 
-        self._traffic_table = QTableWidget(0, 3)
+        # 4. Spalte "Signale" (decodierte DBC-Werte, siehe
+        # append_decoded_signals) -- rein additiv, ersetzt "Daten" (Rohdaten)
+        # nicht, siehe FEATURES.md Punkt 3. Bleibt leer, solange fuer dieses
+        # Interface keine DBC-Datei hinterlegt ist oder die arbitration_id
+        # eines Frames darin nicht definiert ist.
+        self._traffic_table = QTableWidget(0, 4)
         self._traffic_table.setHorizontalHeaderItem(0, QTableWidgetItem())
         self._traffic_table.setHorizontalHeaderItem(1, QTableWidgetItem())
         self._traffic_table.setHorizontalHeaderItem(2, QTableWidgetItem())
+        self._traffic_table.setHorizontalHeaderItem(3, QTableWidgetItem())
         self._traffic_table.verticalHeader().setVisible(False)
         self._traffic_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._traffic_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._traffic_table.setMinimumHeight(160)
         outer.addWidget(self._traffic_table, 1)
 
@@ -852,7 +878,9 @@ class CanControlGroup(QGroupBox):
         self._extended_check.setText(tr("Extended"))
         self._form.labelForField(self._data_row).setText(tr("Daten (Hex):"))
         self._send_button.setToolTip(tr("Senden"))
-        self._traffic_table.setHorizontalHeaderLabels([tr("Zeit (s)"), tr("ID"), tr("Daten")])
+        self._traffic_table.setHorizontalHeaderLabels(
+            [tr("Zeit (s)"), tr("ID"), tr("Daten"), tr("Signale (DBC)")]
+        )
 
     def _on_extended_toggled(self, extended: bool) -> None:
         self._id_spin.setRange(0, CAN_EXTENDED_ID_MAX if extended else CAN_STANDARD_ID_MAX)
@@ -869,8 +897,37 @@ class CanControlGroup(QGroupBox):
         self._traffic_table.setItem(0, 0, QTableWidgetItem(f"{timestamp:.3f}"))
         self._traffic_table.setItem(0, 1, QTableWidgetItem(id_text))
         self._traffic_table.setItem(0, 2, QTableWidgetItem(data_hex))
+        # Spalte "Signale" bleibt zunaechst leer -- eine ggf. passende
+        # Decodierung trifft (falls ueberhaupt) unmittelbar danach separat
+        # per append_decoded_signals ein, siehe dort.
+        self._traffic_table.setItem(0, 3, QTableWidgetItem(""))
+        self._last_frame_id = arbitration_id
         while self._traffic_table.rowCount() > CAN_TRAFFIC_ROW_LIMIT:
             self._traffic_table.removeRow(self._traffic_table.rowCount() - 1)
+
+    def append_decoded_signals(self, arbitration_id: int, decoded) -> None:
+        """Ergaenzt die Spalte "Signale" der zuletzt per append_frame
+        eingefuegten Zeile um die DBC-decodierten Werte -- ``decoded`` ist
+        ein can_bus.dbc.DecodedFrame (siehe control_tab.ControlTab.
+        on_can_signals_decoded).
+
+        Verlaesst sich auf die Aufrufreihenfolge in device_worker.
+        DeviceWorker._poll (can_frame_received wird dort fuer jeden Frame
+        IMMER unmittelbar vor einem etwaigen can_signals_decoded fuer
+        denselben Frame emittiert, beide ueber Queued Connections in genau
+        dieser Reihenfolge zugestellt) -- die arbitration_id-Pruefung unten
+        ist nur ein zusaetzliches Sicherheitsnetz: sollte diese Annahme
+        doch einmal nicht zutreffen, bleibt die Spalte fuer diesen Frame
+        schlicht leer, statt eine falsche Zeile zu befuellen.
+        """
+        if self._traffic_table.rowCount() == 0 or arbitration_id != self._last_frame_id:
+            return
+        text = ", ".join(
+            f"{signal.name}={_format_decoded_value(signal.value)}"
+            + (f" {signal.unit}" if signal.unit else "")
+            for signal in decoded.signals
+        )
+        self._traffic_table.setItem(0, 3, QTableWidgetItem(text))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
@@ -1735,6 +1792,17 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, CanControlGroup):
             section.append_frame(arbitration_id, data_hex, extended, timestamp)
+
+    def on_can_signals_decoded(self, device_id: str, arbitration_id: int, decoded) -> None:
+        """decoded: can_bus.dbc.DecodedFrame -- nur emittiert, wenn fuer
+        dieses Interface eine DBC-Datei hinterlegt ist und diese die
+        arbitration_id kennt (siehe device_worker.DeviceWorker.
+        can_signals_decoded). Ergaenzt die zuletzt per on_can_frame
+        eingetragene Zeile um die decodierten Signalwerte, ersetzt die
+        Rohdaten-Spalten dort NICHT (siehe FEATURES.md Punkt 3)."""
+        section = self._sections.get(device_id)
+        if isinstance(section, CanControlGroup):
+            section.append_decoded_signals(arbitration_id, decoded)
 
     def set_hil_digital_state(self, device_id: str, inputs: list, outputs: list) -> None:
         # Nur outputs relevant -- inputs sind rein lesend und werden bereits

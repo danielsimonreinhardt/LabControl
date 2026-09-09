@@ -131,5 +131,14 @@ with CanBus(interface="pcan", channel="PCAN_USBBUS1", bitrate=500_000) as bus:
   ab und bildet es auf `CanConnectionError`/`CanError` ab, analog zum
   `SerialException`-Fang in `hcs34xx/driver.py`.
 - Kein CAN-FD (nur klassisches CAN, max. 8 Datenbytes).
-- Keine DBC-Signaldecodierung – `recv()`/`send()` arbeiten auf
-  Roh-Frames (Arbitration-ID + Bytes), siehe FEATURES.md Punkt 3.
+- `recv()`/`send()` selbst arbeiten weiterhin ausschließlich auf Roh-Frames
+  (Arbitration-ID + Bytes) – DBC-Signaldecodierung ist bewusst NICHT Teil
+  von `driver.py`, sondern ein eigenständiges, optionales Modul
+  `can_bus/dbc.py` (nutzt `cantools`), das auf bereits empfangenen
+  `CanFrame`-Objekten arbeitet und unabhängig vom Interface-Typ ist. Pro
+  konfiguriertem Interface lässt sich im Einstellungen-Tab optional eine
+  DBC-Datei hinterlegen (`settings.py::can_configs`, Schlüssel
+  `"dbc_path"`); `device_worker.DeviceWorker` decodiert damit jeden
+  empfangenen Frame zusätzlich zu den unverändert weiter gemeldeten
+  Rohdaten (`can_signals_decoded`-Signal neben `can_frame_received`),
+  sichtbar in `control_tab.CanControlGroup`. Siehe FEATURES.md Punkt 3.

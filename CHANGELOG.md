@@ -65,6 +65,39 @@ Semantic Versioning (`lab_gui/version.py`).
     Kennung meldet (bisher nur aus `microhil/driver.py`-Kommentaren
     übernommen, dort selbst als an echter Hardware beobachtet dokumentiert,
     hier aber nicht erneut nachgemessen).
+- **CAN-Bus: DBC-Datei-Import + Signal-Decodierung.** Siehe
+  [FEATURES.md](FEATURES.md) Punkt 3. Neues Modul `can_bus/dbc.py`
+  (`load_dbc()`/`decode_frame()`, basiert auf neuer Abhängigkeit
+  `cantools`, siehe `requirements.txt`) -- bewusst eigenständig statt Teil
+  von `can_bus/driver.py`: Decodierung arbeitet ausschließlich auf bereits
+  empfangenen `CanFrame`-Objekten und ist unabhängig vom Interface-Typ
+  (vector/pcan/...). Pro konfiguriertem CAN-Interface lässt sich im
+  Einstellungen-Tab optional eine DBC-Datei hinterlegen (neue Spalte
+  "DBC-Datei" in `settings_tab._CanConfigTable`, neue Zelle
+  `_DbcFileCell` mit Dateiauswahl-/Entfernen-Button; probeweises Laden
+  beim Auswählen fängt eine kaputte/falsche Datei sofort mit einer
+  Fehlermeldung ab statt erst später lautlos im Log zu verschwinden),
+  persistiert in `settings.py::can_configs` unter dem neuen optionalen
+  Schlüssel `"dbc_path"`. `device_worker.DeviceWorker` lädt/aktualisiert
+  die DBC-Datenbank je Interface (`_reload_can_dbcs()`, gecacht nach Pfad,
+  läuft im bestehenden `_reconnect_can()`-Zyklus mit) und decodiert jeden
+  empfangenen Frame zusätzlich zu den unverändert weiter gemeldeten
+  Rohdaten über ein neues eigenes Signal `can_signals_decoded`
+  (device_id, arbitration_id, `can_bus.dbc.DecodedFrame`) -- bewusst
+  getrennt vom bestehenden `can_frame_received` (Rohdaten-Signal bleibt
+  unverändert, Rohdaten sind weiterhin wichtig fürs Debugging), damit ein
+  späterer weiterer Abnehmer (z.B. Testablauf-Solange/Wenn-Bedingungen,
+  siehe FEATURES.md Punkt 3: bewusst zurückgestellter Folgewunsch) sich
+  unabhängig von der GUI-Anzeige einklinken kann, ohne `can_bus/dbc.py`
+  ändern zu müssen. Sichtbar in `control_tab.CanControlGroup`: neue vierte
+  Spalte "Signale (DBC)" in der Live-Traffic-Tabelle ergänzt die
+  zugehörige Rohdaten-Zeile um `Signalname=Wert Einheit`, bleibt leer ohne
+  hinterlegte DBC-Datei oder bei unbekannter arbitration_id. Mit
+  `MockCanBus` und einer selbst geschriebenen Test-DBC (zwei Botschaften,
+  eine mit `VAL_`-Enum-Wertetabelle) end-to-end gegen `DeviceWorker`,
+  `_CanConfigTable`/`_DbcFileCell` und `ControlTab`/`CanControlGroup`
+  geprüft (Simulationsmodus, offscreen); reale Vector-/PCAN-Hardware und
+  reale, herstellerspezifische DBC-Dateien noch nicht verifiziert.
 - **Eigenes App-Icon (Taskleiste, Fenster, .exe).** Neues Modul
   `lab_gui/app_icon.py` zeichnet ein amberfarbenes "L" im Splash-Look
   (`tools/generate_splash.py`-Farben BG/ACCENT/TEXT) per QPainter statt als

@@ -6,6 +6,7 @@ asammdf>=8.0
 # Konstruktor-Parameter `tty_baudrate`, der erst seit 4.5.0 unter diesem
 # Namen existiert (davor `ttyBaudrate`).
 python-can>=4.5
+cantools>=40.0
 picosdk>=1.1
 
 # nur zum Bauen der .exe (siehe lab_gui/README.md)
