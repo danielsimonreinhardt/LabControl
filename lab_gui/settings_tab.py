@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+import qtawesome as qta
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -46,10 +48,20 @@ from can_bus.driver import (
 )
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
-from icons import IconButton
+from icons import ICON_SIZE, IconButton
 from paths import IS_FROZEN
+from remote_actions import CONTROL_KINDS
 from safety import SAFETY_LIMIT_FIELDS
+from settings import (
+    SHARE_BIND_LAN,
+    SHARE_BIND_LOCAL,
+    SHARE_CONTROL_TIMEOUT_MAX,
+    SHARE_CONTROL_TIMEOUT_MIN,
+    SHARE_PORT_MAX,
+    SHARE_PORT_MIN,
+)
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
+from theme import ThemeManager
 from theme import current as current_palette
 
 # field -> deutscher Basis-Anzeigename (Uebersetzungsschluessel), analog zu
@@ -194,7 +206,9 @@ class _DeviceInfoGroup(QGroupBox):
         self._firmware_value.setText(self._version if self._version else tr("unbekannt"))
 
 
-_CAN_TABLE_COLUMNS = ("interface", "channel", "pick", "bitrate", "serial_baudrate", "label", "dbc", "remove")
+_CAN_TABLE_COLUMNS = (
+    "interface", "channel", "pick", "status", "bitrate", "serial_baudrate", "label", "dbc", "remove",
+)
 
 
 class _DbcFileCell(QWidget):
@@ -288,28 +302,44 @@ class _CanConfigTable(QTableWidget):
     deaktiviertes Feld). Optional laesst sich pro Zeile zusaetzlich eine
     DBC-Datei hinterlegen (siehe _DbcFileCell), fuer die Signal-Decodierung
     empfangener CAN-Frames in control_tab.CanControlGroup (FEATURES.md
-    Punkt 3)."""
+    Punkt 3).
+
+    Spalte "Status": zeigt, wenn device_worker.DeviceWorker fuer diese Zeile
+    can_connect_error gemeldet hat, ein Warnsymbol mit dem Fehlertext als
+    Tooltip (siehe set_connect_error/clear_connect_error) -- vorher landete
+    ein gescheiterter Verbindungsversuch AUSSCHLIESSLICH im Log, die Zeile
+    sah unveraendert "normal konfiguriert" aus und das Interface tauchte
+    ohne jede erkennbare Ursache nirgends in der App auf (Nutzerfeedback,
+    genau das bereits aus den Vector-app_name-Bugs bekannte Muster, siehe
+    can_bus/driver.py::_vector_bus_kwargs-Docstring)."""
 
     changed = Signal()  # irgendeine Zeile wurde hinzugefuegt/entfernt/bearbeitet
 
     def __init__(self) -> None:
         super().__init__(0, len(_CAN_TABLE_COLUMNS))
         self.verticalHeader().setVisible(False)
-        for col in (1, 5, 6):
+        for col in (1, 6, 7):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-        for col in (0, 2, 3, 4, 7):
+        for col in (0, 2, 3, 4, 5, 8):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        # Ein interaktiv bearbeitetes Feld macht den zuletzt angezeigten
+        # Verbindungsfehler dieser Zeile ungueltig (neuer Verbindungsversuch
+        # steht unmittelbar bevor, siehe set_can_configs) -- blockSignals()
+        # in set_configs() unterdrueckt das beim reinen Neuladen aus
+        # settings.json (siehe dort), betrifft also wirklich nur echte
+        # Nutzer-Edits.
+        self.changed.connect(self._clear_all_connect_errors)
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
             [
-                tr("Interface"), tr("Kanal"), "", tr("Bitrate"), tr("Serial-Baudrate"),
+                tr("Interface"), tr("Kanal"), "", "", tr("Bitrate"), tr("Serial-Baudrate"),
                 tr("Bezeichnung"), tr("DBC-Datei"), "",
             ]
         )
         for row in range(self.rowCount()):
-            dbc_cell: _DbcFileCell = self.cellWidget(row, 6)
+            dbc_cell: _DbcFileCell = self.cellWidget(row, 7)
             dbc_cell.retranslate()
 
     def add_row(self, cfg: dict | None = None) -> None:
@@ -351,19 +381,25 @@ class _CanConfigTable(QTableWidget):
         pick_button.clicked.connect(lambda _=None, r=row: self._pick_channel(r))
         self.setCellWidget(row, 2, pick_button)
 
+        # Verbindungsfehler-Anzeige (siehe Klassendoc) -- leer/versteckt,
+        # solange kein can_connect_error fuer diese Zeile gemeldet wurde.
+        status_label = QLabel()
+        status_label.hide()
+        self.setCellWidget(row, 3, status_label)
+
         bitrate_spin = SteppedSpinBox(small_step=1000, large_step=100_000)
         bitrate_spin.setRange(10_000, 1_000_000)
         bitrate_spin.setSuffix(" bit/s")
         bitrate_spin.setValue(int(cfg.get("bitrate", CAN_DEFAULT_BITRATE)))
         bitrate_spin.valueChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 3, bitrate_spin)
+        self.setCellWidget(row, 4, bitrate_spin)
 
         serial_baud_spin = SteppedSpinBox(small_step=1200, large_step=57_600)
         serial_baud_spin.setRange(1200, 2_000_000)
         serial_baud_spin.setSuffix(" Bd")
         serial_baud_spin.setValue(int(cfg.get("serial_baudrate", CAN_DEFAULT_SLCAN_SERIAL_BAUDRATE)))
         serial_baud_spin.valueChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 4, serial_baud_spin)
+        self.setCellWidget(row, 5, serial_baud_spin)
 
         def _update_serial_baud_enabled(_index=None, spin=serial_baud_spin, combo=interface_combo) -> None:
             spin.setEnabled(combo.currentData() == "slcan")
@@ -373,20 +409,20 @@ class _CanConfigTable(QTableWidget):
 
         label_edit = QLineEdit(str(cfg.get("label", "")))
         label_edit.editingFinished.connect(lambda: self.changed.emit())
-        self.setCellWidget(row, 5, label_edit)
+        self.setCellWidget(row, 6, label_edit)
 
         dbc_cell = _DbcFileCell(str(cfg.get("dbc_path", "")))
         dbc_cell.changed.connect(lambda: self.changed.emit())
         dbc_cell.retranslate()
-        self.setCellWidget(row, 6, dbc_cell)
+        self.setCellWidget(row, 7, dbc_cell)
 
         remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
         remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
-        self.setCellWidget(row, 7, remove_button)
+        self.setCellWidget(row, 8, remove_button)
 
     def _remove_row_of(self, widget: QWidget) -> None:
         for row in range(self.rowCount()):
-            if self.cellWidget(row, 7) is widget:
+            if self.cellWidget(row, 8) is widget:
                 self.removeRow(row)
                 self.changed.emit()
                 return
@@ -455,10 +491,10 @@ class _CanConfigTable(QTableWidget):
         for row in range(self.rowCount()):
             interface_combo: QComboBox = self.cellWidget(row, 0)
             channel_edit: QLineEdit = self.cellWidget(row, 1)
-            bitrate_spin: QSpinBox = self.cellWidget(row, 3)
-            serial_baud_spin: QSpinBox = self.cellWidget(row, 4)
-            label_edit: QLineEdit = self.cellWidget(row, 5)
-            dbc_cell: _DbcFileCell = self.cellWidget(row, 6)
+            bitrate_spin: QSpinBox = self.cellWidget(row, 4)
+            serial_baud_spin: QSpinBox = self.cellWidget(row, 5)
+            label_edit: QLineEdit = self.cellWidget(row, 6)
+            dbc_cell: _DbcFileCell = self.cellWidget(row, 7)
             # Zeigt das Feld gerade den sprechenden Namen aus dem
             # Auswahl-Popup an (siehe _pick_channel/add_row, BUGS_
             # GESCHLOSSEN.md #34), gilt weiterhin das dort hinterlegte
@@ -484,10 +520,186 @@ class _CanConfigTable(QTableWidget):
             result.append(cfg)
         return result
 
+    def _row_device_id(self, row: int) -> str:
+        """Wie device_worker.can_device_id(cfg), aber direkt aus den
+        aktuellen Zelleninhalten einer Zeile -- fuer den Abgleich mit
+        can_connect_error/can_connected, die beide nur die device_id kennen,
+        nicht den Zeilenindex (Zeilen koennen sich beim Hinzufuegen/Entfernen
+        verschieben)."""
+        interface_combo: QComboBox = self.cellWidget(row, 0)
+        channel_edit: QLineEdit = self.cellWidget(row, 1)
+        token = channel_edit.property("_channel_token")
+        channel = str(token).strip() if token else channel_edit.text().strip()
+        return f"can:{interface_combo.currentData()}:{channel}"
+
+    def set_connect_error(self, device_id: str, message: str) -> None:
+        for row in range(self.rowCount()):
+            if self._row_device_id(row) == device_id:
+                status_label: QLabel = self.cellWidget(row, 3)
+                status_label.setToolTip(message)
+                status_label.setPixmap(
+                    qta.icon("mdi.alert-circle-outline", color=current_palette().danger)
+                    .pixmap(ICON_SIZE)
+                )
+                status_label.show()
+                return
+
+    def clear_connect_error(self, device_id: str) -> None:
+        for row in range(self.rowCount()):
+            if self._row_device_id(row) == device_id:
+                status_label: QLabel = self.cellWidget(row, 3)
+                status_label.hide()
+                status_label.setToolTip("")
+                return
+
+    def _clear_all_connect_errors(self) -> None:
+        for row in range(self.rowCount()):
+            status_label: QLabel = self.cellWidget(row, 3)
+            if status_label is not None:
+                status_label.hide()
+
     def set_configs(self, configs: list[dict]) -> None:
         self.setRowCount(0)
         for cfg in configs:
             self.add_row(cfg)
+
+
+class _ShareTable(QTableWidget):
+    """Freigabe je Geraet: welche Kachel darf nach aussen gelesen bzw.
+    gesteuert werden.
+
+    Tabelle statt je einer QGroupBox pro Geraet (wie bei den Sicherheits-
+    Grenzwerten): es geht um zwei Haken pro Zeile, und 3-10 Geraete sind als
+    Raster deutlich besser zu ueberblicken als als Sektionsliste. Der
+    Zeilen-Lebenszyklus folgt trotzdem dem Muster von _safety_sections
+    (on_device_known/forget_device in SettingsTab).
+    """
+
+    share_changed = Signal(str, bool, bool)  # device_id, read, control
+
+    COL_LABEL, COL_ID, COL_READ, COL_CONTROL = range(4)
+
+    # Geraetearten mit einer Zeile in dieser Tabelle. Das Oszilloskop bleibt
+    # draussen (eigenes Sonderpanel, exklusives Handle, keine Werte fuer eine
+    # Anzeige). Steuern gibt es nur fuer remote_actions.CONTROL_KINDS: CAN
+    # ist lesbar, aber nie fernsteuerbar.
+    SUPPORTED_KINDS = ("load", "psu", "can", "hil")
+
+    def __init__(self) -> None:
+        super().__init__(0, 4)
+        self.verticalHeader().setVisible(False)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.horizontalHeader().setStretchLastSection(False)
+        self._rows: dict[str, int] = {}
+        self._kinds: dict[str, str] = {}
+
+    def retranslate(self) -> None:
+        self.setHorizontalHeaderLabels(
+            [tr("Gerät"), tr("Geräte-ID"), tr("Lesen"), tr("Steuern")]
+        )
+        for device_id, row in self._rows.items():
+            widget = self.cellWidget(row, self.COL_CONTROL)
+            if widget is not None:
+                widget.setToolTip(self._control_tooltip(self._kinds.get(device_id, "")))
+
+    @staticmethod
+    def _control_tooltip(kind: str) -> str:
+        if kind in CONTROL_KINDS:
+            return tr("Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)")
+        return tr("Dieses Gerät lässt sich nicht fernsteuern")
+
+    def _checkbox(self, device_id: str, column: int, enabled: bool) -> QWidget:
+        box = QCheckBox()
+        box.setEnabled(enabled)
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(box)
+        layout.setAlignment(box, Qt.AlignmentFlag.AlignCenter)
+        box.toggled.connect(lambda _c, d=device_id, c=column: self._on_toggled(d, c))
+        setattr(holder, "checkbox", box)
+        return holder
+
+    def _box(self, device_id: str, column: int) -> QCheckBox | None:
+        holder = self.cellWidget(self._rows[device_id], column)
+        return getattr(holder, "checkbox", None) if holder is not None else None
+
+    def _on_toggled(self, device_id: str, column: int) -> None:
+        """Steuern setzt Lesen voraus (ohne Sicht auf die Kachel gibt es kein
+        Steuern), und Lesen abwaehlen nimmt Steuern zurueck. Settings
+        normalisiert dasselbe noch einmal -- das hier haelt nur die Anzeige
+        ehrlich."""
+        if device_id not in self._rows:
+            return
+        read = self._box(device_id, self.COL_READ)
+        control = self._box(device_id, self.COL_CONTROL)
+        if read is not None and control is not None:
+            if column == self.COL_CONTROL and control.isChecked() and not read.isChecked():
+                read.blockSignals(True)
+                read.setChecked(True)
+                read.blockSignals(False)
+            elif column == self.COL_READ and not read.isChecked() and control.isChecked():
+                control.blockSignals(True)
+                control.setChecked(False)
+                control.blockSignals(False)
+        self._emit(device_id)
+
+    def _emit(self, device_id: str) -> None:
+        if device_id not in self._rows:
+            return
+        read = self._box(device_id, self.COL_READ)
+        control = self._box(device_id, self.COL_CONTROL)
+        self.share_changed.emit(
+            device_id,
+            bool(read.isChecked()) if read else False,
+            bool(control.isChecked()) if control else False,
+        )
+
+    def add_device(self, kind: str, device_id: str, label: str) -> None:
+        if kind not in self.SUPPORTED_KINDS:
+            return
+        if device_id in self._rows:
+            self.set_label(device_id, label)
+            return
+        row = self.rowCount()
+        self.insertRow(row)
+        self._rows[device_id] = row
+        self.setItem(row, self.COL_LABEL, QTableWidgetItem(label))
+        self.setItem(row, self.COL_ID, QTableWidgetItem(device_id))
+        self._kinds[device_id] = kind
+        self.setCellWidget(row, self.COL_READ, self._checkbox(device_id, self.COL_READ, True))
+        control_cell = self._checkbox(device_id, self.COL_CONTROL, kind in CONTROL_KINDS)
+        control_cell.setToolTip(self._control_tooltip(kind))
+        self.setCellWidget(row, self.COL_CONTROL, control_cell)
+        self.resizeColumnsToContents()
+
+    def set_label(self, device_id: str, label: str) -> None:
+        row = self._rows.get(device_id)
+        if row is not None:
+            self.setItem(row, self.COL_LABEL, QTableWidgetItem(label))
+
+    def remove_device(self, device_id: str) -> None:
+        row = self._rows.pop(device_id, None)
+        self._kinds.pop(device_id, None)
+        if row is None:
+            return
+        self.removeRow(row)
+        # Nachfolgende Zeilen ruecken auf -- Index-Zuordnung nachziehen.
+        for other, other_row in self._rows.items():
+            if other_row > row:
+                self._rows[other] = other_row - 1
+
+    def set_share(self, devices: dict) -> None:
+        for device_id in self._rows:
+            entry = devices.get(device_id, {})
+            for column, key in ((self.COL_READ, "read"), (self.COL_CONTROL, "control")):
+                box = self._box(device_id, column)
+                if box is None:
+                    continue
+                box.blockSignals(True)
+                box.setChecked(bool(entry.get(key)))
+                box.blockSignals(False)
 
 
 class SettingsTab(QWidget):
@@ -504,6 +716,18 @@ class SettingsTab(QWidget):
     # nicht direkt).
     reset_devices_requested = Signal()
 
+    # Netzwerk-Freigabe (siehe share_server.py). Wie ueberall im
+    # Einstellungen-Tab: nur melden, Settings fasst dieser Tab nie an.
+    share_enabled_toggled = Signal(bool)
+    share_bind_selected = Signal(str)
+    share_port_changed = Signal(int)
+    share_token_regenerate_requested = Signal()
+    share_read_token_toggled = Signal(bool)
+    share_access_log_toggled = Signal(bool)
+    share_device_changed = Signal(str, bool, bool)  # device_id, read, control
+    share_control_toggled = Signal(bool)            # Hauptschalter Fernsteuerung
+    share_control_timeout_changed = Signal(int)     # Minuten
+
     def __init__(self) -> None:
         super().__init__()
         outer_layout = QVBoxLayout(self)
@@ -516,6 +740,7 @@ class SettingsTab(QWidget):
         self._subtabs.addTab(_scrollable(self._build_devices_page()), "")
         self._subtabs.addTab(_scrollable(self._build_can_page()), "")
         self._subtabs.addTab(_scrollable(self._build_safety_page()), "")
+        self._subtabs.addTab(_scrollable(self._build_network_page()), "")
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -661,6 +886,220 @@ class SettingsTab(QWidget):
         layout.addStretch()
         return page
 
+    def _retranslate_network(self) -> None:
+        self._share_hint.setText(
+            tr(
+                "Stellt ausgewählte Kacheln im lokalen Netzwerk bereit: zum Anzeigen, z.B.\n"
+                "für ein ESP32-Display oder einen Browser auf dem Handy, und — nur wenn\n"
+                "ausdrücklich erlaubt — zum Fernsteuern. Es wird nichts freigegeben, solange\n"
+                "unten kein Haken bei „Lesen“ gesetzt ist. Der Zugriff ist unverschlüsselt\n"
+                "und nur für ein vertrauenswürdiges Heim- oder Labornetz gedacht — den Port\n"
+                "niemals aus dem Internet erreichbar machen (keine Portfreigabe, kein UPnP)."
+            )
+        )
+        self._share_enabled_checkbox.setText(tr("Freigabe im lokalen Netzwerk aktivieren"))
+        self._share_bind_label.setText(tr("Erreichbar für"))
+        self._share_bind_combo.setItemText(0, tr("Nur diesen PC"))
+        self._share_bind_combo.setItemText(1, tr("Alle Geräte im lokalen Netzwerk"))
+        self._share_port_label.setText(tr("Port"))
+        self._share_url_label.setText(tr("Adresse"))
+        self._share_url_edit.setToolTip(tr("Diese Adresse im ESP32-Sketch oder Browser verwenden"))
+        self._share_token_label.setText(tr("Token"))
+        self._share_token_new.setToolTip(tr("Neuen Token erzeugen (macht den alten ungültig)"))
+        self._share_token_copy.setToolTip(tr("Token in die Zwischenablage kopieren"))
+        self._share_read_token_checkbox.setText(tr("Lesezugriff ohne Token erlauben"))
+        self._share_access_log_checkbox.setText(
+            tr("Zugriffe protokollieren (eigene Datei share_access.log)")
+        )
+        self._share_control_hint.setText(
+            tr(
+                "Fernsteuerung: Über das Netzwerk lassen sich Sollwerte setzen und Ausgänge\n"
+                "schalten (z.B. durch einen KI-Assistenten über den MCP-Server). Sie gilt nur\n"
+                "für Geräte mit Haken bei „Steuern“, nur bei aktivem Hauptschalter, nie\n"
+                "während eines Testlaufs oder nach einer Sicherheitsabschaltung — und immer\n"
+                "nur mit Token. „ALLE AUS“ geht jederzeit."
+            )
+        )
+        self._share_control_checkbox.setText(tr("Fernsteuerung aktiv"))
+        self._share_control_timeout_label.setText(tr("Schaltet sich ab nach"))
+        self._share_devices_hint.setText(
+            tr(
+                "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\n"
+                "zusätzlich, sie zu bedienen. Steuern setzt Lesen voraus."
+            )
+        )
+        self._share_table.retranslate()
+
+    def _build_network_page(self) -> QWidget:
+        """Reiter "Netzwerk": ausgewaehlte Kacheln im lokalen Netz bereitstellen
+        (siehe share_server.py). Aufbau bewusst wie _build_can_page(): Hinweis,
+        Bedienelemente, dynamische Geraeteliste."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self._share_hint = QLabel()
+        self._share_hint.setWordWrap(True)
+        self._share_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._share_hint)
+
+        self._share_enabled_checkbox = QCheckBox()
+        self._share_enabled_checkbox.toggled.connect(self.share_enabled_toggled)
+        layout.addWidget(self._share_enabled_checkbox)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+
+        # Auswahlliste statt Freitextfeld: die Entscheidung "nur dieser PC"
+        # gegen "ganzes Netz" ist sicherheitsrelevant und soll weder
+        # vertippbar noch versehentlich auf eine dritte Adresse setzbar sein.
+        self._share_bind_combo = QComboBox()
+        self._share_bind_combo.addItem("", SHARE_BIND_LOCAL)
+        self._share_bind_combo.addItem("", SHARE_BIND_LAN)
+        self._share_bind_combo.currentIndexChanged.connect(
+            lambda _i: self.share_bind_selected.emit(self._share_bind_combo.currentData())
+        )
+        self._share_bind_label = QLabel()
+        form.addRow(self._share_bind_label, self._share_bind_combo)
+
+        self._share_port_spin = SteppedSpinBox()
+        self._share_port_spin.setRange(SHARE_PORT_MIN, SHARE_PORT_MAX)
+        self._share_port_spin.valueChanged.connect(self.share_port_changed)
+        self._share_port_label = QLabel()
+        form.addRow(self._share_port_label, self._share_port_spin)
+
+        # Fertige Adresse zum Abtippen in den ESP32-Sketch -- schreibgeschuetzt,
+        # aber markier- und kopierbar.
+        self._share_url_edit = QLineEdit()
+        self._share_url_edit.setReadOnly(True)
+        self._share_url_label = QLabel()
+        form.addRow(self._share_url_label, self._share_url_edit)
+
+        self._share_token_edit = QLineEdit()
+        self._share_token_edit.setReadOnly(True)
+        self._share_token_new = IconButton("mdi.refresh", "")
+        self._share_token_new.clicked.connect(self.share_token_regenerate_requested)
+        self._share_token_copy = IconButton("mdi.content-copy", "")
+        self._share_token_copy.clicked.connect(self._on_share_token_copy)
+        token_row = QWidget()
+        token_layout = QHBoxLayout(token_row)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.addWidget(self._share_token_edit, 1)
+        token_layout.addWidget(self._share_token_new)
+        token_layout.addWidget(self._share_token_copy)
+        self._share_token_label = QLabel()
+        form.addRow(self._share_token_label, token_row)
+        layout.addLayout(form)
+
+        self._share_read_token_checkbox = QCheckBox()
+        # Invertiert zur Einstellung: gefragt wird "ohne Token erlauben",
+        # gespeichert wird "Token erforderlich" -- der Haken soll die
+        # Lockerung sein, nicht die Absicherung.
+        self._share_read_token_checkbox.toggled.connect(
+            lambda checked: self.share_read_token_toggled.emit(not checked)
+        )
+        layout.addWidget(self._share_read_token_checkbox)
+
+        self._share_access_log_checkbox = QCheckBox()
+        self._share_access_log_checkbox.toggled.connect(self.share_access_log_toggled)
+        layout.addWidget(self._share_access_log_checkbox)
+
+        self._share_status = QLabel()
+        self._share_status.setWordWrap(True)
+        layout.addWidget(self._share_status)
+
+        layout.addWidget(_separator())
+
+        # -- Fernsteuerung: Hauptschalter mit Zeitlimit ----------------------
+        self._share_control_hint = QLabel()
+        self._share_control_hint.setWordWrap(True)
+        self._share_control_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._share_control_hint)
+
+        # Nicht gespeichert: nach jedem App-Start ist die Fernsteuerung aus.
+        # Wer sie einschaltet, gibt bewusst ein Zeitfenster her.
+        self._share_control_checkbox = QCheckBox()
+        self._share_control_checkbox.toggled.connect(self.share_control_toggled)
+        layout.addWidget(self._share_control_checkbox)
+
+        control_form = QFormLayout()
+        control_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self._share_control_timeout_spin = SteppedSpinBox()
+        self._share_control_timeout_spin.setRange(SHARE_CONTROL_TIMEOUT_MIN, SHARE_CONTROL_TIMEOUT_MAX)
+        self._share_control_timeout_spin.setSuffix(" min")
+        self._share_control_timeout_spin.valueChanged.connect(self.share_control_timeout_changed)
+        self._share_control_timeout_label = QLabel()
+        control_form.addRow(self._share_control_timeout_label, self._share_control_timeout_spin)
+        layout.addLayout(control_form)
+
+        self._share_control_status = QLabel()
+        layout.addWidget(self._share_control_status)
+
+        layout.addWidget(_separator())
+
+        self._share_devices_hint = QLabel()
+        self._share_devices_hint.setWordWrap(True)
+        self._share_devices_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._share_devices_hint)
+
+        self._share_table = _ShareTable()
+        self._share_table.share_changed.connect(self.share_device_changed)
+        layout.addWidget(self._share_table)
+
+        layout.addStretch()
+        return page
+
+    def _on_share_token_copy(self) -> None:
+        QApplication.clipboard().setText(self._share_token_edit.text())
+
+    # -- Netzwerk-Freigabe: Zustand von MainWindow hereinreichen -------------
+
+    def set_share_config(self, config: dict) -> None:
+        """Schiebt den persistierten Stand in die Bedienelemente.
+
+        blockSignals rundherum, damit das Befuellen nicht als Nutzeraktion
+        zurueckgemeldet wird (gleiches Muster wie set_dark_mode etc.).
+        """
+        for widget in (self._share_enabled_checkbox, self._share_bind_combo,
+                       self._share_port_spin, self._share_read_token_checkbox,
+                       self._share_access_log_checkbox, self._share_control_timeout_spin):
+            widget.blockSignals(True)
+        self._share_enabled_checkbox.setChecked(bool(config.get("enabled")))
+        index = self._share_bind_combo.findData(config.get("bind", SHARE_BIND_LOCAL))
+        if index >= 0:
+            self._share_bind_combo.setCurrentIndex(index)
+        self._share_port_spin.setValue(int(config.get("port", SHARE_PORT_MIN)))
+        self._share_read_token_checkbox.setChecked(not config.get("read_requires_token", True))
+        self._share_access_log_checkbox.setChecked(bool(config.get("access_log")))
+        self._share_control_timeout_spin.setValue(
+            int(config.get("control_timeout_min", SHARE_CONTROL_TIMEOUT_MIN)))
+        for widget in (self._share_enabled_checkbox, self._share_bind_combo,
+                       self._share_port_spin, self._share_read_token_checkbox,
+                       self._share_access_log_checkbox, self._share_control_timeout_spin):
+            widget.blockSignals(False)
+        self._share_token_edit.setText(config.get("token", ""))
+        self._share_table.set_share(config.get("devices", {}))
+
+    def set_share_status(self, text: str, is_error: bool) -> None:
+        self._share_status.setText(text)
+        color = current_palette().danger if is_error else current_palette().text_muted
+        self._share_status.setStyleSheet(f"color: {color};")
+
+    def set_share_control_state(self, active: bool, text: str) -> None:
+        """Zeigt den Zustand des Hauptschalters an (von MainWindow, sekuendlich
+        waehrend er an ist). Setzt den Haken ohne Signal -- die Anzeige folgt
+        dem Zustand, sie loest ihn nicht aus. Nach einem Ablauf steht der Haken
+        so wieder auf aus."""
+        self._share_control_checkbox.blockSignals(True)
+        self._share_control_checkbox.setChecked(active)
+        self._share_control_checkbox.blockSignals(False)
+        color = current_palette().warning if active else current_palette().text_muted
+        self._share_control_status.setStyleSheet(f"color: {color}; font-weight: bold;" if active
+                                                 else f"color: {color};")
+        self._share_control_status.setText(text)
+
+    def set_share_url(self, url: str) -> None:
+        self._share_url_edit.setText(url)
+
     def _retranslate(self) -> None:
         self._sim_checkbox.setText(tr("Simulationsmodus (simulierte Geräte statt Hardware)"))
         self._hint.setText(
@@ -712,6 +1151,8 @@ class SettingsTab(QWidget):
         self._subtabs.setTabText(1, tr("Geräte"))
         self._subtabs.setTabText(2, tr("CAN-Bus"))
         self._subtabs.setTabText(3, tr("Sicherheit"))
+        self._subtabs.setTabText(4, tr("Netzwerk"))
+        self._retranslate_network()
 
     def set_simulation_mode(self, enabled: bool) -> None:
         self._sim_checkbox.blockSignals(True)
@@ -773,6 +1214,7 @@ class SettingsTab(QWidget):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         if kind == "hil":
             self._ensure_info_section(device_id, label)
+        self._share_table.add_device(kind, device_id, label)
         if not SAFETY_LIMIT_FIELDS.get(kind):
             # CAN/Oszilloskop/HIL sind nicht sicherheitsrelevant (keine
             # Watchdog-Grenzwerte, siehe SAFETY_LIMIT_FIELDS) -- keine leere
@@ -801,6 +1243,7 @@ class SettingsTab(QWidget):
         self._safety_section_rows[device_id] = row_widget
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        self._share_table.set_label(device_id, label)
         info_section = self._info_sections.get(device_id)
         if info_section is not None:
             info_section.set_label(label)
@@ -810,9 +1253,12 @@ class SettingsTab(QWidget):
 
     def forget_device(self, device_id: str) -> None:
         """Entfernt die Geraete-Info- und Sicherheits-Grenzwert-Sektion eines
-        Geraets vollstaendig -- nur fuer den "Geraetezuordnung loeschen"-Button
-        (main_window._on_reset_devices_requested) gedacht, siehe
+        Geraets vollstaendig -- fuer den "Geraetezuordnung loeschen"-Button
+        (main_window._on_reset_devices_requested) und fuer ein einzelnes, in
+        den Einstellungen geloeschtes CAN-Interface
+        (main_window._on_can_configs_changed), siehe
         dashboard.DashboardWidget.forget_device fuer die Begruendung."""
+        self._share_table.remove_device(device_id)
         self._info_sections.pop(device_id, None)
         info_row_widget = self._info_section_rows.pop(device_id, None)
         if info_row_widget is not None:
@@ -839,6 +1285,15 @@ class SettingsTab(QWidget):
 
     def _on_can_table_changed(self) -> None:
         self.can_configs_changed.emit(self._can_table.configs())
+
+    @Slot(str, str)
+    def on_can_connect_error(self, device_id: str, message: str) -> None:
+        self._can_table.set_connect_error(device_id, message)
+
+    @Slot(str, bool)
+    def on_can_connected(self, device_id: str, online: bool) -> None:
+        if online:
+            self._can_table.clear_connect_error(device_id)
 
     def _on_help_clicked(self) -> None:
         HelpDialog(self).exec()

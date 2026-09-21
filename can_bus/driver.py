@@ -347,9 +347,30 @@ class CanBus:
 
     def recv(self, timeout: float = 0.0) -> CanFrame | None:
         """Nicht-blockierender Empfang (timeout=0.0) fuers Polling in
-        device_worker.py -- liefert None, wenn kein Frame anliegt."""
+        device_worker.py -- liefert None, wenn kein Frame anliegt.
+
+        Ueberspringt intern Nachrichten mit is_rx=False (python-can-Standard-
+        wert True, siehe can/message.py -- fuer Backends ohne eigenes Konzept
+        davon, z.B. slcan, bleibt der Filter unten also ein No-Op). Beim
+        Vector-Backend liefert dieselbe Empfangs-Queue (xlReceive) neben
+        echten RX-Frames auch TX-Bestaetigungen EIGENER gesendeter Frames
+        (can/interfaces/vector/canlib.py::_recv_can, Flag
+        XL_CAN_MSG_FLAG_TX_COMPLETED -> is_rx=False) -- inklusive jedes
+        einzelnen automatischen Wiederholungsversuchs, den der CAN-Controller
+        selbst auf Protokollebene ausloest, wenn ein gesendeter Frame mangels
+        eines zweiten, bestaetigenden Busteilnehmers kein ACK bekommt (echtes
+        Bus-/Verkabelungsverhalten, kein Softwarefehler dieses Frames an
+        sich). Ohne diesen Filter erschienen genau diese Wiederholungen
+        faelschlich als eingehende Botschaften in der Live-Traffic-Tabelle
+        (control_tab.CanControlGroup) -- fuer den Nutzer ununterscheidbar von
+        echtem RX-Verkehr, obwohl es die eigene, endlos wiederholte Sendung
+        war (Nutzerfeedback: "verwirrend, dass das als RX-Botschaften
+        angezeigt wird")."""
         try:
-            msg = self._bus.recv(timeout=timeout)
+            while True:
+                msg = self._bus.recv(timeout=timeout)
+                if msg is None or msg.is_rx:
+                    break
         except Exception as exc:
             raise CanConnectionError(f"Empfang fehlgeschlagen: {exc}") from exc
         if msg is None:

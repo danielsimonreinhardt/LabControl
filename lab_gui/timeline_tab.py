@@ -70,9 +70,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from field_catalog import KIND_FIELDS
 from i18n import Translator, tr
 from icons import IconButton
-from microhil.driver import AIN_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT
 from paths import app_dir
 from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, no_own_background
@@ -84,33 +84,10 @@ from theme import current as current_palette
 # Session gedacht und werden nicht gespeichert.
 TIMELINE_LAYOUT_PATH = app_dir() / "timeline_layout.json"
 
-# field_key -> (deutscher Basis-Anzeigename, Einheit); Einheit ist
-# sprachunabhaengig und wird nicht ueber i18n.tr uebersetzt.
-LOAD_SIGNAL_FIELDS = {
-    "voltage": ("Spannung", "V"),
-    "current": ("Strom", "A"),
-    "power": ("Leistung", "W"),
-}
-PSU_SIGNAL_FIELDS = {
-    "voltage": ("Spannung", "V"),
-    "current": ("Strom", "A"),
-}
-# microHIL-Kanaele (BUGS_GESCHLOSSEN.md #33: fehlten bisher komplett in der
-# Verlaufs-Anzeige) -- Kanalzahlen aus microhil/driver.py statt hart
-# verdrahtet, damit eine spaetere Aenderung dort nicht hier separat
-# nachgezogen werden muss. Digitalkanaele (IN/OUT/REL) sind 0/1-Werte ohne
-# Einheit, geplottet als Stufenkurve -- fuer Timing-Fragen (z.B. "wann genau
-# hat OUT3 geschaltet") ist das trotz des schon vorhandenen Live-Status in
-# Dashboard/Control-Tab zusaetzlich nuetzlich, weil dort kein Verlauf sichtbar
-# ist.
-HIL_SIGNAL_FIELDS = {
-    **{f"ain{n}": (f"Analogeingang {n}", "mV") for n in range(1, AIN_COUNT + 1)},
-    **{f"pwr12_{n}_current": (f"12V-Ausgang {n} Strom", "mA") for n in range(1, PWR12_COUNT + 1)},
-    **{f"in{n}": (f"Digitaleingang {n}", "") for n in range(1, IN_COUNT + 1)},
-    **{f"out{n}": (f"Digitalausgang {n}", "") for n in range(1, OUT_COUNT + 1)},
-    **{f"rel{n}": (f"Relais {n}", "") for n in range(1, RELAY_COUNT + 1)},
-}
-KIND_FIELDS = {"load": LOAD_SIGNAL_FIELDS, "psu": PSU_SIGNAL_FIELDS, "hil": HIL_SIGNAL_FIELDS}
+# Namen/Einheiten der plotbaren Signale liegen seit der Netzwerk-Freigabe
+# zentral in field_catalog.py (siehe Import oben) -- der HTTP-Server-Thread
+# braucht denselben Katalog, darf dieses Qt-Modul dafuer aber nicht
+# importieren. KIND_FIELDS hat dort exakt dieselbe Form wie vorher hier.
 
 # Bevorzugte Achsen-Reihenfolge: die linke Achse nimmt die erste hier
 # vorhandene Einheit unter den einem Diagramm zugeordneten Signalen, die

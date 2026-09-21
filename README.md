@@ -12,6 +12,7 @@ LabControl aims to fix that by providing a single, reliable platform to control 
 - **Multi-device coordination** — drive several instruments together (e.g. sync a power supply and a load for automated test sequences), something vendor software typically can't do at all.
 - **Vendor-agnostic** — designed to support equipment from different manufacturers side by side, not locked to a single brand's ecosystem.
 - **Extensible** — new device types and protocols (USB, Ethernet, SCPI, …) can be added as drivers rather than requiring a rewrite.
+- **Network sharing and remote control** — selected tiles can be shown on other devices on the local network (e.g. an ESP32 display), and, if explicitly allowed, controlled remotely: token-protected, per-device opt-in, behind a master switch with a time limit, blocked during test runs and after a safety trip. An included [MCP server](labcontrol_mcp/README.md) lets an AI assistant such as Claude Code read and control the released devices.
 
 ## Status
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 import qtawesome as qta
-from PySide6.QtCore import QMetaObject, QThread, QUrl, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -20,14 +20,18 @@ from PySide6.QtWidgets import (
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from device_registry import DeviceRegistry
-from device_worker import DeviceWorker
+from device_worker import SIM_CAN_ID, DeviceWorker, can_device_id
 from i18n import Translator, tr
+from live_state import LiveState
 from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
 from safety import SafetyMonitor
 from settings import Settings
 from settings_tab import SettingsTab
+from share_api import new_token
+from share_remote import RemoteBridge
+from share_server import ShareServer
 from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
@@ -45,6 +49,10 @@ class MainWindow(QMainWindow):
     # Verbindung -- wie alle anderen Worker-Aufrufe -- ueber eine Queued
     # Connection korrekt in den Worker-Thread gelangt.
     _dispatch_test_action = Signal(str, str, str, float, int)  # device_id, kind, action, value, channel
+    # Aktion aus der Netzwerk-Fernsteuerung, nach der letzten Pruefung im GUI-
+    # Thread (siehe _on_share_action) an den Worker weitergereicht -- eigenes
+    # Signal aus demselben Grund wie _dispatch_test_action, mit Anfrage-ID vorn.
+    _dispatch_share_action = Signal(int, str, str, str, float, int)  # id, device_id, kind, action, value, channel
     # device_id, arbitration_id, data (Hex-String), extended -- eigenes Signal
     # aus demselben Grund wie _dispatch_test_action (Queued Connection in den
     # Worker-Thread), siehe testcase_runner.TestRunner.execute_can_send.
@@ -139,6 +147,19 @@ class MainWindow(QMainWindow):
         self._recorder = Recorder()
         self._run_recorder = RunRecorder()
         self._safety = SafetyMonitor(self._settings.safety_limits)
+        # Wertespeicher und HTTP-Server der Netzwerk-Freigabe. LiveState ist
+        # eine reine Senke wie self._recorder (siehe _setup_worker), der
+        # Server startet erst, wenn die Einstellungen es hergeben.
+        self._live_state = LiveState()
+        self._share_bridge = RemoteBridge(self)
+        self._share_server = ShareServer(self._live_state, self._share_bridge, self)
+        # Sekundentakt nur, solange der Hauptschalter der Fernsteuerung an ist:
+        # aktualisiert die Restzeit-Anzeige und bemerkt den Ablauf. Die
+        # Freigabe selbst endet unabhaengig davon (LiveState vergleicht bei
+        # jeder Anfrage gegen die Uhr).
+        self._remote_timer = QTimer(self)
+        self._remote_timer.setInterval(1000)
+        self._remote_timer.timeout.connect(self._refresh_remote_status)
 
         self._setup_worker()
         self._wire_safety()
@@ -152,12 +173,22 @@ class MainWindow(QMainWindow):
         self._wire_panel_colors()
         self._wire_panel_order()
         self._wire_control_tile_order()
+        # Muss nach _setup_worker() (braucht self._worker) und vor
+        # _replay_known_devices() laufen, damit die Kacheln ihre Labels
+        # bekommen -- gleiche Bedingung wie bei _wire_panel_order().
+        self._wire_share()
         self._replay_known_devices()
 
         # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
         # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
         # eigene Permanent-Widgets ergaenzen (addPermanentWidget ordnet in
         # Aufrufreihenfolge von links nach rechts an).
+        # Sichtbarer Hinweis, solange die Fernsteuerung freigegeben ist -- in
+        # der Statusleiste, damit man ihn auf jedem Reiter sieht. Vor dem ALLE-
+        # AUS-Knopf, der ganz rechts bleiben soll.
+        self._remote_status_label = QLabel()
+        self._remote_status_label.hide()
+        self.statusBar().addPermanentWidget(self._remote_status_label)
         self._all_off_button = QPushButton()
         self._all_off_button.clicked.connect(lambda: self._safe_stop("manual all-off"))
         self.statusBar().addPermanentWidget(self._all_off_button)
@@ -216,6 +247,17 @@ class MainWindow(QMainWindow):
         self._worker.can_signals_decoded.connect(self.timeline_tab.on_can_signals_decoded)
         self._worker.load_measurement.connect(self._recorder.on_load_measurement)
         self._worker.psu_measurement.connect(self._recorder.on_psu_measurement)
+        # Netzwerk-Freigabe: dieselbe Senken-Rolle wie der Recorder, nur
+        # ohne Historie (siehe live_state.py).
+        self._worker.load_measurement.connect(self._live_state.on_load_measurement)
+        self._worker.psu_measurement.connect(self._live_state.on_psu_measurement)
+        self._worker.load_function_state.connect(self._live_state.on_load_function_state)
+        self._worker.can_stats.connect(self._live_state.on_can_stats)
+        self._worker.hil_digital_state.connect(self._live_state.on_hil_digital_state)
+        self._worker.hil_relay_state.connect(self._live_state.on_hil_relay_state)
+        self._worker.hil_analog_input.connect(self._live_state.on_hil_analog_input)
+        self._worker.hil_pwr12_state.connect(self._live_state.on_hil_pwr12_state)
+        self._worker.picoscope_state.connect(self._live_state.on_picoscope_state)
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
@@ -239,6 +281,9 @@ class MainWindow(QMainWindow):
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
         self._safety.tripped.connect(self._on_safety_tripped)
         self._safety.state_changed.connect(self._render_safety_status)
+        # Sperrzustand der Netzwerk-Freigabe: ein Trip macht sich sofort
+        # im Status-Endpoint bemerkbar (siehe live_state._lock_state).
+        self._safety.state_changed.connect(self._live_state.on_safety_state_changed)
 
     def _safe_stop(self, reason: str) -> None:
         logger.warning("Safe-Stop ausgelöst: %s", reason)
@@ -302,6 +347,7 @@ class MainWindow(QMainWindow):
         self._registry.device_known.connect(self.testcase_tab.on_device_known)
         self._registry.device_known.connect(self.timeline_tab.on_device_known)
         self._registry.device_known.connect(self._recorder.on_device_known)
+        self._registry.device_known.connect(self._live_state.on_device_known)
         self._registry.device_known.connect(self._run_recorder.on_device_known)
         self._registry.device_known.connect(self._on_device_known_status)
         self._registry.device_known.connect(self.settings_tab.on_device_known)
@@ -312,6 +358,7 @@ class MainWindow(QMainWindow):
         self._registry.label_changed.connect(self.testcase_tab.on_label_changed)
         self._registry.label_changed.connect(self.timeline_tab.on_label_changed)
         self._registry.label_changed.connect(self._recorder.on_label_changed)
+        self._registry.label_changed.connect(self._live_state.on_label_changed)
         self._registry.label_changed.connect(self._run_recorder.on_label_changed)
         self._registry.label_changed.connect(self._on_label_changed_status)
         self._registry.label_changed.connect(self.settings_tab.on_label_changed)
@@ -485,7 +532,10 @@ class MainWindow(QMainWindow):
 
         self.settings_tab.set_can_configs(self._settings.can_configs)
         self.settings_tab.can_configs_changed.connect(self._settings.set_can_configs)
+        self.settings_tab.can_configs_changed.connect(self._on_can_configs_changed)
         self._settings.can_configs_changed.connect(self._worker.set_can_configs)
+        self._worker.can_connect_error.connect(self.settings_tab.on_can_connect_error)
+        self._worker.can_connected.connect(self.settings_tab.on_can_connected)
 
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.
@@ -520,9 +570,42 @@ class MainWindow(QMainWindow):
             else:
                 self._forget_device(device_id)
 
+    def _on_can_configs_changed(self, configs: list) -> None:
+        """Ein in den Einstellungen per Entfernen-Button geloeschtes
+        CAN-Interface soll komplett vergessen werden (Kachel/Sektion
+        verschwindet vollstaendig), statt wie bei Last/Netzteil/HIL nur als
+        ausgegraute "getrennt"-Kachel liegen zu bleiben (Nutzerfeedback).
+
+        Last/Netzteil/HIL haben echtes Hotplug: ein device_id bleibt dort
+        auch nach dem Trennen sinnvoll, weil dasselbe Geraet jederzeit
+        wieder auftauchen kann (siehe _replay_known_devices). CAN-Interfaces
+        haben KEIN Hotplug (siehe device_worker.py-Modulkommentar) -- ein
+        device_id wird ausschliesslich ueber die Konfigurationsliste
+        bekannt. Faellt ein Eintrag hier weg, gibt es fuer sein device_id
+        prinzipiell keinen Weg mehr, je wieder automatisch zu verbinden;
+        eine ausgegraute Karteileiche waere daher reine Verwirrung -- exakt
+        das gemeldete Verhalten.
+
+        Vergleicht die NEUE Konfigurationsliste gegen alle der Registry
+        bekannten CAN-device_ids (aktuell verbunden ODER aus einer
+        frueheren Sitzung als ausgegraute Kachel bekannt, siehe
+        DeviceRegistry.known_devices) -- jedes fehlende wird sofort
+        vergessen. SIM_CAN_ID (Simulationsmodus-Mock) bewusst ausgenommen:
+        es stammt nie aus dieser Konfigurationsliste, sondern aus dem
+        Simulationsmodus-Umschalter, waere also hier faelschlich IMMER
+        "fehlend"."""
+        wanted_ids = {can_device_id(cfg) for cfg in configs}
+        for kind, device_id, _label in self._registry.known_devices():
+            if kind == "can" and device_id != SIM_CAN_ID and device_id not in wanted_ids:
+                self._registry.forget(device_id)
+                self._forget_device(device_id)
+
     def _forget_device(self, device_id: str) -> None:
         """Entfernt ein NICHT verbundenes Geraet vollstaendig aus der
-        laufenden App (siehe _on_reset_devices_requested) -- betrifft nur
+        laufenden App -- Aufrufer: _on_reset_devices_requested (Button
+        "Geraetezuordnung loeschen") und _on_can_configs_changed (ein
+        einzelnes, in den Einstellungen geloeschtes CAN-Interface). Betrifft
+        nur
         Widgets, die ein Geraet als eigene Kachel/Sektion/Zeile darstellen;
         recorder.py/run_record.py/timeline_tab.py sind bewusst NICHT
         einbezogen (deren geraete-bezogene Daten sind Beschriftungen fuer
@@ -538,6 +621,150 @@ class MainWindow(QMainWindow):
             status_label.deleteLater()
         self._device_labels.pop(device_id, None)
         self._device_online.pop(device_id, None)
+
+    def _wire_share(self) -> None:
+        """Netzwerk-Freigabe: Einstellungen <-> Settings <-> LiveState/Server.
+
+        Die Messwert-Senken sind bereits in _setup_worker()/_wire_registry()/
+        _wire_safety() verdrahtet -- hier steht nur die Konfiguration, damit
+        jede Senke bei ihresgleichen bleibt.
+        """
+        self.settings_tab.set_share_config(self._settings.share_config)
+        self.settings_tab.share_enabled_toggled.connect(self._settings.set_share_enabled)
+        self.settings_tab.share_bind_selected.connect(self._settings.set_share_bind)
+        self.settings_tab.share_port_changed.connect(self._settings.set_share_port)
+        self.settings_tab.share_read_token_toggled.connect(
+            self._settings.set_share_read_requires_token)
+        self.settings_tab.share_access_log_toggled.connect(self._settings.set_share_access_log)
+        self.settings_tab.share_device_changed.connect(self._settings.set_share_device)
+        self.settings_tab.share_token_regenerate_requested.connect(
+            self._on_share_token_regenerate)
+
+        self._settings.share_config_changed.connect(self.settings_tab.set_share_config)
+        self._settings.share_config_changed.connect(self._live_state.set_share_config)
+        self._settings.share_config_changed.connect(self._share_server.apply)
+        # Beispiel-URL nachfuehren, wenn sich die Freigabe aendert -- das
+        # passiert ohne Serverneustart, also feuert started nicht erneut.
+        self._settings.share_config_changed.connect(self._refresh_share_url)
+
+        # -- Fernsteuerung ------------------------------------------------
+        # Explizit QueuedConnection: submit_*() emittieren aus dem Server-
+        # Thread, und die Slots duerfen nur im GUI-Thread laufen.
+        self._share_bridge.action_requested.connect(
+            self._on_share_action, Qt.ConnectionType.QueuedConnection)
+        self._share_bridge.all_off_requested.connect(
+            self._on_share_all_off, Qt.ConnectionType.QueuedConnection)
+        self._dispatch_share_action.connect(self._worker.execute_remote_action)
+        self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
+        self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
+        self.settings_tab.share_control_toggled.connect(self._on_share_control_toggled)
+        self.settings_tab.share_control_timeout_changed.connect(
+            self._settings.set_share_control_timeout_min)
+        # Grenzwerte fuer die Sollwert-Pruefung der Fernsteuerung.
+        self._settings.safety_limits_changed.connect(self._live_state.set_safety_limits)
+        self._live_state.set_safety_limits(self._settings.safety_limits)
+
+        # Wer die Freigabe einschaltet, soll sofort einen Token haben: ohne
+        # einen antwortet die API auf jeden Zugriff mit 503 (token_not_configured),
+        # und der Weg dorthin ("Neu erzeugen" druecken) ist nicht offensichtlich.
+        self._settings.share_config_changed.connect(self._ensure_share_token)
+        self._ensure_share_token(self._settings.share_config)
+
+        self._share_server.started.connect(self._on_share_started)
+        self._share_server.error.connect(self._on_share_error)
+        self._share_server.stopped.connect(self._on_share_stopped)
+
+        # Feldnamen werden im GUI-Thread vorgerendert -- der Server-Thread
+        # darf tr() nicht aufrufen (siehe live_state.py).
+        Translator.instance().language_changed.connect(
+            lambda *_args: self._live_state.refresh_labels())
+
+        self._share_server.set_simulation(self._settings.simulation_mode)
+        self._live_state.set_share_config(self._settings.share_config)
+        self._share_server.apply(self._settings.share_config)
+
+    def _on_share_action(self, request_id: int, device_id: str, kind: str, action: str,
+                         value: float, channel: int) -> None:
+        """Letzte Station im GUI-Thread, bevor eine Fernsteuer-Aktion den Worker
+        erreicht.
+
+        Prueft Sicherheitsabschaltung, Testlauf und Hauptschalter NOCH EINMAL,
+        obwohl der Server-Thread es schon getan hat: sein Schnappschuss kann
+        zwischen Pruefung und Ausfuehrung veraltet sein (ein Trip oder der
+        Start eines Testlaufs in genau dieser Luecke). Die massgeblichen
+        Zustaende leben hier im GUI-Thread und sind hier ohne Verzug lesbar.
+        """
+        if self._safety.is_tripped() or self._test_runner.is_running():
+            self._share_bridge.complete(request_id, False, "locked", "", 0.0)
+            return
+        if not self._live_state.remote_active():
+            self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
+            return
+        self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel)
+
+    def _on_share_all_off(self, _request_id: int, client: str) -> None:
+        # Derselbe Weg wie der ALLE-AUS-Knopf. Ohne die Pruefungen von oben --
+        # der Notaus geht immer.
+        self._safe_stop(f"remote all-off ({client})")
+
+    def _on_share_control_toggled(self, active: bool) -> None:
+        """Hauptschalter "Fernsteuerung aktiv" im Netzwerk-Reiter."""
+        if active:
+            minutes = self._settings.share_config["control_timeout_min"]
+            self._live_state.set_remote_control(True, minutes * 60.0)
+            self._remote_timer.start()
+            logger.warning("Fernsteuerung freigegeben fuer %d min", minutes)
+        else:
+            self._remote_timer.stop()
+            self._live_state.set_remote_control(False)
+            logger.warning("Fernsteuerung ausgeschaltet")
+        self._refresh_remote_status()
+
+    def _refresh_remote_status(self) -> None:
+        remaining = self._live_state.remote_remaining_s()
+        if remaining <= 0.0:
+            if self._remote_timer.isActive():
+                # Zeitfenster abgelaufen (und nicht von Hand ausgeschaltet).
+                self._remote_timer.stop()
+                logger.warning("Fernsteuerung abgelaufen")
+                self.statusBar().showMessage(tr("Fernsteuerung abgelaufen"), 10000)
+            self._remote_status_label.hide()
+            self.settings_tab.set_share_control_state(False, tr("Fernsteuerung aus"))
+            return
+        total = int(remaining)
+        text = tr("Fernsteuerung aktiv – noch {time}",
+                  time=f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
+                  if total >= 3600 else f"{total // 60}:{total % 60:02d}")
+        pal = ThemeManager.instance().palette
+        self._remote_status_label.setStyleSheet(f"color: {pal.warning}; font-weight: bold;")
+        self._remote_status_label.setText(text)
+        self._remote_status_label.show()
+        self.settings_tab.set_share_control_state(True, text)
+
+    def _ensure_share_token(self, config: dict) -> None:
+        if config.get("enabled") and not config.get("token"):
+            self._settings.set_share_token(new_token())
+
+    def _on_share_token_regenerate(self) -> None:
+        self._settings.set_share_token(new_token())
+
+    def _on_share_started(self, url: str) -> None:
+        self.settings_tab.set_share_status(tr("Server läuft auf {url}").format(url=url), False)
+        # Fertige Kachel-URL zum Abtippen in den ESP32-Sketch. Die erste
+        # freigegebene Kachel als Beispiel -- ohne Freigabe die Startseite,
+        # die dann selbst erklaert, dass noch nichts freigegeben ist.
+        shared = [d for d, e in self._settings.share_config["devices"].items() if e.get("read")]
+        self.settings_tab.set_share_url(f"{url}/display?tile={shared[0]}" if shared else url)
+
+    def _on_share_error(self, message: str) -> None:
+        self.settings_tab.set_share_status(message, True)
+
+    def _refresh_share_url(self, _config: dict) -> None:
+        if self._share_server.is_running():
+            self._on_share_started(self._share_server.url())
+
+    def _on_share_stopped(self) -> None:
+        self.settings_tab.set_share_status(tr("Server gestoppt"), False)
 
     def _wire_dashboard_view(self) -> None:
         # Der Ansicht-Umschalter sitzt unten rechts im Dashboard selbst (siehe
@@ -722,6 +949,12 @@ class MainWindow(QMainWindow):
         self._test_runner.run_stopped.connect(lambda: self._set_picoscope_test_running.emit(False))
         self._test_runner.step_failed.connect(lambda *_args: self._set_picoscope_test_running.emit(False))
 
+        # Sperrzustand der Netzwerk-Freigabe an dasselbe Tripel haengen --
+        # jeder Weg aus einem Laufe heraus muss ihn wieder freigeben.
+        self._test_runner.run_finished.connect(lambda: self._live_state.set_test_running(False))
+        self._test_runner.run_stopped.connect(lambda: self._live_state.set_test_running(False))
+        self._test_runner.step_failed.connect(lambda *_args: self._live_state.set_test_running(False))
+
         # Einmalig offen gehaltene PicoScope-Verbindung fuer die Laufdauer
         # (siehe _on_run_requested/device_worker.open_picoscope_session) --
         # muss NACH set_test_running(False) verdrahtet sein (Reihenfolge der
@@ -770,6 +1003,9 @@ class MainWindow(QMainWindow):
             {d for d in step_device_ids if not d.startswith("picoscope:")}
         )
         self._set_picoscope_test_running.emit(True)
+        # Sperrt (ab Phase 2) den schreibenden Netzwerkzugriff und wird
+        # schon jetzt im Status-Endpoint gemeldet.
+        self._live_state.set_test_running(True)
         # Nur oeffnen, wenn der Lauf tatsaechlich eine PICO_*-Aktion
         # enthaelt -- ein Lauf ohne Oszilloskop-Beteiligung soll weder die
         # ~4,5s Verbindungszeit noch die PicoScope-7-App fuer die gesamte
@@ -903,6 +1139,7 @@ class MainWindow(QMainWindow):
         else:
             self._online_devices[kind].discard(device_id)
         self._device_online[device_id] = online
+        self._live_state.set_online(device_id, online)
         self._render_status_label(device_id)
 
     # -- Statusleiste: ein Label je bekanntem Geraet --------------------------
@@ -939,6 +1176,11 @@ class MainWindow(QMainWindow):
         self._style_all_off_button()
 
     def closeEvent(self, event) -> None:
+        # Als allererstes: keine Anfrage darf die App ueberleben, und der
+        # Socket muss vor Prozessende frei sein (sonst scheitert ein
+        # sofortiger Neustart am belegten Port). Ausserdem darf ein
+        # schreibender Zugriff (Phase 2) keinen Worker im Abbau treffen.
+        self._share_server.stop()
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit
         # der Kill garantiert VOR thread.quit()/wait() abgeschlossen ist --
         # sonst koennte die Anwendung schliessen, bevor der Worker die

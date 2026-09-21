@@ -1,0 +1,4 @@
+# Nur fuer den MCP-Server -- NICHT fuer LabControl selbst (dessen Abhaengigkeiten
+# stehen in ../requirements.txt). Getestet mit 2.2.0; die 2.x-API heisst MCPServer
+# (in 1.x hiess sie FastMCP), deshalb die Obergrenze.
+mcp>=2.2,<3

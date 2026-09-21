@@ -263,10 +263,133 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   eine eigene Farbe zugewiesen.
 - **Sprache**: wechselt die Oberflächensprache sofort, ohne Neustart.
 - **Gerätezuordnung löschen**: setzt gespeicherte Geräte-Namen,
-  Sicherheits-Grenzwerte und Panel-Farben aller Geräte auf die
-  Standardwerte zurück (mit Rückfrage, nicht rückgängig zu machen).
+  Sicherheits-Grenzwerte, Panel-Farben und Netzwerk-Freigaben aller
+  Geräte auf die Standardwerte zurück (mit Rückfrage, nicht rückgängig
+  zu machen).
 - **Sicherheits-Grenzwerte (Watchdog)**: siehe Abschnitt 6.
+- **Netzwerk-Freigabe und Fernsteuerung**: siehe unten.
 - **Hilfe**: öffnet dieses Benutzerhandbuch.
+
+### Unterreiter „Netzwerk“: Kacheln im lokalen Netz bereitstellen
+
+Damit lassen sich **einzelne Dashboard-Kacheln** für andere Geräte im
+lokalen Netzwerk sichtbar machen — etwa für ein kleines ESP32-Display im
+Labor oder für einen Browser auf dem Handy. Zum **Anzeigen** genügt die
+Freigabe „Lesen“; zum **Fernsteuern** braucht es zusätzlich „Steuern“ und
+den Hauptschalter (siehe „Fernsteuerung“ weiter unten).
+
+Im Auslieferungszustand ist alles aus: der Server läuft nicht, es ist
+keine Kachel freigegeben, und ein Zugangstoken wird verlangt.
+
+Einrichtung in vier Schritten:
+
+1. **Freigabe im lokalen Netzwerk aktivieren** anhaken.
+2. Bei **Erreichbar für** „Alle Geräte im lokalen Netzwerk“ wählen (die
+   Voreinstellung „Nur diesen PC“ ist zum Ausprobieren gedacht — ein
+   ESP32 erreicht die App damit nicht). Beim ersten Mal fragt die
+   Windows-Firewall nach einer Freigabe; diese muss erteilt werden.
+3. In der Geräte-Tabelle unten bei jeder gewünschten Kachel **Lesen**
+   anhaken. Ohne Haken ist eine Kachel von außen unsichtbar, auch wenn
+   ihre Geräte-ID bekannt ist.
+4. Die angezeigte **Adresse** in den ESP32-Sketch oder in den Browser
+   kopieren.
+
+Nützliche Adressen (`ADRESSE` ist die im Feld angezeigte Basisadresse):
+
+| Adresse | Ergebnis |
+| --- | --- |
+| `ADRESSE/` | Übersicht aller freigegebenen Kacheln mit fertigen Links |
+| `ADRESSE/display?tile=psu:0001` | kompakte Anzeigeseite, aktualisiert sich selbst |
+| `ADRESSE/display?tile=psu:0001&refresh=2` | dasselbe, alle 2 Sekunden |
+| `ADRESSE/display?tile=psu:0001&fmt=text` | schlichte `name=wert`-Zeilen |
+| `ADRESSE/api/v1/tiles` | Liste der freigegebenen Kacheln als JSON |
+| `ADRESSE/api/v1/tiles/psu:0001` | aktuelle Messwerte einer Kachel als JSON |
+
+Die Anzeigeseite braucht kein JavaScript und ist rund ein Kilobyte groß —
+sie ist bewusst so gebaut, dass ein ESP32 sie ohne weiteres darstellen
+kann. Steht ein Wert oder ist das Gerät getrennt, wird er rot und
+entsprechend beschriftet angezeigt. Läuft gerade ein Testablauf oder hat
+der Watchdog ausgelöst, steht das ebenfalls auf der Seite.
+
+**Token.** Er wird beim Einschalten der Freigabe automatisch erzeugt. Solange
+„Lesezugriff ohne Token erlauben“ nicht angehakt ist,
+muss jede Anfrage den Token mitbringen — entweder als Kopfzeile
+(`Authorization: Bearer …`) oder einfach angehängt an die Adresse
+(`…/api/v1/tiles?token=…`), was für einfache Displays der bequemere Weg
+ist. „Neu erzeugen“ macht den bisherigen Token sofort ungültig und ist
+damit der Weg, einem Gerät den Zugriff wieder zu entziehen.
+
+**Sicherheitshinweis.** Die Verbindung ist **unverschlüsselt**, und der
+Token wird im Klartext übertragen und im Klartext in `settings.json`
+gespeichert. Er ist eine Zugangskennung fürs lokale Netz, **kein
+Passwort**. Diese Funktion ist für ein vertrauenswürdiges Heim- oder
+Labornetz gedacht: Der Port darf **niemals** per Portfreigabe oder UPnP
+aus dem Internet erreichbar gemacht werden.
+
+**Zugriffe protokollieren** schreibt jede Anfrage in eine eigene Datei
+`share_access.log` neben dem Programm. Bewusst getrennt von `labdash.log`,
+damit häufiges Abfragen die eigentliche Protokolldatei nicht überschreibt.
+Standardmäßig aus.
+
+#### Fernsteuerung
+
+Über dieselbe Schnittstelle lassen sich Geräte auch **steuern**: Sollwerte
+setzen, Ausgänge und Relais schalten, alles abschalten. Gedacht ist das für
+einen KI-Assistenten (siehe MCP-Server unten) oder eine eigene App. Weil
+dabei reale Hardware bewegt wird, müssen **alle** folgenden Bedingungen
+erfüllt sein:
+
+1. **Token**: Schreibende Anfragen verlangen den Token immer — auch wenn
+   Lesen tokenfrei erlaubt ist — und nur als Kopfzeile
+   (`Authorization: Bearer …`), nie in der Adresse.
+2. **Steuern** ist beim Gerät in der Tabelle angehakt (setzt „Lesen“ voraus).
+   Möglich ist das für Last, Netzteil und microHIL; CAN und Oszilloskop lassen
+   sich nicht fernsteuern.
+3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet. Er ist nach
+   jedem Programmstart aus und schaltet sich nach dem eingestellten Zeitlimit
+   (Standard 60 Minuten) von selbst wieder aus. Solange er an ist, steht in
+   der Statuszeile ein orangefarbener Hinweis mit der Restzeit. Beim Ablauf
+   bleiben die Geräte in ihrem Zustand — sie werden nicht abgeschaltet.
+4. Es läuft **kein Testablauf** und die **Sicherheitsabschaltung** hat nicht
+   ausgelöst. Sonst wird jeder Steuerbefehl abgewiesen (Lesen bleibt möglich).
+5. Aktion, Wert und Kanal sind gültig — die Wertebereiche entsprechen denen im
+   Testeditor — und der Sollwert liegt **nicht über einem aktiven
+   Sicherheits-Grenzwert** dieses Geräts (Abschnitt 6).
+
+**Notaus.** Die Aktion „Alle Ausgänge aus“ ist die einzige Ausnahme: sie
+verlangt nur den Token und geht immer — auch bei ausgeschaltetem Hauptschalter,
+laufendem Testablauf und nach einer Sicherheitsabschaltung. Sie wirkt wie der
+„ALLE AUS“-Button.
+
+Zusätzlich sind höchstens zwei Befehle gleichzeitig unterwegs, und schnelle
+Befehlsfolgen werden gedrosselt, damit ein Stau den Notaus nicht verzögern kann.
+Jeder Steuerbefehl **und jede Abweisung** steht mit der Adresse des Aufrufers im
+Protokoll `labdash.log`.
+
+Am Netzteil HCS-34xx ist „Ausgang AUS“ nur ein Strom von 0 A; ein Strom über
+0 A schaltet den Ausgang wieder ein. Der EIN/AUS-Schalter im Reiter „Steuerung“
+folgt einer Fernsteuer-Aktion; die Sollwertfelder dort bleiben unverändert, die
+tatsächlichen Werte zeigt das Dashboard.
+
+Befehle sind `POST`-Anfragen mit JSON-Rumpf, z.B. (`TOKEN` und `ADRESSE`
+einsetzen; die erlaubten Aktionen je Gerät nennt `ADRESSE/api/v1/tiles/<ID>`):
+
+```
+curl -X POST -H "Authorization: Bearer TOKEN" ^
+     -d "{\"action\":\"PSU_VOLT\",\"value\":5.0}" ^
+     ADRESSE/api/v1/tiles/psu:0001/actions
+curl -X POST -H "Authorization: Bearer TOKEN" ADRESSE/api/v1/all-off
+```
+
+Die Antwort meldet, ob das Gerät den Befehl bestätigt hat (`"ok":true`) oder
+warum er abgewiesen wurde (`"error":"…"`).
+
+**MCP-Server für KI-Assistenten.** Im Ordner `labcontrol_mcp` liegt ein kleiner
+Server, der diese Schnittstelle als Werkzeuge für Claude Code & Co. bereitstellt
+(Status lesen, Geräte auflisten, Werte lesen, Aktion ausführen, Notaus).
+Einrichtung und Sicherheitsmodell stehen in `labcontrol_mcp/README.md`. Er läuft
+als eigener Prozess und kann nicht mehr, als die Schnittstelle oben erlaubt —
+insbesondere kann er den Hauptschalter nicht selbst einschalten.
 
 ---
 
@@ -293,6 +416,10 @@ läuft.
 - Der **„ALLE AUS“-Button** ganz rechts in der Statuszeile schaltet
   jederzeit manuell und sofort alle Ausgänge ab, unabhängig vom
   Watchdog-Status.
+- Fernsteuer-Befehle über das Netzwerk (Abschnitt 5) werden abgewiesen,
+  solange der Alarm ausgelöst ist oder ein Testablauf läuft, und ein
+  Sollwert über einem aktiven Grenzwert wird gar nicht erst angelegt.
+  „Alle Ausgänge aus“ bleibt auch dann möglich.
 
 ---
 

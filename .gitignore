@@ -14,6 +14,8 @@ lab_gui/presets.json
 lab_gui/recordings/
 lab_gui/reports/
 lab_gui/labdash.log
+lab_gui/share_access.log
+labcontrol_mcp/.mcp.json
 /FEATURES.md
 /BUGS.md
 /BUGS_OFFEN.md

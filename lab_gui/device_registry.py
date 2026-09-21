@@ -65,6 +65,20 @@ class DeviceRegistry(QObject):
     def on_device_removed(self, kind: str, device_id: str) -> None:
         self.device_offline.emit(kind, device_id)
 
+    def forget(self, device_id: str) -> None:
+        """Entfernt EIN einzelnes Geraet dauerhaft aus den gespeicherten
+        Labels (device_labels.json) -- anders als reset_all() (loescht ALLE
+        Geraete, siehe dort) fuer den Fall, dass gezielt nur ein einzelnes
+        Geraet nicht mehr bekannt sein soll, z.B. weil seine Konfiguration
+        entfernt wurde (siehe main_window.MainWindow._on_can_configs_changed:
+        ein in den Einstellungen geloeschtes CAN-Interface hat -- anders als
+        Last/Netzteil/HIL mit echtem Hotplug -- keinen Weg mehr, je wieder
+        automatisch zu verbinden, eine ausgegraute Karteileiche waere reine
+        Verwirrung). Kein-Op, falls device_id gar nicht (mehr) bekannt ist."""
+        if device_id in self._labels:
+            del self._labels[device_id]
+            self._save()
+
     def rename(self, kind: str, device_id: str, new_label: str) -> None:
         new_label = new_label.strip()
         if not new_label:

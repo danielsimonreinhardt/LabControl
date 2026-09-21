@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from field_catalog import LOAD_MODE_SHORT
 from i18n import Translator, tr
 from icons import IconButton
 from microhil_panel import MicroHilPanel
@@ -71,6 +72,46 @@ GRID_SPACING = 12
 # nur Statuszeile + Button, also kurz) bleibt einfach.
 TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double"}
 
+# Dieselbe Klassifizierung wie TILE_HEIGHT_BY_KIND, aber fuer die
+# KOMPAKTANSICHT eigens ermittelt -- deckt sich NICHT mit der Normalansicht,
+# da "kurz" dort etwas anderes bedeutet als hier: microHIL bleibt wegen
+# seines Digital-IO-Blocks (IN+OUT uebereinander, siehe microhil_panel.py)
+# auch im Kompaktmodus zweizeilig, und PicoscopePanel ist trotz "nur
+# Statuszeile + Button" in der Normalansicht dort trotzdem zweizeilig
+# (Status ueber dem Button gestapelt) -- empirisch mit sizeHint() gemessen
+# (26px fuer psu/load/can, 68px microHIL, 76px picoscope, siehe
+# BUGS_GESCHLOSSEN.md #36-Nachtrag). Eine solche Kachel kann folglich NIE
+# nur der oberen oder nur der unteren Zeile zugewiesen werden -- sie belegt
+# beim Packen (_tile_span/pack_tiles_by_row) immer beide, genau wie eine
+# doppelt hohe Kachel in der Normalansicht.
+COMPACT_TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double", "picoscope": "double"}
+
+# Feines horizontales Raster der Kompaktansicht: eine Kachel belegt dort
+# nicht mehr genau EINE inhaltsbreite Spalte, sondern eine SPALTENSPANNE in
+# Vielfachen dieser Einheit (analog zur Zeilenspanne, siehe
+# COMPACT_TILE_HEIGHT_BY_KIND). Grund: mit einer Spalte je Kachel kann eine
+# Spalte je Zeile immer nur eine einzige Kachel aufnehmen -- "unter einer
+# breiten Kachel zwei schmale nebeneinander" ist damit prinzipiell
+# unmoeglich, egal wie gezogen wird (Nutzerwunsch, siehe
+# BUGS_GESCHLOSSEN.md #36). Da eine ueber n Einheiten gespannte Kachel die
+# n-1 Zwischenabstaende mitbenutzt, fasst sie n*UNIT + (n-1)*GRID_SPACING
+# Pixel; die Rasterweite betraegt also UNIT+GRID_SPACING = 20px, auf die
+# eine Kachelbreite aufgerundet wird (im Mittel ~10px Verschnitt).
+COMPACT_COLUMN_UNIT = 8
+
+
+def compact_column_span(width: int) -> int:
+    """Rastereinheiten, die eine Kachel der natuerlichen Breite `width` in
+    der Kompaktansicht braucht (siehe COMPACT_COLUMN_UNIT)."""
+    step = COMPACT_COLUMN_UNIT + GRID_SPACING
+    return max(1, -(-(width + GRID_SPACING) // step))
+
+
+def compact_span_width(span: int) -> int:
+    """Umkehrung zu compact_column_span(): Pixelbreite einer ueber `span`
+    Einheiten gespannten Kachel, inklusive der mitbenutzten Zwischenabstaende."""
+    return span * COMPACT_COLUMN_UNIT + (span - 1) * GRID_SPACING
+
 # field_key -> (deutscher Basis-Anzeigename, Einheit); Einheit ist
 # sprachunabhaengig und wird nicht ueber i18n.tr uebersetzt.
 FIELD_DEFS: dict[str, tuple[str, str]] = {
@@ -84,18 +125,6 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 CAN_FIELD_KEYS = ["tx_count", "rx_count"]
-# Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
-# Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md
-# "Bekannte Eigenheiten"), MockKoradKEL102 dagegen den SET-Code aus
-# korad_kel102.driver.FUNCTIONS (CURR/VOLT/RES/POW) -- beide Formate werden
-# hier auf dieselbe Anzeige gemappt.
-LOAD_MODE_SHORT: dict[str, str] = {
-    "CURR": "CC", "CC": "CC",
-    "VOLT": "CV", "CV": "CV",
-    "RES": "CR", "CR": "CR",
-    "POW": "CW", "CW": "CW",
-    "SHORT": "SHORT",
-}
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
@@ -479,6 +508,20 @@ class DashboardWidget(QGroupBox):
         # TILE_HEIGHT_BY_KIND/_relayout_panels) -- doppelte Kacheln
         # bekommen 2*_cell_height + Spacing.
         self._cell_height = 0
+        # Eigene Zellhoehen-Ratsche fuer die Kompaktansicht (siehe
+        # COMPACT_TILE_HEIGHT_BY_KIND) -- unabhaengig von _cell_height, da
+        # die natuerlichen Groessen dort viel kleiner sind als in der
+        # Normalansicht (26px statt z.B. >100px) und sonst faelschlich vom
+        # viel groesseren Normalansicht-Wert dominiert wuerden.
+        self._compact_cell_height = 0
+        # Spaltenspanne je Kachel im feinen Kompakt-Raster (siehe
+        # COMPACT_COLUMN_UNIT/_tile_span), von _relayout_panels() gefuellt.
+        self._compact_col_spans: dict[str, int] = {}
+        # Anzahl der aktuell mit einer Mindestbreite belegten Rasterspalten
+        # -- beim Schrumpfen (Geraet entfernt, Ansicht gewechselt) muessen
+        # die frueher gesetzten Mindestbreiten wieder auf 0 zurueck, sonst
+        # bleibt rechts eine leere Geisterspalte stehen.
+        self._compact_column_count = 0
 
         # Drag & Drop (Kachel-Reihenfolge, siehe eventFilter/_start_panel_
         # drag/_drop_panel weiter unten). _container ist das Drop-Ziel (dort
@@ -546,13 +589,27 @@ class DashboardWidget(QGroupBox):
         return known_ordered + remaining
 
     def _tile_span(self, device_id: str) -> tuple[int, int]:
-        """(col_span, row_span) in Rastereinheiten -- die Breite ist im
-        Dashboard (anders als im Control-Tab) nie klassifiziert, nur die
-        Hoehe (siehe TILE_HEIGHT_BY_KIND, FEATURES.md Punkt 5: "es wird
-        allerdings nur die Hoehe fest vorgegeben")."""
+        """(col_span, row_span) in Rastereinheiten.
+
+        Hoehe: klassifiziert nach Geraeteart (FEATURES.md Punkt 5: "es wird
+        allerdings nur die Hoehe fest vorgegeben"), in der Kompaktansicht
+        ueber eine EIGENE Tabelle (COMPACT_TILE_HEIGHT_BY_KIND), da dort
+        andere Geraetearten zweizeilig sind als in der Normalansicht.
+
+        Breite: in der Normalansicht immer 1 -- dort sind ohnehin alle
+        Kacheln auf dieselbe Breite angeglichen (siehe _relayout_panels),
+        eine Spalte fasst also genau eine Kachel. In der Kompaktansicht
+        dagegen eine Spanne im feinen Raster (COMPACT_COLUMN_UNIT), damit
+        unter einer breiten Kachel zwei schmale nebeneinander Platz finden.
+        Die Spannen berechnet _relayout_panels() aus den (geratschten)
+        natuerlichen Breiten und legt sie in _compact_col_spans ab -- hier
+        wird nur nachgeschlagen, damit Layout und Ziel-Bestimmung beim
+        Ziehen (_tile_rects) garantiert dieselben Spannen sehen."""
         kind = self._panel_kind.get(device_id, "")
-        row_span = 2 if TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1
-        return (1, row_span)
+        if self._compact:
+            row_span = 2 if COMPACT_TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1
+            return (self._compact_col_spans.get(device_id, 1), row_span)
+        return (1, 2 if TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1)
 
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
@@ -723,19 +780,27 @@ class DashboardWidget(QGroupBox):
           waehrend jeder laufenden Animation verfaelschen.
         * Die tatsaechlichen Zellgrenzen beruecksichtigen automatisch die
           Layout-Raender, GRID_SPACING und -- in der Kompaktansicht -- die
-          je Kachel unterschiedlichen Breiten (siehe _relayout_panels)."""
-        if self._compact:
-            positions = {device_id: (0, col) for col, device_id in enumerate(order)}
-            spans = {device_id: (1, 1) for device_id in order}
-        else:
-            spans = {device_id: self._tile_span(device_id) for device_id in order}
-            positions = pack_tiles_by_row(order, spans, max_rows=2)
+          je Kachel unterschiedlichen Breiten (siehe _relayout_panels).
+
+        Nutzt denselben 2-zeiligen Packalgorithmus wie die Normalansicht,
+        auch in der Kompaktansicht (vorher dort stur auf Zeile 0 verdrahtet,
+        Nutzerwunsch) -- _tile_span() liefert je nach Ansicht die passende
+        Hoehenklasse (TILE_HEIGHT_BY_KIND bzw. COMPACT_TILE_HEIGHT_BY_KIND).
+        Zwei schmale (einfach hohe) Kacheln koennen sich dadurch dieselbe
+        Spalte teilen (uebereinander), waehrend eine zweizeilige Kachel
+        (microHIL/PicoScope, auch in der Kompaktansicht) wie in der
+        Normalansicht immer beide Zeilen zugleich belegt und nie nur der
+        oberen oder unteren zugewiesen werden kann."""
+        spans = {device_id: self._tile_span(device_id) for device_id in order}
+        positions = pack_tiles_by_row(order, spans, max_rows=2)
         rects: dict[str, QRect] = {}
         for device_id, (row, col) in positions.items():
+            col_span, row_span = spans[device_id]
             rect = self._panel_layout.cellRect(row, col)
-            row_span = spans[device_id][1]
-            if row_span > 1:
-                rect = rect.united(self._panel_layout.cellRect(row + row_span - 1, col))
+            if row_span > 1 or col_span > 1:
+                rect = rect.united(
+                    self._panel_layout.cellRect(row + row_span - 1, col + col_span - 1)
+                )
             rects[device_id] = rect
         return rects
 
@@ -751,14 +816,22 @@ class DashboardWidget(QGroupBox):
         Anordnung (siehe _tile_rects): gesucht wird die Kachel unter `pos`
         (bzw. bei einem Drop ins Leere die naechstgelegene), die gezogene
         Kachel wird davor oder dahinter in die LISTE einsortiert -- vor ihr,
-        wenn `pos` in der ersten Haelfte liegt, sonst dahinter. Massgeblich
-        ist die Leserichtung: in der Normalansicht fuellen die Kacheln erst
-        eine Spalte von oben nach unten (siehe pack_tiles_by_row), die
-        Haelften liegen dort also uebereinander; die Kompaktansicht ist eine
-        einzelne Zeile, dort nebeneinander. Liegt `pos` ausserhalb der
-        Spalte der Treffer-Kachel, entscheidet stattdessen die x-Richtung
-        (relevant beim Ablegen rechts neben der letzten Spalte -- die Kachel
-        gehoert dann ans Ende).
+        wenn `pos` in der ersten Haelfte liegt, sonst dahinter.
+
+        "Haelfte" bezieht sich dabei auf die DOMINANTE Richtung: der Abstand
+        zur Kachelmitte wird in x- und y-Richtung je auf die halbe
+        Kachelausdehnung normiert (sonst gewaenne bei einer flachen, breiten
+        Kachel immer x und bei einer schmalen, hohen immer y), und die
+        groessere der beiden Abweichungen entscheidet. Beide Richtungen
+        zeigen dabei in dieselbe Leserichtung: das dichte Packing fuellt
+        erst eine Spalte von oben nach unten und geht dann nach rechts
+        (siehe pack_tiles_by_row), "weiter unten" und "weiter rechts"
+        heissen also gleichermassen "dahinter". Diese Zweiachsigkeit ist
+        noetig, seit Kacheln in der Kompaktansicht unterschiedlich breit
+        sind und damit auch NEBENeinander in derselben Zeile liegen koennen
+        (siehe COMPACT_COLUMN_UNIT) -- eine reine y-Entscheidung (obere/
+        untere Haelfte) waere fuer zwei nebeneinanderliegende Kacheln
+        unbedienbar.
 
         Wichtig ist dabei, die Zielbestimmung an der ANGEZEIGTEN Anordnung
         (also inklusive der gezogenen Kachel, die waehrend des Drags nur
@@ -811,14 +884,12 @@ class DashboardWidget(QGroupBox):
             target = min(order, key=lambda d: _rect_distance(rects[d], point))
 
         rect = rects[target]
-        if self._compact:
-            after = point.x() >= rect.center().x()
-        elif point.x() > rect.right():
-            after = True
-        elif point.x() < rect.left():
-            after = False
-        else:
-            after = point.y() >= rect.center().y()
+        # Auf die halbe Kachelausdehnung normierte Abweichung von der Mitte
+        # (siehe Docstring): die dominante Richtung entscheidet, beide
+        # zeigen in dieselbe Leserichtung (rechts/unten = dahinter).
+        offset_x = (point.x() - rect.center().x()) / max(rect.width() / 2, 1)
+        offset_y = (point.y() - rect.center().y()) / max(rect.height() / 2, 1)
+        after = (offset_x if abs(offset_x) >= abs(offset_y) else offset_y) >= 0
 
         order.insert(order.index(target) + (1 if after else 0), dragged_id)
         return order
@@ -921,14 +992,25 @@ class DashboardWidget(QGroupBox):
             if reset_width:
                 self._panel_width = 0
                 self._compact_widths.clear()
+            order = self._current_order()
             if self._compact:
-                # Kompaktansicht: jedes Panel behaelt seine eigene, an den
-                # Inhalt geschmiegte Breite -- aber ebenfalls als Ratsche,
-                # sonst schieben die schwankenden Wertetexte alle rechts
-                # daneben liegenden Panels staendig hin und her.
+                # Kompaktansicht: jede Kachel behaelt ihre eigene, an den
+                # Inhalt geschmiegte Breite (Ratsche je Geraet, siehe Punkt 2
+                # oben) -- sie wird lediglich auf die naechste Rasterweite
+                # des feinen Spaltenrasters aufgerundet (COMPACT_COLUMN_UNIT,
+                # ~10px Verschnitt im Mittel). Die daraus folgende
+                # Spaltenspanne muss VOR dem Packing feststehen, da
+                # _tile_span() sie von hier bezieht.
                 for device_id, panel in self._panels.items():
                     width = max(self._compact_widths.get(device_id, 0), panel.sizeHint().width())
                     self._compact_widths[device_id] = width
+                self._compact_col_spans = {
+                    device_id: compact_column_span(self._compact_widths[device_id])
+                    for device_id in order
+                }
+                for device_id in order:
+                    panel = self._panels[device_id]
+                    width = compact_span_width(self._compact_col_spans[device_id])
                     if panel.minimumWidth() != width or panel.maximumWidth() != width:
                         panel.setFixedWidth(width)
             else:
@@ -938,32 +1020,60 @@ class DashboardWidget(QGroupBox):
                     if panel.minimumWidth() != self._panel_width or panel.maximumWidth() != self._panel_width:
                         panel.setFixedWidth(self._panel_width)
 
-            order = self._current_order()
             for panel in self._panels.values():
                 self._panel_layout.removeWidget(panel)
             if self._compact:
-                # Kompaktansicht bleibt ein einzeiliges Regal wie bisher (nur
-                # jetzt ueber QGridLayout statt QHBoxLayout platziert) -- die
-                # neuen Hoehenklassen (TILE_HEIGHT_BY_KIND) gelten bewusst nur
-                # fuer die Normalansicht, dort wo FEATURES.md Punkt 5 die
-                # doppelte Hoehe ueberhaupt erst herleitet (heutiges
-                # microHIL-Panel in der NORMALEN Ansicht). Zeile 1 (fuer
-                # doppelte Kacheln) bleibt deshalb ungenutzt/ungereserviert.
-                self._panel_layout.setRowMinimumHeight(0, 0)
-                self._panel_layout.setRowMinimumHeight(1, 0)
-                for col, device_id in enumerate(order):
+                # Kompaktansicht: wie die Normalansicht ein bis zu 2-zeiliges
+                # Raster (siehe pack_tiles_by_row/_tile_rects), frueher stur
+                # auf Zeile 0 verdrahtet (Nutzerwunsch: schmale Kacheln
+                # sollen sich per Drag&Drop eine Spalte teilen koennen).
+                # Waagerecht laeuft es hier aber ueber das feine Raster
+                # (COMPACT_COLUMN_UNIT) statt ueber eine Spalte je Kachel --
+                # nur so passen unter eine breite Kachel zwei schmale
+                # nebeneinander. Eigene Hoehenklassen (siehe
+                # COMPACT_TILE_HEIGHT_BY_KIND/_tile_span): ANDERS als in der
+                # Normalansicht ist hier NICHT jede Kachel einfach hoch --
+                # microHIL (Digital-IO-Block) und PicoScope (Status ueber dem
+                # Button) bleiben auch im Kompaktmodus zweizeilig und belegen
+                # deshalb IMMER beide Zeilen zusammen, statt allein in eine
+                # Zeile gezwaengt deren Hoehe fuer alle anderen zu verzerren
+                # (Bugmeldung: "Zeilenhoehe passt nicht").
+                compact_spans = {d: self._tile_span(d) for d in order}
+                compact_positions = pack_tiles_by_row(order, compact_spans, max_rows=2)
+                height_sizes = [(self._panels[d].sizeHint().height(), compact_spans[d][1]) for d in order]
+                self._compact_cell_height = cell_size_ratchet(self._compact_cell_height, height_sizes)
+                self._panel_layout.setRowMinimumHeight(0, self._compact_cell_height)
+                self._panel_layout.setRowMinimumHeight(1, self._compact_cell_height)
+                # Alle Rasterspalten auf dieselbe Mindestbreite: nur dann
+                # sind die Zellgrenzen (cellRect, siehe _tile_rects) auch in
+                # Spalten definiert, die gerade von keiner Kachel BEGONNEN
+                # werden, und eine Spanne von n Einheiten ist ueberall
+                # gleich breit. Ueberzaehlige Spalten aus einer frueheren,
+                # breiteren Anordnung werden dabei zurueckgesetzt.
+                used_columns = max(
+                    (col + compact_spans[d][0] for d, (row, col) in compact_positions.items()),
+                    default=0,
+                )
+                for column in range(max(used_columns, self._compact_column_count)):
+                    self._panel_layout.setColumnMinimumWidth(
+                        column, COMPACT_COLUMN_UNIT if column < used_columns else 0
+                    )
+                self._compact_column_count = used_columns
+                for device_id, (row, col) in compact_positions.items():
                     panel = self._panels[device_id]
-                    # Loest eine aus der Normalansicht uebernommene
-                    # setFixedHeight() (siehe unten) wieder -- sonst bliebe
-                    # z.B. eine microHIL-Kachel beim Umschalten in die
-                    # Kompaktansicht auf ihrer doppelten Normalansicht-Hoehe
-                    # eingefroren, obwohl ihr einzeiliger Kompaktinhalt
-                    # deutlich weniger Platz braucht.
-                    if panel.maximumHeight() != _WIDGET_SIZE_MAX:
-                        panel.setMinimumHeight(0)
-                        panel.setMaximumHeight(_WIDGET_SIZE_MAX)
-                    self._panel_layout.addWidget(panel, 0, col, alignment=Qt.AlignmentFlag.AlignTop)
+                    col_span, row_span = compact_spans[device_id]
+                    panel.setFixedHeight(row_span * self._compact_cell_height + (row_span - 1) * GRID_SPACING)
+                    self._panel_layout.addWidget(
+                        panel, row, col, row_span, col_span, alignment=Qt.AlignmentFlag.AlignTop
+                    )
             else:
+                # Mindestbreiten des Kompakt-Rasters wieder aufheben -- die
+                # Normalansicht hat eine Spalte je Kachel, eine stehen
+                # gebliebene 8px-Mindestbreite je Rastereinheit wuerde dort
+                # eine leere Geisterspalte rechts erzeugen.
+                for column in range(self._compact_column_count):
+                    self._panel_layout.setColumnMinimumWidth(column, 0)
+                self._compact_column_count = 0
                 # Hoehen-Ratsche (analog zur Breiten-Ratsche oben): stellt
                 # sicher, dass die Basis-Zellhoehe im Normalfall auch die
                 # deutlich groessere microHIL-Kachel (doppelte Hoehe) bequem
@@ -1052,9 +1162,12 @@ class DashboardWidget(QGroupBox):
         """Entfernt ein Geraet vollstaendig (auch die ausgegraute Kachel
         eines aktuell getrennten Geraets, siehe _DevicePanel.set_online) --
         anders als eine normale Trennung, die das Panel bewusst als
-        Erinnerung stehen laesst. Nur fuer den "Geraetezuordnung loeschen"-
-        Button (main_window._on_reset_devices_requested) gedacht: ein noch
-        VERBUNDENES Geraet nutzt stattdessen den Live-Relabel-Pfad
+        Erinnerung stehen laesst. Zwei Aufrufer: der "Geraetezuordnung
+        loeschen"-Button (main_window._on_reset_devices_requested) fuer ALLE
+        Geraete, und main_window._on_can_configs_changed fuer ein einzelnes,
+        in den Einstellungen geloeschtes CAN-Interface (kein Hotplug, siehe
+        dort -- eine ausgegraute Karteileiche waere dort reine Verwirrung).
+        Ein noch VERBUNDENES Geraet nutzt stattdessen den Live-Relabel-Pfad
         (DeviceRegistry.on_device_added), da sein Panel ja weiter gebraucht
         wird."""
         panel = self._panels.pop(device_id, None)

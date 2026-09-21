@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "labcontrol": {
+      "command": "C:\\WORK\\vscode_workspace\\LabControl\\labcontrol_mcp\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\WORK\\vscode_workspace\\LabControl\\labcontrol_mcp\\server.py"],
+      "env": {
+        "LABCONTROL_URL": "http://127.0.0.1:8420",
+        "LABCONTROL_TOKEN": "HIER-DEN-TOKEN-AUS-LABCONTROL-EINTRAGEN"
+      }
+    }
+  }
+}

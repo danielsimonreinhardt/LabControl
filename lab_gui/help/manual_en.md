@@ -251,11 +251,129 @@ time-window-limited ring buffer of the live charts.
   gets its own color.
 - **Language**: switches the interface language immediately, without
   restarting.
-- **Clear device assignment**: resets stored device names, safety limits
-  and panel colors for all devices to their defaults (asks for
-  confirmation, cannot be undone).
+- **Clear device assignment**: resets stored device names, safety limits,
+  panel colors and network sharing for all devices to their defaults
+  (asks for confirmation, cannot be undone).
 - **Safety limits (watchdog)**: see section 6.
+- **Network sharing and remote control**: see below.
 - **Help**: opens this user manual.
+
+### “Network” sub-tab: sharing tiles on the local network
+
+This makes **individual dashboard tiles** visible to other devices on the
+local network — for example a small ESP32 display in the lab, or a browser
+on your phone. For **display**, the “Read” share is enough; **remote
+control** additionally needs “Control” and the master switch (see “Remote
+control” below).
+
+Everything is off by default: the server is not running, no tile is
+shared, and an access token is required.
+
+Setup in four steps:
+
+1. Tick **Enable sharing on the local network**.
+2. Under **Reachable by**, choose “All devices on the local network” (the
+   default “This PC only” is meant for trying things out — an ESP32 cannot
+   reach the app that way). The first time, Windows Firewall will ask for
+   permission, which must be granted.
+3. In the device table below, tick **Read** for each tile you want to
+   share. Without that tick a tile is invisible from outside, even if its
+   device ID is known.
+4. Copy the **Address** shown into your ESP32 sketch or into a browser.
+
+Useful addresses (`ADDRESS` is the base address shown in the field):
+
+| Address | Result |
+| --- | --- |
+| `ADDRESS/` | overview of all shared tiles with ready-made links |
+| `ADDRESS/display?tile=psu:0001` | compact display page, refreshes itself |
+| `ADDRESS/display?tile=psu:0001&refresh=2` | the same, every 2 seconds |
+| `ADDRESS/display?tile=psu:0001&fmt=text` | plain `name=value` lines |
+| `ADDRESS/api/v1/tiles` | list of shared tiles as JSON |
+| `ADDRESS/api/v1/tiles/psu:0001` | current readings of one tile as JSON |
+
+The display page needs no JavaScript and is about one kilobyte — it is
+deliberately built so an ESP32 can render it without trouble. A stale
+value or a disconnected device is shown in red and labelled accordingly.
+A running test sequence or a tripped watchdog is shown on the page too.
+
+**Token.** It is generated automatically when sharing is enabled. Unless “Allow read access without a token” is ticked, every
+request must carry the token — either as a header
+(`Authorization: Bearer …`) or simply appended to the address
+(`…/api/v1/tiles?token=…`), which is the easier route for simple displays.
+“Generate a new token” invalidates the previous one immediately and is
+therefore the way to revoke a device's access.
+
+**Security note.** The connection is **unencrypted**, and the token is
+transmitted in clear text and stored in clear text in `settings.json`. It
+is a local-network access key, **not a password**. This feature is meant
+for a trusted home or lab network: the port must **never** be made
+reachable from the internet via port forwarding or UPnP.
+
+**Log requests** writes every request to a separate file
+`share_access.log` next to the program. Deliberately separate from
+`labdash.log`, so that frequent polling does not overwrite the main log.
+Off by default.
+
+#### Remote control
+
+The same interface can also **control** devices: set setpoints, switch outputs
+and relays, switch everything off. It is meant for an AI assistant (see MCP
+server below) or your own app. Because real hardware is moved, **all** of the
+following must hold:
+
+1. **Token**: write requests always require the token — even if reading is
+   allowed without one — and only as a header (`Authorization: Bearer …`),
+   never in the address.
+2. **Control** is ticked for the device in the table (requires “Read”). This
+   is possible for load, power supply and microHIL; CAN and oscilloscope cannot
+   be remote-controlled.
+3. The master switch **“Remote control active”** is on. It is off after every
+   program start and switches itself off after the configured time limit
+   (default 60 minutes). While it is on, an orange notice with the remaining
+   time is shown in the status bar. On expiry the devices stay in their state
+   — they are not switched off.
+4. **No test sequence** is running and the **safety trip** has not fired.
+   Otherwise every control command is rejected (reading stays possible).
+5. Action, value and channel are valid — the value ranges are those of the
+   test editor — and the setpoint is **not above an active safety limit** of
+   this device (section 6).
+
+**Emergency stop.** The action “All outputs off” is the only exception: it
+requires only the token and always works — even with the master switch off,
+during a test sequence and after a safety trip. It acts like the “ALL OFF”
+button.
+
+In addition, at most two commands are in flight at once, and fast command
+sequences are throttled so that a backlog cannot delay the emergency stop.
+Every control command **and every rejection** is written to `labdash.log` with
+the caller's address.
+
+On the HCS-34xx power supply, “output OFF” is merely a current of 0 A; a
+current above 0 A switches the output back on. The ON/OFF switch on the
+“Control” tab follows a remote action; the setpoint fields there stay
+unchanged, the dashboard shows the actual values.
+
+Commands are `POST` requests with a JSON body, e.g. (insert `TOKEN` and
+`ADDRESS`; the allowed actions per device are listed at
+`ADDRESS/api/v1/tiles/<ID>`):
+
+```
+curl -X POST -H "Authorization: Bearer TOKEN" ^
+     -d "{\"action\":\"PSU_VOLT\",\"value\":5.0}" ^
+     ADDRESS/api/v1/tiles/psu:0001/actions
+curl -X POST -H "Authorization: Bearer TOKEN" ADDRESS/api/v1/all-off
+```
+
+The response says whether the device confirmed the command (`"ok":true`) or why
+it was rejected (`"error":"…"`).
+
+**MCP server for AI assistants.** The `labcontrol_mcp` folder contains a small
+server that exposes this interface as tools for Claude Code and similar
+(read status, list devices, read values, perform an action, emergency stop).
+Setup and security model are in `labcontrol_mcp/README.md`. It runs as a
+separate process and can do no more than the interface above allows — in
+particular it cannot switch the master switch on by itself.
 
 ---
 
@@ -281,6 +399,9 @@ whether a testcase is currently running.
 - The **"ALL OFF" button** at the far right of the status bar manually
   switches off all outputs immediately at any time, independent of the
   watchdog state.
+- Remote-control commands over the network (section 5) are rejected while
+  the alarm is tripped or a test sequence is running, and a setpoint above
+  an active limit is not applied at all. “All outputs off” remains possible.
 
 ---
 

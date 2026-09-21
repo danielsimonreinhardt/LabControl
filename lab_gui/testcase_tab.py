@@ -683,9 +683,11 @@ class TestcaseTab(QWidget):
 
     def forget_device(self, device_id: str) -> None:
         """Entfernt ein Geraet aus der Geraete-Auswahl der Testablauf-Zeilen
-        -- nur fuer den "Geraetezuordnung loeschen"-Button (main_window.
-        _on_reset_devices_requested) gedacht, siehe dashboard.
-        DashboardWidget.forget_device fuer die Begruendung. Bereits in
+        -- fuer den "Geraetezuordnung loeschen"-Button (main_window.
+        _on_reset_devices_requested) und fuer ein einzelnes, in den
+        Einstellungen geloeschtes CAN-Interface (main_window.
+        _on_can_configs_changed), siehe dashboard.DashboardWidget.
+        forget_device fuer die Begruendung. Bereits in
         Testablauf-Zeilen ausgewaehlte device_ids bleiben unveraendert
         gespeichert -- die Combo faellt fuer sie auf den schon bestehenden
         "nicht verbunden"-Fallback zurueck (siehe _populate_device_combo)."""

@@ -5,6 +5,12 @@ bei Verbindungsabbruch) die GUI nicht einfrieren laesst. Alle Zugriffe auf
 die Geraete laufen ausschliesslich hier; die GUI kommuniziert nur ueber
 Qt-Signale/Slots (automatisch thread-sicher als Queued Connections).
 
+Seit der Netzwerk-Freigabe hat die App drei Threads statt zwei: GUI,
+dieser Worker und der HTTP-Server (samt einem Thread je Verbindung, siehe
+share_server.py). Der Server-Thread fasst weder Geraete noch Qt-Objekte an
+-- er liest ausschliesslich einen Schnappschuss aus live_state.LiveState;
+die vollstaendigen Regeln fuer diese Grenze stehen dort im Docstring.
+
 Unterstuetzt mehrere gleichzeitig angeschlossene Geraete desselben Typs
 (z.B. zwei baugleiche HCS-34xx-Netzteile). Jede Instanz bekommt eine
 Device-ID (siehe _resolve_device_ids), unter der sie in allen Signalen/
@@ -155,7 +161,13 @@ PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.item
 PICOSCOPE_RETRY_MESSAGE = "picoscope_retry"
 
 
-def _can_device_id(cfg: dict) -> str:
+def can_device_id(cfg: dict) -> str:
+    """Oeffentlich (kein fuehrender Unterstrich), weil main_window.py sie
+    ebenfalls braucht: um beim Loeschen einer Zeile in der Einstellungen-
+    CAN-Tabelle das zugehoerige device_id zu bestimmen und das Geraet
+    komplett zu vergessen statt es (wie bei Last/Netzteil/HIL) nur
+    ausgegraut als "getrennt" stehen zu lassen -- siehe
+    main_window.MainWindow._on_can_configs_changed."""
     return f"can:{cfg['interface']}:{cfg['channel']}"
 
 
@@ -204,9 +216,21 @@ class DeviceWorker(QObject):
     # microHIL-Lese-Aktion befuellt, siehe HIL_READ_ACTIONS/_dispatch_action;
     # 0.0 bei allen anderen Aktionen ohne Bedeutung).
     action_completed = Signal(bool, str, float)
+    # Ergebnis einer Aktion aus der Netzwerk-Fernsteuerung (siehe
+    # execute_remote_action): request_id, success, error, gelesener Wert.
+    # Bewusst NICHT action_completed -- das gehoert dem TestRunner.
+    remote_action_completed = Signal(int, bool, str, float)
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
     can_connected = Signal(str, bool)        # device_id, online
+    # device_id, Fehlertext -- ein konfiguriertes CAN-Interface konnte (noch)
+    # nicht verbunden werden bzw. wurde waehrend des Betriebs getrennt (siehe
+    # _reconnect_can()/_poll()). Vorher landete das AUSSCHLIESSLICH im
+    # Log (logger.warning), die Kachel/Sektion blieb ohne jede sichtbare
+    # Erklaerung einfach weg -- fuer den Nutzer ununterscheidbar von "Config
+    # nie angekommen"/"Bug in der Anbindung" (Nutzerfeedback, siehe
+    # settings_tab.SettingsTab.on_can_connect_error).
+    can_connect_error = Signal(str, str)     # device_id, Fehlertext
     # device_id, arbitration_id, data (Hex-String z.B. "01 A2 FF"), extended, timestamp (s)
     can_frame_received = Signal(str, int, str, bool, float)
     can_stats = Signal(str, int, int)        # device_id, tx_count, rx_count -- fuers Dashboard
@@ -434,7 +458,7 @@ class DeviceWorker(QObject):
     @Slot(list)
     def set_can_configs(self, configs: list) -> None:
         self._can_configs = list(configs)
-        wanted_ids = {_can_device_id(cfg) for cfg in self._can_configs}
+        wanted_ids = {can_device_id(cfg) for cfg in self._can_configs}
         for device_id in list(self._can_buses):
             if device_id != SIM_CAN_ID and device_id not in wanted_ids:
                 self._close_can(device_id)
@@ -631,7 +655,7 @@ class DeviceWorker(QObject):
         """
         self._reload_can_dbcs()
         for cfg in self._can_configs:
-            device_id = _can_device_id(cfg)
+            device_id = can_device_id(cfg)
             if device_id in self._can_buses:
                 continue
             try:
@@ -641,6 +665,7 @@ class DeviceWorker(QObject):
                 )
             except CanConnectionError as exc:
                 logger.warning("CAN-Interface %s nicht erreichbar: %s", device_id, exc)
+                self.can_connect_error.emit(device_id, str(exc))
                 continue
             self._can_buses[device_id] = bus
             self._can_stats[device_id] = [0, 0]
@@ -666,13 +691,13 @@ class DeviceWorker(QObject):
         (can_signals_decoded), die Rohdaten-Anzeige (can_frame_received)
         ist davon unberuehrt.
         """
-        wanted_ids = {_can_device_id(cfg) for cfg in self._can_configs}
+        wanted_ids = {can_device_id(cfg) for cfg in self._can_configs}
         for device_id in list(self._can_dbcs):
             if device_id not in wanted_ids:
                 del self._can_dbcs[device_id]
                 self._can_dbc_paths.pop(device_id, None)
         for cfg in self._can_configs:
-            device_id = _can_device_id(cfg)
+            device_id = can_device_id(cfg)
             dbc_path = cfg.get("dbc_path") or None
             if dbc_path is None:
                 if device_id in self._can_dbcs:
@@ -897,6 +922,7 @@ class DeviceWorker(QObject):
                 del self._can_buses[device_id]
                 self._can_stats.pop(device_id, None)
                 self.can_connected.emit(device_id, False)
+                self.can_connect_error.emit(device_id, str(exc))
                 self.device_removed.emit("can", device_id)
                 continue
             tx, rx = self._can_stats[device_id]
@@ -1267,6 +1293,37 @@ class DeviceWorker(QObject):
     def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
         self.action_completed.emit(ok, message, read_value)
+
+    @Slot(int, str, str, str, float, int)
+    def execute_remote_action(
+        self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int
+    ) -> None:
+        """Aktion aus der Netzwerk-Fernsteuerung (siehe share_remote.py).
+
+        Dieselbe _dispatch_action wie beim Testablauf -- damit dieselbe
+        Geraetelogik und dieselben Fehlermeldungen --, aber mit EIGENEM
+        Ergebnissignal und einer Anfrage-ID. Ueber action_completed zu melden
+        wuerde das Ergebnis dem TestRunner unterschieben (siehe
+        send_can_frame), und ohne ID liesse sich die Antwort nicht der
+        wartenden HTTP-Anfrage zuordnen.
+
+        Die Erlaubnis (Token, Freigabe, Hauptschalter, Wertebereich) ist zu
+        diesem Zeitpunkt bereits geprueft; hier wird nur ausgefuehrt.
+        """
+        ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        if ok and kind == "psu":
+            # Das HCS-34xx hat kein echtes Ausgang-AUS: "aus" ist Strom 0 A
+            # (siehe hcs34xx/README.md). Der EIN/AUS-Schalter im Control-Tab
+            # kennt aber nur, was er selbst oder dieser Worker meldet -- ohne
+            # diese Meldung bliebe er nach einer Fernsteuer-Aktion auf dem
+            # alten Zustand stehen (vgl. psu_output_state oben).
+            if action in ("PSU_OUT_ON", "PSU_OUT_OFF"):
+                self.psu_output_state.emit(device_id, action == "PSU_OUT_ON")
+            elif action == "PSU_CURR":
+                self.psu_output_state.emit(device_id, value > 0.0)
+        logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) -> %s%s", device_id, action, value,
+                    channel, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        self.remote_action_completed.emit(request_id, ok, message, read_value)
 
     def _dispatch_action(
         self, device_id: str, kind: str, action: str, value: float, channel: int

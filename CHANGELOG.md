@@ -7,6 +7,228 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Fernsteuerung über das Netzwerk und MCP-Server für KI-Assistenten (0.12.0).**
+  Die Netzwerk-Freigabe kann jetzt auch **schreiben**: Sollwerte setzen,
+  Ausgänge und Relais schalten, alles abschalten -- gedacht für einen
+  KI-Assistenten (Claude Code) oder eine eigene App. Weil dabei reale Hardware
+  bewegt wird, ist der Schreibweg strenger als der Lesezugriff und hat mehrere
+  voneinander unabhängige Sperren.
+  - **Bedingungen, alle nötig** (`share_api.py`, Reihenfolge = Reihenfolge der
+    Abweisungen): (1) **Token**, immer und nur als `Authorization`-Header, nie
+    als `?token=` -- URLs landen in Logs und Verläufen, und ein Header erzwingt
+    bei Webseiten einen CORS-Preflight, den der Server nie beantwortet; auch bei
+    tokenfreiem Lesen. (2) Kachel sichtbar, sonst 404 (ununterscheidbar von
+    „gibt es nicht"). (3) **„Steuern"** beim Gerät angehakt, sonst 403. (4)
+    **Hauptschalter „Fernsteuerung aktiv"** an, sonst 403. (5) Kein Testlauf und
+    keine Sicherheitsabschaltung, sonst 409 -- Lesen bleibt möglich. (6) Gerät
+    online, sonst 409. (7) Aktion, Wert und Kanal gültig, sonst 400. (8) Sollwert
+    **nicht über einem aktiven Sicherheits-Grenzwert** des Geräts, sonst 400 --
+    der Watchdog löst erst bei einer *Messung* darüber aus, ein Sollwert darüber
+    würde also erst angelegt und dann abgeschaltet.
+  - **Hauptschalter mit Zeitlimit.** Nach jedem Programmstart aus, nicht in
+    `settings.json` gespeichert, schaltet sich nach einstellbarer Zeit
+    (`share_control_timeout_min`, Standard 60, 1-480) selbst wieder ab. Als
+    *Ablaufzeit auf der monotonen Uhr* in `LiveState` abgelegt statt als Flag:
+    die Freigabe erlischt dann von selbst, der Server-Thread vergleicht bei jeder
+    Anfrage gegen die Uhr, auch wenn im GUI-Thread nichts mehr läuft. Solange er
+    an ist, zeigt die Statuszeile einen orangefarbenen Hinweis mit Restzeit. Beim
+    Ablauf bleiben die Geräte in ihrem Zustand. Nur der Nutzer kann ihn
+    einschalten; die API hat dafür bewusst keinen Weg.
+  - **ALLE AUS ist die einzige Ausnahme** (`POST /api/v1/all-off`): verlangt nur
+    den Token und geht auch bei ausgeschaltetem Hauptschalter, laufendem
+    Testlauf und nach einer Sicherheitsabschaltung -- die Richtung, in der nichts
+    kaputtgehen kann. Läuft über `_safe_stop`, also wie der Knopf.
+  - **Aktions-Allowlist** (`lab_gui/remote_actions.py`, Qt-frei): Last (`CURR`,
+    `VOLT`, `RES`, `POW`, `OUT_ON/OFF`), Netzteil (`PSU_VOLT`, `PSU_CURR`,
+    `PSU_OUT_ON/OFF`), microHIL (`HIL_OUT_*`, `HIL_RELAY_*`, `HIL_AOUT`).
+    **Nicht** fernsteuerbar: CAN-Frames senden, PicoScope, Arbiträrsignal --
+    auch dann nicht, wenn `share_devices` von Hand editiert wird
+    (`Settings._control_allowed` und `share_api._controllable` sichern doppelt).
+    Wertebereiche wie `testcase_model.ACTION_VALUE_RANGE`; ein Prüfskript-Abschnitt
+    vergleicht beide Kataloge Eintrag für Eintrag, weil `testcase_model` über
+    `i18n` Qt importiert und hier nicht importiert werden darf.
+  - **Antwort des Geräts wird abgewartet** (`lab_gui/share_remote.py`,
+    `RemoteBridge`): `{"ok":true}` heißt, das Gerät hat bestätigt, nicht nur
+    „abgeschickt". Für einen Client, der Messgeräte steuert, ist „Netzteil nicht
+    verbunden" die entscheidende Information; ein blindes 202 ließe ihn raten.
+    Nach 8 s ohne Antwort kommt ein 202 `pending` (Kommando unterwegs, Ausgang
+    unbekannt, per GET nachsehen). Weg: Server-Thread -> Signal -> GUI-Thread
+    (`main_window._on_share_action`) -> Signal -> `DeviceWorker.
+    execute_remote_action` -> `remote_action_completed` -> zurück.
+  - **Zweite Prüfung im GUI-Thread** unmittelbar vor dem Dispatch: der
+    Schnappschuss des Server-Threads darf zwischen Prüfung und Ausführung
+    veraltet sein (Trip oder Teststart in genau dieser Lücke). Im Prüfskript
+    gezielt erzwungen: Schnappschuss meldet „frei", `SafetyMonitor` ist
+    ausgelöst -> 409, das Kommando erreicht das Gerät nicht.
+  - **Eigenes Ergebnissignal statt `action_completed`**: das gehört dem
+    `TestRunner`; ein Fernsteuer-Ergebnis dort einzuspeisen würde einem laufenden
+    Testablauf ein fremdes Ergebnis unterschieben. `_dispatch_action` wird
+    trotzdem wiederverwendet -- gleiche Gerätelogik, gleiche Fehlermeldungen.
+  - **Notaus nicht aushungern**: höchstens 2 Aktionen gleichzeitig unterwegs (weitere
+    429), Token-Eimer (Burst 10, dann 5/s) gegen Schreibfluten -- jede Aktion belegt
+    den Worker für eine serielle Ein-/Ausgabe, und ALLE AUS reiht sich hinter ihnen
+    ein. Die Server-Slots (8) bleiben so für Lesen und ALLE AUS frei.
+  - **Protokoll**: jede Aktion mit Adresse des Aufrufers und jede Abweisung im
+    Hauptlog `labdash.log` (INFO/WARNING), bewusst nicht im abschaltbaren
+    Zugriffslog -- wer eine überraschende Geräte-Reaktion sucht, muss sehen
+    können, ob sie aus dem Netz kam.
+  - **Netzteil-Besonderheit** (BUGS.md #1b): „Ausgang AUS" ist beim HCS-34xx nur
+    Strom 0 A, `PSU_CURR` > 0 schaltet wieder ein. Steht in der Aktionsbeschreibung
+    der API. Der EIN/AUS-Schalter im Control-Tab folgt einer Fernsteuer-Aktion
+    (`psu_output_state`), die Sollwertfelder dort bleiben unverändert.
+  - **Einstellungen -> Netzwerk**: Hauptschalter „Fernsteuerung aktiv" mit
+    Zeitlimit, „Steuern" in der Tabelle jetzt bedienbar (nur für Last, Netzteil,
+    microHIL; setzt „Lesen" voraus und nimmt es beim Abwählen von „Lesen"
+    zurück), microHIL-Zeilen in der Tabelle. **Token wird beim Einschalten der
+    Freigabe automatisch erzeugt** -- vorher antwortete die API bis zum Druck auf
+    „Neu erzeugen" mit 503, und der Weg dorthin war nicht offensichtlich.
+  - **API-Änderungen (abwärtskompatibel)**: `GET /api/v1/tiles/{id}` listet
+    `actions` (mit Wertebereich, Einheit, Kanälen), `control_available` und
+    `control_blocked` (Sperrgrund); `GET /api/v1/status` meldet `remote_control`
+    (`active`, `remaining_s`); `POST /api/v1/tiles/{id}/actions` und
+    `POST /api/v1/all-off` neu. POST auf einen Lese-Pfad -> 405.
+  - **`labcontrol_mcp/` (neu): MCP-Server** als eigener Prozess außerhalb der
+    `.exe`, nur Standardbibliothek plus das Paket `mcp` (eigene `requirements.txt`,
+    eigene `.venv`). Fünf Werkzeuge: `get_status`, `list_devices`, `read_device`,
+    `control_device`, `all_off`. Übersetzt nur Werkzeugaufrufe in HTTP -- er kann
+    nichts, was die Schnittstelle nicht ohnehin erlaubt, und hat keinen Weg, den
+    Hauptschalter einzuschalten. Fehler kommen als Werkzeugfehler mit Hinweis, was
+    zu tun ist; die Anweisungen an den Assistenten (erst lesen, nur Erbetenes tun,
+    nach dem Schreiben gegenprüfen, im Zweifel `all_off`) reisen als
+    `instructions` mit. Mit `selftest.py` prüfbar, ohne etwas zu steuern.
+  - **Verifiziert am Mock** (Simulationsmodus): reine Schreib-Logik mit
+    Stub-Executor (Token, Reihenfolge der Abweisungen, Validierung, Grenzwerte,
+    ALLE AUS), die komplette App mit echten HTTP-Anfragen (Netzteil, Last und
+    microHIL werden wirklich gesetzt und am Messwert bzw. im Control-Tab
+    gegengeprüft; Sperre durch Trip/Testlauf; Lücken-Fall; ALLE AUS trotz Trip;
+    Drosselung mit freiem ALLE AUS; Ablauf des Zeitfensters ohne GUI-Zutun; von
+    Hand ausschalten; „Steuern" entziehen) und der MCP-Server als echter
+    stdio-Kindprozess gegen dieselbe App (Werkzeugliste, Schreiben mit Wirkung am
+    Messwert, Fehlertexte, falscher Token, App nicht erreichbar).
+  - **Verifiziert an echter Hardware** (gebaute `LabControl_v0.12.0.exe`, Netzteil
+    16V-60A an COM6, Hauptschalter vom Nutzer in der App eingeschaltet): Schreiben
+    ohne Hauptschalter -> 403; `PSU_VOLT` 2,0 V und `PSU_CURR` 0,1 A vom Gerät
+    bestätigt; Wert außer Bereich -> 400; `ALLE AUS` bestätigt und erreicht alle
+    angeschlossenen Geräte (Last, beide Netzteile); Aktionen und Abweisungen mit
+    Aufrufer in `labdash.log`. Per direktem Treiberzugriff gegengeprüft: die
+    Sollwerte kommen im Gerät an (`GETS` liefert 2,0 V / 0,1 A, danach 0,0 A).
+    **Nicht verifiziert:** die Spannung am Ausgang. Die Anzeige blieb bei 0,06 V /
+    0,04 A, obwohl der Sollwert stimmte -- vermutlich ist der Ausgang am Gerät
+    selbst (Ausgangstaste) aus, was sich per Protokoll nicht ändern lässt
+    (siehe `hcs34xx/README.md`). Ein Test mit tatsächlich eingeschaltetem Ausgang
+    steht aus. Ebenso `load` und `microHIL` an echter Hardware (waren nicht
+    verbunden bzw. nicht freigegeben) und der MCP-Server gegen die `.exe`.
+    Hinweis: die Geräteerkennung dauerte mit den derzeit angeschlossenen Geräten
+    über 30 s, das Netzteil war erst danach online -- nicht neu, aber merklich.
+- **Netzwerk-Freigabe: ausgewählte Kacheln im lokalen Netz bereitstellen
+  (Phase 1, nur lesend).** Ein kleiner HTTP-Server in LabControl stellt
+  einzelne Dashboard-Kacheln -- nicht die ganze App -- für andere Geräte im
+  LAN bereit, z.B. für ein ESP32-Display im Labor oder einen Browser auf dem
+  Handy. Standardmäßig vollständig inert: aus, nur Loopback, keine Kachel
+  freigegeben, Token erforderlich. Gebaut auf der Standardbibliothek
+  (`http.server`), also **keine neue Abhängigkeit** und keine Änderung an
+  `requirements.txt` oder `LabControl.spec`.
+  - **Einstellungen-Tab, neuer Unterreiter „Netzwerk":** An/Aus, Erreichbarkeit
+    (nur dieser PC / ganzes Netz, als Auswahlliste statt Freitext -- die
+    Entscheidung ist sicherheitsrelevant und soll nicht vertippbar sein),
+    Port, Zugangstoken mit „Neu erzeugen"/„Kopieren", optional tokenfreier
+    Lesezugriff für einfache Displays, optionales Zugriffsprotokoll und eine
+    fertige Adresse zum Abtippen in den ESP32-Sketch. Darunter eine Tabelle
+    mit einer Zeile je Gerät und den Spalten „Lesen"/„Steuern".
+  - **Endpoints** unter `/api/v1/`: `status` (App-Version, Sperrzustand,
+    Watchdog-Zustand, Auth-Modus), `tiles` (Liste der freigegebenen Kacheln),
+    `tiles/{id}` (eine Kachel mit aktuellen Werten), `values` (Sammelabruf,
+    damit ein Client mit mehreren Kacheln eine statt N Anfragen braucht).
+    Numerische Felder tragen `value`, Text-/Enum-Felder `text` -- nie beides,
+    damit ein Client auf Vorhandensein prüfen kann statt auf den Typ zu raten.
+  - **Anzeige für schwache Clients:** `/display` liefert kompaktes HTML
+    (~750 Byte, Inline-CSS, kein JavaScript) mit `<meta http-equiv="refresh">`
+    -- ein ESP32 braucht damit weder JS-Engine noch eigenen Timer.
+    `/display?fmt=text` liefert stattdessen `key=value`-Zeilen. `/` ist eine
+    winzige Einrichtungsseite mit den fertigen URLs. Veraltete oder getrennte
+    Werte werden rot und beschriftet dargestellt.
+  - **Sperrzustand:** `lock` (`free`/`test_running`/`safety_tripped`) steht in
+    jeder Antwort. Die Fernsteuerung (siehe nächster Eintrag) nutzt ihn zum Abweisen
+    schreibender Zugriffe. Gespeist aus
+    `safety.SafetyMonitor.state_changed` und dem Testlauf-Zustand des
+    `TestRunner` -- ausdrücklich NICHT aus `device_worker.set_test_running()`,
+    das trotz des Namens nur die PicoScope-Reconnect-Probe pausiert.
+  - **Zugriffsschutz:** Token per `Authorization: Bearer` oder `?token=`
+    (manche minimalen ESP32-HTTP-Clients können keine Header setzen),
+    verglichen mit `hmac.compare_digest`. Die Freigabeliste wird an genau
+    einer Stelle ausgewertet (`share_api.visible_tiles`) und gilt für jeden
+    Pfad, auch `/display` und `/`. „Nicht freigegeben" und „existiert nicht"
+    liefern dieselbe 404-Antwort, damit sich die Liste nicht abtasten lässt.
+    Kein Dateisystem-Serving (explizite Routing-Tabelle statt Pfadabbildung),
+    kein CORS-Header, `nosniff`, Deckelung auf 20 Kachel-IDs je Anfrage und
+    8 gleichzeitige Anfragen. Bewusst **kein HTTPS**: ein Zertifikat, das ein
+    ESP32 prüfen kann, gibt es im Heimlabor nicht -- selbstsigniert hieße
+    Pinning oder `setInsecure()`, also Sicherheitsgefühl statt Sicherheit.
+    Der Schutz liegt darin, dass nichts lauscht, bis es eingeschaltet wird.
+  - **Neue Module:** `lab_gui/live_state.py` (thread-sicherer Schnappschuss,
+    einzige Brücke zwischen GUI- und Server-Thread), `lab_gui/share_api.py`
+    (Routing/Auth/JSON), `lab_gui/share_render.py` (HTML/Text),
+    `lab_gui/share_server.py` (Socket- und Thread-Lebensdauer). `share_api`
+    und `share_render` sind bewusst Qt-frei und damit ohne `QApplication` und
+    ohne offenen Socket prüfbar.
+  - **Verifiziert am Mock** (Simulationsmodus, `psu:SIM`/`load:SIM`) und
+    **an echter Hardware** (angeschlossenes HCS-34xx an COM6 lieferte Werte
+    über `/api/v1/tiles/{id}`): Kachelliste, Werte, `/display`, Auth mit und
+    ohne Token, Sperrzustand bei Watchdog-Trip und Testlauf, Entziehen einer
+    Freigabe im laufenden Betrieb (ohne Serverneustart), Portwechsel,
+    belegter Port, 30 parallele Anfragen und sauberes Beenden während
+    laufender Anfragen. `.exe` gebaut (`LabControl_v0.11.0.exe`, alle fünf
+    neuen Module im Bundle) und der `--windowed`-Fall gezielt nachgestellt
+    (`sys.stderr = None` plus echte Anfragen inkl. kaputter Anfragezeile).
+    Anschließend die gebaute `.exe` mit angeschlossener Hardware gestartet:
+    echtes HCS-34xx an COM6 lieferte Live-Werte über `/api/v1/tiles/{id}`
+    und `/display` (0,060 V / 0,060 A / CC), getrennte Geräte erschienen
+    korrekt als `online:false` mit `stale:true`, ein nicht freigegebenes
+    microHIL blieb unsichtbar (404), 20 Anfragen in Folge ohne Fehler
+    (die `stderr`-Falle hätte hier zugeschlagen), Zugriffslog landete
+    ausschließlich in `share_access.log` (genau eine Zeile in
+    `labdash.log`: der Serverstart), und beim Schließen stoppte der Server
+    laut Log VOR `ALL OFF`. **Noch offen:** das echte ESP32-Display.
+  - **Prüfskript `tools/check_network_share.py`** (230 Prüfungen in sieben
+    Abschnitten: `pure`, `remote`, `server`, `settings`, `i18n`, `windowed`,
+    `app`, einzeln aufrufbar). Kein Testframework -- das Projekt kommt bewusst ohne
+    aus, deshalb ein eigenständiges Skript nach dem Muster der übrigen
+    `tools/`-Skripte. `settings.json`/`device_labels.json` werden dabei in
+    ein Temp-Verzeichnis umgelenkt, der echte Stand bleibt unberührt.
+
+### Technisch
+- **`lab_gui/field_catalog.py` (neu): gemeinsamer Feldkatalog.** Namen und
+  Einheiten je `(Geräteart, Feld)` lagen bisher dreifach verstreut
+  (`timeline_tab.KIND_FIELDS` ohne CAN und ohne `mode`,
+  `recording.FIELD_INFO` nur Last/Netzteil, `dashboard.FIELD_DEFS` nur nach
+  Feldnamen ohne Geräteart). Der Server-Thread braucht denselben Katalog,
+  darf dafür aber kein Qt-Widget-Modul importieren -- ohne die Extraktion
+  hinge `share_api.py` an `dashboard.py` samt `qtawesome`. `KIND_FIELDS` und
+  `LOAD_MODE_SHORT` sind unverändert dorthin gezogen und werden
+  re-importiert, keine Aufrufstelle ändert sich. `dashboard.FIELD_DEFS` und
+  `recording.FIELD_INFO` bleiben bewusst unangetastet (anzeige- bzw.
+  exportseitig), siehe den Haltepunkt-Kommentar im Modul-Docstring.
+- **`sys.stderr` ist `None` im `--windowed`-Build.**
+  `BaseHTTPRequestHandler.log_message()`/`log_error()` schreiben
+  bedingungslos dorthin -- ohne Override hätte **jede** Anfrage in der `.exe`
+  einen `AttributeError` geworfen, im Dev-Betrieb völlig unauffällig. Beide
+  sind in `share_server.py` überschrieben.
+- **`allow_reuse_address = False`.** Pythons `HTTPServer` setzt es auf 1;
+  unter Windows erlaubt `SO_REUSEADDR` damit einem **fremden Prozess**, einen
+  bereits gebundenen Port zu übernehmen (anders als unter Unix, wo es nur
+  TIME_WAIT überbrückt). Verifiziert, dass ein sofortiger Neustart auf
+  demselben Port trotzdem gelingt.
+- **Eigenes Zugriffsprotokoll** in `share_access.log` statt in `labdash.log`:
+  letzteres ist auf 1 MB x 3 gedeckelt und die Datei, die man nach einer
+  nächtlichen Sicherheitsabschaltung liest -- eine Zeile je Anfrage hätte sie
+  bei 1 Hz Polling binnen Stunden leergerollt. Standardmäßig aus.
+- **Dritter Thread.** Der Modul-Docstring von `device_worker.py` nennt jetzt
+  GUI, DeviceWorker und den HTTP-Server; die Regeln für die Thread-Grenze
+  stehen ausführlich in `live_state.py`.
+- `Settings.reset_device_settings()` löscht zusätzlich `share_devices` -- die
+  Freigabe ist eine geräteindividuelle Einstellung, und der Button
+  „Gerätezuordnung löschen" verspricht, alles Gerätebezogene zu entfernen.
+
 - **microHIL: einstellbare PWM-Frequenz.** `microhil/driver.py` um
   `set_pwm_frequency(hz)`/`get_pwm_frequency()` erweitert (`PWMFREQ`/
   `PWMFREQ?`, microHIL-Firmware seit 2026-09-09) -- gilt für PWM1-4
@@ -686,6 +908,101 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **CAN/Vector: Eigene, vom Controller mangels ACK automatisch wiederholte
+  Sendeversuche erschienen faelschlich als eingehende Botschaften in der
+  Live-Traffic-Tabelle (Nutzerfeedback, live an echter Vector-Hardware
+  beobachtet: identische Botschaft laeuft endlos auf beiden konfigurierten
+  Kanaelen auf, Interface-LED zeigt CanErr).** Kein Bug im eigentlichen
+  Retry-Verhalten selbst -- ein CAN-Controller wiederholt einen gesendeten
+  Frame automatisch auf Protokollebene, solange kein zweiter Busteilnehmer
+  das ACK-Bit setzt (bestaetigt: Bus korrekt terminiert, aber bewusst ohne
+  zweiten Teilnehmer betrieben) -- ABER `CanBus.recv()` (can_bus/driver.py)
+  gab bisher jede Nachricht aus derselben Empfangs-Queue ungeprueft als
+  "empfangen" weiter. python-cans Vector-Backend liefert ueber dieselbe
+  Queue (`xlReceive`) neben echten RX-Frames auch TX-Bestaetigungen EIGENER
+  gesendeter Frames -- markiert per `msg.is_rx=False`
+  (can/interfaces/vector/canlib.py, Flag `XL_CAN_MSG_FLAG_TX_COMPLETED`),
+  inklusive jedes einzelnen automatischen Wiederholungsversuchs. `CanBus.
+  recv()` ueberspringt jetzt Nachrichten mit `is_rx=False`, bevor sie an
+  device_worker.py weitergereicht werden. Fuer slcan/PCAN ein No-Op (dort
+  bleibt `is_rx` beim python-can-Standardwert `True`, da diese Backends kein
+  eigenes TX-Bestaetigungs-Event ueber recv() liefern). Behebt NICHT das
+  zugrundeliegende Verhalten (der Controller wiederholt ungeachtet dessen
+  weiter, bis ein ACK kommt oder die Verbindung neu aufgebaut wird -- reines
+  Bus-/Protokollverhalten, kein Softwarefehler) -- macht es aber korrekt
+  sichtbar statt es als echten RX-Verkehr misszudeuten. Per Offscreen-Test
+  mit einem simulierten Vector-Bus-Objekt verifiziert (drei is_rx=False-
+  Events werden uebersprungen, der darauffolgende echte RX-Frame korrekt
+  geliefert, leere Queue weiterhin `None`). Noch nicht gegen echte
+  Vector-Hardware durch den Nutzer bestaetigt.
+- **CAN: In den Einstellungen geloeschtes Interface blieb als ausgegraute
+  "getrennt"-Kachel im Dashboard/Control-Tab stehen, statt komplett zu
+  verschwinden (Nutzerfeedback).** Last/Netzteil/HIL duerfen so eine graue
+  Karteileiche nach dem Trennen bewusst behalten (echtes Hotplug, siehe
+  main_window._replay_known_devices) -- CAN-Interfaces haben aber KEIN
+  Hotplug (siehe device_worker.py-Modulkommentar): ein device_id wird
+  ausschliesslich ueber die Konfigurationsliste im Einstellungen-Tab
+  bekannt. Ein geloeschter Eintrag hatte bisher trotzdem keinerlei
+  Aufraeum-Effekt auf DeviceRegistry/Dashboard/Control-Tab/Testablauf --
+  genau denselben, bereits einmal fuer den "Geraetezuordnung loeschen"-
+  Button geloesten Bug (siehe dashboard.DashboardWidget.forget_device), nur
+  diesmal fuer eine einzelne geloeschte CAN-Zeile statt fuer alle Geraete
+  auf einmal. Neue main_window._on_can_configs_changed() vergleicht bei
+  jeder Aenderung der CAN-Konfiguration die neue Liste gegen alle der
+  Registry bekannten CAN-device_ids (aktuell verbunden ODER als graue
+  Kachel aus einer frueheren Sitzung bekannt) und vergisst jedes fehlende
+  vollstaendig -- ueber denselben forget_device()-Pfad, den auch der
+  globale Reset-Button nutzt (DeviceRegistry bekommt dafuer eine neue
+  forget()-Methode fuer genau EIN Geraet statt aller). SIM_CAN_ID
+  (Simulationsmodus) bewusst ausgenommen, da es nie aus dieser
+  Konfigurationsliste stammt. Per Offscreen-Funktionstest verifiziert
+  (Geraet ueber device_known simuliert bekannt gemacht, Kachel/Sektion/
+  Registry-Eintrag entstehen wie erwartet; nach simuliertem Zeilen-Loeschen
+  sind alle drei restlos verschwunden). Noch nicht in der laufenden App
+  durch den Nutzer bestaetigt.
+- **CAN: Fehlgeschlagene Verbindung (z.B. SLCAN-Interface) tauchte nirgends
+  in der App auf -- weder Dashboard noch Control-Tab noch sonstwo
+  (Nutzerfeedback).** War kein Anzeige-Bug in Dashboard/Control-Tab (deren
+  Kachel-/Sektions-Erzeugung ist generisch je device_id, unabhaengig vom
+  CAN-Interface-Typ -- per gezieltem Funktionstest gegen device_worker.
+  DeviceWorker.set_can_configs() bestaetigt), sondern eine tatsaechlich
+  gescheiterte Verbindung: `_reconnect_can()` fing `CanConnectionError`
+  bisher AUSSCHLIESSLICH mit `logger.warning(...)` ab -- sichtbar nur in
+  `labdash.log`, nirgends in der GUI. Ein konkreter Fall stand bereits im
+  Log: `CAN-Interface can:slcan:COM4 nicht erreichbar: ... PermissionError
+  (13, 'Zugriff verweigert', ...)` -- COM4 war durch einen anderen Prozess
+  belegt, die App versuchte lautlos alle drei Sekunden erneut, ohne das
+  jemals irgendwo erkennbar zu machen. Exakt dasselbe Muster wie beim
+  fruehen Vector-`app_name`-Bug ("das Interface tauchte in der GUI schlicht
+  nie auf"), nur diesmal fuer echte Verbindungsfehler statt Discovery.
+  Neues Signal `DeviceWorker.can_connect_error(device_id, message)` (in
+  `_reconnect_can()` UND im bestehenden Trennungs-Pfad in `_poll()`
+  emittiert) macht das jetzt sichtbar: die CAN-Bus-Tabelle im
+  Einstellungen-Tab bekommt eine neue Status-Spalte, die bei einer
+  konfigurierten, aber (noch) nicht erreichbaren Zeile ein Warnsymbol mit
+  dem Fehlertext als Tooltip zeigt -- verschwindet automatisch, sobald die
+  Verbindung klappt (`can_connected`) oder die Zeile bearbeitet wird (alter
+  Fehler waere sonst irrefuehrend). Per Offscreen-Funktionstest verifiziert
+  (eigenes Skript: `set_can_configs`/`_reconnect_can` mit ungueltigem Port
+  ausgeloest, Icon+Tooltip erscheinen, verschwinden nach erfolgreichem
+  Connect bzw. Zeilen-Edit). Noch nicht in der laufenden App/an echter
+  Hardware durch den Nutzer bestaetigt -- insbesondere bleibt offen, was
+  COM4 auf dessen Rechner tatsaechlich blockiert.
+- **CAN-Mock: Live-Traffic-Tabelle im Control-Tab lief im Simulationsbetrieb
+  scheinbar endlos mit Botschaften voll (Nutzerfeedback).** Ursache lag in
+  `can_bus/mock.py`: `MockCanBus.recv()` ignorierte den `timeout`-Parameter
+  komplett und lieferte bei JEDEM Aufruf sofort einen neuen Demo-Frame,
+  statt wie der reale `CanBus.recv()` (`can_bus/driver.py`) bei leerem Bus
+  `None` zurückzugeben. `DeviceWorker._poll()` (`lab_gui/device_worker.py`)
+  ruft `recv(timeout=0.0)` im 100-ms-Takt bis zu `CAN_DRAIN_LIMIT`-mal (32)
+  auf und hängt jeden Treffer sofort an die Live-Traffic-Tabelle im
+  Control-Tab an (`control_tab.CanControlGroup.append_frame`) -- im
+  Mock-Betrieb also ca. 320 "neue" Frames pro Sekunde, unabhängig davon, ob
+  überhaupt etwas gesendet wurde. `MockCanBus` liefert jetzt nur noch alle
+  `DEMO_INTERVAL_S` (0,5 s) einen Frame und sonst `None`, wie ein echter,
+  gerade ruhiger Bus. Bisher nur per Codelektüre/Nachvollzug der Poll-Logik
+  verifiziert -- noch nicht in der laufenden App bestätigt (betrifft nur den
+  Mock, keine echte CAN-Hardware).
 - **CAN: In der gebauten .exe fehlten sämtliche python-can-Backends --
   Ursache von "Keine Kanäle gefunden" (v0.9.17).** python-can lädt seine
   Interface-Backends nicht per normalem `import`, sondern zur Laufzeit über
@@ -1109,6 +1426,108 @@ Semantic Versioning (`lab_gui/version.py`).
   DBC-decodierte CAN-Signale (freier Signalpfad "Nachricht.Signal") direkt
   als while/if-Bedingungsquelle, ohne Umweg über einen vorgeschalteten
   Lese-Schritt mit "In Variable speichern".
+- **[BUGS_GESCHLOSSEN.md #36, Nummer angenommen -- Datei existierte in
+  diesem Checkout noch nicht, bitte mit der eigentlichen Liste abgleichen]
+  Dashboard-Kompaktansicht: schmale Kachel liess sich nicht in eine
+  zweite Zeile ziehen** (in der Normalansicht ging das bereits, siehe
+  BUGS_GESCHLOSSEN.md #30/FEATURES.md Punkt 5): Die Kompaktansicht war in
+  `lab_gui/dashboard.py` an drei Stellen stur auf eine einzelne Zeile
+  verdrahtet, unabhängig vom bereits vorhandenen 2-zeiligen
+  Packalgorithmus (`pack_tiles_by_row`) der Normalansicht --
+  `_tile_rects()` wies jeder Kachel pauschal `(0, col)` zu,
+  `_relayout_panels()` platzierte beim Zeichnen ebenso pauschal in Zeile 0,
+  und `_order_with_dragged_at()` bestimmte "davor/dahinter" beim Ziehen
+  ausschließlich über die x- statt (wie in der Normalansicht) über die
+  y-Koordinate. Alle drei Stellen nutzen jetzt denselben
+  `pack_tiles_by_row(order, spans, max_rows=2)`-Aufruf wie die
+  Normalansicht (Kachelspannen bleiben dabei immer `(1, 1)`, da
+  Kompaktinhalt für jede Geräteart einzeilig ist -- nur die
+  Hoehenklassen aus `TILE_HEIGHT_BY_KIND` gelten weiterhin ausschließlich
+  in der Normalansicht). Zwei schmale Kacheln können sich dadurch jetzt
+  auch in der Kompaktansicht eine Spalte teilen (übereinander), per
+  Drag&Drop oder bereits automatisch beim dichten Packen, statt zwingend
+  in einer einzigen, ggf. horizontal scrollenden Zeile zu landen. Per
+  Offscreen-Test verifiziert (eigenes Skript, kein fester Bestandteil des
+  Repos): Normalansicht-Referenzverhalten unverändert (zwei einfache
+  Kacheln stapeln sich weiterhin automatisch), Kompaktansicht nutzt jetzt
+  ebenfalls zwei Zeilen, ein simulierter Drop auf die untere Hälfte einer
+  Kachel sortiert die gezogene Kachel korrekt dahinter ein und lässt sie
+  nach dem Re-Layout tatsächlich in Zeile 2 derselben Spalte landen
+  (screenshotbestätigt).
+
+  Nachtrag (Nutzerfeedback nach erstem Test): Zeilenhöhe passte noch
+  nicht. Der erste Anlauf oben nahm an, Kompaktinhalt sei für jede
+  Geräteart einzeilig, und wies deshalb überall pauschal (1, 1) als
+  Kachelspanne zu. Empirisch (sizeHint().height()) stimmt das nicht:
+  psu/load/can sind in der Kompaktansicht rund 26px hoch, microHIL
+  (Digital-IO-Block) aber rund 68px und PicoScope (Status über dem Button
+  gestapelt) sogar rund 76px -- beide bleiben also auch dort zweizeilig,
+  obwohl PicoScope in der Normalansicht als "kurz" gilt
+  (TILE_HEIGHT_BY_KIND). Eine so hohe Kachel, gezwungen in row_span=1,
+  verzerrte die Zeilenhöhe für alle Spalten dieser Zeile, statt (wie eine
+  echte Doppelzeile) beide Zeilen selbst zu belegen. Neue, von der
+  Normalansicht unabhängige Klassifizierung COMPACT_TILE_HEIGHT_BY_KIND
+  (hil und picoscope: "double") -- _tile_span() schlägt darüber nach,
+  welche der beiden Tabellen gilt (self._compact). _tile_rects()/
+  _relayout_panels() nutzen jetzt einheitlich _tile_span() statt der
+  vorherigen Pauschalzuweisung, inklusive einer eigenen Zeilenhöhen-
+  Ratsche _compact_cell_height (analog zu _cell_height der Normalansicht,
+  aber unabhängig davon geführt, da die natürlichen Größen dort um
+  Größenordnungen auseinander liegen). Eine solche Doppel-Kachel kann
+  dadurch, wie in der Normalansicht, nie nur der oberen oder unteren Zeile
+  zugewiesen werden, sondern belegt beim Packen immer beide.
+
+  Ebenfalls per Offscreen-Test verifiziert: microHIL bekommt jetzt
+  row_span=2, dessen Gesamthöhe entspricht exakt psu.height() + Abstand +
+  load.height() einer daneben gestapelten Spalte (screenshotbestätigt).
+  Vom Nutzer in der laufenden App bestätigt.
+
+  Nachtrag 2 (Nutzerfeedback nach zweitem Test): unter einer breiten
+  Kachel ließen sich keine zwei schmalen anordnen. Konkretes Beispiel:
+  2 Netzteile, 1 Last, 2 CAN-Bus, 1 Oszilloskop -- "CAN-Bus 2" ließ sich
+  nicht neben "CAN-Bus 1" unter die breitere "Last 150W" ziehen, obwohl
+  dort sichtbar Platz war. Ursache war konzeptionell: die Kompaktansicht
+  hatte GENAU EINE Spalte je Kachel (Spaltenbreite = Kachelbreite), und
+  eine Spalte kann je Zeile nur eine einzige Kachel aufnehmen -- die
+  Anordnung war damit prinzipiell unmöglich, egal wohin gezogen wurde.
+  (Ein erster Anlauf, alle Kacheln einer Spalte auf die breiteste
+  anzugleichen, hätte lediglich die optische Täuschung beseitigt, war aber
+  Platzverschwendung und wurde verworfen.)
+
+  Fix: Die Kompaktansicht bekommt ein feines horizontales Raster
+  (COMPACT_COLUMN_UNIT = 8px, zusammen mit GRID_SPACING eine Rasterweite
+  von 20px). Kacheln haben dort jetzt auch eine SPALTENspanne -- analog
+  zur bereits vorhandenen Zeilenspanne -- die aus der (weiterhin je Gerät
+  geratschten) natürlichen Breite auf die nächste Rasterweite aufgerundet
+  wird, im Mittel also ~10px Verschnitt statt einer Angleichung aller
+  Kacheln an die breiteste. `pack_tiles_by_row()` konnte gemischte
+  Spaltenspannen bereits, es fehlten nur echte Werte: `_tile_span()`
+  liefert sie jetzt aus `_compact_col_spans` (von `_relayout_panels()`
+  vor dem Packen gefüllt, damit Layout und Ziel-Bestimmung beim Ziehen
+  garantiert dieselben Spannen sehen), `_tile_rects()` vereinigt die
+  Zellrechtecke jetzt über beide Spannen, und alle Rasterspalten bekommen
+  dieselbe Mindestbreite (beim Rückwechsel in die Normalansicht wieder
+  aufgehoben, sonst bliebe rechts eine leere Geisterspalte stehen).
+
+  Damit einher ging eine zweite nötige Änderung: die Entscheidung
+  "davor/dahinter" beim Ziehen (`_order_with_dragged_at()`) lief bisher
+  über die y-Achse (obere/untere Hälfte der Zielkachel), sobald der Zeiger
+  waagerecht innerhalb ihrer Spalte lag. Da Kacheln jetzt auch
+  NEBENeinander in derselben Zeile liegen können, wäre das für zwei
+  nebeneinanderliegende Kacheln unbedienbar gewesen; stattdessen
+  entscheidet nun die dominante der beiden auf die halbe Kachelausdehnung
+  normierten Abweichungen von der Kachelmitte. Beide Achsen zeigen dabei
+  in dieselbe Leserichtung, da das dichte Packing erst eine Spalte nach
+  unten und dann nach rechts füllt: "weiter unten" und "weiter rechts"
+  heißen gleichermaßen "dahinter".
+
+  Per Offscreen-Test verifiziert (14 Prüfungen): Normalansicht
+  unverändert (col_span=1 je Kachel), Kompaktansicht nutzt beide Zeilen,
+  Drop auf die untere Hälfte landet in Zeile 2 derselben Spalte, microHIL
+  belegt beide Zeilen mit passender Höhe, zwei schmale Kacheln liegen
+  nebeneinander in Zeile 2 unter einer breiten und behalten dabei ihre
+  jeweils eigene Breite, und der Rückwechsel in die Normalansicht
+  hinterlässt keine Geisterspalten (screenshotbestätigt).
 
 ## [0.6.2]
 

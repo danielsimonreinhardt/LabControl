@@ -1569,10 +1569,12 @@ class ControlTab(QWidget):
         self.section_created.emit(kind, device_id, section)
 
     def forget_device(self, device_id: str) -> None:
-        """Entfernt ein Geraet vollstaendig -- nur fuer den "Geraetezuordnung
-        loeschen"-Button (main_window._on_reset_devices_requested) gedacht,
-        siehe dashboard.DashboardWidget.forget_device fuer die Begruendung.
-        Die Sektion ist bei einem getrennten Geraet ohnehin schon versteckt
+        """Entfernt ein Geraet vollstaendig -- fuer den "Geraetezuordnung
+        loeschen"-Button (main_window._on_reset_devices_requested) und fuer
+        ein einzelnes, in den Einstellungen geloeschtes CAN-Interface
+        (main_window._on_can_configs_changed), siehe
+        dashboard.DashboardWidget.forget_device fuer die Begruendung. Die
+        Sektion ist bei einem getrennten Geraet ohnehin schon versteckt
         (siehe _set_online), wird hier aber zusaetzlich zerstoert statt nur
         unsichtbar zu bleiben."""
         section = self._sections.pop(device_id, None)
