@@ -13,7 +13,7 @@ der Server kann nichts, was die Schnittstelle nicht ohnehin erlaubt.
 
 | Werkzeug | Zweck |
 |---|---|
-| `get_status` | Version, Sperrzustand, Watchdog, Hauptschalter der Fernsteuerung (mit Restzeit) |
+| `get_status` | Version, Sperrzustand, Watchdog, Fernsteuerung (Hauptschalter mit Restzeit, `effective` = gilt für dich) |
 | `list_devices` | Freigegebene Geräte mit Messwerten, erlaubten Aktionen und Sperrgrund |
 | `read_device` | Messwerte eines Geräts (zum Gegenprüfen nach dem Schreiben) |
 | `control_device` | Eine Aktion ausführen (`PSU_VOLT`, `PSU_OUT_ON`, `CURR`, `HIL_RELAY_ON`, …) |
@@ -33,8 +33,9 @@ Werkzeugfehler mit einem Hinweis, was zu tun ist.
    anhaken. CAN und Oszilloskop sind nicht fernsteuerbar.
 3. Den **Token** kopieren (Kopieren-Knopf neben dem Feld).
 
-Der Hauptschalter **„Fernsteuerung aktiv"** bleibt aus — den schaltet man erst
-ein, wenn tatsächlich gesteuert werden soll (siehe unten).
+Der Hauptschalter **„Fernsteuerung aktiv"** braucht der MCP-Server nicht, solange er
+auf demselben Rechner wie LabControl läuft und **„Zugriffe von diesem PC brauchen
+den Hauptschalter nicht"** angehakt ist (Standard, siehe „Sicherheitsmodell").
 
 **2. Umgebung für den MCP-Server** (einmalig, im Ordner `LabControl`):
 
@@ -80,6 +81,16 @@ Damit ein Befehl ankommt, müssen **alle** Bedingungen erfüllt sein:
    60 min) von selbst wieder aus — auch wenn LabControl sonst nichts mehr tut.
    **Nur der Nutzer kann ihn einschalten**, der Assistent hat dafür keinen Weg.
    Beim Ablauf bleiben die Geräte in ihrem Zustand, sie werden nicht abgeschaltet.
+
+   **Ausnahme für diesen PC:** Zugriffe vom selben Rechner — also auch dieser
+   MCP-Server, wenn er lokal läuft — brauchen den Hauptschalter nicht, solange in
+   Einstellungen → Netzwerk **„Zugriffe von diesem PC brauchen den Hauptschalter
+   nicht"** angehakt ist (Standard). Es gibt dann **kein Zeitfenster**: der
+   Assistent kann jederzeit steuern, solange Token, „Steuern" und die Sperren
+   (Punkte 1, 2, 4, 5) stimmen. Wer das nicht will, nimmt den Haken heraus; dann
+   gilt auch für lokale Zugriffe wieder das Zeitfenster. Erkannt wird „lokal" an der
+   Verbindung (Loopback oder die eigene Adresse des Rechners), nicht an Angaben des
+   Aufrufers.
 4. Es läuft **kein Testablauf** und die **Sicherheitsabschaltung** hat nicht
    ausgelöst (sonst HTTP 409). Lesen bleibt dann möglich.
 5. Aktion, Wert und Kanal sind **gültig** (Wertebereiche wie im Testeditor) und
@@ -105,7 +116,7 @@ Wert über 0 A schaltet den Ausgang wieder ein.
 | `nicht erreichbar` | LabControl läuft nicht, Freigabe aus, Adresse/Port falsch, Firewall |
 | `unauthorized` | Token in der MCP-Konfiguration stimmt nicht (nach „Neu erzeugen" anpassen) |
 | `token_not_configured` | In LabControl ist noch kein Token erzeugt |
-| `remote_control_inactive` | Hauptschalter aus oder abgelaufen — Nutzer muss ihn einschalten |
+| `remote_control_inactive` | Hauptschalter aus oder abgelaufen und die Ausnahme „Zugriffe von diesem PC…" aus (oder LabControl läuft auf einem anderen Rechner) — Nutzer muss das ändern |
 | `control_not_permitted` | Bei diesem Gerät ist „Steuern" nicht angehakt |
 | `locked` | Testablauf läuft oder Sicherheitsabschaltung — Steuern gesperrt |
 | `exceeds_safety_limit` | Sollwert über dem aktiven Grenzwert des Geräts |

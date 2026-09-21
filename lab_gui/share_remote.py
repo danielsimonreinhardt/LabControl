@@ -75,7 +75,8 @@ class RemoteBridge(QObject):
     """Lebt im GUI-Thread. submit_*() sind fuer den Server-Thread gedacht und
     blockieren dort; alle Slots laufen im GUI-Thread."""
 
-    action_requested = Signal(int, str, str, str, float, int)  # id, device_id, kind, action, value, channel
+    # id, device_id, kind, action, value, channel, local (Aufruf vom selben Rechner)
+    action_requested = Signal(int, str, str, str, float, int, bool)
     all_off_requested = Signal(int, str)                       # id, client
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -101,27 +102,28 @@ class RemoteBridge(QObject):
             return True
 
     def submit_action(self, device_id: str, kind: str, action: str, value: float,
-                      channel: int, client: str) -> RemoteResult:
+                      channel: int, client: str, local: bool = False) -> RemoteResult:
         if not self._take_token():
             result = RemoteResult("error", "rate_limited")
         elif not self._write_slots.acquire(blocking=False):
             result = RemoteResult("error", "busy")
         else:
             try:
-                result = self._run_action(device_id, kind, action, value, channel)
+                result = self._run_action(device_id, kind, action, value, channel, local)
             finally:
                 self._write_slots.release()
-        self._audit(client, f"{device_id} {action}"
+        self._audit(client + (" (lokal)" if local else ""), f"{device_id} {action}"
                     + (f" wert={value:g}" if value else "")
                     + (f" kanal={channel}" if channel else ""), result)
         return result
 
-    def _run_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> RemoteResult:
+    def _run_action(self, device_id: str, kind: str, action: str, value: float, channel: int,
+                    local: bool) -> RemoteResult:
         req_id = next(self._ids)
         pending = _Pending()
         with self._lock:
             self._pending[req_id] = pending
-        self.action_requested.emit(req_id, device_id, kind, action, value, channel)
+        self.action_requested.emit(req_id, device_id, kind, action, value, channel, local)
         done = pending.event.wait(REMOTE_TIMEOUT_S)
         with self._lock:
             # Kam das Ergebnis nach dem Timeout, findet complete() keinen

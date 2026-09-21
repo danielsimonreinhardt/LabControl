@@ -206,11 +206,13 @@ class _Executor:
     def __init__(self, share_api):
         self.api = share_api
         self.calls: list = []
+        self.locals: list = []
         self.all_off_calls: list = []
         self.next_result = share_api.RemoteResult("ok")
 
-    def submit_action(self, device_id, kind, action, value, channel, client):
+    def submit_action(self, device_id, kind, action, value, channel, client, local=False):
         self.calls.append((device_id, kind, action, value, channel, client))
+        self.locals.append(local)
         return self.next_result
 
     def submit_all_off(self, client):
@@ -218,7 +220,8 @@ class _Executor:
         return self.next_result
 
 
-def _snap_rw(lock="free", remote=True, token="tok", control=True, online=True, limits=None):
+def _snap_rw(lock="free", remote=True, token="tok", control=True, online=True, limits=None,
+             local_bypass=False):
     """Schnappschuss mit Fernsteuer-Zustand. psu:SIM/load:SIM/hil:SIM/can:SIM
     sind lesbar; steuerbar sind sie nur, wenn `control` gesetzt ist."""
     snap = _snap(token=token)
@@ -237,6 +240,7 @@ def _snap_rw(lock="free", remote=True, token="tok", control=True, online=True, l
     snap["test_running"] = lock == "test_running"
     snap["remote"] = {"active": remote, "remaining_s": 1800.0 if remote else 0.0}
     snap["safety_limits"] = limits or {}
+    snap["share"]["local_bypass"] = local_bypass
     return snap
 
 
@@ -249,11 +253,11 @@ def section_remote() -> None:
     bearer = lambda n: "Bearer tok" if n == "Authorization" else None
     no_header = lambda _n: None
 
-    def post(path, payload=None, snap=None, hdr=bearer, raw=None, executor=None):
+    def post(path, payload=None, snap=None, hdr=bearer, raw=None, executor=None, local=False):
         ex = executor or _Executor(share_api)
         body = raw if raw is not None else json.dumps(payload if payload is not None else {}).encode()
         resp = share_api.dispatch("POST", path, hdr, _Stub(snap or _snap_rw()), app_info,
-                                  body=body, executor=ex, client="10.0.0.9")
+                                  body=body, executor=ex, client="10.0.0.9", local=local)
         return resp, ex
 
     def data(resp):
@@ -422,8 +426,9 @@ def section_remote() -> None:
           share_api.dispatch("POST", "/api/v1/all-off", bearer, _Stub(_snap_rw()), app_info).status == 501)
 
     # -- Lesende Antworten: Fernsteuer-Zustand sichtbar ----------------------------------
-    def get(path, snap):
-        return json.loads(share_api.dispatch("GET", path, no_header, _Stub(snap), app_info).body)
+    def get(path, snap, local=False):
+        return json.loads(share_api.dispatch("GET", path, no_header, _Stub(snap), app_info,
+                                             local=local).body)
 
     tile = get("/api/v1/tiles/psu:SIM", _snap_rw())
     check("Kachel listet ihre Aktionen", {a["action"] for a in tile["actions"]}
@@ -445,9 +450,92 @@ def section_remote() -> None:
           get("/api/v1/tiles/can:SIM", _snap_rw())["actions"] == [])
     status = get("/api/v1/status", _snap_rw())
     check("Status nennt den Hauptschalter",
-          status["remote_control"] == {"active": True, "remaining_s": 1800.0})
+          status["remote_control"]["active"] is True and status["remote_control"]["remaining_s"] == 1800.0
+          and status["remote_control"]["effective"] is True)
     check("Status: Hauptschalter aus",
           get("/api/v1/status", _snap_rw(remote=False))["remote_control"]["active"] is False)
+
+    # -- Lokaler Zugriff (selber Rechner) ohne Hauptschalter --------------------------------------
+    off = _snap_rw(remote=False, local_bypass=True)
+    resp, ex = post(act, good, snap=off, local=True)
+    check("lokal + Ausnahme an + Hauptschalter aus -> 200",
+          resp.status == 200 and ex.locals == [True], f"{resp.status} {data(resp)}")
+    resp, ex = post(act, good, snap=off, local=False)
+    check("von aussen bei aktiver Ausnahme + Hauptschalter aus -> weiter 403",
+          resp.status == 403 and data(resp)["error"] == "remote_control_inactive" and not ex.calls)
+    resp, ex = post(act, good, snap=_snap_rw(remote=False, local_bypass=False), local=True)
+    check("lokal, Ausnahme AUS + Hauptschalter aus -> 403",
+          resp.status == 403 and data(resp)["error"] == "remote_control_inactive" and not ex.calls)
+    check("lokal, Hauptschalter an: geht wie bisher",
+          post(act, good, snap=_snap_rw(remote=True, local_bypass=True), local=True)[0].status == 200)
+    # Alles andere gilt fuer lokale Aufrufer unveraendert
+    check("lokal: Token bleibt Pflicht",
+          post(act, good, snap=off, hdr=no_header, local=True)[0].status == 401)
+    check("lokal: falscher Token -> 401",
+          post(act, good, snap=off, local=True,
+               hdr=lambda n: "Bearer falsch" if n == "Authorization" else None)[0].status == 401)
+    resp, _ = post(act, good, snap=_snap_rw(remote=False, control=False, local_bypass=True), local=True)
+    check("lokal: 'Steuern' bleibt Pflicht", resp.status == 403 and data(resp)["error"] == "control_not_permitted")
+    resp, ex = post(act, good, snap=_snap_rw(remote=False, lock="test_running", local_bypass=True), local=True)
+    check("lokal: Testlauf sperrt trotzdem (409)", resp.status == 409 and not ex.calls)
+    resp, ex = post(act, good, snap=_snap_rw(remote=False, lock="safety_tripped", local_bypass=True), local=True)
+    check("lokal: Sicherheitsabschaltung sperrt trotzdem (409)", resp.status == 409 and not ex.calls)
+    check("lokal: Geraet offline -> 409",
+          post(act, good, snap=_snap_rw(remote=False, online=False, local_bypass=True), local=True)[0].status == 409)
+    check("lokal: Wertebereich gilt weiter",
+          post(act, {"action": "PSU_VOLT", "value": 999}, snap=off, local=True)[0].status == 400)
+    lim = {"psu:SIM": {"max_voltage": {"enabled": True, "value": 12.0}}}
+    check("lokal: aktiver Sicherheits-Grenzwert gilt weiter",
+          post(act, {"action": "PSU_VOLT", "value": 20.0},
+               snap=_snap_rw(remote=False, limits=lim, local_bypass=True), local=True)[0].status == 400)
+    check("lokal: CAN bleibt nie steuerbar",
+          post("/api/v1/tiles/can:SIM/actions", {"action": "CAN_SEND"}, snap=off, local=True)[0].status == 403)
+    # Lesende Antworten sagen, was fuer DIESEN Aufrufer gilt
+    mine = get("/api/v1/tiles/psu:SIM", off, local=True)
+    theirs = get("/api/v1/tiles/psu:SIM", off, local=False)
+    check("Kachel: fuer lokalen Aufrufer steuerbar, fuer fremden gesperrt",
+          mine["control_available"] is True and mine["control_blocked"] == ""
+          and theirs["control_available"] is False and theirs["control_blocked"] == "remote_control_inactive")
+    st_local = get("/api/v1/status", off, local=True)["remote_control"]
+    st_remote = get("/api/v1/status", off, local=False)["remote_control"]
+    check("Status: 'effective' unterscheidet lokal und fremd",
+          st_local == {"active": False, "remaining_s": 0.0, "effective": True, "local": True, "local_bypass": True}
+          and st_remote["effective"] is False and st_remote["local"] is False, f"{st_local} {st_remote}")
+    check("Status: Hauptschalter an -> effective auch fuer fremde",
+          get("/api/v1/status", _snap_rw(remote=True), local=False)["remote_control"]["effective"] is True)
+    for label, snap_ in (("Hauptschalter aus", _snap_rw(remote=False)),
+                         ("Testlauf", _snap_rw(remote=False, lock="test_running"))):
+        check(f"ALLE AUS bleibt unabhaengig davon ({label})",
+              post("/api/v1/all-off", snap=snap_, local=True)[0].status == 200)
+
+    # -- Nennwerte des Geraets (GMAX) ersetzen den statischen Rahmen ------------------------------
+    rated = _snap_rw()
+    rated["devices"]["psu:SIM"]["ratings"] = {"max_voltage": 16.2, "max_current": 33.0}
+    for payload, want, label in (
+            ({"action": "PSU_CURR", "value": 25.0}, 200, "25 A an einem 33-A-Netzteil"),
+            ({"action": "PSU_CURR", "value": 33.0}, 200, "genau das Strom-Maximum"),
+            ({"action": "PSU_CURR", "value": 33.1}, 400, "knapp ueber dem Strom-Maximum"),
+            ({"action": "PSU_VOLT", "value": 16.2}, 200, "genau das Spannungs-Maximum"),
+            ({"action": "PSU_VOLT", "value": 20.0}, 400, "20 V an einem 16-V-Netzteil")):
+        resp, ex = post(act, payload, snap=rated)
+        check(f"Nennwerte: {label} -> {want}", resp.status == want, f"{resp.status} {data(resp)}")
+    resp, _ = post(act, {"action": "PSU_VOLT", "value": 20.0}, snap=rated)
+    check("Nennwerte: Fehler nennt das Geraete-Maximum",
+          data(resp)["error"] == "value_out_of_range" and data(resp)["max"] == 16.2, str(data(resp)))
+    tile = get("/api/v1/tiles/psu:SIM", rated)
+    ranges = {a["action"]: a["value"] for a in tile["actions"] if "value" in a}
+    check("Nennwerte: Aktionsliste zeigt die Maxima des Geraets",
+          ranges["PSU_VOLT"]["max"] == 16.2 and ranges["PSU_CURR"]["max"] == 33.0, str(ranges))
+    check("Nennwerte: Kachel nennt sie ausdruecklich",
+          tile.get("ratings") == {"max_voltage": 16.2, "max_current": 33.0})
+    unrated = get("/api/v1/tiles/psu:SIM", _snap_rw())
+    ranges = {a["action"]: a["value"] for a in unrated["actions"] if "value" in a}
+    check("ohne Nennwerte: statischer Rahmen (60 V / 40 A), keine ratings-Angabe",
+          ranges["PSU_VOLT"]["max"] == 60 and ranges["PSU_CURR"]["max"] == 40 and "ratings" not in unrated)
+    check("ohne Nennwerte: 25 A gehen (frueher faelschlich bei 10 A gedeckelt)",
+          post(act, {"action": "PSU_CURR", "value": 25.0})[0].status == 200)
+    check("Nennwert gilt nur fuer das eigene Feld (Last-Strom unberuehrt)",
+          post("/api/v1/tiles/load:SIM/actions", {"action": "CURR", "value": 30.0}, snap=rated)[0].status == 200)
 
     # -- Katalog gegen den Testeditor ------------------------------------------------------
     # Nur hier wird Qt geladen (testcase_model importiert i18n); "pure" prueft
@@ -604,6 +692,55 @@ def section_server() -> None:
     took = time.monotonic() - began
     check("stop() beendet zuegig", took < 3.0, f"{took:.2f} s")
 
+    # -- "lokal" wird an der Verbindung erkannt --------------------------------------------------
+    import share_api
+    from share_server import _is_local
+    check("_is_local: Loopback", _is_local("127.0.0.1", "10.0.0.5") and _is_local("::1", "10.0.0.5"))
+    check("_is_local: eigene LAN-Adresse (Quelle == Ziel)", _is_local("192.168.1.5", "192.168.1.5"))
+    check("_is_local: anderer Rechner im LAN ist nicht lokal", not _is_local("192.168.1.9", "192.168.1.5"))
+    check("_is_local: fremde Adresse, die nur aehnlich beginnt", not _is_local("128.0.0.1", "10.0.0.5"))
+
+    class _Capture:
+        def __init__(self):
+            self.calls = []
+
+        def submit_action(self, *args):
+            self.calls.append(args)
+            return share_api.RemoteResult("ok")
+
+        def submit_all_off(self, client):
+            return share_api.RemoteResult("ok")
+
+    local_state = LiveState()
+    local_state.on_device_known("psu", "psu:SIM", "Netzteil")
+    local_state.on_psu_measurement("psu:SIM", 5.0, 0.5, False)
+    local_cfg = {"enabled": True, "bind": "127.0.0.1", "port": _free_port(), "token": "tok",
+                 "read_requires_token": False, "access_log": False, "local_bypass": True,
+                 "devices": {"psu:SIM": {"read": True, "control": True}}}
+    local_state.set_share_config(local_cfg)      # Hauptschalter bleibt AUS
+    capture = _Capture()
+    local_server = ShareServer(local_state, capture)
+    local_server.apply(local_cfg)
+
+    def post_local(cfg_port):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{cfg_port}/api/v1/tiles/psu:SIM/actions", method="POST",
+            data=json.dumps({"action": "PSU_VOLT", "value": 5.0}).encode(),
+            headers={"Authorization": "Bearer tok"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    check("Server: Anfrage von 127.0.0.1 gilt als lokal -> ohne Hauptschalter 200",
+          post_local(local_cfg["port"]) == 200 and capture.calls and capture.calls[-1][-1] is True,
+          str(capture.calls[-1:] if capture.calls else None))
+    local_cfg2 = dict(local_cfg, local_bypass=False)
+    local_state.set_share_config(local_cfg2)
+    check("Server: Ausnahme live ausgeschaltet -> 403", post_local(local_cfg["port"]) == 403)
+    local_server.stop()
+
     # allow_reuse_address = False darf einen sofortigen Neustart nicht verhindern
     time.sleep(0.2)
     again = ShareServer(state)
@@ -645,6 +782,11 @@ def section_settings() -> None:
           cfg["enabled"] is False and cfg["bind"] == "127.0.0.1"
           and cfg["read_requires_token"] is True and cfg["devices"] == {})
 
+    check("lokaler Zugriff ohne Hauptschalter ist vorbelegt", cfg["local_bypass"] is True)
+    s.set_share_local_bypass(False)
+    check("Ausnahme abschaltbar und persistiert",
+          s.share_config["local_bypass"] is False and Settings().share_config["local_bypass"] is False)
+    s.set_share_local_bypass(True)
     s.set_share_enabled(True)
     s.set_share_device("psu:SIM", True, False)
     before = len(seen)
@@ -718,6 +860,7 @@ SHARE_KEYS = {
     "Fernsteuerung abgelaufen", "Fernsteuerung aktiv – noch {time}",
     "Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)",
     "Dieses Gerät lässt sich nicht fernsteuern",
+    "Zugriffe von diesem PC brauchen den Hauptschalter nicht",
 }
 
 
@@ -828,6 +971,9 @@ def section_app() -> None:
     settings_mod.SETTINGS_PATH.write_text(json.dumps({
         "simulation_mode": True, "share_enabled": True, "share_bind": "127.0.0.1",
         "share_port": port, "share_read_requires_token": False, "share_token": token,
+        # Grundzustand der bisherigen Pruefungen: lokale Aufrufe brauchen den Hauptschalter.
+        # Die Ausnahme selbst wird weiter unten eigens geprueft.
+        "share_local_bypass": False,
         "share_devices": {
             "psu:SIM": {"read": True, "control": True},
             "load:SIM": {"read": True, "control": True},
@@ -836,6 +982,15 @@ def section_app() -> None:
             "can:mock:SIM": {"read": True, "control": True},
         },
     }), encoding="utf-8")
+
+    # Der Simulationsmodus sucht trotzdem nach ECHTEN Geraeten an den COM-Ports. Ein
+    # Test, der beim Schliessen ALLE AUS ausloest, darf die nie erreichen -- an ihnen
+    # haengt womoeglich gerade ein Aufbau. Also ohne Erkennung.
+    import device_worker as dw
+    dw.KoradKEL102.discover_ports = staticmethod(lambda: [])
+    dw.HCS34xx.discover_ports = staticmethod(lambda: [])
+    dw.MicroHIL.discover = staticmethod(lambda: None)
+    dw.picoscope_usb_present = lambda: False
 
     from main_window import MainWindow
 
@@ -920,6 +1075,9 @@ def section_app() -> None:
         # ---------------- Lesen (unveraendert aus Phase 1) ----------------
         tiles = get("/api/v1/tiles", auth=False)[1]["tiles"]
         ids = sorted(t["id"] for t in tiles)
+        check("Test beruehrt keine echte Hardware (nur Simulationsgeraete)",
+              all(t["id"].endswith(":SIM") or ":mock:" in t["id"] or t["id"].startswith("picoscope:")
+                  for t in tiles), str(ids))
         check("Simulationskacheln freigegeben (auch HIL)",
               {"psu:SIM", "load:SIM", "hil:SIM", "can:mock:SIM"} <= set(ids), str(ids))
         check("Messwerte kommen an", wait_for(lambda: field("psu:SIM", "voltage") is not None))
@@ -991,6 +1149,40 @@ def section_app() -> None:
                   and "Fernsteuerung" in window._remote_status_label.text()))
         check("Kachel: jetzt verfuegbar",
               get("/api/v1/tiles/psu:SIM")[1]["control_available"] is True)
+
+        # -- Nennwerte des Netzteils (GMAX) --------------------------------------------
+        psu_group = lambda: window.control_tab._sections["psu:SIM"]
+        _, tile = get("/api/v1/tiles/psu:SIM")
+        check("Nennwerte kommen vom Geraet: Mock meldet 60 V / 10 A",
+              tile.get("ratings") == {"max_voltage": 60.0, "max_current": 10.0}, str(tile.get("ratings")))
+        check("Steuerfeld folgt dem Mock (Strom 0..10 A, OCP 0..10 A)",
+              gui(lambda: (psu_group()._current_spin.maximum(), psu_group()._ocp_spin.maximum())) == (10.0, 10.0))
+
+        # Ein anderes Netzteil melden: 16 V / 33 A (echte Werte des Geraets an COM6)
+        gui(lambda: window._worker.psu_ratings.emit("psu:SIM", 16.2, 33.0))
+        check("Steuerfeld: Spannung, OVP folgen 16,2 V",
+              gui(lambda: (psu_group()._voltage_spin.maximum(), psu_group()._ovp_spin.maximum())) == (16.2, 16.2))
+        check("Steuerfeld: Strom und OCP gehen bis 33 A (frueher bei 10/11 A gedeckelt)",
+              gui(lambda: (psu_group()._current_spin.maximum(), psu_group()._ocp_spin.maximum())) == (33.0, 33.0))
+        check("Steuerfeld: Mindestspannung 1 V bleibt",
+              gui(lambda: psu_group()._voltage_spin.minimum()) == 1.0)
+        safety_spins = gui(lambda: {f: w[1].maximum()
+                                    for f, w in window.settings_tab._safety_sections["psu:SIM"]._widgets.items()})
+        check("Sicherheits-Grenzwerte folgen den Nennwerten",
+              safety_spins == {"max_voltage": 16.2, "max_current": 33.0}, str(safety_spins))
+        check("Testeditor kennt die Nennwerte",
+              gui(lambda: window.testcase_tab._psu_ratings["psu:SIM"]) == (16.2, 33.0))
+        _, tile = get("/api/v1/tiles/psu:SIM")
+        volt_max = next(a["value"]["max"] for a in tile["actions"] if a["action"] == "PSU_VOLT")
+        curr_max = next(a["value"]["max"] for a in tile["actions"] if a["action"] == "PSU_CURR")
+        check("Fernsteuerung listet 16,2 V / 33 A", (volt_max, curr_max) == (16.2, 33.0), f"{volt_max} {curr_max}")
+        check("Fernsteuerung: 25 A werden angenommen", post("/api/v1/tiles/psu:SIM/actions",
+              {"action": "PSU_CURR", "value": 25.0})[0] == 200)
+        check("Fernsteuerung: 20 V werden abgewiesen (Geraet schafft 16,2 V)",
+              post("/api/v1/tiles/psu:SIM/actions", {"action": "PSU_VOLT", "value": 20.0})[1]["error"]
+              == "value_out_of_range")
+        gui(lambda: window._worker.psu_ratings.emit("psu:SIM", 60.0, 10.0))   # zurueck auf den Mock
+        time.sleep(1.2)   # Drosselung der Schreibrate abklingen lassen
 
         # -- Netzteil ------------------------------------------------------------
         code, resp = post(act, {"action": "PSU_VOLT", "value": 5.0})
@@ -1097,7 +1289,7 @@ def section_app() -> None:
         # -- Protokoll -------------------------------------------------------------------------------------------
         joined = "\n".join(capture.lines)
         check("Aktionen stehen im Protokoll (mit Aufrufer)",
-              "Fernsteuerung von 127.0.0.1: psu:SIM PSU_VOLT" in joined)
+              "Fernsteuerung von 127.0.0.1 (lokal): psu:SIM PSU_VOLT" in joined)
         check("Abweisungen stehen im Protokoll", "Fernsteuerung abgewiesen von 127.0.0.1" in joined)
         check("ALLE AUS steht im Protokoll", "ALLE AUS" in joined)
         check("Hauptschalter im Protokoll", "Fernsteuerung freigegeben fuer 60 min" in joined)
@@ -1151,7 +1343,7 @@ def section_app() -> None:
                   out["unknown"]["error"] and "unknown_tile" in out["unknown"]["text"])
             check("MCP all_off ok", not out["alloff"]["error"] and out["alloff"]["data"]["ok"] is True)
             check("MCP-Aufrufer steht im Protokoll",
-                  "Fernsteuerung von 127.0.0.1: psu:SIM PSU_VOLT wert=7" in "\n".join(capture.lines))
+                  "Fernsteuerung von 127.0.0.1 (lokal): psu:SIM PSU_VOLT wert=7" in "\n".join(capture.lines))
 
             wrong = _run_mcp_probe(mcp_python, base, "falscher-token", [
                 {"name": "set", "tool": "control_device",
@@ -1189,6 +1381,46 @@ def section_app() -> None:
               post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403
               and get("/api/v1/tiles/psu:SIM", auth=False)[0] == 200)
         gui(lambda: window.settings_tab._share_control_checkbox.setChecked(False))
+
+        # -- Lokaler Zugriff ohne Hauptschalter --------------------------------------------------------
+        gui(lambda: table._box("psu:SIM", table.COL_CONTROL).setChecked(True))   # oben abgewaehlt
+        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(False))
+        time.sleep(1.2)
+        check("Ausnahme aus, Hauptschalter aus: lokaler Zugriff -> 403",
+              post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)
+        gui(lambda: window.settings_tab._share_local_bypass_checkbox.setChecked(True))
+        rc = get("/api/v1/status", auth=False)[1]["remote_control"]
+        check("Status: Hauptschalter aus, aber fuer diesen lokalen Aufrufer wirksam",
+              rc["active"] is False and rc["effective"] is True and rc["local"] is True
+              and rc["local_bypass"] is True, str(rc))
+        check("Kachel: steuerbar ohne Hauptschalter", get("/api/v1/tiles/psu:SIM")[1]["control_available"] is True)
+        code, resp = post(act, {"action": "PSU_VOLT", "value": 5.0})
+        check("Ausnahme an: PSU_VOLT ohne Hauptschalter -> 200 (ueber die ganze Kette)",
+              code == 200 and resp["ok"] is True, f"{code} {resp}")
+        check("... und der Wert kommt am Geraet an", wait_for(lambda: field("psu:SIM", "voltage") == 5.0))
+        check("... Token bleibt Pflicht", post(act, {"action": "PSU_VOLT", "value": 5.0}, auth=False)[0] == 401)
+        gui(lambda: window._live_state.set_test_running(True))
+        check("... ein Testlauf sperrt trotzdem", post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 409)
+        gui(lambda: window._live_state.set_test_running(False))
+        # Zweite Pruefung im GUI-Thread: Schnappschuss meldet frei, Watchdog hat ausgeloest
+        gui(lambda: window._safety._trip("psu:SIM", "Ausnahme-Test"))
+        gui(lambda: window._live_state.on_safety_state_changed("armed"))
+        check("... auch bei veraltetem Schnappschuss sperrt der Watchdog (GUI-Thread-Pruefung)",
+              post(act, {"action": "PSU_VOLT", "value": 6.0})[0] == 409)
+        gui(window._safety.acknowledge)
+        gui(lambda: table._box("psu:SIM", table.COL_CONTROL).setChecked(False))
+        time.sleep(1.0)
+        check("... ohne 'Steuern' -> 403", post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)
+        gui(lambda: table._box("psu:SIM", table.COL_CONTROL).setChecked(True))
+        time.sleep(1.0)
+        check("... ALLE AUS geht wie immer", post("/api/v1/all-off")[0] == 200)
+        check("Aktion aus lokalem Zugriff steht mit '(lokal)' im Protokoll",
+              "Fernsteuerung von 127.0.0.1 (lokal): psu:SIM PSU_VOLT wert=5" in "\n".join(capture.lines))
+        gui(lambda: window.settings_tab._share_local_bypass_checkbox.setChecked(False))
+        time.sleep(1.0)
+        check("Ausnahme wieder aus -> 403", post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)
+        check("Einstellung ist gespeichert",
+              gui(lambda: settings_mod.Settings().share_config["local_bypass"]) is False)
 
         # -- Token: wird bei aktivierter Freigabe automatisch erzeugt ---------------------------------
         gui(lambda: settings.set_share_token(""))

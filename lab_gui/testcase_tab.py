@@ -383,6 +383,11 @@ class TestcaseTab(QWidget):
         # on_psu_limits(). Nur fuer Zeilen mit konkret ausgewaehltem Geraet nutzbar
         # (bei "automatisch" steht das Zielgeraet erst zur Laufzeit fest).
         self._psu_limits: dict[str, tuple[float, float]] = {}
+        # device_id -> (max. Spannung, max. Strom) laut GMAX. Der Wertebereich der
+        # Spinbox ist statisch und gilt fuer die ganze Geraetefamilie; das Maximum
+        # des konkret gewaehlten Geraets kommt als Warnung dazu (siehe
+        # refresh_value_warning).
+        self._psu_ratings: dict[str, tuple[float, float]] = {}
 
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._toggle_blink)
@@ -693,6 +698,9 @@ class TestcaseTab(QWidget):
         "nicht verbunden"-Fallback zurueck (siehe _populate_device_combo)."""
         if self._known_devices.pop(device_id, None) is not None:
             self._refresh_device_combos()
+
+    def on_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
+        self._psu_ratings[device_id] = (max_voltage, max_current)
 
     def on_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         self._psu_limits[device_id] = (ovp, ocp)
@@ -1055,6 +1063,19 @@ class TestcaseTab(QWidget):
             code = action_combo.currentData() or ""
             device_id = _parse_device_key(device_combo.currentData())[1]
             limits = self._psu_limits.get(device_id) if kind == "psu" and device_id else None
+            ratings = self._psu_ratings.get(device_id) if kind == "psu" and device_id else None
+            index = 0 if code == "PSU_VOLT" else 1
+            if ratings is not None and code in ("PSU_VOLT", "PSU_CURR") \
+                    and value_spin.value() > ratings[index]:
+                value_spin.setStyleSheet(f"border: 1px solid {current_palette().warning};")
+                value_spin.setToolTip(
+                    tr(
+                        "{value:g} liegt über dem Maximum dieses Netzteils ({maximum:g}) "
+                        "-- wird vom Netzteil abgelehnt.",
+                        value=value_spin.value(), maximum=ratings[index],
+                    )
+                )
+                return
             threshold = None
             if limits is not None:
                 if code == "PSU_VOLT":

@@ -261,6 +261,12 @@ class MainWindow(QMainWindow):
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
+        # Nennwerte VOR den Schwellen verbinden (Reihenfolge der Verbindungen =
+        # Reihenfolge der Aufrufe): erst die Bereiche der Felder, dann OVP/OCP.
+        self._worker.psu_ratings.connect(self.control_tab.set_psu_ratings)
+        self._worker.psu_ratings.connect(self.settings_tab.set_psu_ratings)
+        self._worker.psu_ratings.connect(self.testcase_tab.on_psu_ratings)
+        self._worker.psu_ratings.connect(self._live_state.on_psu_ratings)
         self._worker.psu_limits.connect(self.control_tab.set_psu_limits)
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
         self._worker.can_frame_received.connect(self.control_tab.on_can_frame)
@@ -658,6 +664,7 @@ class MainWindow(QMainWindow):
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
         self.settings_tab.share_control_toggled.connect(self._on_share_control_toggled)
+        self.settings_tab.share_local_bypass_toggled.connect(self._settings.set_share_local_bypass)
         self.settings_tab.share_control_timeout_changed.connect(
             self._settings.set_share_control_timeout_min)
         # Grenzwerte fuer die Sollwert-Pruefung der Fernsteuerung.
@@ -684,7 +691,7 @@ class MainWindow(QMainWindow):
         self._share_server.apply(self._settings.share_config)
 
     def _on_share_action(self, request_id: int, device_id: str, kind: str, action: str,
-                         value: float, channel: int) -> None:
+                         value: float, channel: int, local: bool) -> None:
         """Letzte Station im GUI-Thread, bevor eine Fernsteuer-Aktion den Worker
         erreicht.
 
@@ -697,7 +704,11 @@ class MainWindow(QMainWindow):
         if self._safety.is_tripped() or self._test_runner.is_running():
             self._share_bridge.complete(request_id, False, "locked", "", 0.0)
             return
-        if not self._live_state.remote_active():
+        # Dieselbe Regel wie share_api.remote_effective: Hauptschalter an ODER lokaler
+        # Aufruf mit aktiver Ausnahme. Hier frisch aus den Einstellungen gelesen -- der
+        # Server-Thread hat mit einem Schnappschuss gearbeitet.
+        if not (self._live_state.remote_active()
+                or (local and self._settings.share_config["local_bypass"])):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
         self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel)

@@ -662,6 +662,26 @@ class PsuControlGroup(QGroupBox):
         self._output_off_button.setText(tr("AUS"))
         self._update_limit_warning()
 
+    def set_ratings(self, max_voltage: float, max_current: float) -> None:
+        """Setzt die Feldbereiche auf die Nennwerte DIESES Geraets (GMAX).
+
+        Vorher galten fest 60 V / 10 A (OCP 11 A) -- zu weit fuer ein 16-V-Geraet
+        und zu eng fuer eines mit 30 A. Die Mindestspannung von 1 V bleibt: das
+        Geraet nimmt Werte darunter kommentarlos nicht an.
+        """
+        if max_voltage < 1.0 or max_current <= 0.0:
+            return
+        for spin, low, high in (
+            (self._voltage_spin, 1.0, max_voltage),
+            (self._current_spin, 0.0, max_current),
+            (self._ovp_spin, 1.0, max_voltage),
+            (self._ocp_spin, 0.0, max_current),
+        ):
+            spin.blockSignals(True)
+            spin.setRange(low, high)
+            spin.blockSignals(False)
+        self._update_limit_warning()
+
     def set_limits(self, ovp: float, ocp: float) -> None:
         """Uebernimmt die vom Geraet bekannte OVP/OCP-Schwelle in die Felder.
 
@@ -1486,6 +1506,8 @@ class ControlTab(QWidget):
         self._grid.addWidget(self._empty_tile, 0, 0)
 
         self._sections: dict[str, QWidget] = {}
+        # device_id -> (max. Spannung, max. Strom) laut GMAX, siehe set_psu_ratings
+        self._psu_ratings: dict[str, tuple[float, float]] = {}
         self._section_kind: dict[str, str] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
@@ -1547,6 +1569,8 @@ class ControlTab(QWidget):
             section = LoadControlGroup(device_id, label)
         elif kind == "psu":
             section = PsuControlGroup(device_id, label)
+            if device_id in self._psu_ratings:
+                section.set_ratings(*self._psu_ratings[device_id])
         elif kind == "hil":
             section = HilControlGroup(device_id, label)
         else:
@@ -1870,6 +1894,13 @@ class ControlTab(QWidget):
         if section is not None:
             section.setVisible(online)
         self._relayout_grid()
+
+    def set_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
+        # Auch merken, falls der Abschnitt erst spaeter angelegt wird.
+        self._psu_ratings[device_id] = (max_voltage, max_current)
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_ratings(max_voltage, max_current)
 
     def set_psu_limits(self, device_id: str, ovp: float, ocp: float) -> None:
         section = self._sections.get(device_id)

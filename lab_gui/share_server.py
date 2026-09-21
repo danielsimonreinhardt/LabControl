@@ -83,6 +83,17 @@ def lan_address() -> str:
         sock.close()
 
 
+def _is_local(client_ip: str, server_ip: str) -> bool:
+    """Kommt die Verbindung vom selben Rechner?
+
+    Ja bei Loopback (127.x, ::1) -- und auch dann, wenn der Aufrufer die LAN-Adresse
+    dieses Rechners benutzt: Quelle und Ziel der Verbindung sind dann dieselbe
+    Adresse, was ein Rechner im Netz nicht erzeugen kann (der Handschlag brauchte
+    den Rueckweg zu der Adresse). server_ip ist die LOKALE Adresse der Verbindung.
+    """
+    return client_ip.startswith("127.") or client_ip == "::1" or client_ip == server_ip
+
+
 def _access_logger(enabled: bool) -> logging.Logger | None:
     if not enabled:
         return None
@@ -213,7 +224,8 @@ class _ShareRequestHandler(BaseHTTPRequestHandler):
             app_info["base_url"] = f"http://{self.headers.get('Host', '')}"
             response = share_api.dispatch(
                 method, self.path, self.headers.get, self.server.share_state, app_info,
-                body=body, executor=self.server.share_executor, client=self.client_address[0])
+                body=body, executor=self.server.share_executor, client=self.client_address[0],
+                local=_is_local(self.client_address[0], self.request.getsockname()[0]))
             if response.status == 401:
                 self._log_auth_failure()
             elif method == "POST" and response.status not in (200, 202):

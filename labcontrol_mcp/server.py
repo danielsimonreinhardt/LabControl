@@ -6,7 +6,8 @@ Netzwerk-Schnittstelle an (siehe lab_gui/share_api.py). Alle Sicherheits-
 entscheidungen fallen dort, nicht hier: dieser Server ist nur ein Uebersetzer
 von Werkzeugaufrufen in HTTP-Anfragen. Er kann nichts, was die HTTP-Schnittstelle
 nicht ohnehin erlaubt -- und diese verlangt den Token, die Freigabe "Steuern"
-je Geraet und den Hauptschalter "Fernsteuerung aktiv" in LabControl.
+je Geraet und den Hauptschalter "Fernsteuerung aktiv" in LabControl (Zugriffe vom
+selben Rechner brauchen ihn nicht, solange die Ausnahme dafuer angehakt ist).
 
 Konfiguration ueber Umgebungsvariablen:
   LABCONTROL_URL    Basisadresse, Standard http://127.0.0.1:8420
@@ -41,8 +42,10 @@ HINTS = {
     "token_not_configured": "In LabControl ist noch kein Token erzeugt. Freigabe aktivieren oder "
                             "unter Einstellungen -> Netzwerk 'Neu erzeugen' druecken.",
     "remote_control_inactive": "Der Hauptschalter 'Fernsteuerung aktiv' (Einstellungen -> Netzwerk) ist "
-                               "aus oder abgelaufen. NUR DER NUTZER kann ihn einschalten -- bitte darum "
-                               "bitten, nicht versuchen zu umgehen.",
+                               "aus oder abgelaufen, und die Ausnahme 'Zugriffe von diesem PC brauchen den "
+                               "Hauptschalter nicht' ist ebenfalls aus (oder LabControl laeuft auf einem "
+                               "anderen Rechner). NUR DER NUTZER kann das aendern -- bitte darum bitten, "
+                               "nicht versuchen zu umgehen.",
     "control_not_permitted": "Fuer dieses Geraet ist 'Steuern' in LabControl nicht angehakt.",
     "unknown_tile": "Unbekanntes oder nicht freigegebenes Geraet. list_devices zeigt, was freigegeben ist.",
     "locked": "Ein Testablauf laeuft oder die Sicherheitsabschaltung hat ausgeloest. Steuern ist gesperrt; "
@@ -62,9 +65,10 @@ Steuert reale Laborgeraete (Netzteile, elektronische Last, microHIL) ueber LabCo
 Das ist Hardware: ein falscher Befehl kann Prueflinge beschaedigen.
 
 Vorgehen:
-- Zuerst get_status und list_devices lesen. Steuern geht nur, wenn 'remote_control.active' true ist
-  UND das Geraet control_available=true meldet. Ist der Hauptschalter aus, den Nutzer bitten, ihn
-  einzuschalten -- nicht umgehen.
+- Zuerst get_status und list_devices lesen. Steuern geht nur, wenn 'remote_control.effective' true
+  ist UND das Geraet control_available=true meldet. ('effective' ist wahr, wenn der Hauptschalter an
+  ist ODER dieser Rechner ohne Hauptschalter steuern darf.) Ist es falsch, den Nutzer bitten, den
+  Hauptschalter einzuschalten -- nicht umgehen.
 - Nur das tun, worum der Nutzer gebeten hat. Ausgaenge nicht von dir aus einschalten.
 - Nach jedem Schreiben den Zustand mit read_device gegenpruefen (Messwert, nicht nur 'ok').
 - Bei Auffaelligkeiten (unerwartete Werte, Fehlermeldungen) sofort all_off und den Nutzer informieren.
@@ -126,8 +130,9 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHin
 @server.tool(annotations=READ_ONLY)
 def get_status() -> dict:
     """Zustand von LabControl: Version, Sperrzustand ('lock': free / test_running /
-    safety_tripped), Sicherheits-Watchdog ('safety') und ob die Fernsteuerung gerade freigegeben ist
-    ('remote_control': active + remaining_s). Zuerst aufrufen."""
+    safety_tripped), Sicherheits-Watchdog ('safety') und ob die Fernsteuerung fuer DICH gerade freigegeben
+    ist ('remote_control.effective'; 'active'/'remaining_s' betreffen den Hauptschalter, 'local' sagt, ob
+    der Aufruf vom selben Rechner kommt). Zuerst aufrufen."""
     return _checked("GET", "/api/v1/status")
 
 

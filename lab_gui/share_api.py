@@ -147,6 +147,20 @@ def _controllable(snapshot: dict, device_id: str) -> bool:
     return bool(flags.get("control")) and entry.get("kind") in remote_actions.CONTROL_KINDS
 
 
+def remote_effective(snapshot: dict) -> bool:
+    """Ist die Fernsteuerung FUER DIESEN AUFRUFER freigegeben?
+
+    Entweder der Hauptschalter ist an -- oder der Aufruf kommt vom selben Rechner
+    (snapshot["local"], gesetzt in dispatch) und die Einstellung "Zugriffe von
+    diesem PC brauchen den Hauptschalter nicht" ist an. Nur diese eine Sperre
+    entfaellt fuer lokale Aufrufer; Token, Steuern-Freigabe, Sperrzustand, Wert-
+    und Grenzwertpruefung gelten fuer jeden.
+    """
+    if snapshot.get("remote", {}).get("active"):
+        return True
+    return bool(snapshot.get("local")) and bool(snapshot.get("share", {}).get("local_bypass"))
+
+
 def _control_block_reason(snapshot: dict, device_id: str) -> str:
     """Warum ist Steuern gerade NICHT moeglich? \"\" = moeglich.
 
@@ -154,7 +168,7 @@ def _control_block_reason(snapshot: dict, device_id: str) -> str:
     POST dieselbe Antwort geben."""
     if not _controllable(snapshot, device_id):
         return "control_not_permitted"
-    if not snapshot.get("remote", {}).get("active"):
+    if not remote_effective(snapshot):
         return "remote_control_inactive"
     if snapshot.get("lock", "free") != "free":
         return "locked"
@@ -236,11 +250,14 @@ def _tile_detail(device_id: str, entry: dict, snapshot: dict) -> dict:
         "age_s": entry.get("age_s", 0.0),
         "stale": bool(entry.get("stale")),
         "lock": snapshot.get("lock", "free"),
+        # Nennwerte des Geraets (GMAX), falls gemeldet -- der Rahmen, in dem Sollwerte
+        # gueltig sind. Nur Netzteile melden sie.
+        **({"ratings": entry["ratings"]} if entry.get("ratings") else {}),
         # Was an dieser Kachel steuerbar ist -- leer, wenn sie nicht fuer
         # Steuern freigegeben ist. "control_available" sagt, ob es JETZT geht,
         # "control_blocked" nennt sonst den Grund (dieselben Codes wie die
         # Fehlerantworten von POST .../actions).
-        "actions": remote_actions.describe(tile["kind"]) if tile["control"] else [],
+        "actions": remote_actions.describe(tile["kind"], entry.get("ratings")) if tile["control"] else [],
         "control_available": _control_block_reason(snapshot, device_id) == "",
         "control_blocked": _control_block_reason(snapshot, device_id) if tile["control"] else "",
         "fields": fields,
@@ -299,6 +316,12 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         "remote_control": {
             "active": bool(snapshot.get("remote", {}).get("active")),
             "remaining_s": snapshot.get("remote", {}).get("remaining_s", 0.0),
+            # "effective": gilt die Freigabe fuer DIESEN Aufrufer -- Hauptschalter an
+            # ODER lokaler Aufruf mit aktiver Ausnahme. Das ist die Zahl, nach der sich
+            # ein Client richten soll, nicht "active".
+            "effective": remote_effective(snapshot),
+            "local": bool(snapshot.get("local")),
+            "local_bypass": bool(snapshot.get("share", {}).get("local_bypass")),
         },
         "auth": {
             "read_token_required": bool(share.get("read_requires_token")),
@@ -436,7 +459,7 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
     if not isinstance(action, str):
         return _error(400, "unknown_action", allowed=list(remote_actions.REMOTE_ACTIONS.get(kind, {})))
     definition, code, detail = remote_actions.validate(
-        kind, action, payload.get("value"), payload.get("channel"))
+        kind, action, payload.get("value"), payload.get("channel"), entry.get("ratings"))
     if definition is None:
         return _error(400, code, **detail)
 
@@ -449,7 +472,8 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
         field, limit = violation
         return _error(400, "exceeds_safety_limit", limit_field=field, limit=limit, unit=definition.unit)
 
-    result = executor.submit_action(device_id, kind, action, value, channel, client)
+    result = executor.submit_action(device_id, kind, action, value, channel, client,
+                                    bool(snapshot.get("local")))
     return _result_response(result, {"device": device_id, "action": action,
                                      **({"value": value} if definition.needs_value else {}),
                                      **({"channel": channel} if definition.channels else {}),
@@ -507,14 +531,15 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
 
 
 def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
-             body: bytes = b"", executor=None, client: str = "") -> Response:
+             body: bytes = b"", executor=None, client: str = "", local: bool = False) -> Response:
     """Eine Anfrage -> eine Antwort. Die einzige oeffentliche Einstiegsstelle.
 
     `header_get(name)` liefert einen Anfrage-Header (oder None), `state` ist
     ein Objekt mit .snapshot() (im Betrieb live_state.LiveState, im Test ein
     Stub). `body`/`executor`/`client` betreffen nur POST: der Rumpf, das
     Objekt, das Aktionen ausfuehrt (share_remote.RemoteBridge), und die
-    Adresse des Aufrufers fuer das Protokoll. Wirft nie -- jeder Fehler wird
+    Adresse des Aufrufers fuer das Protokoll. `local`: der Aufruf kommt vom selben
+    Rechner (siehe share_server._is_local). Wirft nie -- jeder Fehler wird
     zu einer Antwort, weil ein durchgereichter Fehler im Server-Thread
     niemanden erreichen wuerde.
     """
@@ -526,6 +551,7 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
     query = parse_qs(split.query)
 
     snapshot = state.snapshot()
+    snapshot["local"] = bool(local)
 
     if method == "POST":
         return _dispatch_post(path, header_get, snapshot, body, executor, client)

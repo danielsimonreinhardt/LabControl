@@ -345,7 +345,8 @@ erfüllt sein:
 2. **Steuern** ist beim Gerät in der Tabelle angehakt (setzt „Lesen“ voraus).
    Möglich ist das für Last, Netzteil und microHIL; CAN und Oszilloskop lassen
    sich nicht fernsteuern.
-3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet. Er ist nach
+3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet (nicht nötig für
+   Zugriffe vom selben Rechner, siehe „Ausnahme für diesen PC“). Er ist nach
    jedem Programmstart aus und schaltet sich nach dem eingestellten Zeitlimit
    (Standard 60 Minuten) von selbst wieder aus. Solange er an ist, steht in
    der Statuszeile ein orangefarbener Hinweis mit der Restzeit. Beim Ablauf
@@ -355,6 +356,15 @@ erfüllt sein:
 5. Aktion, Wert und Kanal sind gültig — die Wertebereiche entsprechen denen im
    Testeditor — und der Sollwert liegt **nicht über einem aktiven
    Sicherheits-Grenzwert** dieses Geräts (Abschnitt 6).
+
+**Ausnahme für diesen PC.** Programme auf demselben Rechner wie LabControl —
+etwa der MCP-Server — brauchen den Hauptschalter nicht, solange „Zugriffe von
+diesem PC brauchen den Hauptschalter nicht“ angehakt ist (Voreinstellung). Es gibt
+dann kein Zeitfenster; Token, „Steuern“ beim Gerät, Wertebereiche, Grenzwerte und
+die Sperren bei Testlauf und Sicherheitsabschaltung gelten weiter. Herausnehmen
+des Hakens stellt das Zeitfenster auch für lokale Zugriffe wieder her. „Lokal“
+wird an der Verbindung erkannt (Loopback oder die eigene Adresse des Rechners),
+nicht an Angaben des Aufrufers.
 
 **Notaus.** Die Aktion „Alle Ausgänge aus“ ist die einzige Ausnahme: sie
 verlangt nur den Token und geht immer — auch bei ausgeschaltetem Hauptschalter,

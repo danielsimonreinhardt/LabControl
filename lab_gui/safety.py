@@ -48,7 +48,7 @@ SAFETY_LIMIT_FIELDS: dict[str, list[tuple[str, str, float, float, float]]] = {
     ],
     "psu": [
         ("max_voltage", "V", 0, 60, 60),
-        ("max_current", "A", 0, 10, 10),
+        ("max_current", "A", 0, 40, 10),
     ],
 }
 

@@ -290,6 +290,7 @@ class Settings(QObject):
             self._data.get("share_read_requires_token", cfg["read_requires_token"])
         )
         cfg["access_log"] = bool(self._data.get("share_access_log", cfg["access_log"]))
+        cfg["local_bypass"] = bool(self._data.get("share_local_bypass", cfg["local_bypass"]))
         bind = self._data.get("share_bind")
         if bind in SHARE_BIND_CHOICES:
             cfg["bind"] = bind
@@ -361,6 +362,13 @@ class Settings(QObject):
         if bool(required) == self.share_config["read_requires_token"]:
             return
         self._data["share_read_requires_token"] = bool(required)
+        self._save()
+        self._emit_share_config()
+
+    def set_share_local_bypass(self, enabled: bool) -> None:
+        if bool(enabled) == self.share_config["local_bypass"]:
+            return
+        self._data["share_local_bypass"] = bool(enabled)
         self._save()
         self._emit_share_config()
 

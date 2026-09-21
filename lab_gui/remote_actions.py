@@ -47,6 +47,10 @@ class RemoteAction:
     needs_value: bool = False
     channels: int = 0     # 0 = kein Kanal; sonst gueltig sind 1..channels
     limit_field: str = ""  # zugehoeriger Sicherheits-Grenzwert (safety.py)
+    # Nennwert des Geraets (GMAX), der das statische Maximum ERSETZT, sobald bekannt:
+    # "max_voltage" / "max_current". Das statische Maximum ist nur der Rahmen fuer
+    # ein Geraet, dessen Nennwerte (noch) nicht gemeldet wurden.
+    rating_field: str = ""
     note: str = ""
 
 
@@ -64,8 +68,10 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
         _a("OUT_OFF", "Ausgang AUS"),
     )},
     "psu": {a.code: a for a in (
-        _a("PSU_VOLT", "Spannung setzen", "V", 1, 60, True, limit_field="max_voltage"),
-        _a("PSU_CURR", "Strom setzen", "A", 0, 10, True, limit_field="max_current",
+        _a("PSU_VOLT", "Spannung setzen", "V", 1, 60, True, limit_field="max_voltage",
+           rating_field="max_voltage"),
+        _a("PSU_CURR", "Strom setzen", "A", 0, 40, True, limit_field="max_current",
+           rating_field="max_current",
            note="0 A schaltet den Ausgang aus, ein Wert > 0 A wieder ein "
                 "(das HCS-34xx hat kein echtes Ausgang-AUS)"),
         _a("PSU_OUT_ON", "Ausgang EIN",
@@ -82,14 +88,28 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
 }
 
 
-def describe(kind: str) -> list[dict]:
+def effective_range(definition: RemoteAction, ratings: dict | None) -> tuple[float, float]:
+    """(Minimum, Maximum) einer Aktion fuer DIESES Geraet.
+
+    Ist der Nennwert des Geraets bekannt (`ratings` aus LiveState, GMAX), gilt er
+    statt des statischen Rahmens -- nach oben UND nach unten: ein 16-V-Netzteil
+    nimmt keine 20 V an, ein 30-A-Netzteil aber sehr wohl 25 A.
+    """
+    maximum = definition.maximum
+    rated = (ratings or {}).get(definition.rating_field) if definition.rating_field else None
+    if isinstance(rated, (int, float)) and not isinstance(rated, bool) and rated > definition.minimum:
+        maximum = float(rated)
+    return definition.minimum, maximum
+
+
+def describe(kind: str, ratings: dict | None = None) -> list[dict]:
     """Aktionsliste einer Geraeteart fuer die JSON-Antwort (Feld "actions")."""
     result = []
     for action in REMOTE_ACTIONS.get(kind, {}).values():
         item: dict = {"action": action.code, "label": action.label}
         if action.needs_value:
-            item.update({"value": {"unit": action.unit, "min": action.minimum,
-                                   "max": action.maximum}})
+            low, high = effective_range(action, ratings)
+            item.update({"value": {"unit": action.unit, "min": low, "max": high}})
         if action.channels:
             item["channels"] = action.channels
         if action.note:
@@ -98,14 +118,15 @@ def describe(kind: str) -> list[dict]:
     return result
 
 
-def validate(kind: str, action: str, value, channel) -> tuple[RemoteAction | None, str, dict]:
+def validate(kind: str, action: str, value, channel,
+             ratings: dict | None = None) -> tuple[RemoteAction | None, str, dict]:
     """Prueft eine angeforderte Aktion. Liefert (Aktion, Fehlercode, Details);
     bei Erfolg (Aktion, "", {}).
 
     Fehlercodes: unknown_action, value_required, invalid_value,
     value_out_of_range, channel_required, invalid_channel,
     channel_out_of_range. `value`/`channel` sind die rohen JSON-Werte
-    (None = nicht angegeben).
+    (None = nicht angegeben). `ratings`: Nennwerte des Geraets (GMAX), falls bekannt.
     """
     definition = REMOTE_ACTIONS.get(kind, {}).get(action)
     if definition is None:
@@ -116,9 +137,9 @@ def validate(kind: str, action: str, value, channel) -> tuple[RemoteAction | Non
         # bool ist in Python ein int -- true/false ist hier kein Zahlenwert.
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             return None, "invalid_value", {}
-        if not definition.minimum <= value <= definition.maximum:
-            return None, "value_out_of_range", {
-                "min": definition.minimum, "max": definition.maximum, "unit": definition.unit}
+        low, high = effective_range(definition, ratings)
+        if not low <= value <= high:
+            return None, "value_out_of_range", {"min": low, "max": high, "unit": definition.unit}
     if definition.channels:
         if channel is None:
             return None, "channel_required", {"channels": definition.channels}

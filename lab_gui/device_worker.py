@@ -212,6 +212,11 @@ class DeviceWorker(QObject):
     # abgeschaltet wurde.
     psu_output_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
+    # device_id, maximale Ausgangsspannung (V), maximaler Ausgangsstrom (A) --
+    # die vom Geraet selbst gemeldeten Nennwerte (GMAX), siehe _emit_psu_ratings.
+    # Ohne sie rechnen GUI und Fernsteuerung mit festen 60 V / 10 A -- falsch fuer
+    # jedes Netzteil, das davon abweicht (z.B. 16 V / 30 A).
+    psu_ratings = Signal(str, float, float)
     # fuer Testablauf-Schritte: success, error, gelesener Wert (nur bei einer
     # microHIL-Lese-Aktion befuellt, siehe HIL_READ_ACTIONS/_dispatch_action;
     # 0.0 bei allen anderen Aktionen ohne Bedeutung).
@@ -470,6 +475,7 @@ class DeviceWorker(QObject):
         self._psus[SIM_PSU_ID] = MockHCS34xx()
         self.device_added.emit("psu", SIM_PSU_ID)
         self.psu_connected.emit(SIM_PSU_ID, True)
+        self._emit_psu_ratings(SIM_PSU_ID)
         self._emit_psu_limits(SIM_PSU_ID)
 
     def _remove_mock_psu(self) -> None:
@@ -640,6 +646,10 @@ class DeviceWorker(QObject):
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
             self.psu_output_state.emit(device_id, False)
+            # Nennwerte VOR OVP/OCP: die GUI setzt damit erst die Bereiche der
+            # Felder, dann passen die Schwellen hinein (Signale desselben Threads
+            # kommen in Sendereihenfolge an).
+            self._emit_psu_ratings(device_id)
             self._emit_psu_limits(device_id)
 
     def _reconnect_can(self) -> None:
@@ -851,6 +861,24 @@ class DeviceWorker(QObject):
         self._picoscope_variant = info.variant
         self._picoscope_serial = info.serial
         self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
+
+    def _emit_psu_ratings(self, device_id: str) -> None:
+        """Meldet die Nennwerte (GMAX) des Netzteils an die GUI.
+
+        Einmal beim (Wieder-)Verbinden -- sie aendern sich zur Laufzeit nicht.
+        Ein Fehler hier ist unkritisch: die GUI behaelt dann ihre statischen
+        Rahmen (siehe testcase_model.ACTION_VALUE_RANGE), und ein echter
+        Verbindungsabbruch faellt im naechsten Poll-Zyklus ohnehin auf.
+        """
+        psu = self._psus.get(device_id)
+        if psu is None:
+            return
+        try:
+            max_voltage, max_current = psu.get_max()
+        except PowerSupplyError:
+            return
+        if max_voltage > 0 and max_current > 0:
+            self.psu_ratings.emit(device_id, max_voltage, max_current)
 
     def _emit_psu_limits(self, device_id: str) -> None:
         """Fragt OVP/OCP ab und meldet sie per psu_limits an die GUI.

@@ -62,6 +62,11 @@ DEFAULT_SHARE_CONFIG: dict = {
     # gilt. Der Schalter selbst wird bewusst NICHT gespeichert (siehe
     # LiveState.set_remote_control) -- nur diese Dauer ist eine Einstellung.
     "control_timeout_min": 60,
+    # Zugriffe VOM SELBEN RECHNER (z.B. der MCP-Server) brauchen den Hauptschalter
+    # nicht. Token, "Steuern" je Geraet und die Sperren (Testlauf, Sicherheits-
+    # abschaltung) gelten trotzdem. Gedacht fuer Programme, die der Nutzer selbst auf
+    # diesem PC betreibt; das Zeitfenster schuetzt vor allem vor Zugriffen von aussen.
+    "local_bypass": True,
     # device_id -> {"read": bool, "control": bool}. "control" existiert von
     # Anfang an mit Default False, damit die JSON-Form stabil bleibt, wenn
     # die Fernsteuerung (Phase 2) dazukommt.
@@ -170,6 +175,14 @@ class LiveState(QObject):
         # keinen Funktionscode, nur ein CC-Flag.
         self._write(device_id, voltage=voltage, current=current,
                     mode="CC" if constant_current else "CV")
+
+    @Slot(str, float, float)
+    def on_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
+        """Nennwerte (GMAX) des Netzteils -- die Fernsteuerung prueft Sollwerte
+        gegen SIE statt gegen feste 60 V / 10 A (siehe remote_actions.validate)."""
+        with self._lock:
+            self._entry(device_id)["ratings"] = {
+                "max_voltage": max_voltage, "max_current": max_current}
 
     @Slot(str, int, int)
     def on_can_stats(self, device_id: str, tx_count: int, rx_count: int) -> None:

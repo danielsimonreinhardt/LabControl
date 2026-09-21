@@ -7,6 +7,42 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Lokaler Zugriff braucht den Hauptschalter der Fernsteuerung nicht (0.13.0,
+  Nutzerwunsch).** Der Hauptschalter „Fernsteuerung aktiv" mit Zeitlimit galt für
+  *alle* schreibenden Zugriffe, auch für Programme auf demselben Rechner -- also auch
+  für den MCP-Server, der über `127.0.0.1` kommt. Neue Einstellung „Zugriffe von diesem
+  PC brauchen den Hauptschalter nicht" (`share_local_bypass`, **Standard: an**) im
+  Netzwerk-Reiter. **Folge, bewusst:** ein lokaler Assistent kann dann ohne Zeitfenster
+  steuern. Wer das nicht will, nimmt den Haken heraus.
+  - **Was entfällt, was bleibt:** entfällt nur der Hauptschalter samt Zeitlimit. Token,
+    „Steuern" je Gerät, Sperre bei Testlauf und Sicherheitsabschaltung, Wertebereich,
+    Sicherheits-Grenzwerte, Nennwerte, Drosselung und die Allowlist gelten für lokale
+    Aufrufer unverändert; ALLE AUS ging ohnehin immer.
+  - **„Lokal" wird an der Verbindung erkannt** (`share_server._is_local`): Loopback,
+    oder Quelladresse gleich lokaler Zieladresse der Verbindung -- Letzteres deckt einen
+    Aufrufer ab, der die LAN-Adresse des eigenen Rechners benutzt. Ein Rechner im Netz
+    kann beides nicht erzeugen. Bewusst nicht an einem Header o.ä. festgemacht, den der
+    Aufrufer selbst setzen könnte.
+  - **Wirkt an beiden Prüfstellen:** im Server-Thread (`share_api.remote_effective`) und
+    in der zweiten Prüfung im GUI-Thread (`main_window._on_share_action`, liest die
+    Einstellung frisch). `dispatch(..., local=)` legt das Flag in den Schnappschuss, so
+    dass keine Funktionssignatur im Lesepfad geändert werden musste.
+  - **API:** `GET /api/v1/status` -> `remote_control` bekommt `effective` (gilt die
+    Freigabe für *diesen* Aufrufer), `local` und `local_bypass`; `active`/`remaining_s`
+    betreffen weiter nur den Hauptschalter. Clients sollen sich nach `effective`
+    richten -- der MCP-Server und sein Selbsttest tun das jetzt. Die Kachel-Antwort
+    (`control_available`/`control_blocked`) ist ebenfalls aufruferabhängig. Im Protokoll
+    steht `127.0.0.1 (lokal)`.
+  - **Prüfskript sicher gegen echte Hardware:** der Simulationsmodus sucht trotzdem an
+    den COM-Ports nach echten Geräten, und ein Test, der beim Schließen ALLE AUS
+    auslöst, hätte sie erreicht -- gefährlich, sobald an ihnen ein Aufbau hängt. Der
+    Abschnitt `app` schaltet die Erkennung jetzt ab und prüft, dass nur
+    Simulationsgeräte vorkommen. 291 Prüfungen (vorher 230).
+  - **Verifiziert am Mock** (nur Simulationsgeräte): reine Logik (lokal/fremd, Ausnahme
+    an/aus, alle bleibenden Sperren), Erkennung an einem echten Socket, Einstellung und
+    Persistenz, sowie die ganze App über die volle Kette inkl. Sperre bei veraltetem
+    Schnappschuss. **Noch offen:** Verifikation an echter Hardware und in der gebauten
+    `.exe`.
 - **Fernsteuerung über das Netzwerk und MCP-Server für KI-Assistenten (0.12.0).**
   Die Netzwerk-Freigabe kann jetzt auch **schreiben**: Sollwerte setzen,
   Ausgänge und Relais schalten, alles abschalten -- gedacht für einen
@@ -908,6 +944,40 @@ Semantic Versioning (`lab_gui/version.py`).
   auf die erste verfügbare Aktion zurück, kein Absturz).
 
 ### Behoben
+- **Netzteil: Spannungs- und Strombegrenzung waren fest auf 60 V / 10 A verdrahtet
+  statt an die Nennwerte des Geräts gebunden (0.12.1, Nutzerfeedback).** Ein
+  Netzteil 16 V / 30 A ließ sich nur bis 10 A einstellen (die OCP-Schwelle sogar
+  nur bis 11 A) und bot dabei 60 V an, obwohl es 16,2 V liefert. Das Gerät meldet
+  seine Nennwerte selbst (`GMAX`, hier 16,2 V / 33,0 A), der Treiber las sie auch
+  aus -- nur wurden sie nirgends benutzt.
+  - **`DeviceWorker.psu_ratings`** (neu) meldet die Nennwerte beim (Wieder-)
+    Verbinden, vor OVP/OCP, damit die Felder erst ihren Bereich bekommen und die
+    Schwellen dann hineinpassen.
+  - **Steuerfeld** (`PsuControlGroup.set_ratings`): Spannung, Strom, OVP und OCP
+    gehen bis zum Nennwert des jeweiligen Geräts -- nach oben (33 A statt 10 A)
+    **und nach unten** (16,2 V statt 60 V). Die Mindestspannung von 1 V bleibt, das
+    Gerät nimmt darunter nichts an.
+  - **Sicherheits-Grenzwerte** (Einstellungen -> Sicherheit) folgen ebenfalls den
+    Nennwerten. Liegt ein gespeicherter Grenzwert darüber, klemmt ihn die Spinbox
+    und der gespeicherte Wert folgt der Anzeige -- ein Grenzwert oberhalb dessen,
+    was das Gerät liefern kann, war ohnehin wirkungslos; die Klemmung geht also in
+    die sichere Richtung.
+  - **Testeditor:** die statischen Rahmen sind Obergrenzen für die ganze
+    Gerätefamilie und ein Gerät, das (noch) nichts gemeldet hat: Strom jetzt bis 40 A
+    (`testcase_model.ACTION_VALUE_RANGE`, `safety.SAFETY_LIMIT_FIELDS`). Zusätzlich
+    warnt die Wertebox, wenn ein Sollwert über dem Maximum des gewählten Netzteils
+    liegt.
+  - **Fernsteuerung:** `remote_actions.validate`/`describe` ersetzen den statischen
+    Rahmen durch den Nennwert des Geräts (`LiveState.on_psu_ratings`); die
+    Kachel-Antwort nennt ihn als `ratings`. Ein 16-V-Netzteil weist 20 V ab, ein
+    30-A-Netzteil nimmt 25 A an. Ohne gemeldete Nennwerte gilt der statische Rahmen.
+  - **Verifiziert am Mock:** die Kette Worker -> Steuerfeld/Sicherheits-Grenzwerte/
+    Testeditor/Fernsteuerung mit dem Mock (60 V / 10 A) und mit erzwungenen
+    16,2 V / 33 A; 25 A und 20 V über die Netzwerk-Schnittstelle. Die echten
+    Nennwerte des Geräts (16,2 V / 33,0 A) wurden per direktem Treiberzugriff
+    ausgelesen. **Noch offen:** die laufende App mit dem echten Netzteil -- die
+    COM-Ports waren beim Test von einer laufenden `LabControl_v0.12.0.exe`
+    belegt.
 - **CAN/Vector: Eigene, vom Controller mangels ACK automatisch wiederholte
   Sendeversuche erschienen faelschlich als eingehende Botschaften in der
   Live-Traffic-Tabelle (Nutzerfeedback, live an echter Vector-Hardware

@@ -156,6 +156,22 @@ class _DeviceSafetyGroup(QGroupBox):
     def set_label(self, label: str) -> None:
         self.setTitle(label)
 
+    def set_rating_ranges(self, maxima: dict[str, float]) -> None:
+        """Begrenzt die Spinboxen auf die Nennwerte des Geraets (Feld -> Maximum).
+
+        Ohne Signalsperre: liegt ein gespeicherter Grenzwert ueber dem neuen
+        Maximum, klemmt ihn die Spinbox darauf und meldet das per limit_changed --
+        der gespeicherte Wert folgt damit der Anzeige statt ihr zu widersprechen.
+        Ein Grenzwert oberhalb dessen, was das Geraet ueberhaupt liefern kann, ist
+        ohnehin wirkungslos; die Klemmung geht also in die sichere Richtung.
+        """
+        for field, maximum in maxima.items():
+            widgets = self._widgets.get(field)
+            if widgets is None or maximum <= 0:
+                continue
+            spin = widgets[1]
+            spin.setRange(spin.minimum(), maximum)
+
     def set_limits(self, limits: dict) -> None:
         for field, (checkbox, spin) in self._widgets.items():
             entry = limits.get(field, {"enabled": False, "value": spin.value()})
@@ -726,6 +742,7 @@ class SettingsTab(QWidget):
     share_access_log_toggled = Signal(bool)
     share_device_changed = Signal(str, bool, bool)  # device_id, read, control
     share_control_toggled = Signal(bool)            # Hauptschalter Fernsteuerung
+    share_local_bypass_toggled = Signal(bool)       # lokal ohne Hauptschalter
     share_control_timeout_changed = Signal(int)     # Minuten
 
     def __init__(self) -> None:
@@ -876,6 +893,8 @@ class SettingsTab(QWidget):
         self._safety_sections_layout = QVBoxLayout()
         layout.addLayout(self._safety_sections_layout)
         self._safety_sections: dict[str, _DeviceSafetyGroup] = {}
+        # device_id -> (max. Spannung, max. Strom) laut GMAX, siehe set_psu_ratings
+        self._psu_ratings: dict[str, tuple[float, float]] = {}
         # Umschliessendes Zeilen-Widget je Sektion (siehe on_device_known) --
         # ermoeglicht forget_device(), die komplette Zeile (Sektion + den
         # Stretch daneben) mit einem einzigen deleteLater() zu entfernen,
@@ -915,12 +934,17 @@ class SettingsTab(QWidget):
             tr(
                 "Fernsteuerung: Über das Netzwerk lassen sich Sollwerte setzen und Ausgänge\n"
                 "schalten (z.B. durch einen KI-Assistenten über den MCP-Server). Sie gilt nur\n"
-                "für Geräte mit Haken bei „Steuern“, nur bei aktivem Hauptschalter, nie\n"
-                "während eines Testlaufs oder nach einer Sicherheitsabschaltung — und immer\n"
-                "nur mit Token. „ALLE AUS“ geht jederzeit."
+                "für Geräte mit Haken bei „Steuern“, nie während eines Testlaufs oder nach\n"
+                "einer Sicherheitsabschaltung und immer nur mit Token — von anderen Geräten\n"
+                "außerdem nur bei aktivem Hauptschalter. „ALLE AUS“ geht jederzeit."
             )
         )
         self._share_control_checkbox.setText(tr("Fernsteuerung aktiv"))
+        self._share_local_bypass_checkbox.setText(
+            tr("Zugriffe von diesem PC brauchen den Hauptschalter nicht"))
+        self._share_local_bypass_checkbox.setToolTip(
+            tr("Gilt für Programme auf diesem Rechner, z.B. den MCP-Server. Token, "
+               "„Steuern“ und die Sperren bei Testlauf und Sicherheitsabschaltung bleiben."))
         self._share_control_timeout_label.setText(tr("Schaltet sich ab nach"))
         self._share_devices_hint.setText(
             tr(
@@ -1021,6 +1045,12 @@ class SettingsTab(QWidget):
         self._share_control_checkbox.toggled.connect(self.share_control_toggled)
         layout.addWidget(self._share_control_checkbox)
 
+        # Ausnahme fuer Programme auf DIESEM Rechner (z.B. den MCP-Server): sie
+        # brauchen den Hauptschalter nicht. Token, "Steuern" und die Sperren bleiben.
+        self._share_local_bypass_checkbox = QCheckBox()
+        self._share_local_bypass_checkbox.toggled.connect(self.share_local_bypass_toggled)
+        layout.addWidget(self._share_local_bypass_checkbox)
+
         control_form = QFormLayout()
         control_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self._share_control_timeout_spin = SteppedSpinBox()
@@ -1061,7 +1091,8 @@ class SettingsTab(QWidget):
         """
         for widget in (self._share_enabled_checkbox, self._share_bind_combo,
                        self._share_port_spin, self._share_read_token_checkbox,
-                       self._share_access_log_checkbox, self._share_control_timeout_spin):
+                       self._share_access_log_checkbox, self._share_control_timeout_spin,
+                       self._share_local_bypass_checkbox):
             widget.blockSignals(True)
         self._share_enabled_checkbox.setChecked(bool(config.get("enabled")))
         index = self._share_bind_combo.findData(config.get("bind", SHARE_BIND_LOCAL))
@@ -1072,9 +1103,11 @@ class SettingsTab(QWidget):
         self._share_access_log_checkbox.setChecked(bool(config.get("access_log")))
         self._share_control_timeout_spin.setValue(
             int(config.get("control_timeout_min", SHARE_CONTROL_TIMEOUT_MIN)))
+        self._share_local_bypass_checkbox.setChecked(bool(config.get("local_bypass", True)))
         for widget in (self._share_enabled_checkbox, self._share_bind_combo,
                        self._share_port_spin, self._share_read_token_checkbox,
-                       self._share_access_log_checkbox, self._share_control_timeout_spin):
+                       self._share_access_log_checkbox, self._share_control_timeout_spin,
+                       self._share_local_bypass_checkbox):
             widget.blockSignals(False)
         self._share_token_edit.setText(config.get("token", ""))
         self._share_table.set_share(config.get("devices", {}))
@@ -1240,6 +1273,8 @@ class SettingsTab(QWidget):
         row.addStretch(1)
         self._safety_sections_layout.addWidget(row_widget)
         self._safety_sections[device_id] = section
+        if device_id in self._psu_ratings:
+            section.set_rating_ranges(self._rating_maxima(self._psu_ratings[device_id]))
         self._safety_section_rows[device_id] = row_widget
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
@@ -1267,6 +1302,17 @@ class SettingsTab(QWidget):
         row_widget = self._safety_section_rows.pop(device_id, None)
         if row_widget is not None:
             row_widget.deleteLater()
+
+    @staticmethod
+    def _rating_maxima(ratings: tuple[float, float]) -> dict[str, float]:
+        return {"max_voltage": ratings[0], "max_current": ratings[1]}
+
+    def set_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
+        """Nennwerte (GMAX) eines Netzteils -> Bereiche seiner Grenzwert-Felder."""
+        self._psu_ratings[device_id] = (max_voltage, max_current)
+        section = self._safety_sections.get(device_id)
+        if section is not None:
+            section.set_rating_ranges(self._rating_maxima((max_voltage, max_current)))
 
     def set_device_safety_limits(self, device_id: str, limits: dict) -> None:
         section = self._safety_sections.get(device_id)

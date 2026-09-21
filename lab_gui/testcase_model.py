@@ -197,7 +197,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "OUT_ON": ("", 0, 0),
     "OUT_OFF": ("", 0, 0),
     "PSU_VOLT": ("V", 1, 60),
-    "PSU_CURR": ("A", 0, 10),
+    "PSU_CURR": ("A", 0, 40),
     "PSU_OUT_ON": ("", 0, 0),
     "PSU_OUT_OFF": ("", 0, 0),
     "ARB": ("", 0, 0),

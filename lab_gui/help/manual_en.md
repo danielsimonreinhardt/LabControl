@@ -328,7 +328,8 @@ following must hold:
 2. **Control** is ticked for the device in the table (requires “Read”). This
    is possible for load, power supply and microHIL; CAN and oscilloscope cannot
    be remote-controlled.
-3. The master switch **“Remote control active”** is on. It is off after every
+3. The master switch **“Remote control active”** is on (not needed for access from
+   the same computer, see “Exception for this PC”). It is off after every
    program start and switches itself off after the configured time limit
    (default 60 minutes). While it is on, an orange notice with the remaining
    time is shown in the status bar. On expiry the devices stay in their state
@@ -338,6 +339,14 @@ following must hold:
 5. Action, value and channel are valid — the value ranges are those of the
    test editor — and the setpoint is **not above an active safety limit** of
    this device (section 6).
+
+**Exception for this PC.** Programs on the same computer as LabControl — such as
+the MCP server — do not need the master switch as long as “Access from this PC
+does not need the master switch” is ticked (default). There is then no time
+window; the token, “Control” for the device, value ranges, limits and the locks
+during a test run and after a safety trip still apply. Unticking it restores the
+time window for local access too. “Local” is detected from the connection
+(loopback or the computer's own address), not from anything the caller states.
 
 **Emergency stop.** The action “All outputs off” is the only exception: it
 requires only the token and always works — even with the master switch off,
