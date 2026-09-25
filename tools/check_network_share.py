@@ -556,7 +556,7 @@ def section_remote() -> None:
     check("HIL-Kanalzahlen stimmen mit testcase_model.HIL_CHANNEL_COUNTS ueberein",
           all(remote_actions.REMOTE_ACTIONS["hil"][c].channels == n
               for c, n in tm.HIL_CHANNEL_COUNTS.items() if c in remote_actions.REMOTE_ACTIONS["hil"]))
-    known = set(tm.LOAD_ACTIONS) | set(tm.PSU_ACTIONS) | set(tm.HIL_ACTIONS)
+    known = set(tm.LOAD_ACTIONS) | set(tm.PSU_ACTIONS) | set(tm.HIL_ACTIONS) | set(tm.FG_ACTIONS)
     check("jede Fernsteuer-Aktion ist ein bekannter Testeditor-Aktionscode",
           all(c in known for a in remote_actions.REMOTE_ACTIONS.values() for c in a))
     check("nie enthalten: CAN_SEND, PICO_*, ARB, Lese-Aktionen",
@@ -990,6 +990,7 @@ def section_app() -> None:
     dw.KoradKEL102.discover_ports = staticmethod(lambda: [])
     dw.HCS34xx.discover_ports = staticmethod(lambda: [])
     dw.MicroHIL.discover = staticmethod(lambda: None)
+    dw.JDS66xx.discover_ports = staticmethod(lambda: [])
     dw.picoscope_usb_present = lambda: False
 
     from main_window import MainWindow

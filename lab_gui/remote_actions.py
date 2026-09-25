@@ -30,11 +30,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from jds66xx.driver import MAX_AMPLITUDE_V, MAX_FREQUENCY_HZ, MAX_OFFSET_V, MIN_FREQUENCY_HZ
 from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, RELAY_COUNT
 
 # Geraetearten, die ueberhaupt fernsteuerbar sind. CAN und Oszilloskop bleiben
 # bewusst draussen (siehe Modul-Docstring).
-CONTROL_KINDS = ("load", "psu", "hil")
+CONTROL_KINDS = ("load", "psu", "hil", "fg")
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,21 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
         _a("HIL_RELAY_ON", "Relais EIN", channels=RELAY_COUNT),
         _a("HIL_RELAY_OFF", "Relais AUS", channels=RELAY_COUNT),
         _a("HIL_AOUT", "Analogausgang setzen", "mV", 0, AOUT_MAX_MV, True, channels=AOUT_COUNT),
+    )},
+    "fg": {a.code: a for a in (
+        _a("FG_FREQ", "Frequenz setzen", "Hz", MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ, True, channels=2),
+        _a("FG_AMPL", "Amplitude setzen (Spitze-Spitze)", "V", 0, MAX_AMPLITUDE_V, True, channels=2),
+        _a("FG_OFFS", "Offset setzen", "V", -MAX_OFFSET_V, MAX_OFFSET_V, True, channels=2),
+        _a("FG_DUTY", "Tastverhältnis setzen", "%", 0, 100, True, channels=2),
+        _a("FG_PHASE", "Phase setzen", "°", 0, 360, True, channels=2,
+           note="gilt für Kanal 2 relativ zu Kanal 1, der Kanal wird ignoriert"),
+        _a("FG_WAVE_SINE", "Wellenform Sinus", channels=2),
+        _a("FG_WAVE_SQUARE", "Wellenform Rechteck", channels=2),
+        _a("FG_WAVE_PULSE", "Wellenform Puls", channels=2),
+        _a("FG_WAVE_TRIANGLE", "Wellenform Dreieck", channels=2),
+        _a("FG_WAVE_DC", "Wellenform DC", channels=2),
+        _a("FG_OUT_ON", "Ausgang EIN", channels=2),
+        _a("FG_OUT_OFF", "Ausgang AUS", channels=2),
     )},
 }
 

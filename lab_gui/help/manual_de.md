@@ -85,6 +85,30 @@ Sollwerte und den Schaltzustand:
   den emulierten Aus-Zustand unbemerkt wieder aufhebt. Erst ein Klick auf
   „EIN“ schaltet die Sollwert-Buttons wieder frei.
 
+### Funktionsgenerator (JDS2915 / JDS66xx)
+
+Zwei gleichartige Kanalkästen (Kanal 1 und 2) nebeneinander:
+
+- **Form, Frequenz, Amplitude, Offset, Tastverhältnis**: jeweils mit
+  eigenem Häkchen-Button übernehmen. Die Amplitude ist Spitze-Spitze im
+  Leerlauf (0–20 V), der Offset liegt bei ±9,99 V.
+- **Ausgang EIN/AUS** je Kanal. Anders als bei der Last kennt der
+  Generator eine Rückmeldung aller Einstellungen: Die Schalter zeigen
+  immer den vom Gerät gemeldeten Zustand, und ein Eingriff am Gerät
+  selbst (Drehknopf, Tasten) erscheint nach spätestens zwei Sekunden in
+  den Feldern. Eine laufende Eingabe wird dabei nicht überschrieben,
+  solange sich der Gerätewert nicht ändert.
+- **Phase** (Kanal 2 relativ zu Kanal 1) gibt es nur einmal.
+- **ALLE AUS** schaltet beide Ausgänge ab; Form, Frequenz usw. bleiben
+  gespeichert.
+- Im **Testablauf** stehen Aktionen für Frequenz, Amplitude, Offset,
+  Tastverhältnis, Phase, die Formen Sinus/Rechteck/Puls/Dreieck/DC und
+  Ausgang EIN/AUS zur Verfügung; der Kanal wird in der Zeile gewählt.
+- Das Gerät wird über den CH340-USB-Seriell-Wandler erkannt. Weil dieser
+  Wandler auch in fremden Geräten steckt, wird per Abfrage geprüft, ob
+  tatsächlich ein Funktionsgenerator antwortet. Ein eingeschaltetes Gerät
+  wird daher bis zu 30 Sekunden nach dem Einschalten erkannt.
+
 ---
 
 ## 3. Reiter „Testablauf“

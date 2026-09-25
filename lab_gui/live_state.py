@@ -213,6 +213,19 @@ class LiveState(QObject):
     def on_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
         self._write(device_id, status=status)
 
+    @Slot(str, object)
+    def on_fg_state(self, device_id: str, state: dict) -> None:
+        """Zustand des Funktionsgenerators (siehe device_worker.fg_state)."""
+        from jds66xx.driver import waveform_name  # Qt-frei, aber selten gebraucht
+        fields: dict = {"phase": state["phase"]}
+        for n, (on, ch) in enumerate(zip(state["outputs"], state["channels"]), start=1):
+            fields.update({
+                f"out{n}": int(bool(on)), f"wave{n}": waveform_name(ch["waveform"]),
+                f"freq{n}": ch["frequency"], f"ampl{n}": ch["amplitude"],
+                f"offs{n}": ch["offset"], f"duty{n}": ch["duty"],
+            })
+        self._write(device_id, **fields)
+
     # -- Sperrzustand --------------------------------------------------------
 
     @Slot(str)

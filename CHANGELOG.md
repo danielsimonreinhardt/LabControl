@@ -7,6 +7,55 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Funktionsgenerator JDS2915 (JDS66xx-Protokoll) als neue Geräteart `fg` (0.14.0,
+  Nutzerwunsch).** Treiber, Mock, Dashboard-Kachel, Steuerungs-Sektion, Testablauf-Aktionen,
+  Fernsteuerung/MCP und ALLE AUS. Grundlage ist das Joy-IT-Dokument
+  „JT-JDS6600-Communication-protocol“ (2024-04-23); das JDS2915 nutzt dieselben Register.
+  - **Treiber** `jds66xx/` (`driver.py`, `mock.py`, `README.md`): Werte in SI-Einheiten, die
+    Gerätekodierung (0,01 Hz, mV, 0,01 V mit Nullpunkt 1000, 0,1 %, 0,1 °) bleibt in der
+    Datei. Wertebereiche werden **vor** dem Senden geprüft (`FunctionGeneratorValueError`,
+    Verbindung bleibt); Timeout/Fehlantwort sind `FunctionGeneratorError` (Verbindung tot).
+    Der Mock nutzt dieselben Prüfungen.
+  - **Erkennung über CH340 (`1A86:7523`) ist nicht eindeutig** -- dieselbe VID/PID trägt auch
+    ein fremdes Board dieses Rechners (Konsole, antwortet mit `error`). Deshalb gilt ein Port
+    erst nach Handshake (`:r21=.` muss `:r21=<Zahl>.` liefern) als Generator. Ein
+    durchgefallener Port wird nur alle 30 s erneut angesprochen (`FG_REPROBE_INTERVAL_S`).
+    Folge: ein erst später eingeschalteter Generator wird bis zu 30 s später erkannt.
+  - **Verbinden ändert nichts am Gerät** (anders als das Netzteil): der Zustand wird
+    zurückgelesen und angezeigt. Ein Poll alle 2 s (`FG_POLL_INTERVAL_MS`) erkennt Eingriffe am
+    Gerät; nach jedem eigenen Schreibbefehl wird sofort neu gelesen.
+  - **Steuerung**: je Kanal Form, Frequenz, Amplitude (Spitze-Spitze, Leerlauf), Offset,
+    Tastverhältnis, Ausgang; Phase einmal (Kanal 2 zu 1). Preset-Leiste unterstützt den
+    Generator. ALLE AUS schaltet beide Ausgänge ab, die Signalparameter bleiben.
+  - **Testablauf**: `FG_FREQ/AMPL/OFFS/DUTY/PHASE`, `FG_WAVE_SINE/SQUARE/PULSE/TRIANGLE/DC`,
+    `FG_OUT_ON/OFF`; Kanal im generischen Kanal-Slot wie beim microHIL. **Bewusst nicht
+    umgesetzt:** weitere Wellenformen (Rauschen, Arbiträr, ...) im Testablauf, Verlaufs-
+    Diagramme für Frequenz/Amplitude, Sicherheits-Grenzwerte (ein Generator hat keine
+    Messwerte für den Watchdog), Frequenz-Multiplikatoren mHz/µHz beim Schreiben.
+  - **Fernsteuerung/MCP**: `fg` ist steuerbar (Allowlist in `remote_actions.py`, Bereiche
+    identisch zum Testeditor, vom Prüfskript verglichen).
+  - **Verifiziert am Mock/ohne Hardware:** `tools/check_jds66xx.py` (Kodierung gegen eine
+    Nachbildung der Registerbank, Handshake gegen Konsole/Echo/stumme Ports, Ablehnung
+    ungültiger Werte), Offscreen-GUI im Simulationsmodus (Kachel, Sektion, Bedienung,
+    Testablauf-Aktionen, ALLE AUS, LiveState, Testeditor-Zeile) sowie
+    `tools/check_network_share.py` unverändert grün.
+  - **An echter Hardware (JDS2915) verifiziert** (2026-09-25, nichts an den Ausgängen
+    angeschlossen): Handshake, Modell/Seriennummer, Lesen des Vollzustands (~47 ms, der
+    2-s-Poll ist also unkritisch), Schreiben und exaktes Zurücklesen von Frequenz (0,01 Hz bis
+    15 MHz), Amplitude, Offset (auch negativ), Tastverhältnis, Phase, Wellenform und Ausgang je
+    Kanal (Kanal 1 schalten lässt Kanal 2 unberührt), Ablehnung eines ungültigen Werts ohne
+    Verbindungsabbruch, sowie über den `DeviceWorker` Erkennung als `fg:COM11`, alle
+    Testablauf-Aktionen und ALLE AUS. Der Ausgangszustand wurde danach wiederhergestellt.
+  - **An der Hardware gefunden:** die Amplitude ist **frequenzabhängig begrenzt** -- bis 5 MHz
+    wurden 20 V angenommen, bei 15 MHz klemmt das Gerät still auf 10 V (Sinus und Rechteck).
+    Die Anzeige zeigt deshalb den zurückgelesenen Wert. Eine Klemmung der *Frequenz* je
+    Wellenform gab es bis 15 MHz nicht (Annahme im README war falsch, korrigiert).
+    **Noch offen:** Signal am Ausgang mit dem Oszilloskop nachgemessen, Erkennung nach dem
+    Einschalten (bis 30 s), gebaute `.exe`.
+  - **Prüfskript gegen echte Generatoren gesichert:** `tools/check_network_share.py` schließt
+    die App mit ALLE AUS; ein angeschlossener Generator wurde dabei mit abgeschaltet
+    (Ausgänge aus, Parameter unverändert). Der Abschnitt `app` schaltet die Erkennung des
+    Generators jetzt ab.
 - **Lokaler Zugriff braucht den Hauptschalter der Fernsteuerung nicht (0.13.0,
   Nutzerwunsch).** Der Hauptschalter „Fernsteuerung aktiv" mit Zeitlimit galt für
   *alle* schreibenden Zugriffe, auch für Programme auf demselben Rechner -- also auch

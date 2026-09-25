@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from i18n import tr
+from jds66xx.driver import MAX_AMPLITUDE_V as FG_MAX_AMPLITUDE_V
+from jds66xx.driver import MAX_FREQUENCY_HZ as FG_MAX_FREQUENCY_HZ
+from jds66xx.driver import MAX_OFFSET_V as FG_MAX_OFFSET_V
+from jds66xx.driver import MIN_FREQUENCY_HZ as FG_MIN_FREQUENCY_HZ
 from microhil.driver import AOUT_MAX_MV
 from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 
@@ -67,6 +71,10 @@ HIL_CHANNEL_COUNTS = {
     "HIL_AOUT": 2,
     "HIL_IN_READ": 8,
     "HIL_AIN_READ": 4,
+    # Funktionsgenerator: alle Aktionen haben 2 Kanaele (siehe FG_ACTIONS).
+    **{code: 2 for code in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE", "FG_WAVE_SINE",
+                             "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
+                             "FG_OUT_ON", "FG_OUT_OFF")},
 }
 
 # Lese-Aktionen (siehe HIL_ACTIONS-Kommentar): liefern anders als alle
@@ -93,6 +101,30 @@ PICO_ACTIONS = {
     "PICO_VRMS": "Effektivwert (RMS)",
 }
 PICO_READ_ACTIONS = {"PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS"}
+
+# Funktionsgenerator (siehe jds66xx/driver.py). Wie bei microHIL bezieht sich
+# jede Aktion auf einen Kanal (1/2), der im generischen Kanal-Slot
+# TestStep.hil_channel steht (Name historisch, siehe dort). Ausnahme
+# FG_PHASE: die Phase gibt es nur einmal (Kanal 2 relativ zu Kanal 1), der
+# Kanal wird ignoriert. Wellenformen sind eigene, wertlose Aktionen statt
+# eines Auswahlfelds im Wert-Slot -- so bleibt die Kanalzeile identisch zu
+# microHIL, und die haeufigen Formen sind ein Klick. Weitere Formen (Rauschen,
+# Arbitraer, ...) sind vom Control-Tab aus waehlbar, nicht im Testablauf.
+FG_ACTIONS = {
+    "FG_FREQ": "Frequenz setzen",
+    "FG_AMPL": "Amplitude setzen",
+    "FG_OFFS": "Offset setzen",
+    "FG_DUTY": "Tastverhältnis setzen",
+    "FG_PHASE": "Phase setzen",
+    "FG_WAVE_SINE": "Wellenform Sinus",
+    "FG_WAVE_SQUARE": "Wellenform Rechteck",
+    "FG_WAVE_PULSE": "Wellenform Puls",
+    "FG_WAVE_TRIANGLE": "Wellenform Dreieck",
+    "FG_WAVE_DC": "Wellenform DC",
+    "FG_OUT_ON": "Ausgang EIN",
+    "FG_OUT_OFF": "Ausgang AUS",
+}
+FG_CHANNELS = 2
 
 # Vereinigung aller Lese-Aktionen ueber alle Geraetearten -- Aktionscodes
 # sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
@@ -126,6 +158,7 @@ DEVICE_ACTIONS = {
     "can": CAN_ACTIONS,
     "hil": HIL_ACTIONS,
     "picoscope": PICO_ACTIONS,
+    "fg": FG_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -135,6 +168,7 @@ DEVICE_KIND_LABELS = {
     "can": "CAN-Bus",
     "hil": "microHIL",
     "picoscope": "Oszilloskop",
+    "fg": "Funktionsgenerator",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -181,6 +215,8 @@ VALUELESS_ACTIONS = {
     "HIL_OUT_ON", "HIL_OUT_OFF", "HIL_RELAY_ON", "HIL_RELAY_OFF",
     "HIL_IN_READ", "HIL_AIN_READ",
     "PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS",
+    "FG_WAVE_SINE", "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
+    "FG_OUT_ON", "FG_OUT_OFF",
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -221,6 +257,18 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "PICO_VMIN": ("", 0, 0),
     "PICO_VPP": ("", 0, 0),
     "PICO_VRMS": ("", 0, 0),
+    "FG_FREQ": ("Hz", FG_MIN_FREQUENCY_HZ, FG_MAX_FREQUENCY_HZ),
+    "FG_AMPL": ("V", 0, FG_MAX_AMPLITUDE_V),
+    "FG_OFFS": ("V", -FG_MAX_OFFSET_V, FG_MAX_OFFSET_V),
+    "FG_DUTY": ("%", 0, 100),
+    "FG_PHASE": ("°", 0, 360),
+    "FG_WAVE_SINE": ("", 0, 0),
+    "FG_WAVE_SQUARE": ("", 0, 0),
+    "FG_WAVE_PULSE": ("", 0, 0),
+    "FG_WAVE_TRIANGLE": ("", 0, 0),
+    "FG_WAVE_DC": ("", 0, 0),
+    "FG_OUT_ON": ("", 0, 0),
+    "FG_OUT_OFF": ("", 0, 0),
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen

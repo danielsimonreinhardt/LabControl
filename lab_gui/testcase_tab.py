@@ -922,7 +922,15 @@ class TestcaseTab(QWidget):
         hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(step.action, 8))
         hil_channel_spin.setValue(max(1, step.hil_channel))
         hil_value_spin = SteppedDoubleSpinBox(small_step=1.0, large_step=50.0)
-        hil_value_spin.setDecimals(0)
+        if step.device_kind == "fg":
+            # Funktionsgenerator: Nachkommastellen (0,01 Hz, mV) und ein weiter
+            # Rahmen, bevor on_action_changed den Bereich der Aktion setzt --
+            # sonst wuerde ein gespeicherter Wert schon beim Laden auf den
+            # Vorgabebereich 0..99,99 bzw. auf ganze Zahlen gekuerzt.
+            hil_value_spin.setDecimals(3)
+            hil_value_spin.setRange(-1e9, 1e9)
+        else:
+            hil_value_spin.setDecimals(0)
         hil_value_spin.setValue(step.value)
         hil_layout.addWidget(hil_channel_label)
         hil_layout.addWidget(hil_channel_spin)
@@ -1153,8 +1161,9 @@ class TestcaseTab(QWidget):
             elif code == "CAN_SEND":
                 refresh_can_summary()
                 value_stack.setCurrentIndex(2)
-            elif kind == "hil":
+            elif kind in ("hil", "fg"):
                 hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(code, 8))
+                hil_value_spin.setDecimals(3 if kind == "fg" else 0)
                 hil_value_spin.setSuffix(f" {unit}" if unit else "")
                 hil_value_spin.setRange(lo, hi)
                 # Nicht nur deaktivieren, sondern ganz ausblenden: bei
@@ -1869,7 +1878,7 @@ class TestcaseTab(QWidget):
         # hil_page-Spinbox statt in value_spin; PicoScope-Aktionen tragen den
         # gewaehlten Spannungsbereichs-Code (siehe TestStep.value-Docstring)
         # aus picoscope_page._range_combo (siehe _build_action_row).
-        if kind == "hil":
+        if kind in ("hil", "fg"):
             value = hil_page._value_spin.value()
         elif kind == "picoscope":
             value = float(picoscope_page._range_combo.currentData())
@@ -2250,6 +2259,10 @@ class TestcaseTab(QWidget):
                 detail = tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)
             else:
                 detail = tr("Kanal {ch}", ch=step.hil_channel)
+        elif step.device_kind == "fg":
+            detail = tr("Kanal {ch}", ch=step.hil_channel)
+            if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
+                detail += f": {step.value:g}"
         elif step.device_kind == "picoscope":
             ch = "A" if step.hil_channel != 2 else "B"
             range_name = _PICO_RANGE_BY_CODE.get(int(step.value), "?")

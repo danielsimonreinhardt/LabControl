@@ -599,7 +599,7 @@ class _ShareTable(QTableWidget):
     # draussen (eigenes Sonderpanel, exklusives Handle, keine Werte fuer eine
     # Anzeige). Steuern gibt es nur fuer remote_actions.CONTROL_KINDS: CAN
     # ist lesbar, aber nie fernsteuerbar.
-    SUPPORTED_KINDS = ("load", "psu", "can", "hil")
+    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg")
 
     def __init__(self) -> None:
         super().__init__(0, 4)

@@ -161,7 +161,9 @@ def control_device(device_id: str, action: str, value: float | None = None,
       Last      CURR value=2.0 (A) | VOLT (V) | RES (Ohm) | POW (W) | OUT_ON | OUT_OFF
       microHIL  HIL_OUT_ON/HIL_OUT_OFF channel=1..8 | HIL_RELAY_ON/HIL_RELAY_OFF channel=1..4 |
                 HIL_AOUT channel=1..2 value=mV
-    'value' nur bei Aktionen mit Wert, 'channel' nur beim microHIL. Bei Erfolg kommt 'ok': true zurueck
+      Funktionsgenerator  FG_FREQ (Hz) | FG_AMPL (V, Spitze-Spitze) | FG_OFFS (V) | FG_DUTY (%) |
+                FG_WAVE_SINE/SQUARE/PULSE/TRIANGLE/DC | FG_OUT_ON/FG_OUT_OFF, jeweils channel=1..2
+    'value' nur bei Aktionen mit Wert, 'channel' nur beim microHIL und Funktionsgenerator. Bei Erfolg kommt 'ok': true zurueck
     (das Geraet hat bestaetigt); mit 'status': 'pending' ist der Befehl unterwegs, sein Ausgang aber
     unbekannt -- dann mit read_device nachsehen. Fehler kommen als Werkzeugfehler mit Hinweis."""
     payload: dict = {"action": action}

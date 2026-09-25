@@ -35,6 +35,14 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
+from jds66xx.driver import (
+    MAX_AMPLITUDE_V,
+    MAX_FREQUENCY_HZ,
+    MAX_OFFSET_V,
+    MIN_FREQUENCY_HZ,
+    WAVEFORMS,
+    waveform_name,
+)
 from microhil.driver import (
     AOUT_COUNT,
     AOUT_MAX_MV,
@@ -95,7 +103,7 @@ TILE_SPANS: dict[str, tuple[int, int]] = {
 # Zweig in on_device_known behandelt wird) bekommt Mid_v -- der Live-
 # Traffic-Tisch (CanControlGroup._traffic_table) braucht mehr Hoehe als
 # Breite.
-TILE_SIZE_BY_KIND: dict[str, str] = {"load": "small", "psu": "small", "hil": "big"}
+TILE_SIZE_BY_KIND: dict[str, str] = {"load": "small", "psu": "small", "hil": "big", "fg": "big"}
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
 # provisorisch: die Firmware kennt aktuell noch kein Kommando dafuer (siehe
@@ -809,6 +817,297 @@ class PsuControlGroup(QGroupBox):
         # das Anwenden ist gesperrt.
         self._voltage_button.setEnabled(bool(self._output_on))
         self._current_button.setEnabled(bool(self._output_on))
+
+
+class _FgChannelBox(QGroupBox):
+    """Ein Kanal (1/2) der FgControlGroup: Wellenform, Frequenz, Amplitude,
+    Offset, Tastverhaeltnis und der EIN/AUS-Schalter dieses Ausgangs."""
+
+    def __init__(self, channel: int) -> None:
+        super().__init__()
+        self.channel = channel
+        self.setTitle(tr("Kanal {n}", n=channel))
+        outer = QVBoxLayout(self)
+        self.form = QFormLayout()
+        outer.addLayout(self.form)
+
+        self.wave_combo = QComboBox()
+        for code, name in WAVEFORMS.items():
+            self.wave_combo.addItem(tr(name), code)
+        self.wave_button = IconButton("mdi.check", "")
+        self.wave_row = _row(self.wave_combo, self.wave_button)
+
+        def spin(decimals: int, low: float, high: float, suffix: str, step: float, big: float) -> SteppedDoubleSpinBox:
+            box = SteppedDoubleSpinBox(small_step=step, large_step=big)
+            box.setDecimals(decimals)
+            box.setRange(low, high)
+            box.setSuffix(f" {suffix}")
+            box.setMaximumWidth(150)
+            return box
+
+        self.freq_spin = spin(2, MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ, "Hz", 1.0, 1000.0)
+        self.ampl_spin = spin(3, 0.0, MAX_AMPLITUDE_V, "V", 0.1, 1.0)
+        self.offs_spin = spin(2, -MAX_OFFSET_V, MAX_OFFSET_V, "V", 0.1, 1.0)
+        self.duty_spin = spin(1, 0.0, 100.0, "%", 1.0, 10.0)
+        self.freq_button = IconButton("mdi.check", "")
+        self.ampl_button = IconButton("mdi.check", "")
+        self.offs_button = IconButton("mdi.check", "")
+        self.duty_button = IconButton("mdi.check", "")
+        self.freq_row = _row(self.freq_spin, self.freq_button)
+        self.ampl_row = _row(self.ampl_spin, self.ampl_button)
+        self.offs_row = _row(self.offs_spin, self.offs_button)
+        self.duty_row = _row(self.duty_spin, self.duty_button)
+        self.rows = (self.wave_row, self.freq_row, self.ampl_row, self.offs_row, self.duty_row)
+        for row in self.rows:
+            self.form.addRow(" ", row)
+            _detint_label(self.form, row)
+
+        outer.addStretch(1)
+        self.output_form = QFormLayout()
+        self.output_layout = QHBoxLayout()
+        self.on_button = QPushButton()
+        self.off_button = QPushButton()
+        self.on_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.off_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.output_layout.addWidget(self.on_button)
+        self.output_layout.addWidget(self.off_button)
+        self.output_form.addRow(" ", self.output_layout)
+        _detint_label(self.output_form, self.output_layout)
+        outer.addLayout(self.output_form)
+
+        # None = noch keine Rueckmeldung des Geraets (siehe set_output_state).
+        self.output_on: bool | None = None
+        # Zuletzt zurueckgelesene Werte -- set_values() schreibt nur ein Feld,
+        # dessen Geraetewert sich GEAENDERT hat (siehe FgControlGroup.set_state).
+        self.last: dict | None = None
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        self.setTitle(tr("Kanal {n}", n=self.channel))
+        labels = (tr("Form:"), tr("Frequenz:"), tr("Amplitude:"), tr("Offset:"), tr("Tastverhältnis:"))
+        for row, text in zip(self.rows, labels):
+            self.form.labelForField(row).setText(text)
+        self.ampl_spin.setToolTip(tr("Spitze-Spitze, Leerlauf"))
+        for button in (self.wave_button, self.freq_button, self.ampl_button, self.offs_button, self.duty_button):
+            button.setToolTip(tr("Setzen"))
+        self.output_form.labelForField(self.output_layout).setText(tr("Ausgang:"))
+        self.on_button.setText(tr("EIN"))
+        self.off_button.setText(tr("AUS"))
+        current = self.wave_combo.currentData()
+        self.wave_combo.blockSignals(True)
+        for index in range(self.wave_combo.count()):
+            code = self.wave_combo.itemData(index)
+            self.wave_combo.setItemText(index, tr(waveform_name(code)))
+        self.wave_combo.setCurrentIndex(max(self.wave_combo.findData(current), 0))
+        self.wave_combo.blockSignals(False)
+
+    def set_values(self, values: dict) -> None:
+        """Uebernimmt zurueckgelesene Werte in die Felder -- aber nur die, die
+        sich gegenueber dem letzten Auslesen geaendert haben (beim ersten Mal
+        alle). So folgen die Felder einem Eingriff am Geraet, ohne dass der
+        periodische Abgleich eine gerade laufende Eingabe ueberschreibt."""
+        previous = self.last or {}
+        widgets = {
+            "frequency": self.freq_spin, "amplitude": self.ampl_spin,
+            "offset": self.offs_spin, "duty": self.duty_spin,
+        }
+        for key, box in widgets.items():
+            if self.last is None or previous.get(key) != values[key]:
+                box.blockSignals(True)
+                box.setValue(values[key])
+                box.blockSignals(False)
+        if self.last is None or previous.get("waveform") != values["waveform"]:
+            code = values["waveform"]
+            if self.wave_combo.findData(code) < 0:
+                self.wave_combo.addItem(tr(waveform_name(code)), code)
+            self.wave_combo.blockSignals(True)
+            self.wave_combo.setCurrentIndex(self.wave_combo.findData(code))
+            self.wave_combo.blockSignals(False)
+        self.last = dict(values)
+
+    def set_output_state(self, on: bool) -> None:
+        self.output_on = on
+        self.update_buttons()
+
+    def update_buttons(self) -> None:
+        _style_toggle_buttons(self.on_button, self.off_button, self.output_on, current_palette())
+
+    def apply_theme(self, palette: Palette) -> None:
+        for row in self.rows:
+            row.setStyleSheet(_row_stylesheet(palette))
+        self.update_buttons()
+
+
+class FgControlGroup(QGroupBox):
+    """Steuersektion eines Funktionsgenerators (jds66xx): zwei gleichartige
+    Kanalkaesten nebeneinander plus die Phase (Kanal 2 relativ zu Kanal 1).
+
+    Anders als Last/Netzteil kennt der Generator eine echte Rueckfrage aller
+    Einstellungen, auch des Ausgangszustands -- die Schalter zeigen deshalb
+    immer den vom Geraet gemeldeten Stand (set_state), nie einen geratenen."""
+
+    set_output = Signal(str, int, bool)       # device_id, channel, on
+    set_waveform = Signal(str, int, int)      # device_id, channel, Wellenformcode
+    set_frequency = Signal(str, int, float)   # device_id, channel, Hz
+    set_amplitude = Signal(str, int, float)   # device_id, channel, V
+    set_offset = Signal(str, int, float)      # device_id, channel, V
+    set_duty = Signal(str, int, float)        # device_id, channel, %
+    set_phase = Signal(str, float)            # device_id, Grad
+    panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
+    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+
+    def __init__(self, device_id: str, label: str) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self.setTitle(label)
+
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._subtitle.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(self._on_color_selected)
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+
+        channels_row = QHBoxLayout()
+        self._boxes = {n: _FgChannelBox(n) for n in (1, 2)}
+        for n, box in self._boxes.items():
+            channels_row.addWidget(box)
+            box.wave_button.clicked.connect(lambda _=False, n=n: self._emit_waveform(n))
+            box.freq_button.clicked.connect(
+                lambda _=False, n=n: self.set_frequency.emit(self._device_id, n, self._boxes[n].freq_spin.value()))
+            box.ampl_button.clicked.connect(
+                lambda _=False, n=n: self.set_amplitude.emit(self._device_id, n, self._boxes[n].ampl_spin.value()))
+            box.offs_button.clicked.connect(
+                lambda _=False, n=n: self.set_offset.emit(self._device_id, n, self._boxes[n].offs_spin.value()))
+            box.duty_button.clicked.connect(
+                lambda _=False, n=n: self.set_duty.emit(self._device_id, n, self._boxes[n].duty_spin.value()))
+            box.on_button.clicked.connect(lambda _=False, n=n: self.set_output.emit(self._device_id, n, True))
+            box.off_button.clicked.connect(lambda _=False, n=n: self.set_output.emit(self._device_id, n, False))
+        outer.addLayout(channels_row, 1)
+
+        self._phase_form = QFormLayout()
+        self._phase_spin = SteppedDoubleSpinBox(small_step=1.0, large_step=10.0)
+        self._phase_spin.setDecimals(1)
+        self._phase_spin.setRange(0.0, 360.0)
+        self._phase_spin.setSuffix(" °")
+        self._phase_spin.setMaximumWidth(150)
+        self._phase_button = IconButton("mdi.check", "")
+        self._phase_button.clicked.connect(lambda: self.set_phase.emit(self._device_id, self._phase_spin.value()))
+        self._phase_row = _row(self._phase_spin, self._phase_button)
+        self._phase_form.addRow(" ", self._phase_row)
+        _detint_label(self._phase_form, self._phase_row)
+        outer.addLayout(self._phase_form)
+        self._last_phase: float | None = None
+
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+        self._on_theme_changed(current_palette())
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("Funktionsgenerator (JDS66xx)"))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._phase_form.labelForField(self._phase_row).setText(tr("Phase (Kanal 2 zu 1):"))
+        self._phase_button.setToolTip(tr("Setzen"))
+        for box in self._boxes.values():
+            box.retranslate()
+
+    def _emit_waveform(self, channel: int) -> None:
+        code = self._boxes[channel].wave_combo.currentData()
+        if code is not None:
+            self.set_waveform.emit(self._device_id, channel, int(code))
+
+    def set_state(self, state: dict) -> None:
+        """Ausgaenge immer, Feldwerte nur bei Aenderung am Geraet (siehe
+        _FgChannelBox.set_values)."""
+        for n, (on, values) in enumerate(zip(state["outputs"], state["channels"]), start=1):
+            box = self._boxes[n]
+            box.set_output_state(bool(on))
+            box.set_values(values)
+        if self._last_phase is None or self._last_phase != state["phase"]:
+            self._phase_spin.blockSignals(True)
+            self._phase_spin.setValue(state["phase"])
+            self._phase_spin.blockSignals(False)
+        self._last_phase = state["phase"]
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._phase_row.setStyleSheet(_row_stylesheet(palette))
+        for box in self._boxes.values():
+            box.apply_theme(palette)
+        apply_panel_tint(self, self._color_key)
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def _on_color_selected(self, color_key) -> None:
+        self.panel_color_requested.emit(self._device_id, color_key)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
+        )
+        if ok and new_label.strip():
+            self.rename_requested.emit("fg", self._device_id, new_label.strip())
+
+    def capture_state(self) -> dict:
+        """Zustand fuer die globale Preset-Leiste (siehe PresetBar). Ausgaenge
+        nur, wenn das Geraet sie schon gemeldet hat."""
+        state: dict = {"phase": self._phase_spin.value(), "channels": []}
+        for box in self._boxes.values():
+            state["channels"].append({
+                "waveform": box.wave_combo.currentData(), "frequency": box.freq_spin.value(),
+                "amplitude": box.ampl_spin.value(), "offset": box.offs_spin.value(),
+                "duty": box.duty_spin.value(), "output_on": box.output_on,
+            })
+        return state
+
+    def apply_state(self, state: dict) -> None:
+        """Uebernimmt ein Preset: fuellt die Felder UND schreibt alles sofort
+        aufs Geraet. Reihenfolge je Kanal: erst Form und Werte, der Ausgang
+        zuletzt -- ein Preset soll kein halb eingestelltes Signal anlegen."""
+        channels = state.get("channels", [])
+        for n, saved in enumerate(channels[:2], start=1):
+            box = self._boxes[n]
+            try:
+                index = box.wave_combo.findData(int(saved.get("waveform")))
+                if index >= 0:
+                    box.wave_combo.setCurrentIndex(index)
+                box.freq_spin.setValue(float(saved.get("frequency", box.freq_spin.value())))
+                box.ampl_spin.setValue(float(saved.get("amplitude", box.ampl_spin.value())))
+                box.offs_spin.setValue(float(saved.get("offset", box.offs_spin.value())))
+                box.duty_spin.setValue(float(saved.get("duty", box.duty_spin.value())))
+            except (TypeError, ValueError):
+                continue
+            self._emit_waveform(n)
+            self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
+            self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
+            self.set_offset.emit(self._device_id, n, box.offs_spin.value())
+            self.set_duty.emit(self._device_id, n, box.duty_spin.value())
+        try:
+            self._phase_spin.setValue(float(state.get("phase", self._phase_spin.value())))
+        except (TypeError, ValueError):
+            pass
+        self.set_phase.emit(self._device_id, self._phase_spin.value())
+        for n, saved in enumerate(channels[:2], start=1):
+            if saved.get("output_on") is not None:
+                self.set_output.emit(self._device_id, n, bool(saved["output_on"]))
 
 
 class CanControlGroup(QGroupBox):
@@ -1573,6 +1872,8 @@ class ControlTab(QWidget):
                 section.set_ratings(*self._psu_ratings[device_id])
         elif kind == "hil":
             section = HilControlGroup(device_id, label)
+        elif kind == "fg":
+            section = FgControlGroup(device_id, label)
         else:
             section = CanControlGroup(device_id, label)
         section.hide()
@@ -1829,6 +2130,14 @@ class ControlTab(QWidget):
 
     def set_hil_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_fg_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_fg_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, FgControlGroup):
+            section.set_state(state)
 
     def on_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
         section = self._sections.get(device_id)

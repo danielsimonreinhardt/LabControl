@@ -80,6 +80,28 @@ panels together:
   setpoint click from silently undoing the emulated off state. Only
   clicking "ON" unlocks the setpoint buttons again.
 
+### Function generator (JDS2915 / JDS66xx)
+
+Two identical channel boxes (channel 1 and 2) side by side:
+
+- **Shape, frequency, amplitude, offset, duty cycle**: each applied with
+  its own check button. Amplitude is peak-to-peak into open circuit
+  (0-20 V), offset is +-9.99 V.
+- **Output ON/OFF** per channel. Unlike the load, the generator reports
+  all settings back: the switches always show the state the device
+  reports, and a change made on the device itself (knob, keys) shows up in
+  the fields within two seconds. Input you are typing is not overwritten
+  as long as the device value does not change.
+- **Phase** (channel 2 relative to channel 1) exists only once.
+- **ALL OFF** switches both outputs off; shape, frequency etc. stay set.
+- The **test sequence** offers actions for frequency, amplitude, offset,
+  duty cycle, phase, the shapes sine/square/pulse/triangle/DC and output
+  ON/OFF; the channel is chosen in the row.
+- The device is found through its CH340 USB-serial converter. Because that
+  converter also sits in unrelated devices, a query checks that a function
+  generator really answers. A powered-on device is therefore detected up
+  to 30 seconds after switching it on.
+
 ---
 
 ## 3. "Testcase" tab

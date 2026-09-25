@@ -61,6 +61,19 @@ CAN_STATE_FIELDS = {
     "rx_count": ("Empfangen", ""),
 }
 PICOSCOPE_STATE_FIELDS = {"status": ("Status", "")}
+# Funktionsgenerator: je Kanal Ausgang (0/1), Wellenform (Text), Frequenz,
+# Amplitude (Spitze-Spitze), Offset, Tastverhaeltnis; dazu die Phase. Nicht im
+# Verlauf-Tab plotbar (siehe KIND_FIELDS) -- es sind Einstellungen, keine
+# Messwerte.
+FG_STATE_FIELDS = {
+    **{f"out{n}": (f"Ausgang {n}", "") for n in (1, 2)},
+    **{f"wave{n}": (f"Wellenform {n}", "") for n in (1, 2)},
+    **{f"freq{n}": (f"Frequenz {n}", "Hz") for n in (1, 2)},
+    **{f"ampl{n}": (f"Amplitude {n}", "V") for n in (1, 2)},
+    **{f"offs{n}": (f"Offset {n}", "V") for n in (1, 2)},
+    **{f"duty{n}": (f"Tastverhältnis {n}", "%") for n in (1, 2)},
+    "phase": ("Phase", "°"),
+}
 
 # -- Flacher Gesamtkatalog fuer die Netzwerk-Freigabe ---------------------
 # (kind, field) -> (deutscher Basis-Anzeigename, Einheit). Anders als
@@ -74,6 +87,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
     **{("can", f): v for f, v in CAN_STATE_FIELDS.items()},
     **{("hil", f): v for f, v in HIL_SIGNAL_FIELDS.items()},
     **{("picoscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
+    **{("fg", f): v for f, v in FG_STATE_FIELDS.items()},
 }
 
 # Anzeigereihenfolge je Geraeteart -- bestimmt, in welcher Reihenfolge die
@@ -86,6 +100,7 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
     "picoscope": ["status"],
+    "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
 }
 
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter

@@ -27,6 +27,17 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
+from jds66xx.driver import (
+    FunctionGeneratorError,
+    FunctionGeneratorValueError,
+    JDS66xx,
+    WAVE_DC,
+    WAVE_PULSE,
+    WAVE_SINE,
+    WAVE_SQUARE,
+    WAVE_TRIANGLE,
+)
+from jds66xx.mock import MockJDS66xx
 from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
@@ -100,6 +111,23 @@ HIL_POLL_INTERVAL_MS = 1000
 # dann faelschlich mit "belegt", obwohl gar keine externe App im Weg ist).
 PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
 
+# Eigenes Poll-Intervall fuer den Funktionsgenerator: ein voller Zustand sind
+# 13 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
+# Tastverhaeltnis, Phase). Der Generator hat keine Messwerte, die sich von
+# selbst aendern -- nur ein Handeingriff am Geraet ist zu erkennen, dafuer
+# reicht ein langsamer Takt und er nimmt dem gemeinsamen Poll-Zyklus von
+# Last/Netzteil keine Zeit weg. Nach jedem eigenen Schreibbefehl wird der
+# Zustand ohnehin sofort neu gelesen (siehe _guard_fg/_emit_fg_state).
+FG_POLL_INTERVAL_MS = 2000
+
+# Ein CH340-Port (siehe jds66xx.driver.USB_VID) kann ein FREMDES Geraet tragen.
+# Ein Port, der den Handshake nicht besteht, wird deshalb nicht alle
+# RECONNECT_INTERVAL_MS erneut angesprochen (jedes Mal landet eine unverstandene
+# Zeile beim fremden Geraet), sondern erst nach dieser Frist wieder. Ein
+# ausgeschalteter Generator hat den Port trotzdem schon -- die Frist bestimmt,
+# wie lange es nach dem Einschalten bis zur Erkennung dauern kann.
+FG_REPROBE_INTERVAL_S = 30.0
+
 # Mindestabstand (s) zwischen einem ps2000_close_unit() und dem naechsten
 # ps2000_open_unit() -- an echter Hardware beobachtet: ein Reopen direkt
 # (~0s) nach dem Schliessen schlaegt mit Status 0 fehl (nicht von "belegt
@@ -126,6 +154,16 @@ SIM_LOAD_ID = "load:SIM"
 SIM_CAN_ID = "can:mock:SIM"
 SIM_HIL_ID = "hil:SIM"
 SIM_PICOSCOPE_ID = "picoscope:SIM"
+SIM_FG_ID = "fg:SIM"
+
+# FG_*-Aktionscode (testcase_model.FG_ACTIONS) -> Wellenformcode.
+FG_WAVE_ACTIONS = {
+    "FG_WAVE_SINE": WAVE_SINE,
+    "FG_WAVE_SQUARE": WAVE_SQUARE,
+    "FG_WAVE_PULSE": WAVE_PULSE,
+    "FG_WAVE_TRIANGLE": WAVE_TRIANGLE,
+    "FG_WAVE_DC": WAVE_DC,
+}
 
 # Die ps2000-API kennt (anders als bei Last/Netzteil/microHIL) keine
 # Geraete-Enumeration/Seriennummer-basierte Unterscheidung mehrerer
@@ -275,8 +313,20 @@ class DeviceWorker(QObject):
     # zuletzt bekannten Stand stehen (siehe _reconnect_picoscope).
     picoscope_state = Signal(str, str, str, str)
 
+    fg_connected = Signal(str, bool)         # device_id, online
+    # device_id, Zustand als dict: {"outputs": [bool, bool], "channels":
+    # [{"waveform", "frequency", "amplitude", "offset", "duty"} x2], "phase"}.
+    # Ein dict statt vieler Einzelsignale, weil der Generator kein schnell
+    # veraenderlicher Messwert ist, sondern ein Satz Einstellungen, der nur
+    # als Ganzes gelesen wird (siehe FG_POLL_INTERVAL_MS).
+    fg_state = Signal(str, object)
+
     def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
         super().__init__()
+        self._fgs: dict[str, JDS66xx] = {}
+        # Port -> monotonic()-Zeitpunkt, vor dem er nicht erneut geprobt wird
+        # (siehe FG_REPROBE_INTERVAL_S).
+        self._fg_probe_after: dict[str, float] = {}
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
         self._can_buses: dict[str, CanBus] = {}
@@ -350,6 +400,8 @@ class DeviceWorker(QObject):
         # -- siehe PICOSCOPE_RECONNECT_INTERVAL_MS.
         self._picoscope_reconnect_timer = QTimer(self)
         self._picoscope_reconnect_timer.timeout.connect(self._reconnect_picoscope)
+        self._fg_poll_timer = QTimer(self)
+        self._fg_poll_timer.timeout.connect(self._poll_fgs)
 
     @Slot()
     def start(self) -> None:
@@ -359,12 +411,14 @@ class DeviceWorker(QObject):
             self._add_mock_can()
             self._add_mock_hil()
             self._add_mock_picoscope()
+            self._add_mock_fg()
         self._try_reconnect()
         self._reconnect_picoscope()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
         self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
         self._picoscope_reconnect_timer.start(PICOSCOPE_RECONNECT_INTERVAL_MS)
+        self._fg_poll_timer.start(FG_POLL_INTERVAL_MS)
 
     @Slot(bool)
     def set_test_running(self, running: bool) -> None:
@@ -448,12 +502,14 @@ class DeviceWorker(QObject):
             self._add_mock_can()
             self._add_mock_hil()
             self._add_mock_picoscope()
+            self._add_mock_fg()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
             self._close_can(SIM_CAN_ID)
             self._remove_mock_hil()
             self._remove_mock_picoscope()
+            self._remove_mock_fg()
 
     # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
     # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
@@ -501,6 +557,21 @@ class DeviceWorker(QObject):
             load.close()
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
+
+    def _add_mock_fg(self) -> None:
+        if SIM_FG_ID in self._fgs:
+            return
+        self._fgs[SIM_FG_ID] = MockJDS66xx()
+        self.device_added.emit("fg", SIM_FG_ID)
+        self.fg_connected.emit(SIM_FG_ID, True)
+        self._emit_fg_state(SIM_FG_ID)
+
+    def _remove_mock_fg(self) -> None:
+        fg = self._fgs.pop(SIM_FG_ID, None)
+        if fg is not None:
+            fg.close()
+            self.fg_connected.emit(SIM_FG_ID, False)
+            self.device_removed.emit("fg", SIM_FG_ID)
 
     def _add_mock_can(self) -> None:
         if SIM_CAN_ID in self._can_buses:
@@ -562,6 +633,7 @@ class DeviceWorker(QObject):
         self._reconnect_psus()
         self._reconnect_can()
         self._reconnect_hils()
+        self._reconnect_fgs()
         # PicoScope NICHT hier: eigener, viel langsamerer Timer (siehe
         # PICOSCOPE_RECONNECT_INTERVAL_MS / _picoscope_reconnect_timer).
 
@@ -607,6 +679,82 @@ class DeviceWorker(QObject):
                 self.load_function_state.emit(device_id, candidate.get_function())
             except LoadError:
                 pass  # naechster Poll-Zyklus liefert den Status ohnehin nach
+
+    def _reconnect_fgs(self) -> None:
+        """Verbindet Funktionsgeneratoren. Kandidaten sind alle CH340-Ports,
+        bestaetigt wird per Handshake (JDS66xx.probe) -- die VID/PID allein
+        beweist nichts (siehe jds66xx.driver.USB_VID und FG_REPROBE_INTERVAL_S).
+
+        Anders als beim Netzteil werden die Ausgaenge beim Verbinden NICHT
+        veraendert: das Geraet meldet seinen Zustand wahrheitsgemaess zurueck
+        (Register 20), die Anzeige folgt also dem echten Zustand statt ihn zu
+        raten -- ein gezieltes Abschalten beim Verbinden waere ein Eingriff in
+        einen Aufbau, den der Nutzer vielleicht gerade betreibt."""
+        infos = JDS66xx.discover_ports()
+        present = {info.device for info in infos}
+        for port in [p for p in self._fg_probe_after if p not in present]:
+            del self._fg_probe_after[port]
+        now = time.monotonic()
+        candidates = _resolve_device_ids("fg", infos)
+        for device_id, info in candidates.items():
+            if device_id in self._fgs:
+                continue
+            if self._fg_probe_after.get(info.device, 0.0) > now:
+                continue
+            candidate = None
+            try:
+                candidate = JDS66xx(info.device)
+                if not candidate.probe():
+                    candidate.close()
+                    self._fg_probe_after[info.device] = now + FG_REPROBE_INTERVAL_S
+                    logger.info("CH340-Port %s ist kein Funktionsgenerator (Handshake fehlgeschlagen)", info.device)
+                    continue
+            except OSError:
+                # Port wird von einem anderen Prozess gehalten -- naechster Tick
+                # versucht es erneut (analog zu _reconnect_loads).
+                logger.warning("Funktionsgenerator-Port %s konnte nicht geoeffnet werden", info.device)
+                if candidate is not None:
+                    candidate.close()
+                continue
+            self._fgs[device_id] = candidate
+            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, candidate.identify())
+            self.device_added.emit("fg", device_id)
+            self.fg_connected.emit(device_id, True)
+            self._emit_fg_state(device_id)
+
+    def _emit_fg_state(self, device_id: str) -> None:
+        """Liest den vollen Zustand und meldet ihn per fg_state. Ein Fehler wird
+        wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
+        fg = self._fgs.get(device_id)
+        if fg is None:
+            return
+        try:
+            state = fg.get_state()
+        except FunctionGeneratorError as exc:
+            self._drop_fg(device_id, str(exc))
+            return
+        self.fg_state.emit(device_id, {
+            "outputs": list(state.outputs),
+            "channels": [
+                {"waveform": c.waveform, "frequency": c.frequency, "amplitude": c.amplitude,
+                 "offset": c.offset, "duty": c.duty}
+                for c in state.channels
+            ],
+            "phase": state.phase,
+        })
+
+    def _drop_fg(self, device_id: str, reason: str) -> None:
+        fg = self._fgs.pop(device_id, None)
+        if fg is None:
+            return
+        logger.warning("Funktionsgenerator %s getrennt: %s", device_id, reason)
+        fg.close()
+        self.fg_connected.emit(device_id, False)
+        self.device_removed.emit("fg", device_id)
+
+    def _poll_fgs(self) -> None:
+        for device_id in list(self._fgs):
+            self._emit_fg_state(device_id)
 
     def _reconnect_psus(self) -> None:
         candidates = _resolve_device_ids("psu", HCS34xx.discover_ports())
@@ -1031,6 +1179,23 @@ class DeviceWorker(QObject):
             self.device_removed.emit("psu", device_id)
             return False, str(exc)
 
+    def _guard_fg(self, device_id: str, action: Callable[[JDS66xx], None]) -> tuple[bool, str]:
+        fg = self._fgs.get(device_id)
+        if fg is None:
+            return False, "Funktionsgenerator nicht verbunden"
+        try:
+            action(fg)
+        except FunctionGeneratorValueError as exc:
+            # Wert abgelehnt bzw. nicht quittiert -- kein Verbindungsproblem.
+            return False, str(exc)
+        except FunctionGeneratorError as exc:
+            self._drop_fg(device_id, str(exc))
+            return False, str(exc)
+        # Sofort den echten Zustand zuruecklesen, damit Dashboard und Control-Tab
+        # zeigen, was das Geraet tatsaechlich angenommen hat (z.B. gerundet).
+        self._emit_fg_state(device_id)
+        return True, ""
+
     def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
         bus = self._can_buses.get(device_id)
         if bus is None:
@@ -1105,6 +1270,13 @@ class DeviceWorker(QObject):
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei microHIL %s", device_id)
                 failures.append(device_id)
+        for device_id, fg in list(self._fgs.items()):
+            try:
+                if not self._kill_fg(device_id, fg):
+                    failures.append(device_id)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei Funktionsgenerator %s", device_id)
+                failures.append(device_id)
         self.all_off_finished.emit(";".join(failures))
 
     def _kill_load(self, device_id: str, load: KoradKEL102) -> bool:
@@ -1121,6 +1293,26 @@ class DeviceWorker(QObject):
                 del self._loads[device_id]
                 self.load_connected.emit(device_id, False)
                 self.device_removed.emit("load", device_id)
+                return False
+        return False
+
+    def _kill_fg(self, device_id: str, fg: JDS66xx) -> bool:
+        """Beide Ausgaenge AUS. Die eingestellten Signalparameter bleiben
+        erhalten -- nur der Ausgang wird getrennt, wie bei der Last."""
+        for attempt in (1, 2):
+            try:
+                fg.set_outputs(False, False)
+                logger.info("ALL OFF: Funktionsgenerator %s -> beide Ausgaenge AUS", device_id)
+                self._emit_fg_state(device_id)
+                return True
+            except FunctionGeneratorValueError as exc:
+                logger.error("ALL OFF: Funktionsgenerator %s quittierte nicht: %s", device_id, exc)
+                return False
+            except FunctionGeneratorError as exc:
+                if attempt == 1:
+                    continue
+                logger.error("ALL OFF: Funktionsgenerator %s nicht erreichbar: %s", device_id, exc)
+                self._drop_fg(device_id, str(exc))
                 return False
         return False
 
@@ -1246,6 +1438,36 @@ class DeviceWorker(QObject):
     @Slot(str, int)
     def recall_psu_memory(self, device_id: str, index: int) -> None:
         self._guard_psu(device_id, lambda psu: psu.recall_memory(index))
+
+    # -- Funktionsgenerator: Steuerbefehle (siehe control_tab.FgControlGroup) ------
+
+    @Slot(str, int, bool)
+    def set_fg_output(self, device_id: str, channel: int, on: bool) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_output(channel, on))
+
+    @Slot(str, int, int)
+    def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code))
+
+    @Slot(str, int, float)
+    def set_fg_frequency(self, device_id: str, channel: int, hertz: float) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz))
+
+    @Slot(str, int, float)
+    def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts))
+
+    @Slot(str, int, float)
+    def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts))
+
+    @Slot(str, int, float)
+    def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent))
+
+    @Slot(str, float)
+    def set_fg_phase(self, device_id: str, degrees: float) -> None:
+        self._guard_fg(device_id, lambda fg: fg.set_phase(degrees))
 
     # -- CAN-Bus: Steuerbefehle -----------------------------------------------
     # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
@@ -1443,6 +1665,28 @@ class DeviceWorker(QObject):
                 ok, message = self._guard_hil(device_id, _read_ain)
                 return ok, message, float(result.get("v", 0))
             return False, f"Unbekannte Aktion '{action}' fuer microHIL", 0.0
+
+        if kind == "fg":
+            if action in FG_WAVE_ACTIONS:
+                code = FG_WAVE_ACTIONS[action]
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code))
+            elif action == "FG_FREQ":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value))
+            elif action == "FG_AMPL":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, value))
+            elif action == "FG_OFFS":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_offset(channel, value))
+            elif action == "FG_DUTY":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_duty(channel, value))
+            elif action == "FG_PHASE":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value))
+            elif action == "FG_OUT_ON":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True))
+            elif action == "FG_OUT_OFF":
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False))
+            else:
+                return False, f"Unbekannte Aktion '{action}' fuer Funktionsgenerator", 0.0
+            return ok, message, 0.0
 
         if kind == "picoscope":
             return self._execute_picoscope_action(device_id, action, value, channel)

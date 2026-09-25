@@ -136,6 +136,10 @@ def _step_started_text(record: RunRecord, index: int) -> str:
             if step.action == "HIL_AOUT"
             else tr("Kanal {ch}", ch=step.hil_channel)
         )
+    elif step.device_kind == "fg":
+        detail = tr("Kanal {ch}", ch=step.hil_channel)
+        if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
+            detail += f": {step.value:g}"
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)

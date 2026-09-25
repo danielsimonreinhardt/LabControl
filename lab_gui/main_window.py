@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
         self._online_devices: dict[str, set[str]] = {
-            "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(),
+            "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
         }
 
         self._registry = DeviceRegistry()
@@ -226,6 +226,10 @@ class MainWindow(QMainWindow):
         self._worker.can_connected.connect(self._on_can_connected)
         self._worker.hil_connected.connect(self._on_hil_connected)
         self._worker.hil_info.connect(self.settings_tab.set_hil_firmware_version)
+        self._worker.fg_connected.connect(self._on_fg_connected)
+        self._worker.fg_state.connect(self.dashboard.update_fg)
+        self._worker.fg_state.connect(self.control_tab.set_fg_state)
+        self._worker.fg_state.connect(self._live_state.on_fg_state)
         self._worker.picoscope_connected.connect(self._on_picoscope_connected)
         self._worker.picoscope_state.connect(self.dashboard.update_picoscope_state)
         self._worker.load_measurement.connect(self.dashboard.update_load)
@@ -398,6 +402,8 @@ class MainWindow(QMainWindow):
                 self._on_psu_connected(device_id, False)
             elif kind == "hil":
                 self._on_hil_connected(device_id, False)
+            elif kind == "fg":
+                self._on_fg_connected(device_id, False)
             elif kind == "picoscope":
                 self._on_picoscope_connected(device_id, False)
             else:
@@ -444,6 +450,14 @@ class MainWindow(QMainWindow):
             section.set_pwm.connect(self._worker.set_hil_pwm)
             section.set_pwr12.connect(self._worker.set_hil_pwr12)
             section.set_current_limit.connect(self._worker.set_hil_current_limit)
+        elif kind == "fg":
+            section.set_output.connect(self._worker.set_fg_output)
+            section.set_waveform.connect(self._worker.set_fg_waveform)
+            section.set_frequency.connect(self._worker.set_fg_frequency)
+            section.set_amplitude.connect(self._worker.set_fg_amplitude)
+            section.set_offset.connect(self._worker.set_fg_offset)
+            section.set_duty.connect(self._worker.set_fg_duty)
+            section.set_phase.connect(self._worker.set_fg_phase)
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -1135,6 +1149,12 @@ class MainWindow(QMainWindow):
         self._set_online("hil", device_id, online)
         self.dashboard.set_hil_online(device_id, online)
         self.control_tab.set_hil_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_fg_connected(self, device_id: str, online: bool) -> None:
+        self._set_online("fg", device_id, online)
+        self.dashboard.set_fg_online(device_id, online)
+        self.control_tab.set_fg_online(device_id, online)
 
     @Slot(str, bool)
     def _on_picoscope_connected(self, device_id: str, online: bool) -> None:

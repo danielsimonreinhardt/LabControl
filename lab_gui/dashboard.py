@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from field_catalog import LOAD_MODE_SHORT
 from i18n import Translator, tr
 from icons import IconButton
+from jds66xx.driver import waveform_name
 from microhil_panel import MicroHilPanel
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
 from picoscope2000.driver import launch_app as launch_picoscope_app
@@ -121,15 +122,20 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "mode": ("Modus", ""),
     "tx_count": ("Gesendet", ""),
     "rx_count": ("Empfangen", ""),
+    "fg_ch1": ("Kanal 1", ""),
+    "fg_ch2": ("Kanal 2", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 CAN_FIELD_KEYS = ["tx_count", "rx_count"]
-KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus"}
+FG_FIELD_KEYS = ["fg_ch1", "fg_ch2"]
+KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus",
+              "fg": "Funktionsgenerator"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
-KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip"}
+KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip",
+             "fg": "mdi.sine-wave"}
 
 # "Verbindung getrennt"-Badge oben rechts im Panel, siehe
 # _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
@@ -153,6 +159,8 @@ FIELD_ICONS: dict[str, str] = {
     "mode": "mdi.swap-horizontal-bold",
     "tx_count": "mdi.upload-outline",
     "rx_count": "mdi.download-outline",
+    "fg_ch1": "mdi.numeric-1-box-outline",
+    "fg_ch2": "mdi.numeric-2-box-outline",
 }
 
 
@@ -163,6 +171,14 @@ def _rect_distance(rect: QRect, point: QPoint) -> int:
     dx = max(rect.left() - point.x(), 0, point.x() - rect.right())
     dy = max(rect.top() - point.y(), 0, point.y() - rect.bottom())
     return dx * dx + dy * dy
+
+
+def _format_frequency(hertz: float) -> str:
+    if hertz >= 1_000_000:
+        return f"{hertz / 1_000_000:.4g} MHz"
+    if hertz >= 1_000:
+        return f"{hertz / 1_000:.4g} kHz"
+    return f"{hertz:.4g} Hz"
 
 
 def _field_display(field_key: str) -> str:
@@ -1141,7 +1157,9 @@ class DashboardWidget(QGroupBox):
                 panel = PicoscopePanel(device_id, label)
                 panel.launch_requested.connect(self._on_picoscope_launch_requested)
             else:
-                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS}.get(kind, CAN_FIELD_KEYS)
+                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS}.get(
+                    kind, CAN_FIELD_KEYS
+                )
                 panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
@@ -1215,6 +1233,10 @@ class DashboardWidget(QGroupBox):
         self._set_online(device_id, online)
 
     @Slot(str, bool)
+    def set_fg_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    @Slot(str, bool)
     def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
@@ -1244,6 +1266,24 @@ class DashboardWidget(QGroupBox):
         panel.set_value("voltage", f"{voltage:.2f}")
         panel.set_value("current", f"{current:.2f}")
         panel.set_value("mode", "CC" if constant_current else "CV")
+
+    @Slot(str, object)
+    def update_fg(self, device_id: str, state: dict) -> None:
+        """Eine Textzeile je Kanal: Wellenform, Frequenz, Amplitude -- oder
+        "aus". Ein Generator hat keine Messwerte; angezeigt wird der zuletzt
+        vom Geraet zurueckgelesene Einstellungsstand (siehe
+        device_worker.fg_state)."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        for n, (on, ch) in enumerate(zip(state["outputs"], state["channels"]), start=1):
+            if not on:
+                panel.set_value(f"fg_ch{n}", tr("aus"))
+                continue
+            panel.set_value(
+                f"fg_ch{n}",
+                f"{tr(waveform_name(ch['waveform']))}  {_format_frequency(ch['frequency'])}  {ch['amplitude']:.2f} V",
+            )
 
     @Slot(str, int, int)
     def update_can(self, device_id: str, tx_count: int, rx_count: int) -> None:
