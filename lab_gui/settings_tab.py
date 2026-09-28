@@ -98,13 +98,14 @@ def _scrollable(content: QWidget) -> QScrollArea:
     return scroll
 
 
-def _button_row(button: QPushButton) -> QHBoxLayout:
-    """Haelt einen QPushButton auf seiner natuerlichen Inhaltsbreite statt
-    ihn (QPushButton-Standardverhalten in einem QVBoxLayout, horizontale
-    SizePolicy "Minimum" laesst ihn wachsen) auf die volle Tab-Breite zu
+def _button_row(*buttons: QPushButton) -> QHBoxLayout:
+    """Haelt QPushButtons auf ihrer natuerlichen Inhaltsbreite statt sie
+    (QPushButton-Standardverhalten in einem QVBoxLayout, horizontale
+    SizePolicy "Minimum" laesst sie wachsen) auf die volle Tab-Breite zu
     strecken -- analog zur bereits bestehenden language_row."""
     row = QHBoxLayout()
-    row.addWidget(button)
+    for button in buttons:
+        row.addWidget(button)
     row.addStretch()
     return row
 
@@ -749,6 +750,9 @@ class SettingsTab(QWidget):
     # eigentlichen Reset aus (DeviceRegistry/Settings kennt dieses Widget
     # nicht direkt).
     reset_devices_requested = Signal()
+    # Wie reset_devices_requested, aber nur fuer Geraete, die gerade NICHT
+    # verbunden sind (main_window._on_remove_offline_devices_requested).
+    remove_offline_devices_requested = Signal()
 
     # Netzwerk-Freigabe (siehe share_server.py). Wie ueberall im
     # Einstellungen-Tab: nur melden, Settings fasst dieser Tab nie an.
@@ -853,9 +857,13 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(page)
 
         # -- Geraeteverwaltung ---------------------------------------------
+        # Zwei Stufen (Nutzerwunsch 2026-09-28): nur die gerade nicht
+        # verbundenen Geraete vergessen, oder wie bisher alle.
+        self._remove_offline_button = QPushButton()
+        self._remove_offline_button.clicked.connect(self._on_remove_offline_clicked)
         self._reset_devices_button = QPushButton()
         self._reset_devices_button.clicked.connect(self._on_reset_devices_clicked)
-        layout.addLayout(_button_row(self._reset_devices_button))
+        layout.addLayout(_button_row(self._remove_offline_button, self._reset_devices_button))
 
         layout.addWidget(_separator())
 
@@ -1167,7 +1175,15 @@ class SettingsTab(QWidget):
         self._language_label.setText(tr("Sprache:"))
         self._help_button.setText(tr("Hilfe"))
         self._help_button.setToolTip(tr("Öffnet das Benutzerhandbuch"))
-        self._reset_devices_button.setText(tr("Gerätezuordnung löschen"))
+        self._remove_offline_button.setText(tr("Nicht verbundene Geräte löschen"))
+        self._remove_offline_button.setToolTip(
+            tr(
+                "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, "
+                "Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene "
+                "Geräte bleiben unverändert."
+            )
+        )
+        self._reset_devices_button.setText(tr("Alle Geräte löschen"))
         self._reset_devices_button.setToolTip(
             tr(
                 "Löscht alle gespeicherten Geräte-Namen, Sicherheits-Grenzwerte und "
@@ -1363,10 +1379,23 @@ class SettingsTab(QWidget):
     def _on_help_clicked(self) -> None:
         HelpDialog(self).exec()
 
+    def _on_remove_offline_clicked(self) -> None:
+        if QMessageBox.question(
+            self,
+            tr("Nicht verbundene Geräte löschen"),
+            tr(
+                "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-"
+                "Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte "
+                "bleiben unverändert. Das lässt sich nicht rückgängig machen."
+            ),
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.remove_offline_devices_requested.emit()
+
     def _on_reset_devices_clicked(self) -> None:
         if QMessageBox.question(
             self,
-            tr("Gerätezuordnung löschen"),
+            tr("Alle Geräte löschen"),
             tr(
                 "Alle gespeicherten Geräte-Namen, Sicherheits-Grenzwerte und Panel-Farben "
                 "wirklich löschen und auf die Standardwerte zurücksetzen? Das lässt sich "

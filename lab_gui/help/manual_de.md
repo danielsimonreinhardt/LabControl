@@ -286,10 +286,16 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   erstmaligen Aktivieren bekommt jedes bereits bekannte Gerät automatisch
   eine eigene Farbe zugewiesen.
 - **Sprache**: wechselt die Oberflächensprache sofort, ohne Neustart.
-- **Gerätezuordnung löschen**: setzt gespeicherte Geräte-Namen,
+- **Nicht verbundene Geräte löschen**: vergisst nur die Geräte, die gerade
+  nicht verbunden sind (ausgegraute Kacheln), samt Namen,
+  Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigaben. Verbundene
+  Geräte bleiben unverändert. Wird ein vergessenes Gerät später wieder
+  angeschlossen, erscheint es mit einem neuen Standardnamen.
+- **Alle Geräte löschen**: setzt gespeicherte Geräte-Namen,
   Sicherheits-Grenzwerte, Panel-Farben und Netzwerk-Freigaben aller
-  Geräte auf die Standardwerte zurück (mit Rückfrage, nicht rückgängig
-  zu machen).
+  Geräte auf die Standardwerte zurück; verbundene Geräte bekommen neue
+  Standardnamen, nicht verbundene verschwinden.
+  Beide Knöpfe fragen vorher nach und lassen sich nicht rückgängig machen.
 - **Sicherheits-Grenzwerte (Watchdog)**: siehe Abschnitt 6.
 - **Netzwerk-Freigabe und Fernsteuerung**: siehe unten.
 - **Hilfe**: öffnet dieses Benutzerhandbuch.

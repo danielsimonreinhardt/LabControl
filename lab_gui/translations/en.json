@@ -375,5 +375,11 @@
   "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.": "Sharing per device: “Read” shows the tile on the network, “Control”\nadditionally allows operating it, “Measure” allows acquisitions on the\noscilloscope (e.g. by the MCP server, without the master switch). Both require Read.",
   "Verbunden (MCP)": "Connected (MCP)",
   "Trennen": "Disconnect",
-  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Close the connection used for network/MCP acquisitions now"
+  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Close the connection used for network/MCP acquisitions now",
+  "Nicht verbundene Geräte löschen": "Delete disconnected devices",
+  "Alle Geräte löschen": "Delete all devices",
+  "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.": "Forgets all devices that are currently not connected, including names, safety limits, panel colours and network sharing. Connected devices stay unchanged.",
+  "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.": "Delete all devices that are currently not connected, including names, safety limits, panel colours and network sharing? Connected devices stay unchanged. This cannot be undone.",
+  "{count} nicht verbundene Geräte gelöscht": "{count} disconnected devices deleted",
+  "Keine nicht verbundenen Geräte vorhanden": "No disconnected devices"
 }

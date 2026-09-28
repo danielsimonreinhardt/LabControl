@@ -273,9 +273,15 @@ time-window-limited ring buffer of the live charts.
   gets its own color.
 - **Language**: switches the interface language immediately, without
   restarting.
-- **Clear device assignment**: resets stored device names, safety limits,
-  panel colors and network sharing for all devices to their defaults
-  (asks for confirmation, cannot be undone).
+- **Delete disconnected devices**: forgets only the devices that are
+  currently not connected (greyed-out tiles), including names, safety
+  limits, panel colors and network sharing. Connected devices stay
+  unchanged. A forgotten device that is plugged in again later shows up
+  with a new default name.
+- **Delete all devices**: resets stored device names, safety limits,
+  panel colors and network sharing for all devices to their defaults;
+  connected devices get new default names, disconnected ones disappear.
+  Both buttons ask for confirmation and cannot be undone.
 - **Safety limits (watchdog)**: see section 6.
 - **Network sharing and remote control**: see below.
 - **Help**: opens this user manual.

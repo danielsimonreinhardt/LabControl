@@ -416,6 +416,32 @@ class Settings(QObject):
         self._save()
         self._emit_share_config()
 
+    def forget_device_settings(self, device_id: str) -> None:
+        """Loescht die geraete-individuellen Einstellungen EINES Geraets
+        (Sicherheits-Grenzwerte, Panel-Farbe, Netzwerk-Freigabe) -- Gegenstueck
+        zu reset_device_settings() fuer den Button "Nicht verbundene Geraete
+        loeschen" (siehe main_window._on_remove_offline_devices_requested).
+        Meldet nur, was sich tatsaechlich geaendert hat."""
+        changed_limits = changed_color = changed_share = False
+        for key in ("safety_limits", "panel_colors", "share_devices"):
+            stored = self._data.get(key)
+            if isinstance(stored, dict) and device_id in stored:
+                stored = dict(stored)
+                del stored[device_id]
+                self._data[key] = stored
+                changed_limits |= key == "safety_limits"
+                changed_color |= key == "panel_colors"
+                changed_share |= key == "share_devices"
+        if not (changed_limits or changed_color or changed_share):
+            return
+        self._save()
+        if changed_limits:
+            self.safety_limits_changed.emit(self.safety_limits)
+        if changed_color:
+            self.panel_color_changed.emit(device_id, None)
+        if changed_share:
+            self._emit_share_config()
+
     def reset_device_settings(self) -> None:
         """Loescht alle geraete-individuellen Einstellungen (Sicherheits-
         Grenzwerte + Panel-Farben) -- Teil des "Geraetezuordnung loeschen"-

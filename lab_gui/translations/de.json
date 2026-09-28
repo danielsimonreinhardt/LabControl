@@ -372,5 +372,11 @@
   "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.": "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.",
   "Verbunden (MCP)": "Verbunden (MCP)",
   "Trennen": "Trennen",
-  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"
+  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen",
+  "Nicht verbundene Geräte löschen": "Nicht verbundene Geräte löschen",
+  "Alle Geräte löschen": "Alle Geräte löschen",
+  "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.": "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.",
+  "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.": "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.",
+  "{count} nicht verbundene Geräte gelöscht": "{count} nicht verbundene Geräte gelöscht",
+  "Keine nicht verbundenen Geräte vorhanden": "Keine nicht verbundenen Geräte vorhanden"
 }

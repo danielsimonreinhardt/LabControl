@@ -560,6 +560,8 @@ class MainWindow(QMainWindow):
 
         self.settings_tab.safety_limit_changed.connect(self._settings.set_safety_limit)
         self.settings_tab.reset_devices_requested.connect(self._on_reset_devices_requested)
+        self.settings_tab.remove_offline_devices_requested.connect(
+            self._on_remove_offline_devices_requested)
 
         self.settings_tab.set_can_configs(self._settings.can_configs)
         self.settings_tab.can_configs_changed.connect(self._settings.set_can_configs)
@@ -600,6 +602,27 @@ class MainWindow(QMainWindow):
                 self._registry.on_device_added(kind, device_id)
             else:
                 self._forget_device(device_id)
+
+    def _on_remove_offline_devices_requested(self) -> None:
+        """Button "Nicht verbundene Geraete loeschen" (settings_tab.py, die
+        Rueckfrage lief dort): vergisst nur die Geraete, die gerade NICHT
+        verbunden sind -- Label (DeviceRegistry.forget), geraete-individuelle
+        Einstellungen (Settings.forget_device_settings) und alle Kacheln/
+        Sektionen/Zeilen (_forget_device), genau wie "Alle Geraete loeschen"
+        es fuer diese Geraete tut. Verbundene Geraete behalten Namen,
+        Grenzwerte, Farben und Freigabe. Ein spaeter wieder angeschlossenes
+        Geraet taucht ganz normal mit einem frischen Standardnamen auf."""
+        online_ids = set().union(*self._online_devices.values())
+        removed = [device_id for _kind, device_id, _label in self._registry.known_devices()
+                   if device_id not in online_ids]
+        for device_id in removed:
+            self._registry.forget(device_id)
+            self._settings.forget_device_settings(device_id)
+            self._forget_device(device_id)
+        logger.info("Nicht verbundene Geraete geloescht: %s", ", ".join(removed) or "keine")
+        self.statusBar().showMessage(
+            tr("{count} nicht verbundene Geräte gelöscht", count=len(removed)) if removed
+            else tr("Keine nicht verbundenen Geräte vorhanden"), 5000)
 
     def _on_can_configs_changed(self, configs: list) -> None:
         """Ein in den Einstellungen per Entfernen-Button geloeschtes

@@ -7,6 +7,25 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **„Gerätezuordnung löschen“ zweigeteilt (0.17.0, Nutzerwunsch).** Einstellungen → Geräte hat
+  jetzt zwei Knöpfe:
+  - **„Nicht verbundene Geräte löschen“** (neu): vergisst nur Geräte, die gerade nicht
+    verbunden sind -- Name (`DeviceRegistry.forget`), Sicherheits-Grenzwerte, Panel-Farbe und
+    Netzwerk-Freigabe (neu: `Settings.forget_device_settings`, meldet nur tatsächlich
+    Geändertes) sowie Kachel, Control-Sektion, Einstellungs-Sektionen, Statuszeilen-Eintrag
+    und Testablauf-Auswahl (`_forget_device`, derselbe Weg wie beim bisherigen Knopf).
+    Verbundene Geräte behalten Namen, Grenzwerte, Farbe und Freigabe. Die Statuszeile meldet
+    die Anzahl bzw. „Keine nicht verbundenen Geräte vorhanden“.
+  - **„Alle Geräte löschen“**: der bisherige Knopf „Gerätezuordnung löschen“, Verhalten
+    unverändert (mit aktivierten Panel-Farben bekommt ein verbundenes Gerät danach wie bisher
+    sofort automatisch die nächste freie Farbe).
+  - Beide mit Rückfrage; Handbuch (DE/EN) und Übersetzungen nachgezogen.
+  - **Verifiziert am Mock/ohne Hardware:** neues `tools/check_device_reset.py` (ganze App im
+    Simulationsmodus mit umgelenkten Einstellungen: zwei bekannte, nicht verbundene Geräte
+    werden samt Einstellungen und Kacheln entfernt, das verbundene simulierte Netzteil behält
+    alles; zweiter Klick ohne Offline-Geräte löscht nichts; „Alle Geräte löschen“ unverändert),
+    `check_network_share.py settings i18n` grün, Reiter offscreen gerendert. Nicht an der
+    laufenden App mit echten Geräten geklickt.
 - **Oszilloskope über MCP, Phase 2: Scope-Dienst, Netzwerk-Endpunkte, Häkchen „Messen“,
   MCP-Werkzeuge (0.16.0, Nutzerwunsch).** Ab jetzt kann ein KI-Assistent über den MCP-Server
   mit dem PicoScope messen. Entscheidungen E1–E3 vom 2026-09-28 umgesetzt.
