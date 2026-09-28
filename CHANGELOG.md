@@ -7,6 +7,71 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Oszilloskope über MCP, Phase 1: herstellerneutrale Schicht `scope_api/` (0.15.0,
+  Nutzerwunsch).** Ziel: der KI-Assistent misst und wertet über den MCP-Server mit dem
+  PicoScope 2204A aus, und ein zweites Oszilloskop (entschieden: SCPI-Tischgerät per LAN)
+  braucht später nur einen weiteren Adapter. Plan und Entscheidungen E1–E7 vom 2026-09-28:
+  <https://claude.ai/artifact/PbSiAExdmfT1kjTkVpnStc>. **Noch nicht über die App erreichbar**
+  -- Scope-Thread, Endpunkte in `share_api`, Freigabe „Messen“ und MCP-Werkzeuge sind Phase 2.
+  - **Bibliothekswahl:** das 2204A bleibt bei `picosdk-python-wrappers` (bereits im Einsatz,
+    deckt `ps2000` samt Trigger, Streaming und Signalgenerator ab). `pyPicoSDK` (Pico, v1.7.5)
+    kann nur ps6000a/psospa/ps5000a (6000E, 3000E/5000E, 5000D) und kommt für das 2204A nicht
+    in Frage; seine Form (Abtastrate statt Timebase-Index, Schwelle in mV) war aber Vorbild.
+  - **`scope_api/base.py`**: `Capabilities` (Kanäle, Bereiche, Speicher, Triggerarten, ...),
+    `AcquireRequest` mit vollständiger Prüfung von JSON-Eingaben, `Capture`, `ScopeError` mit
+    stabilen Codes. Alles in V/s/Hz; jede Anfrage trägt die komplette Einstellung
+    (zustandslos), zurück kommen die **tatsächlich** eingestellten Werte.
+  - **`scope_api/analysis.py`**: Kennwerte im Host statt in der Mess-Engine des Geräts, damit
+    beide Scopes dieselben Zahlen liefern: Pegel, Frequenz/Periode, Tastgrad, 10–90-%-Anstieg
+    und -Abfall, Über-/Unterschwingen, Flankenzahl, dazu Min/Max-Hüllkurve (kurze Spitzen
+    bleiben erhalten) und ein kompakter Bericht (Hüllkurve max. 200 Paare, 2-Kanal-Bericht
+    ~10 KB statt ~100 KB Rohwerte).
+  - **`scope_api/store.py`**: Erfassungen mit `capture_id`, die letzten 50 im Speicher, jede
+    als CSV (Entscheidung E3: Datei **und** HTTP-Abruf). Ausschnitte (roh/Mittel/Min-Max)
+    und Neuauswertung im Zeitfenster ohne neue Messung.
+  - **`scope_api/pico2000_adapter.py`** + Treiber: `picoscope2000` kann jetzt beide Kanäle
+    gleichzeitig, AC/DC und einen **echten Flanken-Trigger** mit Pre-Trigger
+    (`configure_channels`/`get_timebase`/`run_block_raw`). Das Warten ist begrenzt (danach
+    `ps2000_stop`), anders als die Endlosschleife in `capture_block()`. `capture_block()`/
+    `measure()` und damit `PICO_*` im Testablauf sind **unverändert**; die Umstellung auf
+    `SCOPE_*` ist Phase 4 (E6). Zeitbasis und Speicher fragt der Adapter beim Gerät ab
+    (`ps2000_get_timebase`) statt eine Tabelle zu pflegen.
+  - **Mock** mit synthetischen, triggerbaren Signalen (Rechteck mit endlichen Flanken, Sinus,
+    Konstante, Rauschen, Übersteuerung, AC-Kopplung). `triggered` im auto-Modus wird am
+    Signal abgelesen, weil die ps2000-API nicht meldet, ob getriggert oder nach Timeout frei
+    erfasst wurde.
+  - **An der Hardware gefunden und behoben:** offene Eingänge lieferten aus dem Rauschen
+    Fantasie-Frequenzen (15 kHz / 620 kHz). Neu: **Rauschschwelle** (unter 2 % des Bereichs
+    keine Flankenauswertung, mit Hinweis „kleineren Bereich wählen“) und **rauschabhängige
+    Hysterese** (10 % des Hubs, bei Rauschen bis 3 σ, höchstens 40 %).
+  - **`numpy`** steht jetzt direkt in `requirements.txt` (kam bisher nur über `asammdf`).
+  - **Verifiziert am Mock/ohne Hardware:** `tools/check_scope_api.py` -- Auswertung gegen
+    rechnerisch bekannte Signale (Frequenz, Tastgrad, Anstiegszeit, Effektivwert, Rauschen,
+    Zeitfenster, Hüllkurve), Prüfung der Anfragen, Adapter über den Mock (Bereichswahl,
+    Tastkopf 10:1, Zeitbasiswahl 10 ms/2 Kanäle → 2,56 µs/3907 Samples, Triggerlage und
+    -richtung, Übersteuerung, alle Fehlercodes), Speicher/CSV/Verdrängung. Import von
+    `device_worker` und der alte Mock-Pfad (`measure()`) unverändert.
+  - **An echter Hardware (2204A, GP816/090) verifiziert** (2026-09-28, **ohne Signal an den
+    Eingängen**): Öffnen und Fähigkeiten, freilaufend mit 2 Kanälen (1 ms → 320 ns/3125
+    Samples, vom Gerät gewählt), 1 Kanal mit 10 ns, `single` ohne Signal → `trigger_timeout`
+    samt Abbruch per `ps2000_stop`, `auto` ohne Trigger erfasst trotzdem, Rauschschwelle an
+    offenen Eingängen.
+  - **Mit bekanntem Signal verifiziert (T1, 2026-09-28):** Funktionsgenerator JDS2915 (`fg:COM14`)
+    Kanal 1 per BNC an Scope-Kanal A, über den MCP-Server eingestellt. Vorher-Messung ohne
+    Eingriff (Sinus 10 kHz / 5 Vss vom Nutzer eingestellt): 10 000 Hz, 5,02 Vss, Effektivwert
+    1,760 V (Soll 1,768 V). Rechteck 1 kHz 0…3,3 V: `single` steigend bei 1,65 V mit 20 %
+    Pre-Trigger → Flanke genau am erwarteten Index, **1000,04 Hz, Tastgrad 49,99 %, oberer
+    Pegel 3,302 V**; 50 % Pre-Trigger mit 10 ns → Flanke genau in der Mitte (Index 1000).
+    Danach Kanal 1 auf den vorgefundenen Stand zurückgestellt (Sinus 10 kHz, 5 V, Ausgang an --
+    nicht wie angekündigt ausgeschaltet, weil er vorher an war), per Zurücklesen und
+    Scope-Messung bestätigt; Kanal 2 nicht angefasst.
+  - **Dabei gefunden und behoben:** bei grobem Abtastintervall meldete `rise_time` das Intervall
+    statt der Flanke (1,15 µs bei 1,28 µs Intervall). Anstiegs-/Abfallzeiten unter 2
+    Abtastintervallen werden jetzt nicht mehr ausgegeben, sondern mit Hinweis auf ein feineres
+    Intervall. **Grenze des 2204A:** die Generatorflanke ist ~2,2 Samples bei 10 ns (~22 ns,
+    von Hand aus den Rohwerten nachgerechnet) und damit genau an der Auflösungsgrenze -- je
+    nach Lage zwischen den Samples kommt ein Wert oder der Hinweis. Schnellere Flanken als
+    ~20–40 ns lassen sich mit dem 2204A nicht messen.
 - **Funktionsgenerator JDS2915 (JDS66xx-Protokoll) als neue Geräteart `fg` (0.14.0,
   Nutzerwunsch).** Treiber, Mock, Dashboard-Kachel, Steuerungs-Sektion, Testablauf-Aktionen,
   Fernsteuerung/MCP und ALLE AUS. Grundlage ist das Joy-IT-Dokument

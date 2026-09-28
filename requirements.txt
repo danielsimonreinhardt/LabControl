@@ -8,6 +8,8 @@ asammdf>=8.0
 python-can>=4.5
 cantools>=40.0
 picosdk>=1.1
+# scope_api (Auswertung, Erfassungsspeicher); kam bisher nur indirekt ueber asammdf.
+numpy>=1.26
 
 # nur zum Bauen der .exe (siehe lab_gui/README.md)
 pyinstaller>=6.0

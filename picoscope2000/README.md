@@ -32,6 +32,19 @@ with PicoScope2000.open_first() as scope:
     print(capture.time_ns[-1])
 ```
 
+## Erfassung für scope_api (seit 0.15.0)
+
+Für die herstellerneutrale Oszilloskop-Schicht (`scope_api/`, MCP-Anbindung)
+gibt es drei zusätzliche Methoden, im Treiber und im Mock:
+`configure_channels()` (beide Kanäle, AC/DC, Bereich), `get_timebase()`
+(Intervall und max. Samples für die aktuelle Kanalzahl) und `run_block_raw()`
+(echter Flanken-Trigger mit Pre-Trigger, begrenztes Warten, danach
+`ps2000_stop` und `PicoScope2000TriggerTimeout`). `capture_block()`/`measure()`
+bleiben für den Testablauf unverändert, bis dieser auf `scope_api` umzieht.
+Der Mock erzeugt dafür synthetische, triggerbare Signale (`SquareWave`,
+`SineWave`, `Constant`; Standard: A = 1-kHz-Rechteck 0..3,3 V, B = 1-kHz-Sinus
+±1 V). Verwendung und Einheiten: `scope_api/README.md`.
+
 ## Bekannte Eigenheiten / Einschränkungen
 
 - **"A" im Modellnamen ist irreführend.** 2204A/2205A nutzen trotz des
@@ -79,7 +92,8 @@ with PicoScope2000.open_first() as scope:
   testweise verbinden und wieder trennen, um überhaupt an die Seriennummer zu
   kommen (anders als bei `hcs34xx`/`korad_kel102`, wo VID/PID-Listing ohne
   Verbindungsaufbau reicht).
-- **Kein echter Trigger in `capture_block()`.** Aktuell wird ein sehr kurzes
+- **Kein echter Trigger in `capture_block()`** (wohl aber in `run_block_raw()`,
+  siehe oben). Aktuell wird ein sehr kurzes
   Auto-Trigger-Timeout (1 ms) statt eines echten Trigger-Levels verwendet –
   die Erfassung läuft damit effektiv freilaufend. Für eine spätere
   Trigger-basierte Erfassung (z.B. für Pass/Fail-Kriterien im

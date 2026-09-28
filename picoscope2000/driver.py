@@ -37,15 +37,20 @@ from __future__ import annotations
 import ctypes
 import os
 import subprocess
+import time
 from ctypes import wintypes
 from pathlib import Path
 
 from picoscope2000.common import (
     CHANNEL_MAP,
     VOLTAGE_RANGE_CODES,
+    ChannelConfig,
     Measurement,
     BlockCapture,
     PicoScope2000Error,
+    PicoScope2000TriggerTimeout,
+    RawBlock,
+    TriggerConfig,
     UnitInfo,
 )
 
@@ -209,6 +214,7 @@ class PicoScope2000:
     def __init__(self, chandle: int):
         self._chandle = ctypes.c_int16(chandle)
         self._closed = False
+        self._enabled: list[str] = []
 
     # -- Discovery / Verbindung ----------------------------------------------
 
@@ -352,6 +358,109 @@ class PicoScope2000:
             voltage_range=voltage_range,
             sample_interval_ns=float(time_interval.value),
             millivolts=millivolts,
+        )
+
+    # -- Erfassung fuer scope_api (beide Kanaele, echter Trigger) ----------------
+    # Reihenfolge wie von scope_api/pico2000_adapter.py genutzt:
+    # configure_channels() -> get_timebase() (Gueltigkeit haengt von der
+    # Kanalzahl ab) -> run_block_raw(). capture_block()/measure() oben bleiben
+    # fuer den Testablauf unveraendert, bis dieser auf scope_api umzieht (E6).
+
+    def configure_channels(self, channels: dict[str, ChannelConfig]) -> None:
+        """Setzt beide Kanaele; nicht genannte werden abgeschaltet."""
+        self._enabled = []
+        try:
+            for name, code in CHANNEL_MAP.items():
+                cfg = channels.get(name)
+                enabled = bool(cfg and cfg.enabled)
+                _check(
+                    _ps.ps2000_set_channel(
+                        self._chandle, code, 1 if enabled else 0,
+                        1 if (cfg is None or cfg.dc) else 0,
+                        cfg.range_code if cfg else VOLTAGE_RANGE_CODES["20V"],
+                    ),
+                    f"ps2000_set_channel({name})",
+                )
+                if enabled:
+                    self._enabled.append(name)
+        except OSError as exc:
+            raise PicoScope2000Error(f"ps2000_set_channel fehlgeschlagen: {exc}") from exc
+
+    def get_timebase(self, timebase: int, num_samples: int) -> tuple[float, int] | None:
+        """(Abtastintervall in ns, max. Samples) oder None, wenn die Timebase mit
+        der aktuellen Kanalkonfiguration ungueltig ist. Am 2204A verifiziert:
+        Intervall = 10 ns * 2**timebase (Timebase 8 -> 2560 ns)."""
+        time_interval = ctypes.c_int32()
+        time_units = ctypes.c_int16()
+        max_samples = ctypes.c_int32()
+        try:
+            status = _ps.ps2000_get_timebase(
+                self._chandle, timebase, num_samples,
+                ctypes.byref(time_interval), ctypes.byref(time_units),
+                1, ctypes.byref(max_samples),
+            )
+        except OSError as exc:
+            raise PicoScope2000Error(f"ps2000_get_timebase fehlgeschlagen: {exc}") from exc
+        if status <= 0:
+            return None
+        return float(time_interval.value), int(max_samples.value)
+
+    def run_block_raw(self, trigger: TriggerConfig, timebase: int, num_samples: int,
+                      wait_s: float) -> RawBlock:
+        """Eine Blockerfassung mit den per configure_channels() gesetzten Kanaelen.
+
+        Wartet hoechstens wait_s auf das Ende (Trigger + Erfassung). Danach wird
+        die Erfassung per ps2000_stop abgebrochen und PicoScope2000TriggerTimeout
+        geworfen -- anders als capture_block() gibt es keine Endlosschleife.
+        """
+        enabled = list(getattr(self, "_enabled", []))
+        if not enabled:
+            raise PicoScope2000Error("Kein Kanal aktiv (configure_channels() vorher aufrufen).")
+        try:
+            _check(
+                _ps.ps2000_set_trigger(
+                    self._chandle, trigger.source, trigger.threshold_adc, trigger.direction,
+                    trigger.delay_pct, trigger.auto_trigger_ms,
+                ),
+                "ps2000_set_trigger",
+            )
+            timing = self.get_timebase(timebase, num_samples)
+            if timing is None:
+                raise PicoScope2000Error(f"Timebase {timebase} mit {num_samples} Samples ungueltig.")
+            time_indisposed_ms = ctypes.c_int32()
+            _check(
+                _ps.ps2000_run_block(self._chandle, num_samples, timebase, 1, ctypes.byref(time_indisposed_ms)),
+                "ps2000_run_block",
+            )
+            deadline = time.monotonic() + wait_s
+            while True:
+                ready = _ps.ps2000_ready(self._chandle)
+                if ready > 0:
+                    break
+                if ready < 0:
+                    raise PicoScope2000Error(f"ps2000_ready meldet Fehler ({ready}) -- Geraet getrennt?")
+                if time.monotonic() > deadline:
+                    _ps.ps2000_stop(self._chandle)
+                    raise PicoScope2000TriggerTimeout(f"Kein Trigger innerhalb von {wait_s:.1f} s.")
+                time.sleep(0.001)
+
+            buffers = {name: (ctypes.c_int16 * num_samples)() for name in enabled}
+            overflow = ctypes.c_int16()
+            n_values = _check(
+                _ps.ps2000_get_values(
+                    self._chandle,
+                    ctypes.byref(buffers["A"]) if "A" in buffers else None,
+                    ctypes.byref(buffers["B"]) if "B" in buffers else None,
+                    None, None, ctypes.byref(overflow), num_samples,
+                ),
+                "ps2000_get_values",
+            )
+        except OSError as exc:
+            raise PicoScope2000Error(f"Blockerfassung fehlgeschlagen: {exc}") from exc
+        return RawBlock(
+            sample_interval_ns=timing[0],
+            adc={name: list(buf[:n_values]) for name, buf in buffers.items()},
+            overflow={name: bool(overflow.value & (1 << CHANNEL_MAP[name])) for name in enabled},
         )
 
     def measure(

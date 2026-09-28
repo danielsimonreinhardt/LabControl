@@ -15,8 +15,55 @@ VOLTAGE_RANGE_CODES = {
 }
 
 
+# Vollausschlag +-V je Bereichscode (ps2000.PICO_VOLTAGE_RANGE ohne DLL-Import).
+RANGE_VOLTS = {
+    1: 0.02, 2: 0.05, 3: 0.1, 4: 0.2, 5: 0.5, 6: 1.0, 7: 2.0, 8: 5.0, 9: 10.0, 10: 20.0,
+}
+# ps2000.h: PS2000_CHANNEL_A..D = 0..3, PS2000_EXTERNAL = 4, PS2000_NONE = 5.
+TRIGGER_SOURCE_NONE = 5
+# ps2000.h: PS2000_RISING = 0, PS2000_FALLING = 1.
+DIRECTION_CODES = {"rising": 0, "falling": 1}
+MAX_ADC = 32767
+
+
 class PicoScope2000Error(RuntimeError):
     """Fehler bei der Kommunikation mit dem PicoScope."""
+
+
+class PicoScope2000TriggerTimeout(PicoScope2000Error):
+    """Innerhalb der Wartezeit kam kein Trigger (Erfassung abgebrochen)."""
+
+
+@dataclass
+class ChannelConfig:
+    enabled: bool
+    dc: bool
+    range_code: int
+
+
+@dataclass
+class TriggerConfig:
+    """Parameter von ps2000_set_trigger in Gerätecodes.
+
+    delay_pct: Lage des Triggers im Block, -100..0 (negativ = Pre-Trigger:
+    -20 heisst, 20 % des Blocks liegen vor dem Trigger).
+    auto_trigger_ms: 0 = unbegrenzt auf Trigger warten, sonst nach dieser
+    Zeit trotzdem erfassen (max. 32767, int16).
+    """
+    source: int
+    threshold_adc: int = 0
+    direction: int = 0
+    delay_pct: int = 0
+    auto_trigger_ms: int = 0
+
+
+@dataclass
+class RawBlock:
+    sample_interval_ns: float
+    # ADC-Werte je aktivem Kanal ("A"/"B"), Bereich -MAX_ADC..+MAX_ADC.
+    adc: dict = field(default_factory=dict)
+    # Übersteuerung je Kanal laut Gerät.
+    overflow: dict = field(default_factory=dict)
 
 
 @dataclass
