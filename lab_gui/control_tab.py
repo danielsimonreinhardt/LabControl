@@ -65,8 +65,7 @@ from tile_grid import (
     PANEL_DRAG_HANDLE_HEIGHT,
     cell_size_ratchet,
     make_drag_pixmap,
-    pack_tiles,
-    rect_distance,
+    place_tiles,
 )
 
 # Obergrenze der im Live-Traffic-Tisch angezeigten Zeilen (siehe
@@ -1949,6 +1948,9 @@ class ControlTab(QWidget):
     # device_ids) -- MainWindow verdrahtet das mit Settings.
     # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
     tile_order_changed = Signal(list)
+    # Feste Zellen {device_id: (Zeile, Spalte)} nach einem Drag&Drop (seit
+    # 0.20.1) -- MainWindow verdrahtet das mit Settings.set_control_tile_cells.
+    tile_cells_changed = Signal(dict)
 
     def __init__(self, presets: PresetStore) -> None:
         super().__init__()
@@ -2004,10 +2006,9 @@ class ControlTab(QWidget):
         self._panel_colors: dict[str, str | None] = {}
         self._colors_enabled = False
 
-        # Kachel-Reihenfolge (device_id-Liste), aus der _relayout_grid() per
-        # pack_tiles() die tatsaechlichen Rasterpositionen berechnet -- fuer
-        # den Control-Tab bislang gar nicht vorhanden (bisher bestimmte
-        # allein die Verbindungsreihenfolge die Anzeigereihenfolge).
+        # Kachel-Reihenfolge (device_id-Liste) -- seit 0.20.1 nur noch der
+        # Startstand fuer Kacheln ohne feste Zelle (_tile_cells, siehe
+        # _relayout_grid/tile_grid.place_tiles).
         self._tile_order: list[str] = []
         # Gewuenschte Reihenfolge (device_id-Liste), die noch nicht (voll-
         # staendig) angewendet werden konnte, weil die betroffenen Geraete
@@ -2029,11 +2030,19 @@ class ControlTab(QWidget):
         content.installEventFilter(self)
         self._drag_device_id: str | None = None
         self._drag_start_pos = None
-        # Waehrend eines Drags ausgeblendete Kachel und live vorgeschlagene
-        # Reihenfolge -- exakt wie dashboard.py (_drag_hidden_panel/
-        # _drag_preview_order), siehe _start_tile_drag/_preview_tile_drag.
+        # Waehrend eines Drags ausgeblendete Kachel -- wie dashboard.py
+        # (_drag_hidden_panel), siehe _start_tile_drag/_preview_tile_drag.
         self._drag_hidden_section: QWidget | None = None
-        self._drag_preview_order: list[str] | None = None
+        # Griffpunkt in der gezogenen Kachel (siehe _target_cell).
+        self._drag_hotspot = None
+        # Feste Zellen je Kachel (seit 0.20.1, siehe tile_grid.place_tiles) und
+        # die waehrend eines Drags live vorgeschlagenen Zellen.
+        self._tile_cells: dict[str, tuple[int, int]] = {}
+        self._drag_preview_cells: dict[str, tuple[int, int]] | None = None
+        # Anzahl Zeilen/Spalten mit gesetzter Mindestgroesse (siehe
+        # _relayout_grid) -- zum Zuruecksetzen, wenn das Raster schrumpft.
+        self._sized_rows = 0
+        self._sized_cols = 0
 
         # Nach einem Sprachwechsel aendern sich Label-Breiten/-Hoehen -- die
         # Kachelgroessen muessen dann neu angeglichen werden.
@@ -2137,18 +2146,29 @@ class ControlTab(QWidget):
         self._apply_pending_tile_order()
         self._relayout_grid()
 
+    def set_tile_cells(self, cells: dict) -> None:
+        """Gespeicherte feste Zellen (Settings.control_tile_cells), einmalig
+        beim Start; auch fuer Geraete, die noch nicht verbunden sind."""
+        self._tile_cells = {d: (int(r), int(c)) for d, (r, c) in cells.items()}
+        self._relayout_grid()
+
     def _apply_pending_tile_order(self) -> None:
         known = [d for d in self._pending_tile_order if d in self._sections]
         unknown_existing = [d for d in self._tile_order if d not in known]
         self._tile_order = known + unknown_existing
 
     def _relayout_grid(self) -> None:
-        """Packt alle aktuell VERBUNDENEN Sektionen dicht in ein Raster mit
-        fester Basiszellgroesse (siehe TILE_SPANS/TILE_SIZE_BY_KIND). Getrennte
+        """Legt alle aktuell VERBUNDENEN Sektionen in ein Raster mit fester
+        Basiszellgroesse (siehe TILE_SPANS/TILE_SIZE_BY_KIND). Getrennte
         Geraete werden uebersprungen -- ihre Sektion bleibt versteckt (siehe
-        _set_online) und nimmt keinen Platz im Raster ein, genau wie zuvor bei
-        FlowLayout (das unsichtbare Widgets ebenfalls ueberspringt, siehe
-        flow_layout.py).
+        _set_online) und nimmt keinen Platz im Raster ein.
+
+        Seit 0.20.1 mit festen Zellen (_tile_cells, per Drag & Drop gesetzt,
+        siehe tile_grid.place_tiles) statt reiner Reihenfolge -- damit bleiben
+        auch Luecken erhalten und lassen sich gezielt belegen. Leere Zeilen und
+        Spalten innerhalb des belegten Bereichs behalten deshalb die
+        Basiszellgroesse (setRow/ColumnMinimum*), sonst fiele eine Luecke in
+        sich zusammen und die Kacheln daneben rueckten optisch nach.
 
         Groesse ist ueber setMinimumSize (nicht setFixedSize) erzwungen,
         analog zur bisherigen _equalize_sections(): eine wachsende OVP/OCP-
@@ -2156,18 +2176,19 @@ class ControlTab(QWidget):
         statt abgeschnitten zu werden.
         """
         self._update_empty_tile()
-        visible_order = self._placed_order()
-        if not visible_order:
+        ids = self._placed_ids()
+        if not ids:
+            self._size_grid_lines(0, 0)
             return
-        spans = {device_id: self._tile_span(device_id) for device_id in visible_order}
+        spans = {device_id: self._tile_span(device_id) for device_id in ids}
 
         # Basiszellgroesse: Ratsche ueber alle sichtbaren Sektionen, gewichtet
         # nach Spannweite (siehe cell_size_ratchet) -- stellt sicher, dass
         # z.B. eine "Big"-Kachel (2x2) im Normalfall die deutlich groessere
         # HilControlGroup bequem fasst, ohne dass 2x Zellgroesse kleiner als
         # deren natuerliche sizeHint() ausfaellt.
-        width_sizes = [(self._sections[d].sizeHint().width(), spans[d][0]) for d in visible_order]
-        height_sizes = [(self._sections[d].sizeHint().height(), spans[d][1]) for d in visible_order]
+        width_sizes = [(self._sections[d].sizeHint().width(), spans[d][0]) for d in ids]
+        height_sizes = [(self._sections[d].sizeHint().height(), spans[d][1]) for d in ids]
         self._cell_width = cell_size_ratchet(self._cell_width, width_sizes)
         self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
 
@@ -2175,7 +2196,7 @@ class ControlTab(QWidget):
         viewport_width = self._scroll_area.viewport().width()
         self._max_cols = max(1, viewport_width // unit) if unit > 0 else 1
 
-        positions = pack_tiles(visible_order, spans, self._max_cols)
+        positions = self._positions(ids)
         for section in self._sections.values():
             self._grid.removeWidget(section)
         for device_id, (row, col) in positions.items():
@@ -2188,21 +2209,38 @@ class ControlTab(QWidget):
                 section, row, col, row_span, col_span,
                 alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
             )
+        rows = max(row + spans[d][1] for d, (row, _col) in positions.items())
+        cols = max(col + min(spans[d][0], self._max_cols) for d, (_row, col) in positions.items())
+        self._size_grid_lines(rows, cols)
 
-    def _placed_order(self) -> list[str]:
-        """Kacheln, die gerade einen Rasterplatz belegen, in Anzeigereihenfolge:
-        alle verbundenen (nicht versteckten) Sektionen -- plus die gerade
-        gezogene, die fuer die Dauer des Drags nur ausgeblendet ist und ihre
-        Zelle behalten soll (siehe _start_tile_drag). Waehrend eines Drags
-        gilt die live vorgeschlagene Reihenfolge (_drag_preview_order), sonst
-        wuerde jedes LayoutRequest die Vorschau sofort zuruecksetzen (siehe
-        dashboard._current_order-Docstring)."""
-        order = self._drag_preview_order if self._drag_preview_order is not None else self._tile_order
+    def _size_grid_lines(self, rows: int, cols: int) -> None:
+        for row in range(max(rows, self._sized_rows)):
+            self._grid.setRowMinimumHeight(row, self._cell_height if row < rows else 0)
+        for col in range(max(cols, self._sized_cols)):
+            self._grid.setColumnMinimumWidth(col, self._cell_width if col < cols else 0)
+        self._sized_rows, self._sized_cols = rows, cols
+
+    def _placed_ids(self) -> list[str]:
+        """Kacheln, die gerade einen Rasterplatz belegen: alle verbundenen (nicht
+        versteckten) Sektionen -- plus die gerade gezogene, die fuer die Dauer
+        des Drags nur ausgeblendet ist und ihre Zelle behalten soll (siehe
+        _start_tile_drag). In _tile_order-Reihenfolge (Startstand fuer Kacheln
+        ohne feste Zelle)."""
         return [
-            d for d in order
+            d for d in self._tile_order
             if d in self._sections
             and (not self._sections[d].isHidden() or self._sections[d] is self._drag_hidden_section)
         ]
+
+    def _positions(self, ids: list[str], preview: bool = True) -> dict[str, tuple[int, int]]:
+        """Zelle je Kachel: waehrend eines Drags die Vorschau, sonst die festen
+        Zellen (siehe tile_grid.place_tiles)."""
+        if preview and self._drag_preview_cells is not None:
+            fixed = self._drag_preview_cells
+        else:
+            fixed = self._tile_cells
+        spans = {device_id: self._tile_span(device_id) for device_id in ids}
+        return place_tiles(ids, spans, self._max_cols, fixed)
 
     def _tile_span(self, device_id: str) -> tuple[int, int]:
         kind = self._section_kind.get(device_id, "")
@@ -2281,14 +2319,13 @@ class ControlTab(QWidget):
             self._drag_start_pos = None
 
     def _start_tile_drag(self, section: QWidget, device_id: str, press_pos) -> None:
-        """Seit 0.20.0 wie im Dashboard (Nutzerwunsch): die echte Kachel wird
-        waehrend des Ziehens ausgeblendet, behaelt aber ihre Zelle; die
-        uebrigen Kacheln ruecken live zur Seite (_preview_tile_drag) und
-        gleiten an ihren neuen Platz (_animate_relayout). Vorher sah man bis
-        zum Loslassen nicht, wo die Kachel landen wuerde, und die Zielzelle
-        wurde gegen eine Anordnung OHNE die gezogene Kachel gerechnet --
-        derselbe Fehler, den dashboard.py als BUGS_OFFEN.md #30 schon behoben
-        hatte (Kachel landete am Ende statt an der Zielstelle)."""
+        """Wie im Dashboard (seit 0.20.0): die echte Kachel wird waehrend des
+        Ziehens ausgeblendet, behaelt aber ihre Zelle; die Vorschau zeigt live,
+        wo sie landet (_preview_tile_drag), verschobene Kacheln gleiten an ihren
+        neuen Platz (_animate_relayout). Seit 0.20.1 ist das Ziel die ZELLE unter
+        dem Abbild der Kachel (feste Platzierung), nicht mehr eine Position in
+        der Reihenfolge -- sonst blieben Luecken neben grossen Kacheln
+        unerreichbar (Nutzer-Screenshot T7)."""
         drag = QDrag(section)
         mime = QMimeData()
         mime.setData(CONTROL_TILE_DRAG_MIME_TYPE, device_id.encode("utf-8"))
@@ -2299,22 +2336,24 @@ class ControlTab(QWidget):
         # Drag-Start sichtbar so, dass ihre Ecke statt des gegriffenen Punkts
         # unter dem Cursor/Finger sitzt.
         drag.setHotSpot(press_pos.toPoint())
+        self._drag_hotspot = press_pos.toPoint()
 
         self._set_keeps_space_when_hidden(section, True)
         self._drag_hidden_section = section
-        self._drag_preview_order = None
+        self._drag_preview_cells = None
         section.hide()
         action = drag.exec(Qt.DropAction.MoveAction)
         if action == Qt.DropAction.IgnoreAction:
             # Kein gueltiger Drop (ausserhalb losgelassen, Escape): Kachel
-            # zurueck, Reihenfolge wie vor dem Drag.
+            # zurueck, Anordnung wie vor dem Drag.
             self._finish_tile_drag()
             self._relayout_grid()
 
     def _finish_tile_drag(self) -> None:
         section = self._drag_hidden_section
         self._drag_hidden_section = None
-        self._drag_preview_order = None
+        self._drag_preview_cells = None
+        self._drag_hotspot = None
         if section is not None:
             self._set_keeps_space_when_hidden(section, False)
             section.show()
@@ -2328,68 +2367,84 @@ class ControlTab(QWidget):
         policy.setRetainSizeWhenHidden(keep)
         section.setSizePolicy(policy)
 
-    def _tile_rects(self, order: list[str]) -> dict[str, QRect]:
-        """Rasterzellen der Kacheln in `order`, gerechnet aus pack_tiles und der
-        festen Basiszelle (_cell_width/_cell_height, siehe _relayout_grid) --
-        nicht aus section.geometry(), die waehrend einer Animation eine
-        Zwischenposition zeigt, und auch nicht wie im Dashboard aus
-        QGridLayout.cellRect(): das lieferte hier direkt nach einem Relayout
-        veraltete Zellen (im Test nachgemessen, auch nach activate()). Das
-        Raster ist ohnehin fest: Zelle = Basiszelle, Abstand = _grid_spacing,
-        oben links ausgerichtet."""
-        spans = {device_id: self._tile_span(device_id) for device_id in order}
-        positions = pack_tiles(order, spans, self._max_cols)
+    def _tile_rects(self, positions: dict[str, tuple[int, int]]) -> dict[str, QRect]:
+        """Pixel-Rechteck je Kachel aus ihrer Zelle und der festen Basiszelle
+        (_cell_width/_cell_height, siehe _relayout_grid) -- nicht aus
+        section.geometry(), die waehrend einer Animation eine Zwischenposition
+        zeigt, und nicht aus QGridLayout.cellRect(), das direkt nach einem
+        Relayout veraltete Zellen lieferte (im Test nachgemessen)."""
         step_x = self._cell_width + self._grid_spacing
         step_y = self._cell_height + self._grid_spacing
         margin = self._grid.contentsMargins()
         rects: dict[str, QRect] = {}
         for device_id, (row, col) in positions.items():
-            col_span, row_span = spans[device_id]
+            col_span, row_span = self._tile_span(device_id)
+            col_span = min(col_span, self._max_cols)
             rects[device_id] = QRect(
                 margin.left() + col * step_x, margin.top() + row * step_y,
                 col_span * step_x - self._grid_spacing, row_span * step_y - self._grid_spacing,
             )
         return rects
 
-    def _order_with_dragged_at(self, dragged_id: str, pos) -> list[str]:
-        """Reihenfolge, WENN die gezogene Kachel jetzt bei `pos` (relativ zum
-        Raster-Container) fallen wuerde -- dieselbe Regel wie
-        dashboard._order_with_dragged_at (siehe dort, ausfuehrlich): Treffer-
-        Kachel in der ANGEZEIGTEN Anordnung suchen (im Zwischenraum die
-        naechstgelegene), die gezogene davor oder dahinter einsortieren, je
-        nach dominanter Richtung der Abweichung von deren Mitte (rechts/unten
-        = dahinter, passend zur zeilenweisen Packung von pack_tiles)."""
-        current = self._placed_order()
-        order = [d for d in current if d != dragged_id]
-        if not order:
-            return [dragged_id]
-        point = pos.toPoint()
-        rects = self._tile_rects(current)
+    def _target_cell(self, dragged_id: str, pos, base: dict[str, tuple[int, int]]) -> tuple[int, int]:
+        """Zelle, in der die gezogene Kachel mit ihrer oberen linken Ecke landen
+        wuerde. Es zaehlt das schwebende Abbild, nicht der Mauszeiger: wer eine
+        Kachel rechts in der Titelzeile greift, legt sie dort ab, wo ihr Abbild
+        liegt (Ecke = Zeiger minus Griffpunkt, auf die naechste Zelle gerundet).
+        Spalte so begrenzt, dass die Spanne passt; Zeile hoechstens direkt
+        unter der bisher untersten Kachel."""
+        step_x = self._cell_width + self._grid_spacing
+        step_y = self._cell_height + self._grid_spacing
+        margin = self._grid.contentsMargins()
+        hotspot = self._drag_hotspot
+        corner_x = pos.x() - (hotspot.x() if hotspot is not None else 0)
+        corner_y = pos.y() - (hotspot.y() if hotspot is not None else 0)
+        col_span = min(self._tile_span(dragged_id)[0], self._max_cols)
+        col = round((corner_x - margin.left()) / step_x) if step_x > 0 else 0
+        row = round((corner_y - margin.top()) / step_y) if step_y > 0 else 0
+        bottoms = [r + self._tile_span(d)[1] for d, (r, _c) in base.items() if d != dragged_id]
+        max_row = max(bottoms, default=0)
+        return (max(0, min(row, max_row)), max(0, min(col, self._max_cols - col_span)))
 
-        own_rect = rects.get(dragged_id)
-        if own_rect is not None and own_rect.contains(point):
-            # Zeiger noch ueber der eigenen Luecke -- nichts umsortieren.
-            return current
+    def _cells_with_dragged_at(self, dragged_id: str, pos) -> dict[str, tuple[int, int]]:
+        """Zellen aller platzierten Kacheln, WENN die gezogene jetzt bei `pos`
+        (relativ zum Raster-Container) fallen wuerde. Ausgangspunkt ist immer
+        die Anordnung VOR dem Drag (nicht die letzte Vorschau), sonst schoeben
+        sich Kacheln beim Ueberfahren immer weiter. Die gezogene Kachel bekommt
+        ihre Zielzelle mit Vorrang; nur wer dort im Weg liegt, rueckt weiter
+        (tile_grid.place_tiles), alle anderen bleiben stehen."""
+        ids = self._placed_ids()
+        base = self._positions(ids, preview=False)
+        target = self._target_cell(dragged_id, pos, base)
+        if base.get(dragged_id) == target:
+            return base
+        fixed = dict(base)
+        fixed[dragged_id] = target
+        spans = {device_id: self._tile_span(device_id) for device_id in ids}
 
-        target = next((d for d in order if rects[d].contains(point)), None)
-        if target is None:
-            target = min(order, key=lambda d: rect_distance(rects[d], point))
-        rect = rects[target]
-        offset_x = (point.x() - rect.center().x()) / max(rect.width() / 2, 1)
-        offset_y = (point.y() - rect.center().y()) / max(rect.height() / 2, 1)
-        after = (offset_x if abs(offset_x) >= abs(offset_y) else offset_y) >= 0
-        order.insert(order.index(target) + (1 if after else 0), dragged_id)
-        return order
+        def cells_of(device_id: str, row: int, col: int) -> set[tuple[int, int]]:
+            col_span, row_span = spans[device_id]
+            return {(row + dr, col + dc) for dr in range(row_span) for dc in range(min(col_span, self._max_cols))}
+
+        # Wer nicht im Weg liegt, wird vor den Verdraengten platziert und bleibt
+        # damit garantiert stehen -- ein verdraengter Kachel darf nur in freie
+        # Zellen ausweichen, nie eine unbeteiligte weiterschieben.
+        blocked = cells_of(dragged_id, *target)
+        bystanders = sorted(
+            (d for d in ids if d != dragged_id and not (cells_of(d, *base[d]) & blocked)),
+            key=lambda d: base[d],
+        )
+        return place_tiles(ids, spans, self._max_cols, fixed, priority=[dragged_id, *bystanders])
 
     def _preview_tile_drag(self, dragged_id: str, pos) -> None:
-        """Waehrend DragMove: uebrige Kacheln schon so anordnen, als waere hier
-        losgelassen worden ("Nachbarn machen Platz", wie im Dashboard)."""
+        """Waehrend DragMove: Kacheln schon so anordnen, als waere hier
+        losgelassen worden. Uebersprungen, wenn sich nichts aendert."""
         if dragged_id not in self._sections:
             return
-        order = self._order_with_dragged_at(dragged_id, pos)
-        if order == self._drag_preview_order:
+        cells = self._cells_with_dragged_at(dragged_id, pos)
+        if cells == self._positions(self._placed_ids()):
             return
-        self._drag_preview_order = order
+        self._drag_preview_cells = cells
         self._animate_relayout()
 
     def _animate_relayout(self) -> None:
@@ -2410,24 +2465,27 @@ class ControlTab(QWidget):
             animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _drop_tile(self, dragged_id: str, drop_pos) -> None:
-        """Uebernimmt die zuletzt VORGESCHAUTE Reihenfolge, statt aus drop_pos
-        neu zu rechnen -- die Vorschau hat die Kacheln schon umsortiert, derselbe
-        Punkt meint jetzt eine andere Stelle (sonst springt die Kachel beim
-        Loslassen nochmal, siehe dashboard._drop_panel)."""
+        """Uebernimmt die zuletzt VORGESCHAUTE Anordnung, statt aus drop_pos
+        neu zu rechnen (sonst springt die Kachel beim Loslassen nochmal, siehe
+        dashboard._drop_panel), und speichert die Zellen ALLER platzierten
+        Kacheln -- getrennte Geraete behalten ihre zuletzt gespeicherte Zelle."""
         if dragged_id not in self._sections:
             return
-        placed = self._drag_preview_order
-        if placed is None:
-            placed = self._order_with_dragged_at(dragged_id, drop_pos)
-        # Getrennte (versteckte) Geraete stehen nicht in `placed`, behalten
-        # aber ihren relativen Platz in der gespeicherten Reihenfolge: sie
-        # bleiben an ihrer Stelle, nur die platzierten werden neu verteilt.
+        cells = self._drag_preview_cells
+        if cells is None:
+            cells = self._cells_with_dragged_at(dragged_id, drop_pos)
+        self._tile_cells.update(cells)
+        # Reihenfolge nachziehen (Lesereihenfolge der Zellen) -- Startstand fuer
+        # Kacheln ohne Zelle und fuer aeltere Einstellungen; getrennte Geraete
+        # behalten ihren Platz darin.
+        placed = sorted(cells, key=lambda d: cells[d])
         placed_iter = iter(placed)
         placed_set = set(placed)
         self._tile_order = [next(placed_iter) if d in placed_set else d for d in self._tile_order]
         self._finish_tile_drag()
         self._relayout_grid()
         self.tile_order_changed.emit(list(self._tile_order))
+        self.tile_cells_changed.emit(dict(self._tile_cells))
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         section = self._sections.get(device_id)

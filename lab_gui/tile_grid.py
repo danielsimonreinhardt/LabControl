@@ -97,6 +97,61 @@ def pack_tiles(order: list[str], spans: dict[str, tuple[int, int]], max_cols: in
     return positions
 
 
+def place_tiles(
+    ids: list[str],
+    spans: dict[str, tuple[int, int]],
+    max_cols: int,
+    fixed: dict[str, tuple[int, int]],
+    priority: list[str] | tuple[str, ...] = (),
+) -> dict[str, tuple[int, int]]:
+    """Wie pack_tiles, aber mit festen Wunschzellen (Control-Tab seit 0.20.1):
+    Kacheln mit Eintrag in `fixed` landen genau dort (Spalte notfalls so weit
+    nach links, dass die Spanne passt), die uebrigen danach dicht in die ersten
+    freien Stellen (in `ids`-Reihenfolge).
+
+    Kollisionen (zwei Wunschzellen ueberlappen, oder das Fenster ist schmaler
+    geworden) loest die Reihenfolge: zuerst `priority` (die gerade gezogene
+    Kachel), dann nach Wunschzelle in Lesereihenfolge; wer keinen Platz mehr
+    findet, rueckt ab seiner Wunschzelle zur naechsten freien Stelle weiter
+    (rechts, dann naechste Zeile). So bewegen sich beim Ablegen nur die
+    Kacheln, die wirklich im Weg liegen.
+
+    Grund: die reine Reihenfolge (pack_tiles) kann nicht jede Anordnung
+    ausdruecken -- eine Luecke neben einer 2x2-Kachel war per Drag & Drop
+    unerreichbar (Nutzer-Screenshot T7)."""
+    max_cols = max(1, max_cols)
+    occupied: set[tuple[int, int]] = set()
+    positions: dict[str, tuple[int, int]] = {}
+
+    def place_from(device_id: str, row: int, col: int) -> None:
+        col_span, row_span = spans.get(device_id, (1, 1))
+        col_span = min(col_span, max_cols)
+        col = max(0, min(col, max_cols - col_span))
+        row = max(0, row)
+        while True:
+            for c in range(col, max_cols - col_span + 1):
+                cells = [(row + dr, c + dc) for dr in range(row_span) for dc in range(col_span)]
+                if not any(cell in occupied for cell in cells):
+                    occupied.update(cells)
+                    positions[device_id] = (row, c)
+                    return
+            row += 1
+            col = 0
+
+    rank = {device_id: i for i, device_id in enumerate(priority)}
+    index = {device_id: i for i, device_id in enumerate(ids)}
+    pinned = sorted(
+        (d for d in ids if d in fixed),
+        key=lambda d: (rank.get(d, len(rank)), fixed[d][0], fixed[d][1], index[d]),
+    )
+    for device_id in pinned:
+        place_from(device_id, *fixed[device_id])
+    for device_id in ids:
+        if device_id not in fixed:
+            place_from(device_id, 0, 0)
+    return positions
+
+
 def pack_tiles_by_row(order: list[str], spans: dict[str, tuple[int, int]], max_rows: int) -> dict[str, tuple[int, int]]:
     """Wie pack_tiles, aber mit fester ZEILENzahl (waechst nach rechts) --
     fuer den Dashboard-Tab (doppelte Hoehe als maximale vertikale

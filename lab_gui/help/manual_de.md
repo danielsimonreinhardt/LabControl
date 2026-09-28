@@ -45,10 +45,11 @@ Für jedes verbundene Gerät erscheint hier eine eigene Bedien-Sektion.
 Sind zwei baugleiche Geräte angeschlossen (z.B. zwei Netzteile), werden
 sie unabhängig voneinander gesteuert.
 
-**Anordnen**: Eine Sektion lässt sich an ihrer Titelzeile greifen und an
-eine andere Stelle ziehen – wie im Dashboard rücken die übrigen Sektionen
-schon beim Ziehen zur Seite und zeigen, wo sie landet. Die Reihenfolge
-bleibt gespeichert.
+**Anordnen**: Eine Sektion lässt sich an ihrer Titelzeile greifen und in
+jede Zelle des Rasters ziehen, auch in eine Lücke neben einer großen
+Sektion. Schon beim Ziehen sieht man, wo sie landet. Liegt dort bereits
+eine Sektion, weicht nur diese auf den nächsten freien Platz aus; alle
+anderen bleiben stehen. Die Anordnung bleibt gespeichert, Escape bricht ab.
 
 ### Preset-Leiste
 

@@ -975,6 +975,10 @@ class MainWindow(QMainWindow):
         (per Drag) in Settings zurueck."""
         self.control_tab.set_tile_order(self._settings.control_tile_order)
         self.control_tab.tile_order_changed.connect(self._settings.set_control_tile_order)
+        # Seit 0.20.1: feste Zellen je Kachel (die Reihenfolge bleibt als
+        # Startstand fuer Kacheln ohne gespeicherte Zelle).
+        self.control_tab.set_tile_cells(self._settings.control_tile_cells)
+        self.control_tab.tile_cells_changed.connect(self._settings.set_control_tile_cells)
 
     def _assign_free_panel_colors(self, device_ids: list[str]) -> None:
         """Vergibt an jedes device_id in device_ids (ohne bereits gespeicherte

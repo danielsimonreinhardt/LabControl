@@ -6,6 +6,32 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Geändert
+- **Control-Reiter: Kacheln frei im Raster platzierbar (0.20.1, Nutzerfeedback T7).** Mit 0.20.0
+  ließen sich Lücken nicht belegen (Screenshot: freie Zelle unter „Netzteil 16V-30A“ neben dem
+  2×2-Funktionsgenerator, das PicoScope ließ sich nicht hineinziehen). Ursache: die Plätze
+  ergaben sich nur aus der Reihenfolge (dichtes Packen), und für diese Anordnung gibt es keine
+  Reihenfolge -- Ziehen sortierte die Kachel nur vor/hinter die nächste ein, das Packen legte sie
+  woanders hin.
+  - Jetzt merkt sich jede Kachel ihre **Zelle** (Zeile, Spalte; `settings.json`:
+    `control_tile_cells`). Ziel beim Ziehen ist die Zelle unter dem schwebenden Abbild (dessen
+    obere linke Ecke, auf die nächste Zelle gerundet -- egal, wo man die Titelzeile gegriffen
+    hat). Liegt dort schon eine Kachel, weicht **nur diese** zur nächsten freien Stelle aus; alle
+    anderen werden vorher platziert und bleiben garantiert stehen.
+  - Neue Funktion `tile_grid.place_tiles` (Wunschzellen + Nachrücken bei Kollision, z. B. wenn
+    das Fenster schmaler wird; Kacheln ohne Zelle wie bisher dicht). Leere Zeilen/Spalten
+    innerhalb des belegten Bereichs behalten die Zellgröße, damit Lücken nicht zusammenfallen.
+  - Übergang: ohne gespeicherte Zellen gilt die bisherige Reihenfolge, die Anordnung sieht nach
+    dem Update also aus wie vorher; ab dem ersten Ziehen werden Zellen gespeichert. Getrennte
+    Geräte behalten ihre Zelle.
+  - **Verifiziert im Simulationsmodus (offscreen):** `check_control_tab.py` grün, Abschnitt
+    Drag & Drop neu: `place_tiles` (Wunschzellen, Lücke bleibt, Kollision, schmales Fenster,
+    Verhalten ohne Zellen), Kachel in die unterste Lücke neben 2×2-Kacheln (Vorschau und
+    Ablegen, alle anderen bleiben stehen, sichtbar an der richtigen Stelle, gespeichert), auf
+    eine belegte Stelle (nur die Kachel im Weg weicht aus), Abbrechen, Neustart mit gleicher
+    Anordnung, keine Überlappung. Das Ziehen mit der Maus selbst geht offscreen nicht.
+    Übrige Prüfskripte grün. **Noch offen:** Test mit der `.exe` (T7).
+
 ### Hinzugefügt
 - **Control-Reiter: Oszilloskop-Kachel, abgesetzte Preset-Leiste, Anordnen wie im Dashboard
   (0.20.0, Nutzerwunsch).**
@@ -74,7 +100,9 @@ Semantic Versioning (`lab_gui/version.py`).
     Schließen per Kreuz und per Knopf, alte Lage beim erneuten Abdocken, Beenden schließt das
     Fenster mit, Neustart geht wieder abgedockt auf) grün; Bildschirmfotos beider Fenster
     angesehen. `check_network_share.py` und `check_device_reset.py` grün. **Noch offen:** Test
-    durch den Nutzer an echten Bildschirmen (zweiter Monitor).
+    durch den Nutzer an echten Bildschirmen (zweiter Monitor). **Am echten
+    System bestätigt (T6, `.exe` aus der CI mit 0.20.0):** Abdocken, zweiter Bildschirm,
+    Zurückholen, Lage merken und Neustart im abgedockten Zustand wie beschrieben.
 - **Oszilloskope über MCP, Phase 3: Erfassungen als Bild (0.18.0, Nutzerwunsch).** Der
   Assistent kann eine Kurve jetzt ansehen statt nur Kennwerte und Hüllkurve zu lesen.
   - **`lab_gui/scope_plot.py`** zeichnet mit QPainter (keine neue Abhängigkeit -- matplotlib

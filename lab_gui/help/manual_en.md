@@ -44,9 +44,11 @@ Every connected device gets its own control section here. If two
 identical devices are connected (e.g. two power supplies), they are
 controlled independently.
 
-**Arranging**: grab a section by its title line and drag it elsewhere –
-as in the dashboard, the other sections already move aside while you drag
-and show where it will land. The order is remembered.
+**Arranging**: grab a section by its title line and drag it into any cell
+of the grid, including a gap next to a large section. While dragging you
+already see where it will land. If a section is already there, only that one
+moves to the next free place; all others stay put. The arrangement is
+remembered; Escape cancels.
 
 ### Preset bar
 

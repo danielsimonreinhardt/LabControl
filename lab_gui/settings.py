@@ -217,6 +217,27 @@ class Settings(QObject):
         self._save()
 
     @property
+    def control_tile_cells(self) -> dict[str, tuple[int, int]]:
+        """Feste Rasterzellen (Zeile, Spalte) der Control-Tab-Kacheln seit 0.20.1
+        (siehe control_tab.ControlTab.set_tile_cells, tile_grid.place_tiles).
+        Leer = alte Anordnung aus control_tile_order."""
+        stored = self._data.get("control_tile_cells")
+        if not isinstance(stored, dict):
+            return {}
+        cells: dict[str, tuple[int, int]] = {}
+        for device_id, cell in stored.items():
+            if isinstance(cell, list) and len(cell) == 2 and all(isinstance(v, int) and v >= 0 for v in cell):
+                cells[device_id] = (cell[0], cell[1])
+        return cells
+
+    def set_control_tile_cells(self, cells: dict) -> None:
+        data = {device_id: [int(row), int(col)] for device_id, (row, col) in cells.items()}
+        if data == self._data.get("control_tile_cells"):
+            return
+        self._data["control_tile_cells"] = data
+        self._save()
+
+    @property
     def control_tile_order(self) -> list[str]:
         """Zuletzt per Drag&Drop gewaehlte Control-Tab-Kachel-Reihenfolge
         (Liste von device_ids) -- siehe control_tab.py: ControlTab.

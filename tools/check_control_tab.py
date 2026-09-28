@@ -159,69 +159,127 @@ def main() -> int:
         window.grab().save(str(shots / "control_tab.png"))
         scope.grab().save(str(shots / "scope_tile.png"))
 
-    print("3) Drag & Drop")
+    print("3) Drag & Drop (feste Zellen)")
+    from PySide6.QtCore import QPoint
+    from tile_grid import place_tiles
+
+    # Einheit: place_tiles
+    spans_u = {"big": (2, 2), "a": (1, 1), "b": (1, 1)}
+    check("place_tiles: Wunschzellen, Luecke bleibt frei",
+          place_tiles(["big", "a", "b"], spans_u, 3, {"big": (0, 0), "a": (1, 2), "b": (3, 0)})
+          == {"big": (0, 0), "a": (1, 2), "b": (3, 0)})
+    check("place_tiles: Kollision -> Nachruecken zur naechsten freien Zelle",
+          place_tiles(["big", "a"], spans_u, 3, {"big": (0, 0), "a": (1, 1)}) == {"big": (0, 0), "a": (1, 2)})
+    check("place_tiles: zu schmales Fenster -> Spalte begrenzt",
+          place_tiles(["big"], spans_u, 3, {"big": (0, 2)}) == {"big": (0, 1)})
+    check("place_tiles: ohne Wunschzellen wie bisher dicht gepackt",
+          place_tiles(["a", "big", "b"], spans_u, 3, {}) == {"a": (0, 0), "big": (0, 1), "b": (1, 0)})
+
     emitted = []
-    tab.tile_order_changed.connect(lambda order: emitted.append(order))
-    order_before = tab._placed_order()
-    check("mindestens drei platzierte Kacheln", len(order_before) >= 3, str(order_before))
-    dragged, target = order_before[0], order_before[-1]
-    section = sections[dragged]
-    cell_before = tab._tile_rects(order_before)[dragged]
+    tab.tile_cells_changed.connect(lambda cells: emitted.append(dict(cells)))
+    ids = tab._placed_ids()
+    check("mindestens drei platzierte Kacheln", len(ids) >= 3, str(ids))
+    hotspot = QPoint(10, 10)  # gegriffen links in der Titelzeile
 
-    # Wie _start_tile_drag, nur ohne das blockierende drag.exec().
-    tab._set_keeps_space_when_hidden(section, True)
-    tab._drag_hidden_section = section
-    tab._drag_preview_order = None
-    section.hide()
-    tab._relayout_grid()
-    app.processEvents()
-    # Hoehe kann sich per Zellhoehen-Ratsche um wenige Pixel aendern -- es
-    # zaehlt, dass die Kachel an ihrem Platz im Raster bleibt.
-    grid_pos = tab._grid.getItemPosition(tab._grid.indexOf(section)) if tab._grid.indexOf(section) >= 0 else None
-    check("gezogene Kachel behaelt ihre Zelle", tab._placed_order() == order_before
-          and grid_pos is not None and grid_pos[:2] == (0, 0)
-          and tab._tile_rects(order_before)[dragged].topLeft() == cell_before.topLeft(),
-          f"{tab._placed_order()} {grid_pos} {tab._tile_rects(order_before)[dragged]} {cell_before}")
+    def begin(device_id):
+        section = sections[device_id]
+        tab._set_keeps_space_when_hidden(section, True)
+        tab._drag_hidden_section = section
+        tab._drag_preview_cells = None
+        tab._drag_hotspot = hotspot
+        section.hide()
+        tab._relayout_grid()
+        app.processEvents()
+        return section
+
+    def pointer_for(device_id, cell):
+        rect = tab._tile_rects({device_id: cell})[device_id]
+        return QPointF(rect.topLeft() + hotspot)
+
+    def free_cells(positions):
+        taken = set()
+        for d, (r, c) in positions.items():
+            cs, rs = tab._tile_span(d)
+            taken |= {(r + dr, c + dc) for dr in range(rs) for dc in range(cs)}
+        bottom = max(r for r, _c in taken) + 1
+        return [(r, c) for r in range(bottom) for c in range(tab._max_cols) if (r, c) not in taken]
+
+    base = tab._positions(ids)
+    small = [d for d in ids if tab._tile_span(d) == (1, 1)]
+    gaps = free_cells(base)
+    check("Ausgangslage hat eine Luecke im Raster (wie im Screenshot)", bool(gaps), str(base))
+    dragged = small[0]
+    gap = max(gaps)  # unterste/rechteste Luecke, neben grossen Kacheln
+    section = begin(dragged)
+    check("gezogene Kachel behaelt ihre Zelle", tab._positions(tab._placed_ids()) == base)
     check("Platzhalter 'kein Geraet' bleibt aus", tab._empty_tile.isHidden())
+    tab._preview_tile_drag(dragged, pointer_for(dragged, base[dragged]))
+    check("ueber der eigenen Zelle: keine Vorschau", tab._drag_preview_cells is None)
 
-    tab._preview_tile_drag(dragged, QPointF(cell_before.center()))
-    check("ueber der eigenen Luecke: nichts umsortiert", tab._placed_order() == order_before)
-
-    rects = tab._tile_rects(tab._placed_order())
-    right_half = QPointF(rects[target].right() - 5, rects[target].center().y())
-    tab._preview_tile_drag(dragged, right_half)
+    tab._preview_tile_drag(dragged, pointer_for(dragged, gap))
     app.processEvents()
-    preview = tab._placed_order()
-    check("Vorschau: hinter die Ziel-Kachel einsortiert",
-          preview[-1] == dragged and preview[:-1] == order_before[1:], str(preview))
-    check("Vorschau noch nicht gespeichert", not emitted and tab._tile_order[0] == dragged)
+    preview = tab._positions(tab._placed_ids())
+    check(f"Vorschau: Kachel in der Luecke {gap}", preview.get(dragged) == gap, str(preview))
+    check("Vorschau: alle anderen bleiben stehen",
+          all(preview[d] == base[d] for d in ids if d != dragged), str(preview))
+    check("Vorschau noch nicht gespeichert", not emitted)
     wait_for(lambda: False, 0.4)  # Animationen auslaufen lassen
     check("keine Ueberlappung in der Vorschau", not overlaps(), str(overlaps()))
-
     tab._drop_tile(dragged, QPointF(0, 0))  # Drop-Position egal: Vorschau gilt
     app.processEvents()
-    check("Loslassen uebernimmt die Vorschau", tab._placed_order() == preview, str(tab._placed_order()))
+    after = tab._positions(tab._placed_ids())
+    check("Loslassen: Kachel bleibt in der Luecke", after == preview, str(after))
     check("Kachel wieder sichtbar", not section.isHidden() and tab._drag_hidden_section is None)
-    check("neue Reihenfolge gemeldet und gespeichert",
-          emitted and emitted[-1] == tab._tile_order
-          and settings_mod.Settings().control_tile_order == tab._tile_order)
+    check("Zellen gemeldet und gespeichert",
+          emitted and emitted[-1].get(dragged) == gap
+          and settings_mod.Settings().control_tile_cells.get(dragged) == gap)
     wait_for(lambda: False, 0.4)
     check("keine Ueberlappung nach dem Ablegen", not overlaps(), str(overlaps()))
+    check("Kachel steht auch sichtbar an der Stelle der Zelle",
+          sections[dragged].pos() == tab._tile_rects({dragged: gap})[dragged].topLeft(),
+          f"{sections[dragged].pos()} {tab._tile_rects({dragged: gap})[dragged].topLeft()}")
+
+    # Auf eine belegte Stelle: nur die Kachel im Weg rueckt weiter.
+    base = tab._positions(tab._placed_ids())
+    mover = next(d for d in small if d != dragged)
+    victim = next(d for d in ids if d not in (mover, dragged) and tab._tile_span(d) == (1, 1))
+    begin(mover)
+    tab._preview_tile_drag(mover, pointer_for(mover, base[victim]))
+    tab._drop_tile(mover, QPointF(0, 0))
+    app.processEvents()
+    after = tab._positions(tab._placed_ids())
+    check("belegte Stelle: gezogene Kachel landet dort", after[mover] == base[victim], str(after))
+    check("belegte Stelle: verdraengte Kachel rueckt weiter", after[victim] != base[victim])
+    check("belegte Stelle: Unbeteiligte bleiben stehen",
+          all(after[d] == base[d] for d in ids if d not in (mover, victim)), f"{base} -> {after}")
+    wait_for(lambda: False, 0.4)
+    check("keine Ueberlappung", not overlaps(), str(overlaps()))
 
     # Abbrechen: Vorschau verworfen, Stand wie vorher.
-    order_before = tab._placed_order()
-    dragged = order_before[0]
-    section = sections[dragged]
-    tab._set_keeps_space_when_hidden(section, True)
-    tab._drag_hidden_section = section
-    section.hide()
-    rects = tab._tile_rects(order_before)
-    tab._preview_tile_drag(dragged, QPointF(rects[order_before[-1]].right() - 5, rects[order_before[-1]].center().y()))
+    base = tab._positions(tab._placed_ids())
+    section = begin(dragged)
+    tab._preview_tile_drag(dragged, pointer_for(dragged, (0, 0)))
     tab._finish_tile_drag()
     tab._relayout_grid()
     app.processEvents()
-    check("Abbrechen stellt die alte Reihenfolge her",
-          tab._placed_order() == order_before and not section.isHidden())
+    check("Abbrechen stellt die alte Anordnung her",
+          tab._positions(tab._placed_ids()) == base and not section.isHidden())
+
+    # Neustart: dieselbe Anordnung aus settings.json.
+    window.close()
+    app.processEvents()
+    window = MainWindow(settings_mod.Settings())
+    window.resize(1400, 900)
+    window.show()
+    tab = window.control_tab
+    sections = tab._sections
+    wait_for(lambda: all(d in sections and not sections[d].isHidden() for d in ids))
+    wait_for(lambda: False, 1.0)
+    check("Neustart: gleiche Anordnung", tab._positions(tab._placed_ids()) == base,
+          f"{tab._positions(tab._placed_ids())} != {base}")
+    check("Neustart: keine Ueberlappung", not overlaps(), str(overlaps()))
+    if shots is not None:
+        window.grab().save(str(shots / "control_tab_nach_drag.png"))
 
     window.close()
     app.processEvents()
