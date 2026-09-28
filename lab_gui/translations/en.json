@@ -325,7 +325,6 @@
   "Server läuft auf {url}": "Server running at {url}",
   "Server gestoppt": "Server stopped",
   "Stellt ausgewählte Kacheln im lokalen Netzwerk bereit: zum Anzeigen, z.B.\nfür ein ESP32-Display oder einen Browser auf dem Handy, und — nur wenn\nausdrücklich erlaubt — zum Fernsteuern. Es wird nichts freigegeben, solange\nunten kein Haken bei „Lesen“ gesetzt ist. Der Zugriff ist unverschlüsselt\nund nur für ein vertrauenswürdiges Heim- oder Labornetz gedacht — den Port\nniemals aus dem Internet erreichbar machen (keine Portfreigabe, kein UPnP).": "Makes selected tiles available on the local network: for display, e.g.\nan ESP32 display or a browser on your phone, and — only when explicitly\nallowed — for remote control. Nothing is shared until a “Read” box below\nis ticked. The connection is unencrypted and intended for a trusted home\nor lab network only — never make the port reachable from the internet\n(no port forwarding, no UPnP).",
-  "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen. Steuern setzt Lesen voraus.": "Sharing per device: “Read” shows the tile on the network, “Control”\nadditionally allows operating it. Control requires Read.",
   "Fernsteuerung aktiv": "Remote control active",
   "Schaltet sich ab nach": "Switches off after",
   "Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)": "Allow remote control of this device (only effective while the master switch is on)",
@@ -369,5 +368,12 @@
   "Rauschen": "Noise",
   "Exponentieller Anstieg": "Exponential rise",
   "Exponentieller Abfall": "Exponential decay",
-  "Multiton": "Multi-tone"
+  "Multiton": "Multi-tone",
+  "Messen": "Measure",
+  "Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)": "Allow acquisitions over the network/MCP (does not need the master switch)",
+  "Nur für Oszilloskope": "Oscilloscopes only",
+  "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.": "Sharing per device: “Read” shows the tile on the network, “Control”\nadditionally allows operating it, “Measure” allows acquisitions on the\noscilloscope (e.g. by the MCP server, without the master switch). Both require Read.",
+  "Verbunden (MCP)": "Connected (MCP)",
+  "Trennen": "Disconnect",
+  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Close the connection used for network/MCP acquisitions now"
 }

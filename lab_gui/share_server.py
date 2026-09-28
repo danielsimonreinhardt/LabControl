@@ -118,9 +118,10 @@ class _ShareHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = False  # siehe Modul-Docstring, Falle 2
     request_queue_size = 16
 
-    def __init__(self, address, handler, state, app_info, access_log, executor=None):
+    def __init__(self, address, handler, state, app_info, access_log, executor=None, scopes=None):
         self.share_state = state
         self.share_executor = executor
+        self.share_scopes = scopes
         self.share_app_info = app_info
         self.share_access_log = access_log
         self.share_slots = threading.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -224,7 +225,8 @@ class _ShareRequestHandler(BaseHTTPRequestHandler):
             app_info["base_url"] = f"http://{self.headers.get('Host', '')}"
             response = share_api.dispatch(
                 method, self.path, self.headers.get, self.server.share_state, app_info,
-                body=body, executor=self.server.share_executor, client=self.client_address[0],
+                body=body, executor=self.server.share_executor, scopes=self.server.share_scopes,
+                client=self.client_address[0],
                 local=_is_local(self.client_address[0], self.request.getsockname()[0]))
             if response.status == 401:
                 self._log_auth_failure()
@@ -285,10 +287,12 @@ class ShareServer(QObject):
     stopped = Signal()
     error = Signal(str)     # Bindfehler o.ae. -- fuer den Einstellungen-Tab
 
-    def __init__(self, state, executor=None, parent: QObject | None = None) -> None:
+    def __init__(self, state, executor=None, parent: QObject | None = None, scopes=None) -> None:
         super().__init__(parent)
         self._state = state
         self._executor = executor
+        # Oszilloskop-Dienst (scope_service.ScopeService) fuer /scopes und /captures.
+        self._scopes = scopes
         self._server: _ShareHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._current: tuple[bool, str, int] | None = None
@@ -327,7 +331,7 @@ class ShareServer(QObject):
         try:
             server = _ShareHTTPServer(
                 (bind, port), _ShareRequestHandler, self._state,
-                self._app_info, _access_logger(access_log), self._executor)
+                self._app_info, _access_logger(access_log), self._executor, self._scopes)
         except OSError as exc:
             # Haeufigster Fall: Port belegt. Darf NIE in den GUI-Start
             # durchschlagen -- die App muss auch dann normal laufen.

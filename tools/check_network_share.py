@@ -18,6 +18,9 @@ Abschnitte:
   remote    Schreib-Endpoints (Fernsteuerung) der reinen API-Schicht mit einem
             Stub-Executor: Token, Reihenfolge der Abweisungen, Validierung,
             Sicherheits-Grenzwerte, ALLE AUS. Ohne Qt, ohne Socket.
+  scopes    Oszilloskop-Endpoints (/scopes, /captures) mit echtem ScopeService
+            und simuliertem Scope: Freigabe "Messen", Token, Fehlercodes,
+            Testablauf-Vorrang, Trennen. Ohne Socket, ohne Hardware.
   server    ShareServer an einem echt gebundenen Port: Start/Stopp,
             Portwechsel, belegter Port, Nebenlaeufigkeit, sauberes Beenden.
   settings  Der Freigabe-Block in settings.py inkl. Deep-Merge gegen eine
@@ -564,6 +567,182 @@ def section_remote() -> None:
                   for a in remote_actions.REMOTE_ACTIONS.values() for c in a))
 
 
+# -------------------------------------------------------------- scopes ----
+
+def _snap_scope(measure=True, read=True, remote=False, token="tok", online=True):
+    """Schnappschuss mit dem simulierten Oszilloskop. Hauptschalter standardmaessig
+    AUS und Aufruf nicht lokal: Messen darf ihn nicht brauchen (E1)."""
+    snap = _snap_rw(remote=remote, token=token, control=False)
+    snap["devices"]["picoscope:SIM"] = {"kind": "picoscope", "label": "Oszi", "online": online,
+                                        "fields": {"status": "free"}, "age_s": 0.1, "stale": False}
+    snap["share"]["devices"]["picoscope:SIM"] = {"read": read, "control": False, "measure": measure}
+    return snap
+
+
+def section_scopes() -> None:
+    head("scopes -- Oszilloskop-Endpoints mit echtem ScopeService (simuliertes Scope)")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    import share_api
+    from picoscope2000 import mock as pico_mock
+    import scope_service
+    from scope_service import ScopeService
+
+    pico_mock.MockPicoScope2000.signals = pico_mock.default_signals()
+    tmp = tempfile.TemporaryDirectory()
+    service = ScopeService(pathlib.Path(tmp.name) / "captures")
+    sid = "picoscope:SIM"
+    service.on_picoscope_connected(sid, True)
+    service.on_picoscope_state(sid, "free", "2204A", "SIM-2204A-0001")
+
+    app_info = {"version": "0.0.0", "simulation": True, "uptime_s": 1.0, "base_url": ""}
+    bearer = lambda n: "Bearer tok" if n == "Authorization" else None
+    no_header = lambda _n: None
+
+    def call(method, path, payload=None, snap=None, hdr=bearer, scopes=service, raw=None):
+        body = raw if raw is not None else (json.dumps(payload).encode() if payload is not None else b"")
+        resp = share_api.dispatch(method, path, hdr, _Stub(snap or _snap_scope()), app_info,
+                                  body=body, client="10.0.0.9", local=False, scopes=scopes)
+        try:
+            return resp.status, json.loads(resp.body.decode("utf-8"))
+        except ValueError:
+            return resp.status, {}
+
+    acq = f"/api/v1/scopes/{sid}/acquire"
+    good = {"channels": [{"name": "A", "range_v": 5}, {"name": "B", "range_v": 2}],
+            "timing": {"duration_s": 0.01, "pre_trigger_pct": 20},
+            "trigger": {"mode": "single", "source": "A", "level_v": 1.65},
+            "measurements": ["frequency", "duty", "vpp"]}
+
+    # -- Lesen -------------------------------------------------------------
+    status, body = call("GET", "/api/v1/scopes")
+    check("GET /scopes listet das Oszilloskop", status == 200 and [x["id"] for x in body["scopes"]] == [sid],
+          str(body))
+    entry = body["scopes"][0]
+    check("Zustand: messbar, idle, Modell", entry["measure"] and entry["measure_available"]
+          and entry["state"] == "idle" and entry["model"] == "2204A", str(entry))
+    status, body = call("GET", "/api/v1/scopes", snap=_snap_scope(measure=False))
+    check("ohne Messen: measure_blocked = measure_not_permitted",
+          body["scopes"][0]["measure_blocked"] == "measure_not_permitted")
+    status, body = call("GET", "/api/v1/scopes", snap=_snap_scope(read=False))
+    check("ohne Lesen unsichtbar", status == 200 and body["scopes"] == [])
+    status, body = call("GET", f"/api/v1/scopes/{sid}/capabilities")
+    check("Faehigkeiten ohne Oeffnen", status == 200 and len(body["channels"]) == 2
+          and body["trigger"]["modes"] == ["none", "auto", "single"], str(body)[:200])
+    check("GET einzelnes Oszilloskop", call("GET", f"/api/v1/scopes/{sid}")[0] == 200)
+    check("unbekanntes Oszilloskop -> 404", call("GET", "/api/v1/scopes/picoscope:X/capabilities")[0] == 404)
+    check("psu ist kein Oszilloskop -> 404", call("GET", "/api/v1/scopes/psu:SIM")[0] == 404)
+    check("ohne Dienst -> 501", call("GET", "/api/v1/scopes", scopes=None)[0] == 501)
+
+    # -- Methoden / Pfade ------------------------------------------------------
+    check("GET auf acquire -> 405", call("GET", acq)[0] == 405)
+    check("POST auf /scopes -> 405", call("POST", "/api/v1/scopes", {})[0] == 405)
+    check("unbekannter Unterpfad -> 404", call("GET", f"/api/v1/scopes/{sid}/foo")[0] == 404)
+    check("zu tiefer Pfad -> 404", call("GET", f"/api/v1/scopes/{sid}/a/b")[0] == 404)
+
+    # -- Erfassen: Abweisungen ------------------------------------------------
+    check("ohne Token -> 401", call("POST", acq, good, hdr=no_header)[0] == 401)
+    check("falscher Token -> 401",
+          call("POST", acq, good, hdr=lambda n: "Bearer x" if n == "Authorization" else None)[0] == 401)
+    check("ohne Messen -> 403", call("POST", acq, good, snap=_snap_scope(measure=False)) ==
+          (403, {"v": 1, "error": "measure_not_permitted"}))
+    check("ohne Lesen -> 404 (unsichtbar)", call("POST", acq, good, snap=_snap_scope(read=False))[0] == 404)
+    check("kaputter Rumpf -> 400", call("POST", acq, raw=b"{kein json")[0] == 400)
+    status, body = call("POST", acq, {**good, "timing": {}})
+    check("ungueltige Anfrage -> 400 invalid_request", status == 400 and body["error"] == "invalid_request")
+    status, body = call("POST", acq, {**good, "measurements": ["thd"]})
+    check("unbekannter Kennwert -> 400", status == 400 and body["error"] == "unknown_measurement")
+    status, body = call("POST", acq, {**good, "channels": [{"name": "A", "range_v": 50}]})
+    check("Bereich zu gross -> 400 mit max_range_v",
+          status == 400 and body["error"] == "setting_not_supported" and body["max_range_v"] == 20.0, str(body))
+
+    # -- Erfassen: Erfolg ---------------------------------------------------------
+    status, body = call("POST", acq, good)
+    check("Erfassung ohne Hauptschalter und nicht lokal -> 200", status == 200 and body["ok"] is True,
+          str(body)[:300])
+    cid = body.get("capture_id", "")
+    check("Bericht: 1 kHz, Tastgrad, triggered", body.get("triggered") is True
+          and abs(body["channels"]["A"]["frequency"] - 1000) < 5 and abs(body["channels"]["A"]["duty"] - 50) < 2)
+    check("Bericht: Huellkurve 200 Punkte, CSV vorhanden", body["envelope"]["points"] == 200
+          and pathlib.Path(body["csv_path"]).is_file())
+    check("Bericht klein (< 25 KB)", len(json.dumps(body)) < 25_000, str(len(json.dumps(body))))
+    status, body = call("GET", "/api/v1/scopes")
+    check("danach verbunden mit Restzeit", body["scopes"][0]["state"] == "connected"
+          and 0 < body["scopes"][0]["disconnect_in_s"] <= scope_service.IDLE_CLOSE_S, str(body["scopes"][0]))
+    status, body = call("POST", acq, {**good, "envelope_points": 0})
+    check("envelope_points=0 ohne Huellkurve", status == 200 and "envelope" not in body)
+
+    # -- Erfassungen lesen ------------------------------------------------------
+    status, body = call("GET", f"/api/v1/captures/{cid}?channel=A&max_points=100")
+    check("Ausschnitt min/max", status == 200 and body["channels"]["A"]["mode"] == "minmax"
+          and len(body["channels"]["A"]["t"]) <= 100, str(body)[:200])
+    status, body = call("GET", f"/api/v1/captures/{cid}?t_start_s=0&t_stop_s=0.00005")
+    check("Ausschnitt 0..50 us roh, beide Kanaele", status == 200 and body["channels"]["A"]["mode"] == "raw"
+          and set(body["channels"]) == {"A", "B"})
+    check("Ausschnitt: kaputte Zahl -> 400", call("GET", f"/api/v1/captures/{cid}?t_start_s=abc")[0] == 400)
+    status, body = call("GET", f"/api/v1/captures/{cid}?max_points=999999")
+    check("max_points gedeckelt", status == 200 and len(body["channels"]["A"]["t"]) <= scope_service.MAX_EXCERPT_POINTS)
+    status, body = call("POST", f"/api/v1/captures/{cid}/measure",
+                        {"measurements": ["frequency"], "channel": "A", "t_start_s": 0})
+    check("Neuauswertung im Fenster", status == 200 and abs(body["channels"]["A"]["frequency"] - 1000) < 5)
+    check("Neuauswertung ohne Token -> 401",
+          call("POST", f"/api/v1/captures/{cid}/measure", {}, hdr=no_header)[0] == 401)
+    check("unbekannte Erfassung -> 404", call("GET", "/api/v1/captures/c-00000000-000000-00")[0] == 404)
+    check("Erfassung eines nicht freigegebenen Scopes -> 404",
+          call("GET", f"/api/v1/captures/{cid}", snap=_snap_scope(measure=False))[0] == 404)
+
+    # -- Sperren ------------------------------------------------------------------
+    service.begin_test(sid)
+    status, body = call("POST", acq, good)
+    check("Testablauf nutzt das Scope -> 409 scope_in_test_run",
+          status == 409 and body["error"] == "scope_in_test_run", str(body))
+    check("begin_test hat getrennt", call("GET", "/api/v1/scopes")[1]["scopes"][0]["state"] == "test")
+    service.end_test()
+    check("nach Testende wieder frei", call("POST", acq, good)[0] == 200)
+    with service._lock:
+        service._busy.add(sid)
+    status, body = call("POST", acq, good)
+    check("laufende Erfassung -> 429 scope_busy", status == 429 and body["error"] == "scope_busy")
+    with service._lock:
+        service._busy.discard(sid)
+    pico_mock.MockPicoScope2000.signals = {"A": pico_mock.Constant(0.2), "B": pico_mock.Constant(0.0)}
+    status, body = call("POST", acq, good)
+    check("kein Trigger -> 504 trigger_timeout", status == 504 and body["error"] == "trigger_timeout")
+    pico_mock.MockPicoScope2000.signals = pico_mock.default_signals()
+    service.on_picoscope_connected(sid, False)
+    status, body = call("POST", acq, good)
+    check("Scope abgesteckt -> 409 device_offline", status == 409 and body["error"] == "device_offline")
+    service.on_picoscope_connected(sid, True)
+
+    # -- Trennen --------------------------------------------------------------------
+    call("POST", acq, good)
+    status, body = call("POST", f"/api/v1/scopes/{sid}/release", {})
+    check("release trennt", status == 200 and body["released"] is True)
+    status, body = call("POST", f"/api/v1/scopes/{sid}/release", {})
+    check("zweites release: war nicht verbunden", status == 200 and body["released"] is False)
+    check("release ohne Messen -> 403",
+          call("POST", f"/api/v1/scopes/{sid}/release", {}, snap=_snap_scope(measure=False))[0] == 403)
+    check("Erfassung bleibt nach release lesbar", call("GET", f"/api/v1/captures/{cid}")[0] == 200)
+
+    # -- Leerlauf-Trennung (E2), mit verkuerzter Frist ---------------------------------
+    saved = scope_service.IDLE_CLOSE_S
+    scope_service.IDLE_CLOSE_S = 0.2
+    try:
+        call("POST", acq, good)
+        service._close_idle()
+        check("vor Ablauf der Frist bleibt verbunden",
+              call("GET", "/api/v1/scopes")[1]["scopes"][0]["state"] == "connected")
+        time.sleep(0.3)
+        service._close_idle()
+        service._executor.submit(lambda: None).result()   # Trennen im Scope-Thread abwarten
+        check("nach Ablauf der Frist getrennt", call("GET", "/api/v1/scopes")[1]["scopes"][0]["state"] == "idle")
+    finally:
+        scope_service.IDLE_CLOSE_S = saved
+
+    service.shutdown()
+    tmp.cleanup()
+
+
 # -------------------------------------------------------------- server ----
 
 def _free_port() -> int:
@@ -810,7 +989,27 @@ def section_settings() -> None:
 
     s.set_share_device("load:SIM", True, False)
     check("Persistenz ueber Neustart",
-          Settings().share_config["devices"].get("load:SIM") == {"read": True, "control": False})
+          Settings().share_config["devices"].get("load:SIM") == {"read": True, "control": False,
+                                                                 "measure": False})
+
+    # "Messen" (Oszilloskop-Erfassungen ueber Netzwerk/MCP, seit 0.16.0)
+    s.set_share_device("picoscope:SIM", True, False, True)
+    check("Messen fuer Oszilloskop gespeichert",
+          Settings().share_config["devices"].get("picoscope:SIM", {}).get("measure") is True)
+    s.set_share_device("picoscope:SIM", False, False, True)
+    check("Messen ohne Lesen wird verworfen",
+          s.share_config["devices"].get("picoscope:SIM", {}).get("measure", False) is False)
+    s.set_share_device("psu:SIM", True, False, True)
+    check("Messen nur fuer Oszilloskope", s.share_config["devices"]["psu:SIM"]["measure"] is False)
+    s.set_share_device("picoscope:SIM", True, True, True)
+    check("Steuern fuer Oszilloskop bleibt aus", s.share_config["devices"]["picoscope:SIM"]["control"] is False)
+    raw = json.loads(settings_mod.SETTINGS_PATH.read_text(encoding="utf-8"))
+    raw["share_devices"]["load:SIM"] = {"read": True, "control": False, "measure": True}
+    settings_mod.SETTINGS_PATH.write_text(json.dumps(raw), encoding="utf-8")
+    check("von Hand gesetztes Messen an einer Last wird beim Laden verworfen",
+          Settings().share_config["devices"]["load:SIM"]["measure"] is False)
+    s.set_share_device("psu:SIM", False, False)
+    s.set_share_device("picoscope:SIM", False, False)
 
     # Kaputt editierte Datei darf im Server-Thread keinen KeyError ausloesen
     raw = json.loads(settings_mod.SETTINGS_PATH.read_text(encoding="utf-8"))
@@ -861,6 +1060,8 @@ SHARE_KEYS = {
     "Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)",
     "Dieses Gerät lässt sich nicht fernsteuern",
     "Zugriffe von diesem PC brauchen den Hauptschalter nicht",
+    "Messen", "Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)",
+    "Nur für Oszilloskope",
 }
 
 
@@ -891,14 +1092,14 @@ def section_i18n() -> None:
     tab = SettingsTab()
     Translator.instance().set_language("de")
     german = tab._subtabs.tabText(4)
-    columns_de = [tab._share_table.horizontalHeaderItem(c).text() for c in range(4)]
+    columns_de = [tab._share_table.horizontalHeaderItem(c).text() for c in range(5)]
     Translator.instance().set_language("en")
     english = tab._subtabs.tabText(4)
-    columns_en = [tab._share_table.horizontalHeaderItem(c).text() for c in range(4)]
+    columns_en = [tab._share_table.horizontalHeaderItem(c).text() for c in range(5)]
     Translator.instance().set_language("de")
     check("Reitertitel uebersetzt", (german, english) == ("Netzwerk", "Network"))
     check("Tabellenspalten uebersetzt",
-          columns_en == ["Device", "Device ID", "Read", "Control"], str(columns_de))
+          columns_en == ["Device", "Device ID", "Read", "Control", "Measure"], str(columns_de))
 
 
 # Client-Skript fuer die MCP-Stufe von section_app. Laeuft im Interpreter der
@@ -980,6 +1181,8 @@ def section_app() -> None:
             "hil:SIM": {"read": True, "control": True},
             # von Hand editiert: CAN darf nie steuerbar werden
             "can:mock:SIM": {"read": True, "control": True},
+            # Erfassungen ueber Netzwerk/MCP (Haekchen "Messen")
+            "picoscope:SIM": {"read": True, "control": False, "measure": True},
         },
     }), encoding="utf-8")
 
@@ -1316,10 +1519,28 @@ def section_app() -> None:
                  "args": {"device_id": "hil:SIM", "action": "HIL_RELAY_ON", "channel": 2}},
                 {"name": "unknown", "tool": "read_device", "args": {"device_id": "psu:NICHTDA"}},
                 {"name": "alloff", "tool": "all_off"},
+                # Oszilloskop (simuliert: A = 1-kHz-Rechteck 0..3,3 V)
+                {"name": "scopes", "tool": "list_scopes"},
+                {"name": "caps", "tool": "get_scope_capabilities", "args": {"scope_id": "picoscope:SIM"}},
+                {"name": "acquire", "tool": "acquire", "args": {
+                    "scope_id": "picoscope:SIM", "channels": [{"name": "A", "range_v": 5}],
+                    "duration_s": 0.005, "pre_trigger_pct": 20, "trigger_mode": "single",
+                    "trigger_level_v": 1.65, "measurements": ["frequency", "duty", "vtop"],
+                    "envelope_points": 50}},
+                {"name": "scopes_open", "tool": "list_scopes"},
+                {"name": "acquire_bad", "tool": "acquire", "args": {
+                    "scope_id": "picoscope:SIM", "channels": [{"name": "A", "range_v": 50}],
+                    "duration_s": 0.005}},
+                {"name": "acquire_ghost", "tool": "acquire", "args": {
+                    "scope_id": "picoscope:NICHTDA", "channels": [{"name": "A", "range_v": 5}],
+                    "duration_s": 0.005}},
+                {"name": "release", "tool": "release_scope", "args": {"scope_id": "picoscope:SIM"}},
             ]
             out = _run_mcp_probe(mcp_python, base, token, steps)
-            check("MCP: fuenf Werkzeuge angeboten",
-                  out["tools"] == ["all_off", "control_device", "get_status", "list_devices", "read_device"],
+            check("MCP: elf Werkzeuge angeboten (5 Steuerung + 6 Oszilloskop)",
+                  out["tools"] == ["acquire", "all_off", "control_device", "get_capture",
+                                   "get_scope_capabilities", "get_status", "list_devices", "list_scopes",
+                                   "measure", "read_device", "release_scope"],
                   str(out["tools"]))
             check("MCP: Sicherheitshinweise fuer den Assistenten mitgeliefert",
                   "Hardware" in out["instructions"] and "all_off" in out["instructions"])
@@ -1343,6 +1564,32 @@ def section_app() -> None:
             check("MCP: unbekanntes Geraet -> Werkzeugfehler",
                   out["unknown"]["error"] and "unknown_tile" in out["unknown"]["text"])
             check("MCP all_off ok", not out["alloff"]["error"] and out["alloff"]["data"]["ok"] is True)
+            scopes = out["scopes"]["data"]["scopes"] if not out["scopes"]["error"] else []
+            check("MCP list_scopes: simuliertes Scope messbar",
+                  [x["id"] for x in scopes] == ["picoscope:SIM"] and scopes[0]["measure_available"] is True,
+                  str(out["scopes"])[:200])
+            check("MCP get_scope_capabilities", not out["caps"]["error"]
+                  and out["caps"]["data"]["channels"][0]["name"] == "A")
+            acq = out["acquire"]["data"] or {}
+            check("MCP acquire: 1 kHz, Tastgrad 50 %, getriggert, 50 Huellkurvenpunkte",
+                  not out["acquire"]["error"] and acq["triggered"] is True
+                  and abs(acq["channels"]["A"]["frequency"] - 1000) < 5
+                  and abs(acq["channels"]["A"]["duty"] - 50) < 2 and acq["envelope"]["points"] == 50,
+                  out["acquire"]["text"][:200])
+            check("MCP: danach verbunden", out["scopes_open"]["data"]["scopes"][0]["state"] == "connected")
+            check("MCP acquire: Bereich zu gross -> Werkzeugfehler mit Hinweis",
+                  out["acquire_bad"]["error"] and "setting_not_supported" in out["acquire_bad"]["text"]
+                  and "Hinweis" in out["acquire_bad"]["text"], out["acquire_bad"]["text"][:160])
+            check("MCP acquire: unbekanntes Scope -> unknown_scope",
+                  out["acquire_ghost"]["error"] and "unknown_scope" in out["acquire_ghost"]["text"])
+            check("MCP release_scope trennt", not out["release"]["error"]
+                  and out["release"]["data"]["released"] is True)
+            check("MCP-Anweisungen erklaeren Oszilloskope",
+                  "release_scope" in out["instructions"] and "Tastkopf" in out["instructions"])
+            check("Erfassung steht im Protokoll",
+                  "Oszilloskop-Erfassung von 127.0.0.1: picoscope:SIM -> c-" in "\n".join(capture.lines))
+            check("Kachel zeigt nach dem Trennen wieder frei",
+                  wait_for(lambda: field("picoscope:SIM", "status") == "free"))
             check("MCP-Aufrufer steht im Protokoll",
                   "Fernsteuerung von 127.0.0.1 (lokal): psu:SIM PSU_VOLT wert=7" in "\n".join(capture.lines))
 
@@ -1527,6 +1774,7 @@ def section_windowed() -> None:
 SECTIONS = {
     "pure": section_pure,
     "remote": section_remote,
+    "scopes": section_scopes,
     "server": section_server,
     "settings": section_settings,
     "i18n": section_i18n,

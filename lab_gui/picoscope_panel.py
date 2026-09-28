@@ -17,6 +17,12 @@ Geraet gerade fuer einen laufenden Testablauf offen (siehe device_worker.
 open_picoscope_session) -- die periodische Reconnect-Probe pausiert
 waehrenddessen, der Status bleibt bis zum Laufende auf "test" stehen statt
 faelschlich "frei"/"belegt" zu suggerieren.
+
+"Verbunden (MCP)" (status "mcp", seit 0.16.0) bedeutet: der ScopeService
+haelt das Geraet fuer Erfassungen ueber Netzwerk/MCP offen (siehe
+lab_gui/scope_service.py) und trennt nach 60 s ohne Erfassung von selbst.
+Der Knopf "Trennen" gibt es sofort frei; "PicoScope 7 oeffnen" trennt
+ebenfalls vorher, sonst koennte die App das Geraet nicht oeffnen.
 """
 from __future__ import annotations
 
@@ -32,13 +38,18 @@ from theme import current as current_palette
 
 STATUS_ICON = {
     "free": "mdi.check-circle-outline", "busy": "mdi.lock-outline", "test": "mdi.flask-outline",
+    "mcp": "mdi.lan-connect",
 }
-STATUS_TEXT = {"free": "Frei", "busy": "Belegt (andere App?)", "test": "Belegt (Testlauf läuft)"}
+STATUS_TEXT = {
+    "free": "Frei", "busy": "Belegt (andere App?)", "test": "Belegt (Testlauf läuft)",
+    "mcp": "Verbunden (MCP)",
+}
 STATUS_ICON_SIZE = 18
 
 
 class PicoscopePanel(QGroupBox):
     launch_requested = Signal()
+    release_requested = Signal(str)  # device_id
 
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
@@ -74,6 +85,11 @@ class PicoscopePanel(QGroupBox):
         status_layout.addWidget(self._status_text)
         status_layout.addWidget(self._variant_label)
         status_layout.addStretch()
+        # Nur sichtbar, solange der ScopeService das Geraet haelt (status "mcp").
+        self._release_button = IconButton("mdi.lan-disconnect", "", text=tr("Trennen"))
+        self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
+        self._release_button.setVisible(False)
+        status_layout.addWidget(self._release_button)
         outer.addWidget(status_row)
 
         # Anders als die uebrigen Dashboard-Kacheln (reine Statusanzeige)
@@ -100,6 +116,8 @@ class PicoscopePanel(QGroupBox):
     def _retranslate(self) -> None:
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
         self._status_text.setText(tr(STATUS_TEXT.get(self._status, "Unbekannt")))
+        self._release_button.setText(tr("Trennen"))
+        self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_style(palette)
@@ -112,7 +130,7 @@ class PicoscopePanel(QGroupBox):
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")
-        color = palette.check_pass if self._status == "free" else palette.text_muted
+        color = palette.check_pass if self._status in ("free", "mcp") else palette.text_muted
         self._status_icon.setPixmap(
             qta.icon(icon_name, color=color).pixmap(STATUS_ICON_SIZE, STATUS_ICON_SIZE)
         )
@@ -160,6 +178,7 @@ class PicoscopePanel(QGroupBox):
             self._status = "busy"
             self._variant = ""
             self._serial = ""
+            self._release_button.setVisible(False)
             self._variant_label.setText("")
             self._variant_label.setToolTip("")
         self.setVisible(True)
@@ -169,8 +188,10 @@ class PicoscopePanel(QGroupBox):
 
     def set_state(self, status: str, variant: str, serial: str) -> None:
         self._status = status
-        self._variant = variant
-        self._serial = serial
+        self._variant = variant or self._variant
+        self._serial = serial or self._serial
+        variant, serial = self._variant, self._serial
+        self._release_button.setVisible(status == "mcp")
         self._apply_status_icon(current_palette())
         self._retranslate()
         # Nur die kurze Typenbezeichnung sichtbar (Nutzerfeedback: "reicht

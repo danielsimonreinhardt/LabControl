@@ -348,8 +348,8 @@ following must hold:
    allowed without one — and only as a header (`Authorization: Bearer …`),
    never in the address.
 2. **Control** is ticked for the device in the table (requires “Read”). This
-   is possible for load, power supply and microHIL; CAN and oscilloscope cannot
-   be remote-controlled.
+   is possible for load, power supply, microHIL and function generator; CAN and
+   oscilloscope cannot be remote-controlled (for the oscilloscope see “Measure” below).
 3. The master switch **“Remote control active”** is on (not needed for access from
    the same computer, see “Exception for this PC”). It is off after every
    program start and switches itself off after the configured time limit
@@ -401,10 +401,24 @@ it was rejected (`"error":"…"`).
 
 **MCP server for AI assistants.** The `labcontrol_mcp` folder contains a small
 server that exposes this interface as tools for Claude Code and similar
-(read status, list devices, read values, perform an action, emergency stop).
-Setup and security model are in `labcontrol_mcp/README.md`. It runs as a
-separate process and can do no more than the interface above allows — in
-particular it cannot switch the master switch on by itself.
+(read status, list devices, read values, perform an action, emergency stop, and
+measure with the oscilloscope). Setup and security model are in
+`labcontrol_mcp/README.md`. It runs as a separate process and can do no more than
+the interface above allows — in particular it cannot switch the master switch on
+by itself.
+
+**Measuring with the oscilloscope over the network.** With **“Measure”** ticked
+for the oscilloscope, an assistant may set up and evaluate acquisitions through
+the MCP server (channels, range, timebase, trigger; readings such as frequency,
+duty cycle, rise time). Since nothing is switched, “Measure” does not need the
+master switch, but it does need the token and “Read”. While an acquisition runs
+or ran recently, LabControl keeps the oscilloscope open — the tile then shows
+**“Connected (MCP)”**. It disconnects by itself 60 seconds after the last
+acquisition; **“Disconnect”** on the tile or **“Open PicoScope 7”** release it
+immediately. A test run with oscilloscope steps takes precedence: on start, a
+connection for acquisitions is closed, and no new ones are accepted until the run
+ends. Every acquisition is also saved as a CSV file in the `captures` folder next
+to the program.
 
 ---
 

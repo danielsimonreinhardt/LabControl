@@ -50,7 +50,7 @@ from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import ICON_SIZE, IconButton
 from paths import IS_FROZEN
-from remote_actions import CONTROL_KINDS
+from remote_actions import CONTROL_KINDS, SCOPE_KINDS
 from safety import SAFETY_LIMIT_FIELDS
 from settings import (
     SHARE_BIND_LAN,
@@ -591,18 +591,18 @@ class _ShareTable(QTableWidget):
     (on_device_known/forget_device in SettingsTab).
     """
 
-    share_changed = Signal(str, bool, bool)  # device_id, read, control
+    share_changed = Signal(str, bool, bool, bool)  # device_id, read, control, measure
 
-    COL_LABEL, COL_ID, COL_READ, COL_CONTROL = range(4)
+    COL_LABEL, COL_ID, COL_READ, COL_CONTROL, COL_MEASURE = range(5)
 
-    # Geraetearten mit einer Zeile in dieser Tabelle. Das Oszilloskop bleibt
-    # draussen (eigenes Sonderpanel, exklusives Handle, keine Werte fuer eine
-    # Anzeige). Steuern gibt es nur fuer remote_actions.CONTROL_KINDS: CAN
-    # ist lesbar, aber nie fernsteuerbar.
-    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg")
+    # Geraetearten mit einer Zeile in dieser Tabelle. Steuern gibt es nur fuer
+    # remote_actions.CONTROL_KINDS (CAN ist lesbar, aber nie fernsteuerbar),
+    # Messen nur fuer remote_actions.SCOPE_KINDS (Erfassungen ueber
+    # Netzwerk/MCP, seit 0.16.0 -- vorher blieb das Oszilloskop ganz draussen).
+    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope")
 
     def __init__(self) -> None:
-        super().__init__(0, 4)
+        super().__init__(0, 5)
         self.verticalHeader().setVisible(False)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -612,18 +612,27 @@ class _ShareTable(QTableWidget):
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
-            [tr("Gerät"), tr("Geräte-ID"), tr("Lesen"), tr("Steuern")]
+            [tr("Gerät"), tr("Geräte-ID"), tr("Lesen"), tr("Steuern"), tr("Messen")]
         )
         for device_id, row in self._rows.items():
             widget = self.cellWidget(row, self.COL_CONTROL)
             if widget is not None:
                 widget.setToolTip(self._control_tooltip(self._kinds.get(device_id, "")))
+            widget = self.cellWidget(row, self.COL_MEASURE)
+            if widget is not None:
+                widget.setToolTip(self._measure_tooltip(self._kinds.get(device_id, "")))
 
     @staticmethod
     def _control_tooltip(kind: str) -> str:
         if kind in CONTROL_KINDS:
             return tr("Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)")
         return tr("Dieses Gerät lässt sich nicht fernsteuern")
+
+    @staticmethod
+    def _measure_tooltip(kind: str) -> str:
+        if kind in SCOPE_KINDS:
+            return tr("Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)")
+        return tr("Nur für Oszilloskope")
 
     def _checkbox(self, device_id: str, column: int, enabled: bool) -> QWidget:
         box = QCheckBox()
@@ -649,16 +658,19 @@ class _ShareTable(QTableWidget):
         if device_id not in self._rows:
             return
         read = self._box(device_id, self.COL_READ)
-        control = self._box(device_id, self.COL_CONTROL)
-        if read is not None and control is not None:
-            if column == self.COL_CONTROL and control.isChecked() and not read.isChecked():
-                read.blockSignals(True)
-                read.setChecked(True)
-                read.blockSignals(False)
-            elif column == self.COL_READ and not read.isChecked() and control.isChecked():
-                control.blockSignals(True)
-                control.setChecked(False)
-                control.blockSignals(False)
+        if read is not None:
+            for dependent in (self.COL_CONTROL, self.COL_MEASURE):
+                box = self._box(device_id, dependent)
+                if box is None:
+                    continue
+                if column == dependent and box.isChecked() and not read.isChecked():
+                    read.blockSignals(True)
+                    read.setChecked(True)
+                    read.blockSignals(False)
+                elif column == self.COL_READ and not read.isChecked() and box.isChecked():
+                    box.blockSignals(True)
+                    box.setChecked(False)
+                    box.blockSignals(False)
         self._emit(device_id)
 
     def _emit(self, device_id: str) -> None:
@@ -666,10 +678,12 @@ class _ShareTable(QTableWidget):
             return
         read = self._box(device_id, self.COL_READ)
         control = self._box(device_id, self.COL_CONTROL)
+        measure = self._box(device_id, self.COL_MEASURE)
         self.share_changed.emit(
             device_id,
             bool(read.isChecked()) if read else False,
             bool(control.isChecked()) if control else False,
+            bool(measure.isChecked()) if measure else False,
         )
 
     def add_device(self, kind: str, device_id: str, label: str) -> None:
@@ -688,6 +702,9 @@ class _ShareTable(QTableWidget):
         control_cell = self._checkbox(device_id, self.COL_CONTROL, kind in CONTROL_KINDS)
         control_cell.setToolTip(self._control_tooltip(kind))
         self.setCellWidget(row, self.COL_CONTROL, control_cell)
+        measure_cell = self._checkbox(device_id, self.COL_MEASURE, kind in SCOPE_KINDS)
+        measure_cell.setToolTip(self._measure_tooltip(kind))
+        self.setCellWidget(row, self.COL_MEASURE, measure_cell)
         self.resizeColumnsToContents()
 
     def set_label(self, device_id: str, label: str) -> None:
@@ -709,7 +726,8 @@ class _ShareTable(QTableWidget):
     def set_share(self, devices: dict) -> None:
         for device_id in self._rows:
             entry = devices.get(device_id, {})
-            for column, key in ((self.COL_READ, "read"), (self.COL_CONTROL, "control")):
+            for column, key in ((self.COL_READ, "read"), (self.COL_CONTROL, "control"),
+                                (self.COL_MEASURE, "measure")):
                 box = self._box(device_id, column)
                 if box is None:
                     continue
@@ -740,7 +758,7 @@ class SettingsTab(QWidget):
     share_token_regenerate_requested = Signal()
     share_read_token_toggled = Signal(bool)
     share_access_log_toggled = Signal(bool)
-    share_device_changed = Signal(str, bool, bool)  # device_id, read, control
+    share_device_changed = Signal(str, bool, bool, bool)  # device_id, read, control, measure
     share_control_toggled = Signal(bool)            # Hauptschalter Fernsteuerung
     share_local_bypass_toggled = Signal(bool)       # lokal ohne Hauptschalter
     share_control_timeout_changed = Signal(int)     # Minuten
@@ -949,7 +967,8 @@ class SettingsTab(QWidget):
         self._share_devices_hint.setText(
             tr(
                 "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\n"
-                "zusätzlich, sie zu bedienen. Steuern setzt Lesen voraus."
+                "zusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n"
+                "(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus."
             )
         )
         self._share_table.retranslate()

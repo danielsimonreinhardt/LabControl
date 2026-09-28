@@ -439,6 +439,9 @@ class DashboardWidget(QGroupBox):
     # Klick auf den Ansicht-Umschalter unten rechts; MainWindow verdrahtet ihn
     # mit der persistierten Einstellung, die dann set_compact zurueckruft.
     compact_toggle_requested = Signal()
+    # device_id -- Oszilloskop-Verbindung des ScopeService trennen (Kachel-Knopf
+    # "Trennen" und vor dem Start von PicoScope 7), siehe scope_service.py.
+    picoscope_release_requested = Signal(str)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop (Liste von device_ids,
     # links nach rechts) -- MainWindow verdrahtet das mit Settings.
     # set_panel_order() zur Persistenz, analog zu panel_color_requested.
@@ -1155,7 +1158,9 @@ class DashboardWidget(QGroupBox):
                 # belegt) + Start-Button passen nicht ins Messwerte-Schema
                 # (siehe picoscope_panel.py-Modul-Docstring).
                 panel = PicoscopePanel(device_id, label)
-                panel.launch_requested.connect(self._on_picoscope_launch_requested)
+                panel.launch_requested.connect(
+                    lambda d=device_id: self._on_picoscope_launch_requested(d))
+                panel.release_requested.connect(self.picoscope_release_requested)
             else:
                 field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS}.get(
                     kind, CAN_FIELD_KEYS
@@ -1358,7 +1363,12 @@ class DashboardWidget(QGroupBox):
             return
         panel.set_state(status, variant, serial)
 
-    def _on_picoscope_launch_requested(self) -> None:
+    def _on_picoscope_launch_requested(self, device_id: str = "") -> None:
+        # Haelt der ScopeService das Geraet (Erfassungen ueber MCP), vorher
+        # trennen -- sonst kann PicoScope 7 es nicht oeffnen (exklusiv). Das
+        # Trennen laeuft im Scope-Thread und ist lange vor dem App-Start fertig.
+        if device_id:
+            self.picoscope_release_requested.emit(device_id)
         # Direkt hier statt ueber den DeviceWorker/Thread geroutet: reiner
         # Prozessstart der PicoScope-7-App (kein Zugriff auf das offene
         # Geraete-Handle, siehe picoscope2000.driver.launch_app), also ohne

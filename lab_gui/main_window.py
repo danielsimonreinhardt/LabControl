@@ -23,10 +23,12 @@ from device_registry import DeviceRegistry
 from device_worker import SIM_CAN_ID, DeviceWorker, can_device_id
 from i18n import Translator, tr
 from live_state import LiveState
+from paths import app_dir
 from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
 from safety import SafetyMonitor
+from scope_service import ScopeService
 from settings import Settings
 from settings_tab import SettingsTab
 from share_api import new_token
@@ -152,7 +154,13 @@ class MainWindow(QMainWindow):
         # Server startet erst, wenn die Einstellungen es hergeben.
         self._live_state = LiveState()
         self._share_bridge = RemoteBridge(self)
-        self._share_server = ShareServer(self._live_state, self._share_bridge, self)
+        # Oszilloskop-Erfassungen ueber Netzwerk/MCP (scope_api, Phase 2). Eigener
+        # Thread fuer die DLL-Aufrufe; Erfassungen landen zusaetzlich als CSV in
+        # captures/ neben der App (Entscheidung E3).
+        self._scope_service = ScopeService(app_dir() / "captures", self)
+        self._scope_service.connection_changed.connect(self._on_scope_connection_changed)
+        self._share_server = ShareServer(self._live_state, self._share_bridge, self,
+                                         scopes=self._scope_service)
         # Sekundentakt nur, solange der Hauptschalter der Fernsteuerung an ist:
         # aktualisiert die Restzeit-Anzeige und bemerkt den Ablauf. Die
         # Freigabe selbst endet unabhaengig davon (LiveState vergleicht bei
@@ -232,6 +240,9 @@ class MainWindow(QMainWindow):
         self._worker.fg_state.connect(self._live_state.on_fg_state)
         self._worker.picoscope_connected.connect(self._on_picoscope_connected)
         self._worker.picoscope_state.connect(self.dashboard.update_picoscope_state)
+        self._worker.picoscope_connected.connect(self._scope_service.on_picoscope_connected)
+        self._worker.picoscope_state.connect(self._scope_service.on_picoscope_state)
+        self.dashboard.picoscope_release_requested.connect(self._scope_service.release_async)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
@@ -991,6 +1002,10 @@ class MainWindow(QMainWindow):
         self._test_runner.run_finished.connect(lambda: self._close_picoscope_sessions.emit())
         self._test_runner.run_stopped.connect(lambda: self._close_picoscope_sessions.emit())
         self._test_runner.step_failed.connect(lambda *_args: self._close_picoscope_sessions.emit())
+        # Erfassungen ueber Netzwerk/MCP wieder zulassen (siehe _on_run_requested).
+        self._test_runner.run_finished.connect(lambda *_args: self._scope_service.end_test())
+        self._test_runner.run_stopped.connect(lambda *_args: self._scope_service.end_test())
+        self._test_runner.step_failed.connect(lambda *_args: self._scope_service.end_test())
 
         # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
         # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen")
@@ -1048,6 +1063,12 @@ class MainWindow(QMainWindow):
         # Docstring) -- exakt einmal pro Lauf mit PicoScope-Beteiligung.
         for device_id in step_device_ids:
             if device_id.startswith("picoscope:"):
+                # Vorrang des Testablaufs: der ScopeService (Erfassungen ueber
+                # Netzwerk/MCP) nimmt keine neuen Erfassungen mehr an, wartet
+                # eine laufende ab und gibt das exklusive Handle frei, BEVOR
+                # die Session geoeffnet wird. Blockiert hoechstens so lange wie
+                # eine Erfassung (Trigger-Timeout max. 30 s).
+                self._scope_service.begin_test(device_id)
                 QMetaObject.invokeMethod(
                     self._worker,
                     "open_picoscope_session",
@@ -1206,12 +1227,22 @@ class MainWindow(QMainWindow):
         self._style_safety_banner()
         self._style_all_off_button()
 
+    @Slot(str, str)
+    def _on_scope_connection_changed(self, device_id: str, status: str) -> None:
+        """ScopeService hat verbunden ("mcp") oder getrennt ("free"): Kachel und
+        Netzwerk-Zustand nachziehen. Nach dem Trennen ist das Geraet frei --
+        es war ja eben noch von uns geoeffnet."""
+        self.dashboard.update_picoscope_state(device_id, status, "", "")
+        self._live_state.on_picoscope_state(device_id, status, "", "")
+
     def closeEvent(self, event) -> None:
         # Als allererstes: keine Anfrage darf die App ueberleben, und der
         # Socket muss vor Prozessende frei sein (sonst scheitert ein
         # sofortiger Neustart am belegten Port). Ausserdem darf ein
         # schreibender Zugriff (Phase 2) keinen Worker im Abbau treffen.
         self._share_server.stop()
+        # Offenes Oszilloskop-Handle freigeben (sonst bleibt es bis Prozessende belegt).
+        self._scope_service.shutdown()
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit
         # der Kill garantiert VOR thread.quit()/wait() abgeschlossen ist --
         # sonst koennte die Anwendung schliessen, bevor der Worker die

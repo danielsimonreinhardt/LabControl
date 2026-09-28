@@ -322,7 +322,6 @@
   "Server läuft auf {url}": "Server läuft auf {url}",
   "Server gestoppt": "Server gestoppt",
   "Stellt ausgewählte Kacheln im lokalen Netzwerk bereit: zum Anzeigen, z.B.\nfür ein ESP32-Display oder einen Browser auf dem Handy, und — nur wenn\nausdrücklich erlaubt — zum Fernsteuern. Es wird nichts freigegeben, solange\nunten kein Haken bei „Lesen“ gesetzt ist. Der Zugriff ist unverschlüsselt\nund nur für ein vertrauenswürdiges Heim- oder Labornetz gedacht — den Port\nniemals aus dem Internet erreichbar machen (keine Portfreigabe, kein UPnP).": "Stellt ausgewählte Kacheln im lokalen Netzwerk bereit: zum Anzeigen, z.B.\nfür ein ESP32-Display oder einen Browser auf dem Handy, und — nur wenn\nausdrücklich erlaubt — zum Fernsteuern. Es wird nichts freigegeben, solange\nunten kein Haken bei „Lesen“ gesetzt ist. Der Zugriff ist unverschlüsselt\nund nur für ein vertrauenswürdiges Heim- oder Labornetz gedacht — den Port\nniemals aus dem Internet erreichbar machen (keine Portfreigabe, kein UPnP).",
-  "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen. Steuern setzt Lesen voraus.": "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen. Steuern setzt Lesen voraus.",
   "Fernsteuerung aktiv": "Fernsteuerung aktiv",
   "Schaltet sich ab nach": "Schaltet sich ab nach",
   "Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)": "Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)",
@@ -366,5 +365,12 @@
   "Rauschen": "Rauschen",
   "Exponentieller Anstieg": "Exponentieller Anstieg",
   "Exponentieller Abfall": "Exponentieller Abfall",
-  "Multiton": "Multiton"
+  "Multiton": "Multiton",
+  "Messen": "Messen",
+  "Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)": "Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)",
+  "Nur für Oszilloskope": "Nur für Oszilloskope",
+  "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.": "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\nzusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus.",
+  "Verbunden (MCP)": "Verbunden (MCP)",
+  "Trennen": "Trennen",
+  "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen": "Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"
 }

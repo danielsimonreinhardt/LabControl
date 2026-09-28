@@ -7,6 +7,58 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Oszilloskope über MCP, Phase 2: Scope-Dienst, Netzwerk-Endpunkte, Häkchen „Messen“,
+  MCP-Werkzeuge (0.16.0, Nutzerwunsch).** Ab jetzt kann ein KI-Assistent über den MCP-Server
+  mit dem PicoScope messen. Entscheidungen E1–E3 vom 2026-09-28 umgesetzt.
+  - **`lab_gui/scope_service.py`**: alle DLL-Aufrufe für Netzwerk/MCP laufen in **einem
+    eigenen Thread**, nicht im DeviceWorker (dessen Poll-Zyklus würde einfrieren) und nicht
+    wechselnd in den Server-Threads. Die Verbindung bleibt nach einer Erfassung offen und wird
+    **60 s nach der letzten** getrennt (E2). Am 2204A gemessen: erste Erfassung 3,6 s,
+    jede weitere **0,05 s** statt erneut ~4,5 s mit Relaisklicken.
+  - **Exklusives Handle zwischen DeviceWorker und Scope-Dienst**: neuer Wächter
+    `picoscope2000/guard.py`. Die vier Stellen, an denen der Worker das echte Gerät öffnet oder
+    schließt (Erkennung, Test-Session öffnen/schließen, Einzelaktion ohne Session), fragen ihn
+    ohne Warten an; die Pause nach dem Schließen (2 s) gilt jetzt für beide. Hält der
+    Scope-Dienst das Gerät, meldet die Erkennung den Zustand „mcp“ statt fälschlich „belegt“.
+  - **Testablauf hat Vorrang**: `_on_run_requested` ruft vor dem Öffnen der Test-Session
+    `ScopeService.begin_test()` -- keine neuen Erfassungen, eine laufende wird abgewartet
+    (höchstens 45 s, blockiert so lange den GUI-Thread), dann getrennt. Nach Laufende wieder
+    frei. Erfassungen während des Laufs → 409 `scope_in_test_run`.
+  - **Endpunkte** in `share_api.py` (weiter Qt-frei, Dienst als Parameter wie der Executor):
+    `GET /api/v1/scopes`, `GET /api/v1/scopes/{id}[/capabilities]`,
+    `POST /api/v1/scopes/{id}/acquire|release`, `GET /api/v1/captures/{cid}`,
+    `POST /api/v1/captures/{cid}/measure`. Fehlercodes aus `scope_api` mit passendem HTTP-Status
+    (400/404/409/429/502/504). Jede Erfassung und jedes Trennen steht mit Aufrufer im
+    `labdash.log`.
+  - **Freigabe „Messen“ (E1)**: eigenes Häkchen je Oszilloskop in Einstellungen → Netzwerk
+    (Tabelle hat jetzt eine Spalte „Messen“ und eine Zeile für das Oszilloskop). Braucht Token
+    und „Lesen“, aber **nicht** den Hauptschalter -- ein Oszilloskop schaltet nichts. Wie bei
+    „Steuern“ an die Geräteart gebunden, auch beim Laden einer von Hand editierten
+    `settings.json`. Erfassungen eines nicht (mehr) freigegebenen Oszilloskops sind auch über
+    ihre ID nicht erreichbar (404).
+  - **Kachel**: Zustand „Verbunden (MCP)“ und Knopf **„Trennen“**; „PicoScope 7 öffnen“ trennt
+    vorher, sonst könnte die App das Gerät nicht öffnen.
+  - **MCP-Server**: sechs neue Werkzeuge `list_scopes`, `get_scope_capabilities`, `acquire`,
+    `get_capture`, `measure`, `release_scope`, Hinweise zu allen neuen Fehlercodes, 60 s
+    Wartezeit für Oszilloskop-Aufrufe (Trigger bis 30 s + Öffnen). Die Anweisungen sagen dem
+    Assistenten, vor der ersten Messung an einem neuen Messpunkt nach Tastkopf und Pegel zu
+    fragen und nach einer Messreihe zu trennen. `plot_capture` (Bild) folgt in Phase 3.
+  - **Erfassungen** liegen zusätzlich als CSV in `captures/` neben der App (E3, in
+    `.gitignore`).
+  - **Verifiziert am Mock/ohne Hardware:** `tools/check_network_share.py` mit neuem Abschnitt
+    `scopes` (46 Prüfungen: Freigabe, Token, Methoden, alle Fehlercodes, Testablauf-Vorrang,
+    Beschäftigt, Abstecken, Trennen, Leerlauf-Trennung) und erweitertem Abschnitt `app` (echte
+    App im Simulationsmodus, echter MCP-Kindprozess: elf Werkzeuge, Erfassung 1 kHz/50 %,
+    Fehler mit Hinweis, Kachel wieder „frei“ nach dem Trennen, Protokoll). Alle übrigen
+    Abschnitte unverändert grün; die Freigabe eines Geräts enthält jetzt `"measure"`.
+  - **An echter Hardware (2204A) verifiziert** (2026-09-28, Scope-Dienst ohne App, Sinus
+    10 kHz/5 Vss vom JDS2915 an A): Erfassung 10 000 Hz/5,06 Vss, Wächter hält das Handle
+    und weist den Worker ab, Trennen gibt frei, erneutes Öffnen nach der Pause, Übergabe an eine
+    Test-Session (`begin_test` 1,0 s, danach PICO_VPP-Pfad 5020 mV, MCP währenddessen
+    `scope_in_test_run`, danach wieder frei), nach Beenden direkt öffenbar.
+    **Noch offen:** der ganze Weg über die **laufende App und Claude Code** an echter
+    Hardware -- braucht einen Neustart von LabControl in 0.16.0, das Häkchen „Messen“ und
+    ein Neuverbinden des MCP-Servers in Claude Code (T2 im Entscheidungsboard); gebaute `.exe`.
 - **Oszilloskope über MCP, Phase 1: herstellerneutrale Schicht `scope_api/` (0.15.0,
   Nutzerwunsch).** Ziel: der KI-Assistent misst und wertet über den MCP-Server mit dem
   PicoScope 2204A aus, und ein zweites Oszilloskop (entschieden: SCPI-Tischgerät per LAN)

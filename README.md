@@ -32,7 +32,8 @@ A new release is compiled after every master-push. Just download and run the .ex
 - PicoScope 2204A/2205A USB oscilloscope (dashboard tile with free/busy
   status + a button to launch the PicoScope 7 app; LabControl deliberately
   does not replicate its channel/trigger/waveform UI, see
-  `picoscope2000/README.md`)
+  `picoscope2000/README.md`). An AI assistant can measure with it through the
+  MCP server via the vendor-neutral `scope_api/` layer (see `scope_api/README.md`)
 
 ## Contributing
 

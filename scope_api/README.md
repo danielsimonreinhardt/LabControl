@@ -6,8 +6,13 @@ ein zweites Oszilloskop (geplant: SCPI-Tischgerät per LAN) nur einen weiteren
 Adapter braucht. Auswertung, Speicher, Netzwerk-Schnittstelle und
 MCP-Werkzeuge bleiben dabei gleich.
 
-Stand: **Phase 1** (Schnittstelle, Auswertung, Speicher, 2204A-Adapter, Mock).
-Netzwerk-Endpunkte, eigener Scope-Thread und MCP-Werkzeuge folgen in Phase 2.
+Stand: **Phase 2** (seit 0.16.0). Phase 1 (0.15.0): Schnittstelle, Auswertung,
+Speicher, 2204A-Adapter, Mock. Phase 2: eigener Scope-Thread mit
+Leerlauf-Trennung (`lab_gui/scope_service.py`), Endpunkte `/api/v1/scopes` und
+`/api/v1/captures` (`lab_gui/share_api.py`), Häkchen „Messen“, Kachelzustand
+„Verbunden (MCP)“ und die MCP-Werkzeuge (`labcontrol_mcp/server.py`). Die
+Abstimmung um das exklusive PicoScope-Handle zwischen DeviceWorker und
+Scope-Dienst regelt `picoscope2000/guard.py`.
 Plan und Entscheidungen vom 2026-09-28:
 <https://claude.ai/artifact/PbSiAExdmfT1kjTkVpnStc>.
 

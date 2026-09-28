@@ -37,11 +37,26 @@ Sicherheitsabschaltung -- es ist die Richtung, in der nichts kaputtgehen kann.
 Ausgefuehrt wird ueber einen `executor` (im Betrieb share_remote.RemoteBridge),
 den dispatch() als Parameter bekommt. So bleibt dieses Modul Qt-frei und mit
 einem Stub pruefbar.
+
+Oszilloskope (scope_api, Umsetzungsvorschlag 2026-09-28) haben eigene Routen,
+ausgefuehrt ueber `scopes` (im Betrieb scope_service.ScopeService):
+  GET  /api/v1/scopes                      Oszilloskope mit Zustand
+  GET  /api/v1/scopes/{id}                 ein Oszilloskop
+  GET  /api/v1/scopes/{id}/capabilities    Faehigkeiten
+  POST /api/v1/scopes/{id}/acquire         eine Erfassung (blockiert bis Ergebnis)
+  POST /api/v1/scopes/{id}/release         Verbindung sofort trennen
+  GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung
+  POST /api/v1/captures/{cid}/measure      Kennwerte neu berechnen
+Erfassen braucht Token + Lesen + das eigene Haekchen "Messen" (E1), aber NICHT
+den Hauptschalter: ein Oszilloskop hat keinen Ausgang. Ein Testablauf, der
+das Oszilloskop nutzt, hat Vorrang (409 scope_in_test_run).
 """
 from __future__ import annotations
 
 import hmac
 import json
+import logging
+import math
 import secrets
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -49,6 +64,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import remote_actions
 from field_catalog import field_info, field_order
 from share_render import render_display, render_index, render_text
+
+from scope_api.base import ScopeError
+
+logger = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 API_VERSION = 1
@@ -145,6 +164,14 @@ def _controllable(snapshot: dict, device_id: str) -> bool:
     flags = snapshot.get("share", {}).get("devices", {}).get(device_id, {})
     entry = snapshot.get("devices", {}).get(device_id, {})
     return bool(flags.get("control")) and entry.get("kind") in remote_actions.CONTROL_KINDS
+
+
+def _measure_permitted(snapshot: dict, device_id: str) -> bool:
+    """Ist dieses Oszilloskop fuer Erfassungen freigegeben (Haekchen "Messen")?
+    Wie bei _controllable zusaetzlich an die Geraeteart gebunden."""
+    flags = snapshot.get("share", {}).get("devices", {}).get(device_id, {})
+    entry = snapshot.get("devices", {}).get(device_id, {})
+    return bool(flags.get("measure")) and entry.get("kind") in remote_actions.SCOPE_KINDS
 
 
 def remote_effective(snapshot: dict) -> bool:
@@ -491,6 +518,188 @@ def _all_off(executor, client: str) -> Response:
     return _result_response(result, {})
 
 
+# -- Oszilloskope (scope_api) --------------------------------------------------
+
+# HTTP-Status je ScopeError-Code (Codes siehe scope_api/base.py und scope_service.py).
+SCOPE_ERROR_STATUS = {
+    "invalid_request": 400, "setting_not_supported": 400, "level_out_of_range": 400,
+    "duration_too_long": 400, "unknown_measurement": 400,
+    "unknown_capture": 404,
+    "device_offline": 409, "scope_in_test_run": 409, "scope_busy_external": 409,
+    "scope_busy": 429,
+    "device_error": 502,
+    "trigger_timeout": 504,
+}
+
+
+def _scope_tiles(snapshot: dict) -> dict[str, dict]:
+    return {d: e for d, e in visible_tiles(snapshot).items() if e.get("kind") in remote_actions.SCOPE_KINDS}
+
+
+def _scope_error(exc: ScopeError) -> Response:
+    status = SCOPE_ERROR_STATUS.get(exc.code, 502)
+    headers = {"Retry-After": "2"} if status == 429 else None
+    return _json(status, {"v": API_VERSION, "ok": False, **exc.to_dict()}, headers)
+
+
+def _scope_summary(device_id: str, entry: dict, snapshot: dict, scopes) -> dict:
+    permitted = _measure_permitted(snapshot, device_id)
+    blocked = "measure_not_permitted" if not permitted else scopes.blocked_reason(device_id)
+    return {
+        "id": device_id,
+        "label": entry.get("label", device_id),
+        "online": bool(entry.get("online", True)),
+        "measure": permitted,
+        "measure_available": blocked == "",
+        "measure_blocked": blocked,
+        **scopes.describe(device_id),
+    }
+
+
+def _scopes_list(snapshot: dict, scopes) -> Response:
+    return _json(200, {"v": API_VERSION, "scopes": [
+        _scope_summary(d, e, snapshot, scopes) for d, e in _scope_tiles(snapshot).items()]})
+
+
+def _scope_get(snapshot: dict, scopes, device_id: str, what: str) -> Response:
+    entry = _scope_tiles(snapshot).get(device_id)
+    if entry is None:
+        return _error(404, "unknown_scope")
+    if what == "":
+        return _json(200, {"v": API_VERSION, **_scope_summary(device_id, entry, snapshot, scopes)})
+    try:
+        return _json(200, {"v": API_VERSION, "id": device_id, **scopes.capabilities(device_id)})
+    except ScopeError as exc:
+        return _scope_error(exc)
+
+
+def _float_param(query: dict, key: str) -> float | None:
+    raw = query.get(key)
+    if not raw:
+        return None
+    try:
+        value = float(raw[0])
+    except ValueError:
+        raise ScopeError("invalid_request", f"'{key}' muss eine Zahl sein.") from None
+    if not math.isfinite(value):
+        raise ScopeError("invalid_request", f"'{key}' muss eine Zahl sein.")
+    return value
+
+
+def _capture_permitted(snapshot: dict, scopes, capture_id: str) -> Response | None:
+    """Erfassungen sind nur ueber ein sichtbares, fuer Messen freigegebenes
+    Oszilloskop erreichbar -- sonst dieselbe 404 wie fuer eine unbekannte ID."""
+    try:
+        device_id = scopes.capture_device(capture_id)
+    except ScopeError as exc:
+        return _scope_error(exc)
+    if device_id not in _scope_tiles(snapshot) or not _measure_permitted(snapshot, device_id):
+        return _json(404, {"v": API_VERSION, "ok": False, "error": "unknown_capture"})
+    return None
+
+
+def _capture_get(snapshot: dict, scopes, capture_id: str, query: dict) -> Response:
+    denied = _capture_permitted(snapshot, scopes, capture_id)
+    if denied is not None:
+        return denied
+    try:
+        result = scopes.excerpt(
+            capture_id, (query.get("channel") or [None])[0], _float_param(query, "t_start_s"),
+            _float_param(query, "t_stop_s"), _int_param(query, "max_points", 500, 2, 100_000),
+            (query.get("mode") or ["minmax"])[0])
+    except ScopeError as exc:
+        return _scope_error(exc)
+    return _json(200, {"v": API_VERSION, **result})
+
+
+def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, client: str) -> Response:
+    entry = _scope_tiles(snapshot).get(device_id)
+    if entry is None:
+        return _error(404, "unknown_scope")
+    if not _measure_permitted(snapshot, device_id):
+        return _error(403, "measure_not_permitted")
+    if what == "release":
+        result = scopes.release(device_id)
+        logger.info("Oszilloskop von %s: %s trennen -> %s", client, device_id,
+                    "getrennt" if result.get("released") else "war nicht verbunden")
+        return _json(200, {"v": API_VERSION, "ok": True, "id": device_id, **result})
+    payload = _parse_body(body)
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    started = time.monotonic()
+    try:
+        report = scopes.acquire(device_id, payload)
+    except ScopeError as exc:
+        logger.info("Oszilloskop-Erfassung von %s: %s -> Fehler (%s)", client, device_id, exc.code)
+        return _scope_error(exc)
+    logger.info("Oszilloskop-Erfassung von %s: %s -> %s (%.1f s)", client, device_id,
+                report.get("capture_id"), time.monotonic() - started)
+    return _json(200, {"v": API_VERSION, "ok": True, **report})
+
+
+def _capture_measure(snapshot: dict, scopes, capture_id: str, body: bytes) -> Response:
+    denied = _capture_permitted(snapshot, scopes, capture_id)
+    if denied is not None:
+        return denied
+    payload = _parse_body(body) if body else {}
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    try:
+        return _json(200, {"v": API_VERSION, "ok": True, **scopes.measure(capture_id, payload)})
+    except ScopeError as exc:
+        return _scope_error(exc)
+
+
+def _scope_route(path: str) -> tuple[str, str, str] | None:
+    """("scopes", "", "") | ("scope", id, ""|"capabilities"|"acquire"|"release")
+    | ("capture", cid, ""|"measure") | None fuer alle anderen Pfade."""
+    if path == f"{API_PREFIX}/scopes":
+        return "scopes", "", ""
+    for prefix, kind in ((f"{API_PREFIX}/scopes/", "scope"), (f"{API_PREFIX}/captures/", "capture")):
+        if path.startswith(prefix):
+            parts = path[len(prefix):].split("/")
+            if len(parts) == 1 and parts[0]:
+                return kind, parts[0], ""
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return kind, parts[0], parts[1]
+            return kind, "", "invalid"
+    return None
+
+
+_SCOPE_GET = {("scopes", ""), ("scope", ""), ("scope", "capabilities"), ("capture", "")}
+_SCOPE_POST = {("scope", "acquire"), ("scope", "release"), ("capture", "measure")}
+
+
+def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict, body: bytes,
+                    scopes, client: str) -> Response:
+    kind, ident, what = route
+    wanted = _SCOPE_POST if method == "POST" else _SCOPE_GET
+    if (kind, what) not in wanted:
+        # Erst die Route, dann der Token -- wie bei den uebrigen Pfaden.
+        if (kind, what) in _SCOPE_GET:
+            return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "GET, HEAD"})
+        if (kind, what) in _SCOPE_POST:
+            return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "POST"})
+        return _error(404, "not_found")
+    if scopes is None:
+        return _error(501, "not_implemented")
+    if method == "POST":
+        denied = check_write_auth(snapshot, header_get)
+        if denied is not None:
+            return denied
+        if kind == "scope":
+            return _scope_post(snapshot, scopes, ident, what, body, client)
+        return _capture_measure(snapshot, scopes, ident, body)
+    denied = check_auth(snapshot, header_get, query)
+    if denied is not None:
+        return denied
+    if kind == "scopes":
+        return _scopes_list(snapshot, scopes)
+    if kind == "scope":
+        return _scope_get(snapshot, scopes, ident, what)
+    return _capture_get(snapshot, scopes, ident, query)
+
+
 # -- Dispatch ---------------------------------------------------------------
 
 def _post_route(path: str) -> tuple[str, str] | None:
@@ -531,7 +740,8 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
 
 
 def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
-             body: bytes = b"", executor=None, client: str = "", local: bool = False) -> Response:
+             body: bytes = b"", executor=None, client: str = "", local: bool = False,
+             scopes=None) -> Response:
     """Eine Anfrage -> eine Antwort. Die einzige oeffentliche Einstiegsstelle.
 
     `header_get(name)` liefert einen Anfrage-Header (oder None), `state` ist
@@ -539,7 +749,9 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
     Stub). `body`/`executor`/`client` betreffen nur POST: der Rumpf, das
     Objekt, das Aktionen ausfuehrt (share_remote.RemoteBridge), und die
     Adresse des Aufrufers fuer das Protokoll. `local`: der Aufruf kommt vom selben
-    Rechner (siehe share_server._is_local). Wirft nie -- jeder Fehler wird
+    Rechner (siehe share_server._is_local). `scopes`: Oszilloskop-Dienst
+    (scope_service.ScopeService) fuer die /scopes- und /captures-Routen.
+    Wirft nie -- jeder Fehler wird
     zu einer Antwort, weil ein durchgereichter Fehler im Server-Thread
     niemanden erreichen wuerde.
     """
@@ -552,6 +764,16 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
 
     snapshot = state.snapshot()
     snapshot["local"] = bool(local)
+
+    scope_route = _scope_route(path)
+    if scope_route is not None:
+        try:
+            return _dispatch_scope(method, scope_route, header_get, snapshot, query, body, scopes, client)
+        except ScopeError as exc:
+            return _scope_error(exc)
+        except Exception:  # noqa: BLE001 -- dispatch wirft nie (siehe Docstring)
+            logger.exception("Oszilloskop-Anfrage %s %s gescheitert", method, path)
+            return _error(500, "internal_error")
 
     if method == "POST":
         return _dispatch_post(path, header_get, snapshot, body, executor, client)

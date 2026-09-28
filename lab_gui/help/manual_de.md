@@ -367,8 +367,8 @@ erfüllt sein:
    Lesen tokenfrei erlaubt ist — und nur als Kopfzeile
    (`Authorization: Bearer …`), nie in der Adresse.
 2. **Steuern** ist beim Gerät in der Tabelle angehakt (setzt „Lesen“ voraus).
-   Möglich ist das für Last, Netzteil und microHIL; CAN und Oszilloskop lassen
-   sich nicht fernsteuern.
+   Möglich ist das für Last, Netzteil, microHIL und Funktionsgenerator; CAN und
+   Oszilloskop lassen sich nicht fernsteuern (zum Oszilloskop siehe „Messen“ unten).
 3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet (nicht nötig für
    Zugriffe vom selben Rechner, siehe „Ausnahme für diesen PC“). Er ist nach
    jedem Programmstart aus und schaltet sich nach dem eingestellten Zeitlimit
@@ -420,10 +420,24 @@ warum er abgewiesen wurde (`"error":"…"`).
 
 **MCP-Server für KI-Assistenten.** Im Ordner `labcontrol_mcp` liegt ein kleiner
 Server, der diese Schnittstelle als Werkzeuge für Claude Code & Co. bereitstellt
-(Status lesen, Geräte auflisten, Werte lesen, Aktion ausführen, Notaus).
-Einrichtung und Sicherheitsmodell stehen in `labcontrol_mcp/README.md`. Er läuft
-als eigener Prozess und kann nicht mehr, als die Schnittstelle oben erlaubt —
-insbesondere kann er den Hauptschalter nicht selbst einschalten.
+(Status lesen, Geräte auflisten, Werte lesen, Aktion ausführen, Notaus, dazu
+mit dem Oszilloskop messen). Einrichtung und Sicherheitsmodell stehen in
+`labcontrol_mcp/README.md`. Er läuft als eigener Prozess und kann nicht mehr, als
+die Schnittstelle oben erlaubt — insbesondere kann er den Hauptschalter nicht
+selbst einschalten.
+
+**Messen mit dem Oszilloskop über das Netzwerk.** Mit dem Haken **„Messen“** beim
+Oszilloskop darf ein Assistent über den MCP-Server Erfassungen einstellen und
+auswerten (Kanäle, Bereich, Zeitbasis, Trigger; Kennwerte wie Frequenz,
+Tastgrad, Anstiegszeit). Weil dabei nichts geschaltet wird, braucht „Messen“ den
+Hauptschalter nicht, wohl aber den Token und „Lesen“. Solange eine Erfassung
+läuft oder kürzlich lief, hält LabControl das Oszilloskop geöffnet — die Kachel
+zeigt dann **„Verbunden (MCP)“**. 60 Sekunden nach der letzten Erfassung wird
+von selbst getrennt; **„Trennen“** auf der Kachel oder **„PicoScope 7 öffnen“**
+geben es sofort frei. Ein Testablauf mit Oszilloskop-Schritten hat Vorrang: beim
+Start wird eine Verbindung für Erfassungen getrennt, und bis zum Laufende werden
+keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
+`captures` neben dem Programm.
 
 ---
 

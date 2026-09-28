@@ -20,3 +20,7 @@ labcontrol_mcp/.mcp.json
 /BUGS.md
 /BUGS_OFFEN.md
 /BUGS_GESCHLOSSEN.md
+
+# Oszilloskop-Erfassungen (scope_service.py, CSV je Erfassung)
+lab_gui/captures/
+captures/

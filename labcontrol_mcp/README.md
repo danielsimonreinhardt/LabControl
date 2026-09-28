@@ -1,8 +1,8 @@
 # LabControl-MCP-Server
 
 Gibt einem KI-Assistenten (z.B. Claude Code) Werkzeuge, um die freigegebenen
-Messgeräte von LabControl **zu lesen und zu steuern**: Sollwerte setzen,
-Ausgänge schalten, Notaus.
+Messgeräte von LabControl **zu lesen und zu steuern** (Sollwerte setzen,
+Ausgänge schalten, Notaus) und **mit Oszilloskopen zu messen**.
 
 Der Server läuft als eigener Prozess **außerhalb** der LabControl-`.exe` und
 übersetzt Werkzeugaufrufe in Anfragen an deren Netzwerk-Schnittstelle
@@ -18,6 +18,12 @@ der Server kann nichts, was die Schnittstelle nicht ohnehin erlaubt.
 | `read_device` | Messwerte eines Geräts (zum Gegenprüfen nach dem Schreiben) |
 | `control_device` | Eine Aktion ausführen (`PSU_VOLT`, `PSU_OUT_ON`, `CURR`, `HIL_RELAY_ON`, …) |
 | `all_off` | Notaus: alle Ausgänge aller Geräte ab — geht immer |
+| `list_scopes` | Oszilloskope mit Zustand (frei / verbunden / Testlauf) und ob Messen gerade geht |
+| `get_scope_capabilities` | Kanäle, Bereiche, Abtastrate, Speicher, Triggerarten eines Oszilloskops |
+| `acquire` | Eine Erfassung mit vollständiger Einstellung (V, s); liefert Kennwerte, Warnungen, Hüllkurve, CSV-Pfad |
+| `get_capture` | Ausschnitt einer Erfassung (roh oder verdichtet) |
+| `measure` | Kennwerte einer gespeicherten Erfassung neu berechnen, ohne neue Messung |
+| `release_scope` | Verbindung zum Oszilloskop sofort trennen (sonst nach 60 s von selbst) |
 
 `control_device` bekommt die Antwort des Geräts abgewartet: `ok: true` heißt,
 das Gerät hat den Befehl bestätigt (nicht nur „abgeschickt"). Fehler kommen als
@@ -30,7 +36,8 @@ Werkzeugfehler mit einem Hinweis, was zu tun ist.
 1. „Freigabe im lokalen Netzwerk aktivieren" anhaken. Der Token wird dabei
    automatisch erzeugt.
 2. In der Geräte-Tabelle bei den gewünschten Geräten **Lesen** und **Steuern**
-   anhaken. CAN und Oszilloskop sind nicht fernsteuerbar.
+   anhaken, beim Oszilloskop **Lesen** und **Messen**. CAN und Oszilloskop sind
+   nicht fernsteuerbar.
 3. Den **Token** kopieren (Kopieren-Knopf neben dem Feld).
 
 Der Hauptschalter **„Fernsteuerung aktiv"** braucht der MCP-Server nicht, solange er
@@ -99,7 +106,19 @@ Damit ein Befehl ankommt, müssen **alle** Bedingungen erfüllt sein:
 **Immer erlaubt** (mit Token): `all_off`. Auch bei ausgeschaltetem Hauptschalter,
 laufendem Testablauf und nach einer Sicherheitsabschaltung.
 
-**Nie fernsteuerbar:** CAN-Frames senden, PicoScope, Arbiträrsignale.
+**Nie fernsteuerbar:** CAN-Frames senden, Arbiträrsignale, Ausgänge des Oszilloskops
+(Signalgenerator folgt später unter denselben Regeln wie „Steuern“).
+
+### Oszilloskope (seit 0.16.0)
+
+Erfassen braucht **Token**, **Lesen** und das eigene Häkchen **„Messen“**, aber
+**nicht den Hauptschalter** — ein Oszilloskop schaltet nichts. Ein **Testablauf**,
+der das Oszilloskop nutzt, hat Vorrang (`scope_in_test_run`). Solange nach einer
+Erfassung weniger als 60 s vergangen sind, hält LabControl das Gerät geöffnet
+(Kachel: „Verbunden (MCP)“); PicoScope 7 kann es dann nicht öffnen —
+`release_scope`, „Trennen“ oder „PicoScope 7 öffnen“ auf der Kachel geben es frei.
+Jede Erfassung steht mit Aufrufer im `labdash.log` und als CSV in `captures/`
+neben der App. Einheiten, Kennwerte und Fehlercodes: `scope_api/README.md`.
 
 Zusätzlich: höchstens 2 Befehle gleichzeitig unterwegs und eine
 Schreibraten-Begrenzung (5/s), damit ein Stau von Befehlen den Notaus nicht
@@ -121,3 +140,7 @@ Wert über 0 A schaltet den Ausgang wieder ein.
 | `locked` | Testablauf läuft oder Sicherheitsabschaltung — Steuern gesperrt |
 | `exceeds_safety_limit` | Sollwert über dem aktiven Grenzwert des Geräts |
 | `device_error` | Das Gerät hat abgelehnt oder ist nicht verbunden (Text steht in `message`) |
+| `measure_not_permitted` | Beim Oszilloskop ist „Messen“ nicht angehakt |
+| `scope_busy_external` | Oszilloskop von einem anderen Programm belegt (PicoScope 7?) |
+| `scope_in_test_run` | Ein Testablauf nutzt das Oszilloskop |
+| `trigger_timeout` | Kein Trigger in der Wartezeit (Pegel, Flanke, Quelle prüfen) |

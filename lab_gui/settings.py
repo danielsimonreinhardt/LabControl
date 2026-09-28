@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, Signal
 from i18n import DEFAULT_LANGUAGE
 from live_state import DEFAULT_DEVICE_SHARE, default_share_config
 from paths import IS_FROZEN, app_dir
-from remote_actions import CONTROL_KINDS
+from remote_actions import CONTROL_KINDS, SCOPE_KINDS
 from safety import SAFETY_LIMIT_FIELDS, default_device_limits, device_kind
 
 SETTINGS_PATH = app_dir() / "settings.json"
@@ -47,6 +47,13 @@ def _control_allowed(device_id: str, read: bool, control: bool) -> bool:
     settings.json ebenso angewandt wie im Setter, damit eine von Hand
     editierte Datei die Regel nicht umgehen kann."""
     return bool(control) and bool(read) and device_kind(device_id) in CONTROL_KINDS
+
+
+def _measure_allowed(device_id: str, read: bool, measure: bool) -> bool:
+    """Erfassen ueber Netzwerk/MCP (Haekchen "Messen", Entscheidung E1 vom
+    2026-09-28) setzt Lesen voraus und gibt es nur fuer Oszilloskope
+    (remote_actions.SCOPE_KINDS) -- beim Laden wie im Setter angewandt."""
+    return bool(measure) and bool(read) and device_kind(device_id) in SCOPE_KINDS
 
 
 def _clamp_control_timeout(minutes: int) -> int:
@@ -317,6 +324,7 @@ class Settings(QObject):
                     for key, default in DEFAULT_DEVICE_SHARE.items()
                 }
                 flags["control"] = _control_allowed(device_id, flags["read"], flags["control"])
+                flags["measure"] = _measure_allowed(device_id, flags["read"], flags["measure"])
                 cfg["devices"][device_id] = flags
         return cfg
 
@@ -390,11 +398,12 @@ class Settings(QObject):
         self._save()
         self._emit_share_config()
 
-    def set_share_device(self, device_id: str, read: bool, control: bool) -> None:
+    def set_share_device(self, device_id: str, read: bool, control: bool, measure: bool = False) -> None:
         """Freigabe EINES Geraets. Analog zu set_panel_color geraete-individuell
         in einem Dict abgelegt (share_devices), nicht als eigener Schluessel."""
         entry = {"read": bool(read),
-                 "control": _control_allowed(device_id, bool(read), bool(control))}
+                 "control": _control_allowed(device_id, bool(read), bool(control)),
+                 "measure": _measure_allowed(device_id, bool(read), bool(measure))}
         if self.share_config["devices"].get(device_id) == entry:
             return
         stored = self._data.get("share_devices")

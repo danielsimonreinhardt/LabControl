@@ -67,13 +67,14 @@ DEFAULT_SHARE_CONFIG: dict = {
     # abschaltung) gelten trotzdem. Gedacht fuer Programme, die der Nutzer selbst auf
     # diesem PC betreibt; das Zeitfenster schuetzt vor allem vor Zugriffen von aussen.
     "local_bypass": True,
-    # device_id -> {"read": bool, "control": bool}. "control" existiert von
-    # Anfang an mit Default False, damit die JSON-Form stabil bleibt, wenn
-    # die Fernsteuerung (Phase 2) dazukommt.
+    # device_id -> {"read": bool, "control": bool, "measure": bool}. "control"
+    # existiert von Anfang an mit Default False, damit die JSON-Form stabil
+    # bleibt, wenn die Fernsteuerung (Phase 2) dazukommt. "measure" (seit
+    # 0.16.0): Erfassungen ueber Netzwerk/MCP, nur fuer Oszilloskope.
     "devices": {},
 }
 
-DEFAULT_DEVICE_SHARE: dict = {"read": False, "control": False}
+DEFAULT_DEVICE_SHARE: dict = {"read": False, "control": False, "measure": False}
 
 
 def default_share_config() -> dict:

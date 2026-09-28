@@ -56,6 +56,7 @@ from microhil.driver import (
 from microhil.mock import MockMicroHIL
 from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 from picoscope2000.driver import PicoScope2000, PicoScope2000Error, usb_present as picoscope_usb_present
+from picoscope2000.guard import GUARD as PICOSCOPE_GUARD, OWNER_SERVICE, OWNER_WORKER
 from picoscope2000.mock import MockPicoScope2000
 
 logger = logging.getLogger(__name__)
@@ -450,6 +451,14 @@ class DeviceWorker(QObject):
             return
         if not self._picoscope_present or self._picoscope_busy:
             return
+        # Handle-Waechter (picoscope2000/guard.py): haelt gerade der ScopeService
+        # das Geraet, gibt es keine Session -- main_window._on_run_requested
+        # laesst ihn vorher freigeben (ScopeService.begin_test), das ist hier
+        # also nur der Rest-Fall. Der Waechter bleibt bis close_picoscope_sessions
+        # belegt.
+        if not PICOSCOPE_GUARD.try_acquire(OWNER_WORKER):
+            return
+        PICOSCOPE_GUARD.settle()
         elapsed = time.monotonic() - self._picoscope_last_close
         if elapsed < PICOSCOPE_SETTLE_S:
             time.sleep(PICOSCOPE_SETTLE_S - elapsed)
@@ -457,6 +466,7 @@ class DeviceWorker(QObject):
         try:
             scope = PicoScope2000.open_first()
         except PicoScope2000Error:
+            PICOSCOPE_GUARD.release(closed=False)
             return
         finally:
             self._picoscope_busy = False
@@ -477,6 +487,7 @@ class DeviceWorker(QObject):
                 logger.exception("PicoScope-Session %s: Fehler beim Schliessen", device_id)
             if device_id != SIM_PICOSCOPE_ID:
                 self._picoscope_last_close = time.monotonic()
+                PICOSCOPE_GUARD.release()
         self._picoscope_sessions.clear()
         # Sofort einen frischen Status statt auf die naechste tatsaechliche
         # An-/Absteck-Erkennung zu warten (seit der Entfernung der
@@ -993,9 +1004,18 @@ class DeviceWorker(QObject):
         PICO_*-Aktionen currently busy sehen und auf ihren eigenen
         Retry-Mechanismus zurueckfallen (siehe testcase_runner.py).
         """
+        # Haelt der ScopeService (Erfassung ueber Netzwerk/MCP) das Geraet, ist
+        # der Status bekannt: "mcp". Oeffnen ginge ohnehin nicht (exklusiv).
+        if not PICOSCOPE_GUARD.try_acquire(OWNER_WORKER):
+            if PICOSCOPE_GUARD.owner == OWNER_SERVICE:
+                self.picoscope_state.emit(PICOSCOPE_ID, "mcp", self._picoscope_variant, self._picoscope_serial)
+            return
         self._picoscope_busy = True
+        opened = False
         try:
+            PICOSCOPE_GUARD.settle()
             scope = PicoScope2000.open_first()
+            opened = True
             try:
                 info = scope.get_info()
             finally:
@@ -1006,6 +1026,7 @@ class DeviceWorker(QObject):
             return
         finally:
             self._picoscope_busy = False
+            PICOSCOPE_GUARD.release(closed=opened)
         self._picoscope_variant = info.variant
         self._picoscope_serial = info.serial
         self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
@@ -1758,6 +1779,9 @@ class DeviceWorker(QObject):
         # zurueckkehren.
         if self._picoscope_busy:
             return False, PICOSCOPE_RETRY_MESSAGE, 0.0
+        if not PICOSCOPE_GUARD.try_acquire(OWNER_WORKER):
+            return False, "Oszilloskop belegt (Erfassung über Netzwerk/MCP)", 0.0
+        PICOSCOPE_GUARD.settle()
         # Siehe PICOSCOPE_SETTLE_S: ein Reopen zu kurz nach dem letzten
         # Schliessen (egal ob von _reconnect_picoscope() oder einer
         # vorherigen Aktion) schlaegt an echter Hardware fehl.
@@ -1766,11 +1790,13 @@ class DeviceWorker(QObject):
             time.sleep(PICOSCOPE_SETTLE_S - elapsed)
 
         self._picoscope_busy = True
+        opened = False
         try:
             try:
                 scope = driver_cls.open_first()
             except PicoScope2000Error:
                 return False, "Oszilloskop belegt (vermutlich PicoScope-7-App offen)", 0.0
+            opened = True
             try:
                 measurement = scope.measure(channel=pico_channel, voltage_range=voltage_range)
             except PicoScope2000Error as exc:
@@ -1780,4 +1806,5 @@ class DeviceWorker(QObject):
                 self._picoscope_last_close = time.monotonic()
         finally:
             self._picoscope_busy = False
+            PICOSCOPE_GUARD.release(closed=opened)
         return True, "", getattr(measurement, field)
