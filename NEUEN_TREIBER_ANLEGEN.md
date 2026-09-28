@@ -2,15 +2,24 @@
 
 Checkliste für die Integration eines neuen Gerätetyps in LabControl, abgeleitet
 aus dem tatsächlichen Aufbau der bestehenden Treiber
-([hcs34xx](hcs34xx/), [korad_kel102](korad_kel102/), [can_bus](can_bus/),
-[microhil](microhil/)). Als Vorlage eignet sich für ein "einfaches" USB/
+([hcs34xx](device-driver/hcs34xx/), [korad_kel102](device-driver/korad_kel102/),
+[can_bus](device-driver/can_bus/), [microhil](device-driver/microhil/),
+[jds66xx](device-driver/jds66xx/), [picoscope2000](device-driver/picoscope2000/)). Als Vorlage eignet sich für ein "einfaches" USB/
 Seriell-Gerät mit Live-Messwerten am besten `hcs34xx` (Netzteil) oder
 `korad_kel102` (Last); `can_bus`/`microhil` zeigen die Variante ohne
 automatische USB-Discovery bzw. mit mehreren Kanälen pro Gerät.
 
 ## 1. Treiber-Paket anlegen
 
-Neuer Ordner `<geraetename>/` auf gleicher Ebene wie `hcs34xx/`, mit:
+**Alle Geräte-Treiber liegen im Ordner [`device-driver/`](device-driver/)** — neue
+Treiber immer dort anlegen, nicht im Repo-Stamm. Der Ordner ist wegen des
+Bindestrichs kein Python-Paket, sondern steht im Suchpfad (`lab_gui/main.py`,
+`LabControl.spec` mit `pathex`, die Skripte in `tools/`). Importiert wird deshalb
+weiterhin direkt über den Paketnamen, z.B. `from hcs34xx.driver import HCS34xx`.
+Ein neues Prüfskript in `tools/` braucht dafür dieselbe Zeile
+`sys.path.insert(0, str(ROOT / "device-driver"))` wie die bestehenden.
+
+Neuer Ordner `device-driver/<geraetename>/` neben `device-driver/hcs34xx/`, mit:
 
 - `__init__.py` — leer
 - `driver.py` — echte Hardware-Anbindung
@@ -22,7 +31,7 @@ Neuer Ordner `<geraetename>/` auf gleicher Ebene wie `hcs34xx/`, mit:
 - **Eigene Exception-Basisklasse** `class <X>Error(RuntimeError)`. Falls das
   Gerät Sollwerte kommentarlos ablehnen kann (ohne dass die Verbindung tot
   ist), dafür eine Subklasse anlegen (Vorbild: `PowerSupplyValueError` in
-  `hcs34xx/driver.py`) — `device_worker._guard_*` muss "Wert abgelehnt" und
+  `device-driver/hcs34xx/driver.py`) — `device_worker._guard_*` muss "Wert abgelehnt" und
   "Verbindung tot" unterscheiden können, sonst wird bei jedem abgelehnten
   Sollwert fälschlich die Verbindung getrennt.
 - **Low-Level-Kommunikation** in einer privaten Methode (z.B. `_query`)
@@ -44,7 +53,7 @@ Neuer Ordner `<geraetename>/` auf gleicher Ebene wie `hcs34xx/`, mit:
   `device_worker.py` (eigener `QThread`) — der Treiber selbst bleibt dumm.
 - Jede Eigenheit des Protokolls (Timing, Skalierung, ignorierte Werte,
   fehlende Kommandos) direkt als Kommentar an der betroffenen Stelle
-  begründen, nicht nur im README. Beispiel: `hcs34xx/driver.py` `MIN_VOLTAGE`
+  begründen, nicht nur im README. Beispiel: `device-driver/hcs34xx/driver.py` `MIN_VOLTAGE`
   — ohne die Prüfung würde ein abgelehnter Wert in einen Timeout laufen und
   fälschlich als Verbindungsabbruch gewertet.
 
@@ -60,7 +69,7 @@ Neuer Ordner `<geraetename>/` auf gleicher Ebene wie `hcs34xx/`, mit:
 ## 4. `README.md` je Treiber-Paket
 
 Kurzbeschreibung, Verwendungsbeispiel, und zwingend ein Abschnitt
-"Bekannte Eigenheiten / Einschränkungen" (Vorlage: `hcs34xx/README.md`) —
+"Bekannte Eigenheiten / Einschränkungen" (Vorlage: `device-driver/hcs34xx/README.md`) —
 jede im Code kommentierte Eigenheit gehört hier zusätzlich in
 nutzerverständlicher Form rein.
 
@@ -132,7 +141,7 @@ Vorlage: `settings.py`/`settings_tab.py` (`can_configs`) plus
 - **`CHANGELOG.md` vor jedem Push aktualisieren** (Projekt-Konvention).
 - Erst gegen `mock.py`/Simulationsmodus testen, dann **zwingend gegen echte
   Hardware verifizieren** — Codereview allein deckt Timing-/Protokoll-
-  Eigenheiten nicht auf (siehe `hcs34xx/driver.py`: `MIN_VOLTAGE`,
+  Eigenheiten nicht auf (siehe `device-driver/hcs34xx/driver.py`: `MIN_VOLTAGE`,
   `_probe_alive` — beides erst an echter Hardware gefunden). Typische
   Fallstricke, auf die dabei zu achten ist:
   - Timeout durch abgelehnten Wert wird fälschlich als Verbindungsabbruch

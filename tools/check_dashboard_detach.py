@@ -25,6 +25,7 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "device-driver"))  # Geraete-Treiber (jds66xx, picoscope2000, ...)
 sys.path.insert(0, str(ROOT / "lab_gui"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

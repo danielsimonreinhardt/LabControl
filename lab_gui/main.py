@@ -4,7 +4,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # fuer korad_kel102/hcs34xx
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # fuer scope_api
+# Geraete-Treiber (korad_kel102, hcs34xx, ...) liegen seit 0.20.2 gesammelt in
+# device-driver/ -- wegen des Bindestrichs kein Paket, sondern ein Suchpfad,
+# damit die Importe ("from hcs34xx.driver import ...") unveraendert bleiben.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "device-driver"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (control_tab, ...)
 
 import logging

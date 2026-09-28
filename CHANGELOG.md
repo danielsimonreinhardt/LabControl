@@ -7,6 +7,23 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Repo-Struktur: alle Geräte-Treiber in `device-driver/` (0.20.2, Nutzerwunsch).** `can_bus`,
+  `hcs34xx`, `jds66xx`, `korad_kel102`, `microhil` und `picoscope2000` liegen jetzt unter
+  `device-driver/` (per `git mv`, Historie bleibt erhalten); **neue Treiber werden ab jetzt
+  immer dort angelegt** (in `NEUEN_TREIBER_ANLEGEN.md` festgehalten). `scope_api/` bleibt im
+  Stamm -- es ist die herstellerneutrale Oszilloskop-Schicht, kein Treiber.
+  - `device-driver` ist wegen des Bindestrichs kein Python-Paket, sondern ein **Suchpfad**:
+    eingetragen in `lab_gui/main.py`, `LabControl.spec` (`sys.path` für den CAN-Import beim
+    Bauen und `pathex` für die Analyse) und allen Skripten in `tools/`. Dadurch bleiben sämtliche
+    Importe (`from hcs34xx.driver import ...`) unverändert -- kein Code in `lab_gui/`,
+    `scope_api/` oder den Treibern selbst musste angepasst werden.
+  - Links und Pfadangaben in `README.md`, `lab_gui/README.md`, `scope_api/README.md` und
+    `NEUEN_TREIBER_ANLEGEN.md` nachgezogen (ältere CHANGELOG-Einträge bleiben, wie sie waren).
+  - **Verifiziert:** alle Prüfskripte in `tools/` grün (`check_jds66xx`, `check_scope_api`,
+    `check_device_reset`, `check_dashboard_detach`, `check_control_tab`, `check_network_share`)
+    sowie ein lokaler PyInstaller-Build aus `LabControl.spec`: `.exe` gebaut, alle sechs
+    Treiber-Pakete laut Analyse aus `device-driver/` eingebunden, keine fehlenden Module.
+    Die gebaute `.exe` selbst noch nicht gestartet (Test mit der CI-`.exe`).
 - **Control-Reiter: Kacheln frei im Raster platzierbar (0.20.1, Nutzerfeedback T7).** Mit 0.20.0
   ließen sich Lücken nicht belegen (Screenshot: freie Zelle unter „Netzteil 16V-30A“ neben dem
   2×2-Funktionsgenerator, das PicoScope ließ sich nicht hineinziehen). Ursache: die Plätze

@@ -15,7 +15,7 @@ Leerlauf-Trennung (`lab_gui/scope_service.py`), Endpunkte `/api/v1/scopes` und
 `/api/v1/captures` (`lab_gui/share_api.py`), Häkchen „Messen“, Kachelzustand
 „Verbunden (MCP)“ und die MCP-Werkzeuge (`labcontrol_mcp/server.py`). Die
 Abstimmung um das exklusive PicoScope-Handle zwischen DeviceWorker und
-Scope-Dienst regelt `picoscope2000/guard.py`.
+Scope-Dienst regelt `device-driver/picoscope2000/guard.py`.
 Plan und Entscheidungen vom 2026-09-28:
 <https://claude.ai/artifact/PbSiAExdmfT1kjTkVpnStc>.
 

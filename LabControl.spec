@@ -52,11 +52,13 @@ generate_icon.main()
 # liefert einfach eine leere Liste -- in der GUI sichtbar nur als
 # "Keine Kanäle gefunden" im Settings-Tab, in der Entwicklungsumgebung
 # (ungefroren) dagegen NIE reproduzierbar, weil dort alle Backends reguleaer
-# importierbar sind. Siehe can_bus/README.md.
+# importierbar sind. Siehe device-driver/can_bus/README.md.
 #
 # Aus INTERFACE_LIST abgeleitet statt hart verdrahtet, damit ein spaeter
 # ergaenzter Interface-Typ nicht erneut still aus dem Build faellt.
 sys.path.insert(0, str(SPECPATH))
+# Geraete-Treiber liegen in device-driver/ (Suchpfad, kein Paket, siehe lab_gui/main.py).
+sys.path.insert(0, str(Path(SPECPATH) / "device-driver"))
 from can.interfaces import BACKENDS  # noqa: E402
 from can_bus.driver import INTERFACE_LIST  # noqa: E402
 
@@ -70,7 +72,7 @@ for _interface in INTERFACE_LIST:
 
 a = Analysis(
     ['lab_gui/main.py'],
-    pathex=['.'],
+    pathex=['.', 'device-driver'],
     binaries=[],
     # Ziel-Unterordner bewusst FLACH (nicht "lab_gui/translations" o.ae.):
     # i18n._TRANSLATIONS_DIR und help_dialog._HELP_DIR suchen zur Laufzeit in

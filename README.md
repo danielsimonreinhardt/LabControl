@@ -28,11 +28,11 @@ A new release is compiled after every master-push. Just download and run the .ex
 - KORAD KEL102 electronic load
 - MANSON HCS-3304 USB (all versions of the HCS family should work)
 - Joy-IT JDS2915 dual-channel function generator (JDS66xx protocol; see
-  `jds66xx/README.md`)
+  `device-driver/jds66xx/README.md`)
 - PicoScope 2204A/2205A USB oscilloscope (dashboard and control tiles with
   free/busy status, name/colour + a button to launch the PicoScope 7 app; LabControl deliberately
   does not replicate its channel/trigger/waveform UI, see
-  `picoscope2000/README.md`). An AI assistant can measure with it through the
+  `device-driver/picoscope2000/README.md`). An AI assistant can measure with it through the
   MCP server via the vendor-neutral `scope_api/` layer (see `scope_api/README.md`)
 
 ## Contributing

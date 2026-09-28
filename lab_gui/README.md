@@ -1,7 +1,7 @@
 # Labor-Steuerung GUI
 
-PySide6-Oberfläche für die elektronische Last ([korad_kel102](../korad_kel102/))
-und das Labornetzteil ([hcs34xx](../hcs34xx/)).
+PySide6-Oberfläche für die elektronische Last ([korad_kel102](../device-driver/korad_kel102/))
+und das Labornetzteil ([hcs34xx](../device-driver/hcs34xx/)).
 
 ## Start
 
@@ -55,7 +55,7 @@ statt die .exe zu versionieren.
   Wartezeit je Schritt. Während der Ausführung ist die Tabelle gesperrt,
   der aktuelle Schritt wird markiert und in der Statuszeile angezeigt.
   Das Wert-Feld passt Einheit/Min/Max automatisch an die gewählte Aktion an
-  (z.B. Netzteil-Spannung nur 1–60V, siehe `hcs34xx/driver.py`: `MIN_VOLTAGE`).
+  (z.B. Netzteil-Spannung nur 1–60V, siehe `device-driver/hcs34xx/driver.py`: `MIN_VOLTAGE`).
   - **Ablaufsteuerung**: über das „+“-Menü lassen sich neben Aktionsschritten
     auch Zählschleifen („Schleife n×“, z.B. für Lade-/Entlade-Zyklen bei
     Akku-Tests), While-Schleifen, If/Else-Verzweigungen und Laufvariablen
@@ -92,7 +92,7 @@ statt die .exe zu versionieren.
     weiterhin geladen, v2-Dateien lassen sich aber nicht mit älteren
     Programmversionen öffnen.
 - **Ausgang Ein/Aus-Workaround fürs Netzteil**: Das HCS-34xx hat kein
-  Software-Ausgang-Ein/Aus (siehe `hcs34xx/README.md`). „Aus“ setzt den
+  Software-Ausgang-Ein/Aus (siehe `device-driver/hcs34xx/README.md`). „Aus“ setzt den
   Strom auf 0A; „Ein“ übernimmt die Spannung und hebt den Strom auf
   mindestens 0,1A an, statt einen ggf. schon höher konfigurierten Wert zu
   überschreiben. Im Control-Tab nutzt „Ein“ die aktuell im Formular
