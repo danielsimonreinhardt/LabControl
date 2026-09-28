@@ -56,9 +56,21 @@ Semantic Versioning (`lab_gui/version.py`).
     und weist den Worker ab, Trennen gibt frei, erneutes Öffnen nach der Pause, Übergabe an eine
     Test-Session (`begin_test` 1,0 s, danach PICO_VPP-Pfad 5020 mV, MCP währenddessen
     `scope_in_test_run`, danach wieder frei), nach Beenden direkt öffenbar.
-    **Noch offen:** der ganze Weg über die **laufende App und Claude Code** an echter
-    Hardware -- braucht einen Neustart von LabControl in 0.16.0, das Häkchen „Messen“ und
-    ein Neuverbinden des MCP-Servers in Claude Code (T2 im Entscheidungsboard); gebaute `.exe`.
+  - **Ganzer Weg über die laufende App und Claude Code verifiziert (T2, 2026-09-28):**
+    LabControl 0.16.0 aus dem Repo, „Messen“ angehakt, MCP-Server in Claude Code neu verbunden.
+    `list_scopes` → `picoscope:default` messbar; `acquire` ohne Signal: Rauschschwelle greift
+    an beiden offenen Eingängen, auto-Modus meldet „kein Trigger“; JDS2915 Kanal 1 über MCP
+    auf Rechteck 1 kHz 0…3,3 V: `single` bei 1,65 V/20 % → **1000,04 Hz, Tastgrad 50,01 %,
+    3,302 V, 20 Flanken**, keine Warnungen; `get_capture` um den Trigger (roh, Flanke direkt
+    nach t = 0), `measure` im Fenster 0–2,5 ms (5 Flanken), CSV mit 7813 Samples lesbar;
+    Kachel/LiveState „mcp“, nach `release_scope` wieder „free“. Generator danach auf den
+    vorgefundenen Stand (beide Ausgänge aus, Kanal 1 Sinus 10 kHz 5 V) und zurückgelesen.
+  - **Dabei aufgefallen:** die Repo-Version nutzt `lab_gui/settings.json` mit **eigenem
+    Token** -- der MCP-Server hatte den der `.exe` und bekam beim Erfassen 401 (Lesen geht
+    tokenfrei, deshalb fiel es erst dort auf). Behoben durch Eintragen des Tokens der
+    Repo-Version in die MCP-Konfiguration; beim Wechsel zurück zur `.exe` Token angleichen.
+    **Noch offen:** „PicoScope 7 öffnen“ während einer MCP-Verbindung (Klick durch den Nutzer,
+    T3 im Entscheidungsboard) und die gebaute `.exe`.
 - **Oszilloskope über MCP, Phase 1: herstellerneutrale Schicht `scope_api/` (0.15.0,
   Nutzerwunsch).** Ziel: der KI-Assistent misst und wertet über den MCP-Server mit dem
   PicoScope 2204A aus, und ein zweites Oszilloskop (entschieden: SCPI-Tischgerät per LAN)
