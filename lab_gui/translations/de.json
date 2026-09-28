@@ -378,5 +378,9 @@
   "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.": "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.",
   "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.": "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.",
   "{count} nicht verbundene Geräte gelöscht": "{count} nicht verbundene Geräte gelöscht",
-  "Keine nicht verbundenen Geräte vorhanden": "Keine nicht verbundenen Geräte vorhanden"
+  "Keine nicht verbundenen Geräte vorhanden": "Keine nicht verbundenen Geräte vorhanden",
+  "Kurve": "Kurve",
+  "Letzte Erfassung über Netzwerk/MCP als Bild anzeigen": "Letzte Erfassung über Netzwerk/MCP als Bild anzeigen",
+  "Letzte Erfassung: {summary}": "Letzte Erfassung: {summary}",
+  "Letzte Erfassung {capture_id}": "Letzte Erfassung {capture_id}"
 }

@@ -421,7 +421,9 @@ master switch, but it does need the token and “Read”. While an acquisition r
 or ran recently, LabControl keeps the oscilloscope open — the tile then shows
 **“Connected (MCP)”**. It disconnects by itself 60 seconds after the last
 acquisition; **“Disconnect”** on the tile or **“Open PicoScope 7”** release it
-immediately. A test run with oscilloscope steps takes precedence: on start, a
+immediately. After an acquisition the tile shows its time and readings;
+**“Plot”** opens it as an image — so you can see what the assistant measured.
+A test run with oscilloscope steps takes precedence: on start, a
 connection for acquisitions is closed, and no new ones are accepted until the run
 ends. Every acquisition is also saved as a CSV file in the `captures` folder next
 to the program.

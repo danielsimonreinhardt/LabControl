@@ -442,6 +442,8 @@ class DashboardWidget(QGroupBox):
     # device_id -- Oszilloskop-Verbindung des ScopeService trennen (Kachel-Knopf
     # "Trennen" und vor dem Start von PicoScope 7), siehe scope_service.py.
     picoscope_release_requested = Signal(str)
+    # device_id -- letzte Erfassung ueber Netzwerk/MCP als Bild zeigen (main_window).
+    picoscope_plot_requested = Signal(str)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop (Liste von device_ids,
     # links nach rechts) -- MainWindow verdrahtet das mit Settings.
     # set_panel_order() zur Persistenz, analog zu panel_color_requested.
@@ -1161,6 +1163,7 @@ class DashboardWidget(QGroupBox):
                 panel.launch_requested.connect(
                     lambda d=device_id: self._on_picoscope_launch_requested(d))
                 panel.release_requested.connect(self.picoscope_release_requested)
+                panel.plot_requested.connect(self.picoscope_plot_requested)
             else:
                 field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS}.get(
                     kind, CAN_FIELD_KEYS
@@ -1362,6 +1365,12 @@ class DashboardWidget(QGroupBox):
         if panel is None:
             return
         panel.set_state(status, variant, serial)
+
+    @Slot(str, str, str)
+    def update_picoscope_capture(self, device_id: str, capture_id: str, text: str) -> None:
+        panel = self._panels.get(device_id)
+        if isinstance(panel, PicoscopePanel):
+            panel.set_last_capture(text)
 
     def _on_picoscope_launch_requested(self, device_id: str = "") -> None:
         # Haelt der ScopeService das Geraet (Erfassungen ueber MCP), vorher

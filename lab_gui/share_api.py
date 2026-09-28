@@ -46,6 +46,7 @@ ausgefuehrt ueber `scopes` (im Betrieb scope_service.ScopeService):
   POST /api/v1/scopes/{id}/acquire         eine Erfassung (blockiert bis Ergebnis)
   POST /api/v1/scopes/{id}/release         Verbindung sofort trennen
   GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung
+  GET  /api/v1/captures/{cid}/plot         Erfassung als PNG (Phase 3)
   POST /api/v1/captures/{cid}/measure      Kennwerte neu berechnen
 Erfassen braucht Token + Lesen + das eigene Haekchen "Messen" (E1), aber NICHT
 den Hauptschalter: ein Oszilloskop hat keinen Ausgang. Ein Testablauf, der
@@ -612,6 +613,23 @@ def _capture_get(snapshot: dict, scopes, capture_id: str, query: dict) -> Respon
     return _json(200, {"v": API_VERSION, **result})
 
 
+PNG_TYPE = "image/png"
+
+
+def _capture_plot(snapshot: dict, scopes, capture_id: str, query: dict) -> Response:
+    denied = _capture_permitted(snapshot, scopes, capture_id)
+    if denied is not None:
+        return denied
+    raw_channels = (query.get("channels") or [""])[0]
+    channels = [c.strip() for c in raw_channels.split(",") if c.strip()] or None
+    try:
+        png = scopes.plot(capture_id, channels, _float_param(query, "t_start_s"), _float_param(query, "t_stop_s"),
+                          _int_param(query, "width", 1000, 1, 100_000), _int_param(query, "height", 560, 1, 100_000))
+    except ScopeError as exc:
+        return _scope_error(exc)
+    return Response(200, PNG_TYPE, png)
+
+
 def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, client: str) -> Response:
     entry = _scope_tiles(snapshot).get(device_id)
     if entry is None:
@@ -666,7 +684,7 @@ def _scope_route(path: str) -> tuple[str, str, str] | None:
     return None
 
 
-_SCOPE_GET = {("scopes", ""), ("scope", ""), ("scope", "capabilities"), ("capture", "")}
+_SCOPE_GET = {("scopes", ""), ("scope", ""), ("scope", "capabilities"), ("capture", ""), ("capture", "plot")}
 _SCOPE_POST = {("scope", "acquire"), ("scope", "release"), ("capture", "measure")}
 
 
@@ -697,6 +715,8 @@ def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict,
         return _scopes_list(snapshot, scopes)
     if kind == "scope":
         return _scope_get(snapshot, scopes, ident, what)
+    if what == "plot":
+        return _capture_plot(snapshot, scopes, ident, query)
     return _capture_get(snapshot, scopes, ident, query)
 
 

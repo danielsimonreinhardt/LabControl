@@ -32,6 +32,7 @@ from scope_api import analysis
 from scope_api.base import AcquireRequest, ScopeError
 from scope_api.pico2000_adapter import PicoScope2000Scope, open_pico2000
 from scope_api.store import CaptureStore
+import scope_plot
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ TEST_HANDOVER_TIMEOUT_S = 45.0
 class ScopeService(QObject):
     # device_id, "mcp" (Verbindung offen) oder "free" (getrennt) -- für Kachel und LiveState.
     connection_changed = Signal(str, str)
+    # device_id, capture_id, Kurztext (Uhrzeit + Kennwerte) -- letzte Erfassung auf der Kachel.
+    capture_added = Signal(str, str, str)
 
     def __init__(self, capture_dir: Path | None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -174,6 +177,10 @@ class ScopeService(QObject):
         capture_id = self._store.add(capture)
         with self._lock:
             self._capture_device[capture_id] = device_id
+        try:
+            self.capture_added.emit(device_id, capture_id, scope_plot.summary(capture))
+        except Exception:  # noqa: BLE001 -- die Kachel darf eine Erfassung nie scheitern lassen
+            logger.exception("Oszilloskop %s: Kurztext für die Kachel gescheitert", device_id)
         report = analysis.report(capture, items, max(1, points))
         if points == 0:
             report.pop("envelope", None)
@@ -202,6 +209,12 @@ class ScopeService(QObject):
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
                 raise ScopeError("invalid_request", f"'{name}' muss eine Zahl sein.")
         return self._store.measure(capture_id, items, str(channel) if channel else None, t_start, t_stop)
+
+    def plot(self, capture_id: str, channels: list[str] | None, t_start: float | None, t_stop: float | None,
+             width: int, height: int) -> bytes:
+        """PNG einer gespeicherten Erfassung (scope_plot.plot_png). Zeichnet im
+        aufrufenden Thread -- QImage/QPainter brauchen dafuer keinen GUI-Thread."""
+        return scope_plot.plot_png(self._store.get(capture_id), channels, t_start, t_stop, width, height)
 
     def release(self, device_id: str) -> dict:
         was_open = self._executor.submit(self._close_job, device_id).result()

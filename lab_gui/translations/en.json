@@ -381,5 +381,9 @@
   "Vergisst alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe. Verbundene Geräte bleiben unverändert.": "Forgets all devices that are currently not connected, including names, safety limits, panel colours and network sharing. Connected devices stay unchanged.",
   "Alle Geräte, die gerade nicht verbunden sind, samt Namen, Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigabe löschen? Verbundene Geräte bleiben unverändert. Das lässt sich nicht rückgängig machen.": "Delete all devices that are currently not connected, including names, safety limits, panel colours and network sharing? Connected devices stay unchanged. This cannot be undone.",
   "{count} nicht verbundene Geräte gelöscht": "{count} disconnected devices deleted",
-  "Keine nicht verbundenen Geräte vorhanden": "No disconnected devices"
+  "Keine nicht verbundenen Geräte vorhanden": "No disconnected devices",
+  "Kurve": "Plot",
+  "Letzte Erfassung über Netzwerk/MCP als Bild anzeigen": "Show the last network/MCP acquisition as an image",
+  "Letzte Erfassung: {summary}": "Last acquisition: {summary}",
+  "Letzte Erfassung {capture_id}": "Last acquisition {capture_id}"
 }

@@ -440,7 +440,9 @@ Hauptschalter nicht, wohl aber den Token und „Lesen“. Solange eine Erfassung
 läuft oder kürzlich lief, hält LabControl das Oszilloskop geöffnet — die Kachel
 zeigt dann **„Verbunden (MCP)“**. 60 Sekunden nach der letzten Erfassung wird
 von selbst getrennt; **„Trennen“** auf der Kachel oder **„PicoScope 7 öffnen“**
-geben es sofort frei. Ein Testablauf mit Oszilloskop-Schritten hat Vorrang: beim
+geben es sofort frei. Nach einer Erfassung zeigt die Kachel deren Uhrzeit und
+Kennwerte; **„Kurve“** öffnet sie als Bild — so sieht man, was der Assistent
+gemessen hat. Ein Testablauf mit Oszilloskop-Schritten hat Vorrang: beim
 Start wird eine Verbindung für Erfassungen getrennt, und bis zum Laufende werden
 keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
 `captures` neben dem Programm.

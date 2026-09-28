@@ -23,9 +23,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.types import TextContent, ToolAnnotations
 
 BASE_URL = os.environ.get("LABCONTROL_URL", "http://127.0.0.1:8420").rstrip("/")
 TOKEN = os.environ.get("LABCONTROL_TOKEN", "")
@@ -97,12 +97,15 @@ Vorgehen:
 - Bei Auffaelligkeiten (unerwartete Werte, Fehlermeldungen) sofort all_off und den Nutzer informieren.
 - Netzteil HCS-34xx: 'Ausgang AUS' ist nur Strom = 0 A; PSU_CURR > 0 schaltet den Ausgang wieder EIN.
 
-Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, release_scope):
+Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,
+release_scope):
 - Messen schaltet nichts, braucht aber das Haekchen 'Messen' je Oszilloskop (nicht den Hauptschalter).
 - Vor der ersten Messung an einem neuen Messpunkt den Nutzer nach Tastkopf (1:1/10:1) und erwartetem
   Pegel fragen und den Bereich (range_v) passend waehlen -- das Oszilloskop kann die Verdrahtung nicht pruefen.
 - Alles in V, s, Hz. acquire liefert Kennwerte, Warnungen und eine Huellkurve, keine Rohdaten; Details
   ueber get_capture (Ausschnitt) oder die CSV-Datei (csv_path), Neuauswertung ohne neue Messung ueber measure.
+  Mit plot_capture die Kurve als Bild ansehen, auch gezoomt -- vor allem bei unerwarteten Werten, Stoerungen,
+  Schwingen oder Einschwingvorgaengen, die Kennwerte allein nicht zeigen.
 - 'overrange' oder Warnungen ernst nehmen (Bereich erhoehen). Ein Kennwert None hat seinen Grund in 'unavailable'.
 - Die Verbindung bleibt 60 s nach der letzten Erfassung offen (PicoScope 7 kann das Geraet dann nicht
   oeffnen). Nach einer Messreihe release_scope aufrufen.
@@ -149,6 +152,26 @@ def _fail(status: int, body: dict) -> ToolError:
     if code in HINTS:
         text += f"\nHinweis: {HINTS[code]}"
     return ToolError(text)
+
+
+def _fetch_png(path: str) -> bytes:
+    """GET auf eine Bild-Route. Fehler kommen wie sonst als JSON und werden zu ToolError."""
+    request = urllib.request.Request(BASE_URL + path, method="GET")
+    if TOKEN:
+        request.add_header("Authorization", f"Bearer {TOKEN}")
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+            data = response.read()
+            if response.headers.get_content_type() != "image/png":
+                raise ToolError(f"Unerwartete Antwort ({response.headers.get_content_type()}) statt PNG.")
+            return data
+    except urllib.error.HTTPError as exc:
+        raise _fail(exc.code, _parse(exc.read())) from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise ToolError(
+            f"LabControl unter {BASE_URL} nicht erreichbar ({exc}). Laeuft die App, ist die "
+            f"Netzwerk-Freigabe aktiviert und stimmen Adresse und Port?"
+        ) from exc
 
 
 def _checked(method: str, path: str, payload: dict | None = None, timeout: float = TIMEOUT_S) -> dict:
@@ -314,6 +337,33 @@ def measure(capture_id: str, measurements: list[str] | None = None, channel: str
     if t_stop_s is not None:
         payload["t_stop_s"] = t_stop_s
     return _checked("POST", "/api/v1/captures/" + urllib.parse.quote(capture_id, safe="") + "/measure", payload)
+
+
+@server.tool(annotations=READ_ONLY)
+def plot_capture(capture_id: str, channels: list[str] | None = None, t_start_s: float | None = None,
+                 t_stop_s: float | None = None, width: int = 1000, height: int = 560) -> list[Image | TextContent]:
+    """Eine gespeicherte Erfassung als Bild (PNG) ansehen -- wie ein Oszilloskop-Schirm: Kopfzeile mit
+    Trigger und Abtastintervall, je Kanal eine Legende mit Bereich, min/max, Vss, Effektivwert und
+    Frequenz, t = 0 am Trigger (senkrechte Strichlinie), Triggerpegel als waagerechte Strichlinie.
+    Die Spannungsachse ist gemeinsam fuer alle Kanaele und auf die Daten skaliert. Je Pixelspalte
+    werden Min und Max gezeichnet, kurze Spitzen bleiben sichtbar. Mit t_start_s/t_stop_s auf einen
+    Ausschnitt zoomen (z.B. eine Flanke), mit channels auf einzelne Kanaele beschraenken.
+    width 400..2000, height 250..1200 Pixel. Liest nur -- misst nicht neu."""
+    query: dict = {"width": width, "height": height}
+    if channels:
+        query["channels"] = ",".join(channels)
+    if t_start_s is not None:
+        query["t_start_s"] = t_start_s
+    if t_stop_s is not None:
+        query["t_stop_s"] = t_stop_s
+    png = _fetch_png("/api/v1/captures/" + urllib.parse.quote(capture_id, safe="") + "/plot?"
+                     + urllib.parse.urlencode(query))
+    window = ""
+    if t_start_s is not None or t_stop_s is not None:
+        window = f", Ausschnitt {t_start_s if t_start_s is not None else 'Anfang'} .. " \
+                 f"{t_stop_s if t_stop_s is not None else 'Ende'} s"
+    return [Image(data=png, format="png"),
+            TextContent(type="text", text=f"Erfassung {capture_id}{window} ({len(png)} Byte PNG).")]
 
 
 @server.tool(annotations=ToolAnnotations(

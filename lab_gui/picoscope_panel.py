@@ -23,6 +23,11 @@ haelt das Geraet fuer Erfassungen ueber Netzwerk/MCP offen (siehe
 lab_gui/scope_service.py) und trennt nach 60 s ohne Erfassung von selbst.
 Der Knopf "Trennen" gibt es sofort frei; "PicoScope 7 oeffnen" trennt
 ebenfalls vorher, sonst koennte die App das Geraet nicht oeffnen.
+
+Letzte Erfassung (seit 0.18.0): eine Zeile mit Uhrzeit und Kennwerten der
+letzten Erfassung ueber Netzwerk/MCP und ein Knopf "Kurve", der sie als Bild
+zeigt (main_window._show_scope_plot, gezeichnet von scope_plot.py) -- damit
+der Nutzer sieht, was der Assistent gemessen hat.
 """
 from __future__ import annotations
 
@@ -50,6 +55,7 @@ STATUS_ICON_SIZE = 18
 class PicoscopePanel(QGroupBox):
     launch_requested = Signal()
     release_requested = Signal(str)  # device_id
+    plot_requested = Signal(str)  # device_id -- letzte Erfassung als Bild zeigen
 
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
@@ -92,6 +98,20 @@ class PicoscopePanel(QGroupBox):
         status_layout.addWidget(self._release_button)
         outer.addWidget(status_row)
 
+        # Letzte Erfassung ueber Netzwerk/MCP -- erst sichtbar, wenn es eine gibt.
+        capture_row = no_own_background(QWidget())
+        capture_layout = QHBoxLayout(capture_row)
+        capture_layout.setContentsMargins(0, 0, 0, 0)
+        self._capture_label = QLabel()
+        self._capture_label.setWordWrap(True)
+        self._plot_button = IconButton("mdi.chart-line", "", text=tr("Kurve"))
+        self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
+        capture_layout.addWidget(self._capture_label, 1)
+        capture_layout.addWidget(self._plot_button)
+        capture_row.setVisible(False)
+        self._capture_row = capture_row
+        outer.addWidget(capture_row)
+
         # Anders als die uebrigen Dashboard-Kacheln (reine Statusanzeige)
         # erwartet diese Kachel aktive Bedienung -- ein normaler, neutral
         # gestylter QPushButton ging darin optisch unter (Nutzerfeedback).
@@ -117,6 +137,8 @@ class PicoscopePanel(QGroupBox):
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
         self._status_text.setText(tr(STATUS_TEXT.get(self._status, "Unbekannt")))
         self._release_button.setText(tr("Trennen"))
+        self._plot_button.setText(tr("Kurve"))
+        self._plot_button.setToolTip(tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen"))
         self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
@@ -127,6 +149,13 @@ class PicoscopePanel(QGroupBox):
 
     def _apply_variant_style(self, palette: Palette) -> None:
         self._variant_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._capture_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+
+    def set_last_capture(self, text: str) -> None:
+        """Kurztext der letzten Erfassung (scope_plot.summary), z.B.
+        "11:31:00 · A 3.35 Vss 1.000 kHz"."""
+        self._capture_label.setText(tr("Letzte Erfassung: {summary}", summary=text))
+        self._capture_row.setVisible(True)
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")

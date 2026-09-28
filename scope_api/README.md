@@ -6,7 +6,10 @@ ein zweites Oszilloskop (geplant: SCPI-Tischgerät per LAN) nur einen weiteren
 Adapter braucht. Auswertung, Speicher, Netzwerk-Schnittstelle und
 MCP-Werkzeuge bleiben dabei gleich.
 
-Stand: **Phase 2** (seit 0.16.0). Phase 1 (0.15.0): Schnittstelle, Auswertung,
+Stand: **Phase 3** (seit 0.18.0): Erfassungen als Bild -- `lab_gui/scope_plot.py`
+(QPainter, keine neue Abhängigkeit), Endpunkt `GET /api/v1/captures/{cid}/plot`,
+MCP-Werkzeug `plot_capture` und die letzte Erfassung samt Knopf „Kurve“ auf der
+Oszilloskop-Kachel. Davor **Phase 2** (0.16.0). Phase 1 (0.15.0): Schnittstelle, Auswertung,
 Speicher, 2204A-Adapter, Mock. Phase 2: eigener Scope-Thread mit
 Leerlauf-Trennung (`lab_gui/scope_service.py`), Endpunkte `/api/v1/scopes` und
 `/api/v1/captures` (`lab_gui/share_api.py`), Häkchen „Messen“, Kachelzustand

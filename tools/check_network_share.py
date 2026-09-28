@@ -724,6 +724,33 @@ def section_scopes() -> None:
           call("POST", f"/api/v1/scopes/{sid}/release", {}, snap=_snap_scope(measure=False))[0] == 403)
     check("Erfassung bleibt nach release lesbar", call("GET", f"/api/v1/captures/{cid}")[0] == 200)
 
+    # -- Bild (Phase 3) -------------------------------------------------------------------
+    def raw_get(path, snap=None):
+        return share_api.dispatch("GET", path, bearer, _Stub(snap or _snap_scope()), app_info,
+                                  client="10.0.0.9", scopes=service)
+
+    resp = raw_get(f"/api/v1/captures/{cid}/plot")
+    check("GET plot -> PNG", resp.status == 200 and resp.content_type == "image/png"
+          and resp.body[:8] == b"\x89PNG\r\n\x1a\n" and len(resp.body) > 5000, str(resp.status))
+    from PySide6.QtGui import QImage
+    img = QImage.fromData(resp.body, "PNG")
+    check("Standardgroesse 1000 x 560", (img.width(), img.height()) == (1000, 560))
+    resp = raw_get(f"/api/v1/captures/{cid}/plot?channels=B&t_start_s=0&t_stop_s=0.001&width=5000&height=10")
+    img = QImage.fromData(resp.body, "PNG")
+    check("Ausschnitt, ein Kanal, Groesse geklemmt", resp.status == 200 and (img.width(), img.height()) == (2000, 250))
+    check("unbekannter Kanal -> 400", raw_get(f"/api/v1/captures/{cid}/plot?channels=C").status == 400)
+    check("leeres Zeitfenster -> 400", raw_get(f"/api/v1/captures/{cid}/plot?t_start_s=5&t_stop_s=6").status == 400)
+    check("plot unbekannte Erfassung -> 404", raw_get("/api/v1/captures/c-00000000-000000-00/plot").status == 404)
+    check("plot ohne Messen-Freigabe -> 404",
+          raw_get(f"/api/v1/captures/{cid}/plot", snap=_snap_scope(measure=False)).status == 404)
+    check("POST auf plot -> 405", call("POST", f"/api/v1/captures/{cid}/plot", {})[0] == 405)
+    seen = []
+    service.capture_added.connect(lambda *a: seen.append(a))
+    status, body = call("POST", acq, good)
+    QApplication.processEvents()
+    check("capture_added meldet ID und Kurztext fuer die Kachel",
+          seen and seen[-1][0] == sid and seen[-1][1] == body["capture_id"] and "A " in seen[-1][2], str(seen))
+
     # -- Leerlauf-Trennung (E2), mit verkuerzter Frist ---------------------------------
     saved = scope_service.IDLE_CLOSE_S
     scope_service.IDLE_CLOSE_S = 0.2
@@ -1114,9 +1141,23 @@ async def main():
     params = StdioServerParameters(command=sys.executable, args=[sys.argv[1]], env={**os.environ})
     out = {}
     async with Client(params) as c:
+        def resolve(value):
+            # "$schritt.feld" -> Wert aus einem frueheren Schritt (z.B. capture_id)
+            if isinstance(value, str) and value.startswith("$"):
+                step, _, key = value[1:].partition(".")
+                return (out[step]["data"] or {}).get(key)
+            return value
+
         async def call(name, args):
-            r = await c.call_tool(name, args)
-            text = r.content[0].text if r.content else ""
+            r = await c.call_tool(name, {k: resolve(v) for k, v in args.items()})
+            images = [b for b in r.content if getattr(b, "type", "") == "image"]
+            texts = [b.text for b in r.content if getattr(b, "type", "") == "text"]
+            text = texts[0] if texts else ""
+            if images:
+                import base64
+                raw = base64.b64decode(images[0].data)
+                return {"error": bool(r.is_error), "data": None, "text": text,
+                        "image": {"mime": images[0].mime_type, "bytes": len(raw), "png": raw[:8] == b"\x89PNG\r\n\x1a\n"}}
             data = r.structured_content
             if data is None:
                 # dict-Rueckgaben kommen als JSON-Text; Fehler sind Klartext
@@ -1534,13 +1575,18 @@ def section_app() -> None:
                 {"name": "acquire_ghost", "tool": "acquire", "args": {
                     "scope_id": "picoscope:NICHTDA", "channels": [{"name": "A", "range_v": 5}],
                     "duration_s": 0.005}},
+                {"name": "plot", "tool": "plot_capture", "args": {"capture_id": "$acquire.capture_id"}},
+                {"name": "plot_zoom", "tool": "plot_capture", "args": {
+                    "capture_id": "$acquire.capture_id", "channels": ["A"], "t_start_s": -5e-6,
+                    "t_stop_s": 5e-6, "width": 600, "height": 320}},
+                {"name": "plot_bad", "tool": "plot_capture", "args": {"capture_id": "c-00000000-000000-00"}},
                 {"name": "release", "tool": "release_scope", "args": {"scope_id": "picoscope:SIM"}},
             ]
             out = _run_mcp_probe(mcp_python, base, token, steps)
-            check("MCP: elf Werkzeuge angeboten (5 Steuerung + 6 Oszilloskop)",
+            check("MCP: zwoelf Werkzeuge angeboten (5 Steuerung + 7 Oszilloskop)",
                   out["tools"] == ["acquire", "all_off", "control_device", "get_capture",
                                    "get_scope_capabilities", "get_status", "list_devices", "list_scopes",
-                                   "measure", "read_device", "release_scope"],
+                                   "measure", "plot_capture", "read_device", "release_scope"],
                   str(out["tools"]))
             check("MCP: Sicherheitshinweise fuer den Assistenten mitgeliefert",
                   "Hardware" in out["instructions"] and "all_off" in out["instructions"])
@@ -1582,6 +1628,24 @@ def section_app() -> None:
                   and "Hinweis" in out["acquire_bad"]["text"], out["acquire_bad"]["text"][:160])
             check("MCP acquire: unbekanntes Scope -> unknown_scope",
                   out["acquire_ghost"]["error"] and "unknown_scope" in out["acquire_ghost"]["text"])
+            check("MCP plot_capture liefert ein PNG-Bild mit Text",
+                  not out["plot"]["error"] and out["plot"].get("image", {}).get("png") is True
+                  and out["plot"]["image"]["mime"] == "image/png" and out["plot"]["image"]["bytes"] > 5000
+                  and "Erfassung c-" in out["plot"]["text"], str(out["plot"])[:200])
+            check("MCP plot_capture gezoomt (ein Kanal, 10 us)",
+                  not out["plot_zoom"]["error"] and out["plot_zoom"].get("image", {}).get("png") is True
+                  and "Ausschnitt" in out["plot_zoom"]["text"])
+            check("MCP plot_capture: unbekannte Erfassung -> Werkzeugfehler",
+                  out["plot_bad"]["error"] and "unknown_capture" in out["plot_bad"]["text"])
+            panel = window.dashboard._panels.get("picoscope:SIM")
+            check("Kachel zeigt die letzte Erfassung",
+                  gui(lambda: panel._capture_row.isVisibleTo(panel)
+                      and "Letzte Erfassung" in panel._capture_label.text()),
+                  gui(lambda: panel._capture_label.text()))
+            check("Knopf Kurve oeffnet ein Fenster mit Bild",
+                  gui(lambda: (window._show_scope_plot("picoscope:SIM"),
+                               any(w.windowTitle().startswith("Letzte Erfassung c-")
+                                   for w in QApplication.topLevelWidgets() if w.isVisible()))[1]))
             check("MCP release_scope trennt", not out["release"]["error"]
                   and out["release"]["data"]["released"] is True)
             check("MCP-Anweisungen erklaeren Oszilloskope",

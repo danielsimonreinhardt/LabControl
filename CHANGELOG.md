@@ -7,6 +7,38 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Oszilloskope über MCP, Phase 3: Erfassungen als Bild (0.18.0, Nutzerwunsch).** Der
+  Assistent kann eine Kurve jetzt ansehen statt nur Kennwerte und Hüllkurve zu lesen.
+  - **`lab_gui/scope_plot.py`** zeichnet mit QPainter (keine neue Abhängigkeit -- matplotlib
+    würde die `.exe` um viele MB vergrößern; deshalb in `lab_gui/` und nicht im Qt-freien
+    `scope_api/`): Kopfzeile mit Trigger, Abtastintervall, Modell, ID, Uhrzeit (wird bei
+    schmalen Bildern hinten gekürzt); je Kanal eine Legende mit Bereich, Kopplung, min/max,
+    Vss, Effektivwert, Frequenz, ggf. „ÜBERSTEUERT“; Kanalfarben wie PicoScope 7; t = 0 am
+    Trigger und Triggerpegel als Strichlinien; gemeinsame, auf die Daten skalierte
+    Spannungsachse mit Raster aus der 1-2-5-Reihe; Zeitraster auf runden Werten ab t = 0 (die
+    erste Fassung teilte stur in 10 und beschriftete „-512 ns“/„299 µs“). Je Pixelspalte Min
+    und Max, damit kurze Spitzen sichtbar bleiben. Zahlen mit SI-Vorsilbe; 999,96 Hz wird zu
+    „1.000 kHz“ statt „1000 Hz“ bzw. „0.9998 kHz“ (beides in der ersten Fassung gesehen).
+  - **`GET /api/v1/captures/{cid}/plot`** (`channels`, `t_start_s`, `t_stop_s`, `width`
+    400–2000, `height` 250–1200) liefert `image/png`; Freigaberegeln wie bei den Ausschnitten.
+  - **MCP-Werkzeug `plot_capture`** gibt das PNG als Bildinhalt plus eine Textzeile zurück; die
+    Anweisungen empfehlen es bei unerwarteten Werten, Störungen und Einschwingvorgängen.
+  - **Kachel**: Zeile „Letzte Erfassung: 11:31:00 · A 3.35 Vss 1.000 kHz“ und Knopf **„Kurve“**
+    (öffnet das Bild in einem Fenster), damit der Nutzer sieht, was gemessen wurde.
+  - **Beim Testen gefunden:** `tr()` hat selbst einen Parameter `text` -- ein Platzhalter
+    `{text}` in der Kachelzeile warf TypeError; umbenannt in `{summary}`.
+  - **Nicht umgesetzt**, weil schon vorhanden: „feinere Ausschnitte in `get_capture`“ aus dem
+    Plan (Zeitfenster, roh/Mittel/Min-Max gibt es seit Phase 2).
+  - **Verifiziert am Mock/ohne Hardware:** `check_network_share.py` komplett grün, neu im
+    Abschnitt `scopes`: PNG-Signatur, Standardgröße, Klemmen der Größe, Ausschnitt/Kanal,
+    Fehlercodes, Freigabe, 405 auf POST, Kurztext-Signal; im Abschnitt `app` über den echten
+    MCP-Kindprozess: 12 Werkzeuge, `plot_capture` liefert ein PNG (45 KB) samt Text, gezoomt,
+    unbekannte ID als Werkzeugfehler, Kachelzeile sichtbar, „Kurve“ öffnet ein Fenster.
+    Bilder mit echten Schriften gerendert und angesehen (Mock: Rechteck + Sinus, Zoom auf die
+    Flanke). **Mit echten Messdaten:** die CSV der T2-Messung am 2204A gerendert -- 10 Perioden,
+    reales ±1-LSB-Rauschen, im Zoom genau ein Sample in der Flanke (Auflösungsgrenze bei
+    1,28 µs). **Noch offen:** `plot_capture` über deine laufende App (Neustart + MCP neu
+    verbinden, T4 im Entscheidungsboard), gebaute `.exe`.
 - **„Gerätezuordnung löschen“ zweigeteilt (0.17.0, Nutzerwunsch).** Einstellungen → Geräte hat
   jetzt zwei Knöpfe:
   - **„Nicht verbundene Geräte löschen“** (neu): vergisst nur Geräte, die gerade nicht

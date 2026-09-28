@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSystemTrayIcon,
     QTabWidget,
@@ -159,6 +160,8 @@ class MainWindow(QMainWindow):
         # captures/ neben der App (Entscheidung E3).
         self._scope_service = ScopeService(app_dir() / "captures", self)
         self._scope_service.connection_changed.connect(self._on_scope_connection_changed)
+        # device_id -> capture_id der letzten Erfassung (Knopf "Kurve" der Kachel)
+        self._last_scope_capture: dict[str, str] = {}
         self._share_server = ShareServer(self._live_state, self._share_bridge, self,
                                          scopes=self._scope_service)
         # Sekundentakt nur, solange der Hauptschalter der Fernsteuerung an ist:
@@ -243,6 +246,8 @@ class MainWindow(QMainWindow):
         self._worker.picoscope_connected.connect(self._scope_service.on_picoscope_connected)
         self._worker.picoscope_state.connect(self._scope_service.on_picoscope_state)
         self.dashboard.picoscope_release_requested.connect(self._scope_service.release_async)
+        self._scope_service.capture_added.connect(self._on_scope_capture_added)
+        self.dashboard.picoscope_plot_requested.connect(self._show_scope_plot)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
@@ -1257,6 +1262,36 @@ class MainWindow(QMainWindow):
         es war ja eben noch von uns geoeffnet."""
         self.dashboard.update_picoscope_state(device_id, status, "", "")
         self._live_state.on_picoscope_state(device_id, status, "", "")
+
+    @Slot(str, str, str)
+    def _on_scope_capture_added(self, device_id: str, capture_id: str, text: str) -> None:
+        self._last_scope_capture[device_id] = capture_id
+        self.dashboard.update_picoscope_capture(device_id, capture_id, text)
+
+    @Slot(str)
+    def _show_scope_plot(self, device_id: str) -> None:
+        """Knopf "Kurve" der Oszilloskop-Kachel: letzte Erfassung als Bild."""
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QDialog
+
+        from scope_api.base import ScopeError
+
+        capture_id = self._last_scope_capture.get(device_id, "")
+        try:
+            png = self._scope_service.plot(capture_id, None, None, None, 1000, 560)
+        except ScopeError as exc:
+            QMessageBox.information(self, tr("Kurve"), exc.message)
+            return
+        pixmap = QPixmap()
+        pixmap.loadFromData(png, "PNG")
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Letzte Erfassung {capture_id}", capture_id=capture_id))
+        layout = QVBoxLayout(dialog)
+        image = QLabel()
+        image.setPixmap(pixmap)
+        layout.addWidget(image)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
 
     def closeEvent(self, event) -> None:
         # Als allererstes: keine Anfrage darf die App ueberleben, und der

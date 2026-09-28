@@ -23,6 +23,7 @@ der Server kann nichts, was die Schnittstelle nicht ohnehin erlaubt.
 | `acquire` | Eine Erfassung mit vollständiger Einstellung (V, s); liefert Kennwerte, Warnungen, Hüllkurve, CSV-Pfad |
 | `get_capture` | Ausschnitt einer Erfassung (roh oder verdichtet) |
 | `measure` | Kennwerte einer gespeicherten Erfassung neu berechnen, ohne neue Messung |
+| `plot_capture` | Erfassung als Bild (PNG) ansehen, auch gezoomt oder für einzelne Kanäle |
 | `release_scope` | Verbindung zum Oszilloskop sofort trennen (sonst nach 60 s von selbst) |
 
 `control_device` bekommt die Antwort des Geräts abgewartet: `ok: true` heißt,
