@@ -382,5 +382,13 @@
   "Kurve": "Kurve",
   "Letzte Erfassung über Netzwerk/MCP als Bild anzeigen": "Letzte Erfassung über Netzwerk/MCP als Bild anzeigen",
   "Letzte Erfassung: {summary}": "Letzte Erfassung: {summary}",
-  "Letzte Erfassung {capture_id}": "Letzte Erfassung {capture_id}"
+  "Letzte Erfassung {capture_id}": "Letzte Erfassung {capture_id}",
+  "Dashboard in eigenem Fenster öffnen": "Dashboard in eigenem Fenster öffnen",
+  "Dashboard wieder ins Hauptfenster holen": "Dashboard wieder ins Hauptfenster holen",
+  "Oszilloskop": "Oszilloskop",
+  "Status:": "Status:",
+  "Letzte Erfassung:": "Letzte Erfassung:",
+  "Presets": "Presets",
+  "alle Geräte auf einmal": "alle Geräte auf einmal",
+  "PicoScope 7 öffnen": "PicoScope 7 öffnen"
 }

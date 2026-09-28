@@ -13,7 +13,7 @@ Drag-Abbild (rein optisch, zustandslos) wird hier geteilt.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -106,6 +106,16 @@ def pack_tiles_by_row(order: list[str], spans: dict[str, tuple[int, int]], max_r
     swapped_spans = {device_id: (row_span, col_span) for device_id, (col_span, row_span) in spans.items()}
     swapped_positions = pack_tiles(order, swapped_spans, max_rows)
     return {device_id: (col, row) for device_id, (row, col) in swapped_positions.items()}
+
+
+def rect_distance(rect: QRect, point: QPoint) -> int:
+    """Quadrierter Abstand von `point` zum naechsten Punkt von `rect`
+    (0, wenn `point` darin liegt) -- nur zum Vergleichen gedacht (Drop ins
+    Leere: naechstgelegene Kachel, siehe dashboard/control_tab
+    _order_with_dragged_at), die Wurzel waere dafuer ueberfluessig."""
+    dx = max(rect.left() - point.x(), 0, point.x() - rect.right())
+    dy = max(rect.top() - point.y(), 0, point.y() - rect.bottom())
+    return dx * dx + dy * dy
 
 
 def cell_size_ratchet(current: int, sizes: list[tuple[int, int]]) -> int:

@@ -133,6 +133,31 @@ class Settings(QObject):
         self.dashboard_compact_changed.emit(enabled)
 
     @property
+    def dashboard_detached(self) -> bool:
+        """Dashboard in eigenem Fenster (siehe dashboard_window.py) -- wird beim
+        Start wiederhergestellt. Kein Signal: nur MainWindow liest und schreibt."""
+        return bool(self._data.get("dashboard_detached", False))
+
+    def set_dashboard_detached(self, detached: bool) -> None:
+        if detached == self.dashboard_detached:
+            return
+        self._data["dashboard_detached"] = detached
+        self._save()
+
+    @property
+    def dashboard_window_geometry(self) -> str:
+        """Position/Groesse des Dashboard-Fensters (QWidget.saveGeometry, Base64),
+        damit es wieder auf dem zweiten Bildschirm aufgeht."""
+        stored = self._data.get("dashboard_window_geometry")
+        return stored if isinstance(stored, str) else ""
+
+    def set_dashboard_window_geometry(self, geometry: str) -> None:
+        if geometry == self.dashboard_window_geometry:
+            return
+        self._data["dashboard_window_geometry"] = geometry
+        self._save()
+
+    @property
     def notifications_enabled(self) -> bool:
         return bool(self._data.get("notifications_enabled", True))
 

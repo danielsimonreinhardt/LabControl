@@ -7,8 +7,10 @@ um `ps2000.dll`). `PicoScope2000.open_first()` verbindet automatisch.
 In LabControl als Dashboard-Kachel (Status frei/belegt + Start-Button für
 die PicoScope-7-App, siehe `lab_gui/picoscope_panel.py`) UND als
 Testablauf-Aktionen (`PICO_VMAX`/`PICO_VMIN`/`PICO_VPP`/`PICO_VRMS`, siehe
-unten) eingebunden -- bewusst KEIN Control-Tab-Abschnitt, keine
-Block-Erfassung/Kurvenanzeige im GUI. Grund: LabControl ist eine
+unten) eingebunden. Seit 0.20.0 zusätzlich eine schlanke Control-Kachel
+(`control_tab.PicoscopeControlGroup`: Status, Name, Panel-Farbe, dieselben
+Knöpfe wie die Dashboard-Kachel) -- aber weiterhin keine Kanal-/Trigger-
+Einstellungen und keine eigene Kurvenanzeige im GUI. Grund: LabControl ist eine
 übergeordnete Laborsteuerung, kein Ersatz für die PicoScope-7-App -- für ein
 so komplexes Gerät wie ein Oszilloskop (Kanäle, Trigger, Kurvenanzeige) macht
 es wenig Sinn, deren Funktionsumfang nachzubauen. Stattdessen liefert
@@ -138,10 +140,11 @@ Der Mock erzeugt dafür synthetische, triggerbare Signale (`SquareWave`,
   Spannungsbereich wird -- da `execute_action` kein eigenes Range-Feld hat
   -- als `VOLTAGE_RANGE_CODES`-Zahlencode im sonst bei Lese-Aktionen
   unbenutzten `value`-Feld transportiert (siehe `TestStep.value`-Docstring,
-  `device_worker._execute_picoscope_action`). Bewusst KEIN Control-Tab-
-  Abschnitt: `control_tab.on_device_known()` bricht für `kind ==
-  "picoscope"` früh ab, bevor der generische `else`-Zweig sonst fälschlich
-  eine bedeutungslose `CanControlGroup`-Sektion dafür anlegen würde.
+  `device_worker._execute_picoscope_action`). Die Control-Kachel
+  (seit 0.20.0) hat keine Steueraktionen; `control_tab.on_device_known()`
+  legt für `kind == "picoscope"` eine `PicoscopeControlGroup` an (früher
+  brach es dort ab, damit nicht der generische `else`-Zweig eine
+  bedeutungslose `CanControlGroup`-Sektion anlegte).
 - **Testlauf haelt die Verbindung offen (statt pro Aktion neu zu
   verbinden).** `main_window._on_run_requested()` ermittelt vor Laufstart,
   ob Schritte `kind == "picoscope"` referenzieren (ueber

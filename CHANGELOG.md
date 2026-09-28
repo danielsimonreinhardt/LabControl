@@ -7,6 +7,74 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Control-Reiter: Oszilloskop-Kachel, abgesetzte Preset-Leiste, Anordnen wie im Dashboard
+  (0.20.0, Nutzerwunsch).**
+  - **Oszilloskop-Kachel** (`control_tab.PicoscopeControlGroup`). Konzeptlücke: Name und
+    Panel-Farbe lassen sich nur im Control-Reiter setzen, das PicoScope hatte dort aber keine
+    Kachel (`on_device_known` brach für `picoscope` bewusst ab). Jetzt: Stift (umbenennen) und
+    Farbkreis wie bei allen Geräten -- beides wirkt auch auf die Dashboard-Kachel und die
+    Statusleiste --, dazu Status, Typ mit Seriennummer, letzte Erfassung über Netzwerk/MCP und die
+    Knöpfe „PicoScope 7 öffnen“ (trennt vorher, wie auf der Dashboard-Kachel), „Trennen“ (nur bei
+    MCP-Verbindung) und „Kurve“. Keine Kanal-/Trigger-Einstellungen (Grundsatz unverändert), kein
+    Preset-Zustand. Kachelgröße „small“. `DashboardWidget._on_picoscope_launch_requested` heißt
+    jetzt `launch_picoscope`, weil beide Kacheln es nutzen.
+  - **Preset-Leiste** als eigener Kasten mit Überschrift „Presets“ und Hinweis „alle Geräte auf
+    einmal“ (Fläche `surface_alt`, Rahmen, links bündig mit dem Kachelraster, vertikal fest). Vorher
+    standen die fünf Knöpfe ohne Trennung direkt über den Geräte-Kacheln.
+  - **Drag & Drop wie im Dashboard.** Ziehen an der Titelzeile gab es schon, aber ohne Vorschau und
+    mit der alten Zielberechnung, die gegen eine Anordnung *ohne* die gezogene Kachel rechnete
+    (im Dashboard als BUGS_OFFEN.md #30 behoben). Jetzt übernommen: die Kachel bleibt beim Ziehen
+    unsichtbar an ihrem Platz, die übrigen rücken live zur Seite und gleiten dorthin, Loslassen
+    übernimmt genau die Vorschau (kein Nachspringen), Abbrechen/Escape stellt den alten Stand her.
+    Die Zellen werden aus Basiszelle und Abstand gerechnet statt über `QGridLayout.cellRect()`,
+    das direkt nach einem Relayout veraltete Werte lieferte (nachgemessen). Getrennte Geräte
+    behalten ihren Platz in der gespeicherten Reihenfolge. `rect_distance` liegt jetzt in
+    `tile_grid.py` (von Dashboard und Control-Reiter genutzt).
+
+### Behoben
+- **Control-Reiter: Kacheln lagen übereinander oben links (0.20.0).** Beim Prüfen gefunden: eine
+  neue Sektion hatte noch kein Eltern-Widget, wurde beim Verbinden kurz ein eigenes Fenster und
+  beim Einsetzen ins Raster umgehängt -- was sie wieder versteckte, bis Qt sie verzögert erneut
+  zeigte. Lief dazwischen schon das nächste Relayout (mehrere Geräte verbinden kurz
+  nacheinander; im Simulationsmodus immer), fiel sie aus dem Raster und lag sichtbar, aber
+  ungelayoutet über den anderen. Jetzt hängt sie von Anfang an im Raster-Container.
+- **„PicoScope 7 öffnen“** hatte keine englische Übersetzung.
+
+### Verifiziert (0.20.0)
+- **Im Simulationsmodus (offscreen):** neues `tools/check_control_tab.py` grün -- keine
+  Überlappung nach dem Start, Oszilloskop-Kachel (Status vom Worker, Typ, Umbenennen wirkt auf
+  Control- und Dashboard-Kachel und wird gespeichert, Farbe ebenso, Trennen/Kurve folgen dem
+  ScopeService), Preset-Kasten (Überschrift, bündig), Drag & Drop (gezogene Kachel behält ihre
+  Zelle, über der eigenen Lücke keine Änderung, Vorschau sortiert hinter die Ziel-Kachel ohne zu
+  speichern, keine Überlappung in Vorschau und danach, Loslassen übernimmt die Vorschau und
+  speichert, Abbrechen stellt her). Das eigentliche Ziehen mit der Maus (`QDrag.exec`) geht
+  offscreen nicht -- geprüft sind die Schritte, die Qt dabei aufruft. Bildschirmfotos angesehen.
+  `check_dashboard_detach.py`, `check_device_reset.py`, `check_network_share.py` grün.
+  **Noch offen:** Test durch den Nutzer (Ziehen mit der Maus, Aussehen, Umbenennen/Farbe am echten
+  2204A).
+- **Dashboard abdockbar (0.19.0, Nutzerwunsch).** Neuer Knopf unten rechts im Dashboard, links
+  neben dem Ansicht-Umschalter: öffnet das Dashboard in einem eigenen Fenster, z. B. um es auf
+  einen zweiten Bildschirm zu schieben. Das Hauptfenster zeigt es dann nicht mehr, die Reiter
+  bekommen die frei gewordene Höhe. Schließen des Fensters (Kreuz oder derselbe Knopf, der jetzt
+  „wieder ins Hauptfenster holen“ anzeigt) setzt es an alter Stelle unter dem Sicherheitsbanner
+  wieder ein.
+  - Umgehängt wird dasselbe `DashboardWidget`, nicht eine Kopie -- alle Verbindungen zu Worker,
+    Einstellungen, Kachelfarben, Reihenfolge und Oszilloskop-Knöpfen laufen unverändert weiter.
+  - Neues Modul `lab_gui/dashboard_window.py`. Das Fenster hat bewusst kein Eltern-Fenster: unter
+    Windows bliebe es sonst immer über dem Hauptfenster und würde mit ihm minimiert; so steht es
+    unabhängig auf dem zweiten Bildschirm, mit eigenem Taskleisten-Eintrag. Beim Beenden der App
+    wird es mit geschlossen.
+  - Position/Größe (`dashboard_window_geometry`) und der Zustand (`dashboard_detached`) stehen in
+    `settings.json`: das Fenster geht beim nächsten Abdocken und nach einem Neustart wieder dort
+    auf, wo es zuletzt war. Ist der zweite Bildschirm nicht mehr da, rückt Qt es auf einen
+    vorhandenen.
+  - Der Knopf „ALLE AUS“ bleibt in der Statusleiste des Hauptfensters.
+  - **Verifiziert im Simulationsmodus (offscreen):** neues `tools/check_dashboard_detach.py`
+    (Abdocken, Kachel bekommt im Fenster weiter Messwerte, kein zweites Fenster bei Doppelklick,
+    Schließen per Kreuz und per Knopf, alte Lage beim erneuten Abdocken, Beenden schließt das
+    Fenster mit, Neustart geht wieder abgedockt auf) grün; Bildschirmfotos beider Fenster
+    angesehen. `check_network_share.py` und `check_device_reset.py` grün. **Noch offen:** Test
+    durch den Nutzer an echten Bildschirmen (zweiter Monitor).
 - **Oszilloskope über MCP, Phase 3: Erfassungen als Bild (0.18.0, Nutzerwunsch).** Der
   Assistent kann eine Kurve jetzt ansehen statt nur Kennwerte und Hüllkurve zu lesen.
   - **`lab_gui/scope_plot.py`** zeichnet mit QPainter (keine neue Abhängigkeit -- matplotlib

@@ -52,6 +52,7 @@ from tile_grid import (
     cell_size_ratchet,
     make_drag_pixmap,
     pack_tiles_by_row,
+    rect_distance,
 )
 
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
@@ -162,15 +163,6 @@ FIELD_ICONS: dict[str, str] = {
     "fg_ch1": "mdi.numeric-1-box-outline",
     "fg_ch2": "mdi.numeric-2-box-outline",
 }
-
-
-def _rect_distance(rect: QRect, point: QPoint) -> int:
-    """Quadrierter Abstand von `point` zum naechsten Punkt von `rect`
-    (0, wenn `point` darin liegt) -- nur zum Vergleichen gedacht
-    (siehe _order_with_dragged_at), die Wurzel waere dafuer ueberfluessig."""
-    dx = max(rect.left() - point.x(), 0, point.x() - rect.right())
-    dy = max(rect.top() - point.y(), 0, point.y() - rect.bottom())
-    return dx * dx + dy * dy
 
 
 def _format_frequency(hertz: float) -> str:
@@ -439,6 +431,9 @@ class DashboardWidget(QGroupBox):
     # Klick auf den Ansicht-Umschalter unten rechts; MainWindow verdrahtet ihn
     # mit der persistierten Einstellung, die dann set_compact zurueckruft.
     compact_toggle_requested = Signal()
+    # Klick auf den Abdock-Knopf daneben: MainWindow verschiebt das Dashboard in
+    # ein eigenes Fenster bzw. holt es zurueck und ruft dann set_detached.
+    detach_toggle_requested = Signal()
     # device_id -- Oszilloskop-Verbindung des ScopeService trennen (Kachel-Knopf
     # "Trennen" und vor dem Start von PicoScope 7), siehe scope_service.py.
     picoscope_release_requested = Signal(str)
@@ -494,15 +489,24 @@ class DashboardWidget(QGroupBox):
 
         # ScrollArea und Ansicht-Umschalter teilen sich eine Zeile: der Button
         # sitzt unten rechts im Dashboard-Bereich, ohne eigene Zeile und damit
-        # ohne zusaetzliche vertikale Hoehe.
+        # ohne zusaetzliche vertikale Hoehe. Der Abdock-Knopf steht links daneben
+        # statt darueber -- uebereinander wuerden die zwei Knoepfe die
+        # Kompaktansicht hoeher machen.
         body = QHBoxLayout()
         body.addWidget(self._scroll_area, 1)
         corner = QVBoxLayout()
         corner.addStretch()
+        corner_buttons = QHBoxLayout()
+        corner_buttons.setSpacing(2)
+        self._detach_button = IconButton("mdi.open-in-new", "")
+        self._detach_button.setFixedSize(QSize(28, 24))
+        self._detach_button.clicked.connect(self.detach_toggle_requested)
+        corner_buttons.addWidget(self._detach_button)
         self._view_toggle_button = IconButton("mdi.arrow-collapse-vertical", "")
         self._view_toggle_button.setFixedSize(QSize(28, 24))
         self._view_toggle_button.clicked.connect(self.compact_toggle_requested)
-        corner.addWidget(self._view_toggle_button)
+        corner_buttons.addWidget(self._view_toggle_button)
+        corner.addLayout(corner_buttons)
         body.addLayout(corner)
         outer.addLayout(body)
 
@@ -519,6 +523,7 @@ class DashboardWidget(QGroupBox):
         self._panel_colors: dict[str, str | None] = {}
         self._colors_enabled = False
         self._compact = False
+        self._detached = False
         # Aktuell angeglichene Panel-Breite (0 = noch keine gesetzt) -- als
         # Ratsche gefuehrt, siehe _relayout_panels. In der Kompaktansicht
         # stattdessen eine Ratsche je Panel (device_id -> Breite), weil die
@@ -635,6 +640,7 @@ class DashboardWidget(QGroupBox):
     def _retranslate(self) -> None:
         self.setTitle(tr("Dashboard"))
         self._update_toggle_button()
+        self._update_detach_button()
 
     def _style_scroll_area(self, palette: Palette) -> None:
         """Faerbt ScrollArea/Container auf die Flaeche der umschliessenden
@@ -658,6 +664,18 @@ class DashboardWidget(QGroupBox):
         self._view_toggle_button.setToolTip(
             tr("Normale Ansicht") if self._compact else tr("Kompakte Ansicht")
         )
+
+    def _update_detach_button(self) -> None:
+        self._detach_button.set_icon("mdi.dock-top" if self._detached else "mdi.open-in-new")
+        self._detach_button.setToolTip(
+            tr("Dashboard wieder ins Hauptfenster holen") if self._detached
+            else tr("Dashboard in eigenem Fenster öffnen")
+        )
+
+    def set_detached(self, detached: bool) -> None:
+        """Nur Anzeige des Abdock-Knopfs -- das Umhaengen selbst macht MainWindow."""
+        self._detached = detached
+        self._update_detach_button()
 
     @Slot(bool)
     def set_compact(self, compact: bool) -> None:
@@ -902,7 +920,7 @@ class DashboardWidget(QGroupBox):
         if target is None:
             # Abgelegt zwischen/neben den Kacheln (Zwischenraum, freie
             # Flaeche rechts der letzten Spalte): naechstgelegene Kachel.
-            target = min(order, key=lambda d: _rect_distance(rects[d], point))
+            target = min(order, key=lambda d: rect_distance(rects[d], point))
 
         rect = rects[target]
         # Auf die halbe Kachelausdehnung normierte Abweichung von der Mitte
@@ -1161,7 +1179,7 @@ class DashboardWidget(QGroupBox):
                 # (siehe picoscope_panel.py-Modul-Docstring).
                 panel = PicoscopePanel(device_id, label)
                 panel.launch_requested.connect(
-                    lambda d=device_id: self._on_picoscope_launch_requested(d))
+                    lambda d=device_id: self.launch_picoscope(d))
                 panel.release_requested.connect(self.picoscope_release_requested)
                 panel.plot_requested.connect(self.picoscope_plot_requested)
             else:
@@ -1372,7 +1390,8 @@ class DashboardWidget(QGroupBox):
         if isinstance(panel, PicoscopePanel):
             panel.set_last_capture(text)
 
-    def _on_picoscope_launch_requested(self, device_id: str = "") -> None:
+    def launch_picoscope(self, device_id: str = "") -> None:
+        """Auch vom Knopf der Control-Kachel (control_tab.PicoscopeControlGroup)."""
         # Haelt der ScopeService das Geraet (Erfassungen ueber MCP), vorher
         # trennen -- sonst kann PicoScope 7 es nicht oeffnen (exklusiv). Das
         # Trennen laeuft im Scope-Thread und ist lange vor dem App-Start fertig.

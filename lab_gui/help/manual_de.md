@@ -26,6 +26,11 @@ Die Anzeige aktualisiert sich automatisch etwa alle 500 ms.
 - **Ansicht umschalten**: Der Pfeil-Button unten rechts im
   Dashboard-Rahmen wechselt zwischen normaler und kompakter Ansicht
   (kleinere Kacheln, für viele gleichzeitig sichtbare Geräte).
+- **Abdocken**: Der Button links daneben öffnet das Dashboard in einem
+  eigenen Fenster, z. B. für einen zweiten Bildschirm; das Hauptfenster
+  zeigt dann nur noch die Reiter. Schließen des Fensters (oder derselbe
+  Button) holt das Dashboard zurück. Position und Größe des Fensters merkt
+  sich die App, ebenso ob es beim Beenden abgedockt war.
 - **Panel-Farben**: Ist die Option in den Einstellungen aktiviert (siehe
   Abschnitt 5), lässt sich jedes Geräte-Panel individuell einfärben, um
   z.B. „Last 1“ und „Last 2“ auf einen Blick zu unterscheiden. Die Farbe
@@ -40,9 +45,14 @@ Für jedes verbundene Gerät erscheint hier eine eigene Bedien-Sektion.
 Sind zwei baugleiche Geräte angeschlossen (z.B. zwei Netzteile), werden
 sie unabhängig voneinander gesteuert.
 
+**Anordnen**: Eine Sektion lässt sich an ihrer Titelzeile greifen und an
+eine andere Stelle ziehen – wie im Dashboard rücken die übrigen Sektionen
+schon beim Ziehen zur Seite und zeigen, wo sie landet. Die Reihenfolge
+bleibt gespeichert.
+
 ### Preset-Leiste
 
-Ganz oben befinden sich 5 feste, geräteübergreifende Preset-Plätze. Ein
+Ganz oben, im eigenen Kasten „Presets“, befinden sich 5 feste, geräteübergreifende Preset-Plätze. Ein
 Preset speichert für alle aktuell sichtbaren Geräte-Panels gemeinsam die
 Sollwerte und den Schaltzustand:
 
@@ -108,6 +118,21 @@ Zwei gleichartige Kanalkästen (Kanal 1 und 2) nebeneinander:
   Wandler auch in fremden Geräten steckt, wird per Abfrage geprüft, ob
   tatsächlich ein Funktionsgenerator antwortet. Ein eingeschaltetes Gerät
   wird daher bis zu 30 Sekunden nach dem Einschalten erkannt.
+
+### Oszilloskop (PicoScope 2204A/2205A)
+
+Kanäle, Trigger und Kurven stellt LabControl bewusst nicht ein – dafür gibt
+es die PicoScope-7-App bzw. Erfassungen über den MCP-Server. Die Sektion
+zeigt:
+
+- **Status** (frei, belegt, Testlauf, über MCP verbunden) sowie Typ und
+  Seriennummer.
+- **Letzte Erfassung** über Netzwerk/MCP mit dem Knopf **„Kurve“** (zeigt
+  sie als Bild).
+- **„PicoScope 7 öffnen“** und – solange LabControl das Gerät für
+  Erfassungen hält – **„Trennen“**.
+- Wie bei den anderen Geräten **umbenennen** (Stift) und **Panel-Farbe**
+  (Farbkreis); beides gilt auch für die Dashboard-Kachel.
 
 ---
 

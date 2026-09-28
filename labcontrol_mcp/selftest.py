@@ -20,7 +20,12 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 SERVER = Path(__file__).resolve().parent / "server.py"
-EXPECTED_TOOLS = {"get_status", "list_devices", "read_device", "control_device", "all_off"}
+EXPECTED_TOOLS = {
+    "get_status", "list_devices", "read_device", "control_device", "all_off",
+    # Oszilloskope
+    "list_scopes", "get_scope_capabilities", "acquire", "get_capture", "measure",
+    "plot_capture", "release_scope",
+}
 
 
 def _payload(result) -> dict:

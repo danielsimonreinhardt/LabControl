@@ -26,6 +26,11 @@ display refreshes automatically about every 500 ms.
 - **Toggle view**: the arrow button at the bottom right of the dashboard
   frame switches between the normal and a compact view (smaller tiles,
   for many devices visible at once).
+- **Detach**: the button to its left opens the dashboard in a window of
+  its own, e.g. for a second screen; the main window then shows only the
+  tabs. Closing that window (or the same button) brings the dashboard
+  back. The app remembers the window's position and size, and whether it
+  was detached when you quit.
 - **Panel colors**: if the option is enabled in Settings (see section
   5), each device panel can be tinted individually, e.g. to tell "Load
   1" and "Load 2" apart at a glance. The color is picked in the
@@ -39,9 +44,13 @@ Every connected device gets its own control section here. If two
 identical devices are connected (e.g. two power supplies), they are
 controlled independently.
 
+**Arranging**: grab a section by its title line and drag it elsewhere –
+as in the dashboard, the other sections already move aside while you drag
+and show where it will land. The order is remembered.
+
 ### Preset bar
 
-At the very top are 5 fixed, device-spanning preset slots. A preset
+At the very top, in their own "Presets" box, are 5 fixed, device-spanning preset slots. A preset
 stores the setpoints and switch state for all currently visible device
 panels together:
 
@@ -101,6 +110,21 @@ Two identical channel boxes (channel 1 and 2) side by side:
   converter also sits in unrelated devices, a query checks that a function
   generator really answers. A powered-on device is therefore detected up
   to 30 seconds after switching it on.
+
+### Oscilloscope (PicoScope 2204A/2205A)
+
+LabControl deliberately does not set channels, trigger or waveforms – that
+is what the PicoScope 7 app or acquisitions through the MCP server are for.
+The section shows:
+
+- **Status** (free, busy, test run, connected via MCP) plus model and
+  serial number.
+- The **last acquisition** over network/MCP with the **“Plot”** button
+  (shows it as an image).
+- **“Open PicoScope 7”** and – while LabControl holds the device for
+  acquisitions – **“Disconnect”**.
+- As for the other devices: **rename** (pencil) and **panel colour** (colour
+  wheel); both also apply to the dashboard tile.
 
 ---
 

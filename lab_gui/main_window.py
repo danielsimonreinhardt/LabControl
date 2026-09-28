@@ -1,10 +1,10 @@
-"""Hauptfenster: Dashboard (immer sichtbar) + Reiter (Control/Testcase) + Statusleiste."""
+"""Hauptfenster: Dashboard (immer sichtbar, abdockbar in ein eigenes Fenster) + Reiter (Control/Testcase) + Statusleiste."""
 from __future__ import annotations
 
 import logging
 
 import qtawesome as qta
-from PySide6.QtCore import QMetaObject, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QByteArray, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from control_tab import ControlTab
 from dashboard import DashboardWidget
+from dashboard_window import DashboardWindow
 from device_registry import DeviceRegistry
 from device_worker import SIM_CAN_ID, DeviceWorker, can_device_id
 from i18n import Translator, tr
@@ -113,6 +114,11 @@ class MainWindow(QMainWindow):
 
         self.dashboard = DashboardWidget()
         layout.addWidget(self.dashboard)
+        # Fuer das Abdocken (siehe _detach_dashboard): das Dashboard wird aus
+        # diesem Layout genommen und spaeter an derselben Stelle wieder eingesetzt.
+        self._central_layout = layout
+        self._dashboard_window: DashboardWindow | None = None
+        self._closing = False
 
         self._presets = PresetStore()
 
@@ -243,6 +249,7 @@ class MainWindow(QMainWindow):
         self._worker.fg_state.connect(self._live_state.on_fg_state)
         self._worker.picoscope_connected.connect(self._on_picoscope_connected)
         self._worker.picoscope_state.connect(self.dashboard.update_picoscope_state)
+        self._worker.picoscope_state.connect(self.control_tab.update_picoscope_state)
         self._worker.picoscope_connected.connect(self._scope_service.on_picoscope_connected)
         self._worker.picoscope_state.connect(self._scope_service.on_picoscope_state)
         self.dashboard.picoscope_release_requested.connect(self._scope_service.release_async)
@@ -474,6 +481,10 @@ class MainWindow(QMainWindow):
             section.set_offset.connect(self._worker.set_fg_offset)
             section.set_duty.connect(self._worker.set_fg_duty)
             section.set_phase.connect(self._worker.set_fg_phase)
+        elif kind == "picoscope":
+            section.launch_requested.connect(self.dashboard.launch_picoscope)
+            section.release_requested.connect(self._scope_service.release_async)
+            section.plot_requested.connect(self._show_scope_plot)
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -839,6 +850,51 @@ class MainWindow(QMainWindow):
         )
         self._settings.dashboard_compact_changed.connect(self.dashboard.set_compact)
         self.dashboard.set_compact(self._settings.dashboard_compact)
+        # Abdocken in ein eigenes Fenster (z.B. zweiter Bildschirm). Ein beim
+        # letzten Beenden abgedocktes Dashboard geht erst nach dem Anzeigen des
+        # Hauptfensters wieder auf (singleShot), sonst stuende es dahinter.
+        self.dashboard.detach_toggle_requested.connect(self._toggle_dashboard_detached)
+        if self._settings.dashboard_detached:
+            QTimer.singleShot(0, self._detach_dashboard)
+
+    def _toggle_dashboard_detached(self) -> None:
+        if self._dashboard_window is None:
+            self._detach_dashboard()
+        else:
+            self._dashboard_window.close()  # -> closed -> _dock_dashboard
+
+    def _detach_dashboard(self) -> None:
+        if self._dashboard_window is not None or self._closing:
+            return
+        self._central_layout.removeWidget(self.dashboard)
+        window = DashboardWindow()
+        window.set_dashboard(self.dashboard)
+        window.closed.connect(self._dock_dashboard)
+        geometry = self._settings.dashboard_window_geometry
+        if not (geometry and window.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))):
+            # Erstes Abdocken: so breit wie das Hauptfenster, leicht versetzt.
+            window.resize(self.width(), window.sizeHint().height())
+            window.move(self.pos() + QPoint(40, 40))
+        self._dashboard_window = window
+        self.dashboard.set_detached(True)
+        self._settings.set_dashboard_detached(True)
+        window.show()
+        window.raise_()
+
+    def _dock_dashboard(self) -> None:
+        window = self._dashboard_window
+        if window is None:
+            return
+        self._dashboard_window = None
+        self._settings.set_dashboard_window_geometry(bytes(window.saveGeometry().toBase64()).decode("ascii"))
+        # Direkt unter dem Sicherheitsbanner, wie beim Start.
+        self._central_layout.insertWidget(self._central_layout.indexOf(self._safety_banner) + 1, self.dashboard)
+        self.dashboard.show()
+        self.dashboard.set_detached(False)
+        # Beim Beenden bleibt "abgedockt" gespeichert -> naechster Start wieder im Fenster.
+        if not self._closing:
+            self._settings.set_dashboard_detached(False)
+        window.deleteLater()
 
     def _wire_notifications(self) -> None:
         # Desktop-Benachrichtigung bei Lauf-Ende/Fehler (FEATURES.md Punkt 8),
@@ -1207,11 +1263,9 @@ class MainWindow(QMainWindow):
 
     @Slot(str, bool)
     def _on_picoscope_connected(self, device_id: str, online: bool) -> None:
-        # Kein control_tab.set_picoscope_online: das PicoScope hat bewusst
-        # keinen Control-Tab-Abschnitt (nur Dashboard-Kachel + Start-Button
-        # fuer die PicoScope-7-App, siehe picoscope_panel.py-Modul-Docstring).
         self._set_online("picoscope", device_id, online)
         self.dashboard.set_picoscope_online(device_id, online)
+        self.control_tab.set_picoscope_online(device_id, online)
 
     def _set_online(self, kind: str, device_id: str, online: bool) -> None:
         if online:
@@ -1261,12 +1315,14 @@ class MainWindow(QMainWindow):
         Netzwerk-Zustand nachziehen. Nach dem Trennen ist das Geraet frei --
         es war ja eben noch von uns geoeffnet."""
         self.dashboard.update_picoscope_state(device_id, status, "", "")
+        self.control_tab.update_picoscope_state(device_id, status, "", "")
         self._live_state.on_picoscope_state(device_id, status, "", "")
 
     @Slot(str, str, str)
     def _on_scope_capture_added(self, device_id: str, capture_id: str, text: str) -> None:
         self._last_scope_capture[device_id] = capture_id
         self.dashboard.update_picoscope_capture(device_id, capture_id, text)
+        self.control_tab.update_picoscope_capture(device_id, capture_id, text)
 
     @Slot(str)
     def _show_scope_plot(self, device_id: str) -> None:
@@ -1299,6 +1355,11 @@ class MainWindow(QMainWindow):
         # sofortiger Neustart am belegten Port). Ausserdem darf ein
         # schreibender Zugriff (Phase 2) keinen Worker im Abbau treffen.
         self._share_server.stop()
+        # Abgedocktes Dashboard-Fenster mit schliessen (es hat kein Eltern-Fenster,
+        # siehe dashboard_window.py); der Zustand bleibt fuer den naechsten Start.
+        self._closing = True
+        if self._dashboard_window is not None:
+            self._dashboard_window.close()
         # Offenes Oszilloskop-Handle freigeben (sonst bleibt es bis Prozessende belegt).
         self._scope_service.shutdown()
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit

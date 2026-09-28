@@ -10,7 +10,7 @@ keine eingestellten Werte verloren gehen.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QMimeData, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,6 +55,7 @@ from microhil.driver import (
 from microhil_panel import DOT_ICON_SIZE, DOT_OFF, DOT_ON
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
+from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
 from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager, form_control_qss
@@ -65,6 +66,7 @@ from tile_grid import (
     cell_size_ratchet,
     make_drag_pixmap,
     pack_tiles,
+    rect_distance,
 )
 
 # Obergrenze der im Live-Traffic-Tisch angezeigten Zeilen (siehe
@@ -103,7 +105,9 @@ TILE_SPANS: dict[str, tuple[int, int]] = {
 # Zweig in on_device_known behandelt wird) bekommt Mid_v -- der Live-
 # Traffic-Tisch (CanControlGroup._traffic_table) braucht mehr Hoehe als
 # Breite.
-TILE_SIZE_BY_KIND: dict[str, str] = {"load": "small", "psu": "small", "hil": "big", "fg": "big"}
+TILE_SIZE_BY_KIND: dict[str, str] = {
+    "load": "small", "psu": "small", "hil": "big", "fg": "big", "picoscope": "small",
+}
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
 # provisorisch: die Firmware kennt aktuell noch kein Kommando dafuer (siehe
@@ -1285,6 +1289,138 @@ class CanControlGroup(QGroupBox):
         pass
 
 
+class PicoscopeControlGroup(QGroupBox):
+    """Control-Kachel fuer ein Oszilloskop (seit 0.20.0, Nutzerwunsch): vor allem,
+    damit es wie jedes andere Geraet einen eigenen Namen und eine Panel-Farbe
+    bekommt -- beides gibt es nur im Control-Tab (BUGS.md #10b), das PicoScope
+    hatte bis dahin nur seine Dashboard-Kachel.
+
+    Inhalt wie auf der Dashboard-Kachel (picoscope_panel.py): Status, Typ und
+    Seriennummer, "PicoScope 7 oeffnen", "Trennen" (solange der ScopeService es
+    fuer Netzwerk/MCP haelt) und die letzte Erfassung mit "Kurve". Keine
+    Kanal-/Trigger-Einstellungen: LabControl kopiert die PicoScope-7-App nicht,
+    Erfassungen stellt der Assistent je Anfrage vollstaendig ein. Kein Preset-
+    Zustand (wie CanControlGroup)."""
+
+    launch_requested = Signal(str)   # device_id -- PicoScope 7 starten (vorher trennen)
+    release_requested = Signal(str)  # device_id -- ScopeService-Verbindung trennen
+    plot_requested = Signal(str)     # device_id -- letzte Erfassung als Bild
+    panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
+    rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+
+    def __init__(self, device_id: str, label: str) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self._status = "busy"
+        self._variant = ""
+        self._serial = ""
+        self._capture_text = ""
+        self.setTitle(label)
+
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(self._on_color_selected)
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
+        self._status_label = QLabel()
+        self._form.addRow(" ", self._status_label)
+        _detint_label(self._form, self._status_label)
+        self._device_label = QLabel()
+        self._form.addRow(" ", self._device_label)
+        _detint_label(self._form, self._device_label)
+        self._capture_label = QLabel()
+        self._capture_label.setWordWrap(True)
+        self._form.addRow(" ", self._capture_label)
+        _detint_label(self._form, self._capture_label)
+
+        self._launch_button = IconButton("mdi.open-in-new", "", text=tr("PicoScope 7 öffnen"))
+        self._launch_button.clicked.connect(lambda: self.launch_requested.emit(self._device_id))
+        self._release_button = IconButton("mdi.lan-disconnect", "", text=tr("Trennen"))
+        self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
+        self._plot_button = IconButton("mdi.chart-line", "", text=tr("Kurve"))
+        self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
+        self._button_row = _row(self._launch_button, self._release_button, self._plot_button)
+        outer.addWidget(self._button_row)
+        outer.addStretch(1)
+
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._on_theme_changed(current_palette())
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("Oszilloskop"))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._form.labelForField(self._status_label).setText(tr("Status:"))
+        self._form.labelForField(self._device_label).setText(tr("Gerät:"))
+        self._form.labelForField(self._capture_label).setText(tr("Letzte Erfassung:"))
+        self._status_label.setText(tr(PICOSCOPE_STATUS_TEXT.get(self._status, "Unbekannt")))
+        device = self._variant or "--"
+        self._device_label.setText(f"{device} ({self._serial})" if self._serial else device)
+        self._capture_label.setText(self._capture_text or "--")
+        self._launch_button.setText(tr("PicoScope 7 öffnen"))
+        self._release_button.setText(tr("Trennen"))
+        self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
+        self._plot_button.setText(tr("Kurve"))
+        self._plot_button.setToolTip(tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen"))
+        self._release_button.setVisible(self._status == "mcp")
+        self._plot_button.setEnabled(bool(self._capture_text))
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._button_row.setStyleSheet(_row_stylesheet(palette))
+        apply_panel_tint(self, self._color_key)
+
+    def set_state(self, status: str, variant: str, serial: str) -> None:
+        """Wie PicoscopePanel.set_state: leere variant/serial behalten den letzten Stand."""
+        self._status = status
+        self._variant = variant or self._variant
+        self._serial = serial or self._serial
+        self._retranslate()
+
+    def set_last_capture(self, text: str) -> None:
+        self._capture_text = text
+        self._retranslate()
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def _on_color_selected(self, color_key) -> None:
+        self.panel_color_requested.emit(self._device_id, color_key)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(
+            self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
+        )
+        if ok and new_label.strip():
+            self.rename_requested.emit("picoscope", self._device_id, new_label.strip())
+
+    def capture_state(self) -> dict:
+        return {}
+
+    def apply_state(self, state: dict) -> None:
+        pass
+
+
 class HilControlGroup(QGroupBox):
     """Steuersektion fuer den microHIL: Schalter fuer Digitalausgaenge
     (OUT1-8), Relais (REL1-4) und 12V-Ausgaenge (PWR12 1-2), Eingabefelder
@@ -1712,7 +1848,13 @@ class _PresetSlotButton(QWidget):
 
 class PresetBar(QWidget):
     """Leiste mit 5 festen, geraeteuebergreifenden Preset-Plaetzen (siehe
-    presets.py) ganz oben im Control-Tab."""
+    presets.py) ganz oben im Control-Tab.
+
+    Seit 0.20.0 als eigener, abgesetzter Kasten mit Ueberschrift "Presets"
+    (Nutzerfeedback: die Knoepfe standen ohne Trennung direkt ueber den
+    Geraete-Kacheln und wirkten wie eine weitere Kachelreihe). Eigene Flaeche
+    (surface_alt) mit Rahmen, links buendig mit dem Kachelraster darunter
+    (gleicher Aussenabstand wie ControlTab._grid_spacing)."""
 
     load_requested = Signal(int)    # slot index
     save_requested = Signal(int)
@@ -1721,8 +1863,38 @@ class PresetBar(QWidget):
     def __init__(self, presets: PresetStore) -> None:
         super().__init__()
         self._presets = presets
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 4)
+        outer = QHBoxLayout(self)
+        self._outer = outer
+        self.set_side_margin(12)
+        # Vertikal fest: sonst teilt sich die Leiste ueberschuessige Hoehe mit
+        # dem Kachel-Scrollbereich und wird zu einem hohen, leeren Kasten.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._frame = QWidget()
+        self._frame.setObjectName("presetBar")
+        # Ohne das malt ein einfaches QWidget seinen QSS-Hintergrund nicht
+        # (siehe _safety_banner in main_window.py).
+        self._frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        outer.addWidget(self._frame)
+        layout = QHBoxLayout(self._frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(6)
+        self._heading_icon = QLabel()
+        self._heading_label = QLabel()
+        heading_row.addWidget(self._heading_icon)
+        heading_row.addWidget(self._heading_label)
+        heading_row.addStretch()
+        heading.addStretch()
+        heading.addLayout(heading_row)
+        self._hint_label = QLabel()
+        heading.addWidget(self._hint_label)
+        heading.addStretch()
+        layout.addLayout(heading)
+        layout.addSpacing(8)
 
         self._slot_buttons: list[_PresetSlotButton] = []
         for slot in range(SLOT_COUNT):
@@ -1732,7 +1904,9 @@ class PresetBar(QWidget):
             slot_button.rename_clicked.connect(lambda s=slot: self.rename_requested.emit(s))
             layout.addWidget(slot_button)
             self._slot_buttons.append(slot_button)
-        layout.addStretch()
+        # Faktor 1: der Rest der Breite geht hierhin, nicht zwischen
+        # Ueberschrift und Knoepfe.
+        layout.addStretch(1)
 
         presets.preset_changed.connect(self._refresh_names)
         Translator.instance().language_changed.connect(self._refresh_names)
@@ -1740,11 +1914,24 @@ class PresetBar(QWidget):
         self._on_theme_changed(current_palette())
         self._refresh_names()
 
+    def set_side_margin(self, margin: int) -> None:
+        self._outer.setContentsMargins(margin, 12, margin, 0)
+
     def _on_theme_changed(self, pal: Palette) -> None:
+        self._frame.setStyleSheet(
+            f"QWidget#presetBar {{ background-color: {pal.surface_alt};"
+            f" border: 1px solid {pal.border}; border-radius: 8px; }}"
+        )
+        self._heading_label.setStyleSheet(f"color: {pal.text}; font-weight: bold; background: transparent;")
+        self._hint_label.setStyleSheet(f"color: {pal.text_muted}; background: transparent;")
+        self._heading_icon.setStyleSheet("background: transparent;")
+        self._heading_icon.setPixmap(qta.icon("mdi.bookmark-multiple-outline", color=pal.text).pixmap(18, 18))
         for button in self._slot_buttons:
             button.apply_style(pal)
 
     def _refresh_names(self, *_args) -> None:
+        self._heading_label.setText(tr("Presets"))
+        self._hint_label.setText(tr("alle Geräte auf einmal"))
         for slot, button in enumerate(self._slot_buttons):
             button.set_text(self._presets.name(slot))
             button.set_tooltips(tr("Preset laden"), tr("Preset speichern"), tr("Preset umbenennen"))
@@ -1797,6 +1984,9 @@ class ControlTab(QWidget):
         # den QGridLayout nicht von sich aus bietet.
         self._scroll_area.viewport().installEventFilter(self)
         outer_layout.addWidget(self._scroll_area)
+        # Preset-Kasten buendig mit dem Kachelraster: dessen Rand ist
+        # _grid_spacing innerhalb des Scrollbereich-Rahmens.
+        self._preset_bar.set_side_margin(self._grid_spacing + self._scroll_area.frameWidth())
 
         # Platzhalter, solange kein Geraet verbunden ist (siehe
         # _update_empty_tile) -- von Anfang an sichtbar, da beim Start noch
@@ -1839,20 +2029,17 @@ class ControlTab(QWidget):
         content.installEventFilter(self)
         self._drag_device_id: str | None = None
         self._drag_start_pos = None
+        # Waehrend eines Drags ausgeblendete Kachel und live vorgeschlagene
+        # Reihenfolge -- exakt wie dashboard.py (_drag_hidden_panel/
+        # _drag_preview_order), siehe _start_tile_drag/_preview_tile_drag.
+        self._drag_hidden_section: QWidget | None = None
+        self._drag_preview_order: list[str] | None = None
 
         # Nach einem Sprachwechsel aendern sich Label-Breiten/-Hoehen -- die
         # Kachelgroessen muessen dann neu angeglichen werden.
         Translator.instance().language_changed.connect(self._relayout_grid)
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
-        if kind == "picoscope":
-            # Bewusst KEINE Control-Tab-Sektion: das PicoScope hat nur eine
-            # Dashboard-Kachel + Start-Button fuer die PicoScope-7-App
-            # (siehe picoscope_panel.py-Modul-Docstring) -- ohne diesen
-            # fruehen Ausstieg wuerde es faelschlich in den generischen
-            # "else"-Zweig unten fallen und eine bedeutungslose
-            # CanControlGroup-Sektion bekommen.
-            return
         section = self._sections.get(device_id)
         if section is not None:
             section.set_label(label)
@@ -1874,8 +2061,20 @@ class ControlTab(QWidget):
             section = HilControlGroup(device_id, label)
         elif kind == "fg":
             section = FgControlGroup(device_id, label)
+        elif kind == "picoscope":
+            # Seit 0.20.0 mit eigener Kachel (Name, Farbe, Status), siehe
+            # PicoscopeControlGroup -- vorher fiel es hier bewusst heraus.
+            section = PicoscopeControlGroup(device_id, label)
         else:
             section = CanControlGroup(device_id, label)
+        # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion
+        # beim setVisible(True) in _set_online kurz ein eigenes Fenster, und das
+        # spaetere addWidget haengt sie um -- was sie wieder versteckt, bis Qt
+        # sie verzoegert (queued) erneut zeigt. Lief in diesem Moment schon das
+        # naechste _relayout_grid (mehrere Geraete verbinden kurz nacheinander,
+        # im Simulationsmodus immer), fiel die Sektion aus dem Raster und lag
+        # danach sichtbar, aber ungelayoutet oben links ueber den anderen.
+        section.setParent(self._grid_container)
         section.hide()
         section.set_colors_enabled(self._colors_enabled)
         section.panel_color_requested.connect(self.panel_color_requested)
@@ -1957,9 +2156,7 @@ class ControlTab(QWidget):
         statt abgeschnitten zu werden.
         """
         self._update_empty_tile()
-        visible_order = [
-            d for d in self._tile_order if d in self._sections and not self._sections[d].isHidden()
-        ]
+        visible_order = self._placed_order()
         if not visible_order:
             return
         spans = {device_id: self._tile_span(device_id) for device_id in visible_order}
@@ -1992,6 +2189,21 @@ class ControlTab(QWidget):
                 alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
             )
 
+    def _placed_order(self) -> list[str]:
+        """Kacheln, die gerade einen Rasterplatz belegen, in Anzeigereihenfolge:
+        alle verbundenen (nicht versteckten) Sektionen -- plus die gerade
+        gezogene, die fuer die Dauer des Drags nur ausgeblendet ist und ihre
+        Zelle behalten soll (siehe _start_tile_drag). Waehrend eines Drags
+        gilt die live vorgeschlagene Reihenfolge (_drag_preview_order), sonst
+        wuerde jedes LayoutRequest die Vorschau sofort zuruecksetzen (siehe
+        dashboard._current_order-Docstring)."""
+        order = self._drag_preview_order if self._drag_preview_order is not None else self._tile_order
+        return [
+            d for d in order
+            if d in self._sections
+            and (not self._sections[d].isHidden() or self._sections[d] is self._drag_hidden_section)
+        ]
+
     def _tile_span(self, device_id: str) -> tuple[int, int]:
         kind = self._section_kind.get(device_id, "")
         size_key = TILE_SIZE_BY_KIND.get(kind, "mid_v")
@@ -2013,9 +2225,15 @@ class ControlTab(QWidget):
             return False
         if obj is self._grid_container:
             event_type = event.type()
-            if event_type == QEvent.Type.DragEnter or event_type == QEvent.Type.DragMove:
+            if event_type == QEvent.Type.DragEnter:
                 if event.mimeData().hasFormat(CONTROL_TILE_DRAG_MIME_TYPE):
                     event.acceptProposedAction()
+                    return True
+            elif event_type == QEvent.Type.DragMove:
+                if event.mimeData().hasFormat(CONTROL_TILE_DRAG_MIME_TYPE):
+                    event.acceptProposedAction()
+                    dragged_id = bytes(event.mimeData().data(CONTROL_TILE_DRAG_MIME_TYPE)).decode("utf-8")
+                    self._preview_tile_drag(dragged_id, event.position())
                     return True
             elif event_type == QEvent.Type.Drop:
                 if event.mimeData().hasFormat(CONTROL_TILE_DRAG_MIME_TYPE):
@@ -2063,6 +2281,14 @@ class ControlTab(QWidget):
             self._drag_start_pos = None
 
     def _start_tile_drag(self, section: QWidget, device_id: str, press_pos) -> None:
+        """Seit 0.20.0 wie im Dashboard (Nutzerwunsch): die echte Kachel wird
+        waehrend des Ziehens ausgeblendet, behaelt aber ihre Zelle; die
+        uebrigen Kacheln ruecken live zur Seite (_preview_tile_drag) und
+        gleiten an ihren neuen Platz (_animate_relayout). Vorher sah man bis
+        zum Loslassen nicht, wo die Kachel landen wuerde, und die Zielzelle
+        wurde gegen eine Anordnung OHNE die gezogene Kachel gerechnet --
+        derselbe Fehler, den dashboard.py als BUGS_OFFEN.md #30 schon behoben
+        hatte (Kachel landete am Ende statt an der Zielstelle)."""
         drag = QDrag(section)
         mime = QMimeData()
         mime.setData(CONTROL_TILE_DRAG_MIME_TYPE, device_id.encode("utf-8"))
@@ -2073,44 +2299,133 @@ class ControlTab(QWidget):
         # Drag-Start sichtbar so, dass ihre Ecke statt des gegriffenen Punkts
         # unter dem Cursor/Finger sitzt.
         drag.setHotSpot(press_pos.toPoint())
-        drag.exec(Qt.DropAction.MoveAction)
 
-    def _drop_tile(self, dragged_id: str, drop_pos) -> None:
-        """Ordnet die gezogene Kachel an ihrer neuen Position in _tile_order
-        ein -- Zielzelle aus drop_pos (Position relativ zum Raster-Container)
-        ueber die Basiszellgroesse bestimmt, eingefuegt wird vor der ersten
-        aktuell platzierten Kachel, deren Zelle in Lesereihenfolge (Zeile,
-        dann Spalte) nicht vor der Zielzelle liegt (sonst ans Ende)."""
+        self._set_keeps_space_when_hidden(section, True)
+        self._drag_hidden_section = section
+        self._drag_preview_order = None
+        section.hide()
+        action = drag.exec(Qt.DropAction.MoveAction)
+        if action == Qt.DropAction.IgnoreAction:
+            # Kein gueltiger Drop (ausserhalb losgelassen, Escape): Kachel
+            # zurueck, Reihenfolge wie vor dem Drag.
+            self._finish_tile_drag()
+            self._relayout_grid()
+
+    def _finish_tile_drag(self) -> None:
+        section = self._drag_hidden_section
+        self._drag_hidden_section = None
+        self._drag_preview_order = None
+        if section is not None:
+            self._set_keeps_space_when_hidden(section, False)
+            section.show()
+
+    @staticmethod
+    def _set_keeps_space_when_hidden(section: QWidget, keep: bool) -> None:
+        """Siehe dashboard.DashboardWidget._set_keeps_space_when_hidden: ohne
+        das zieht QGridLayout die Zelle der ausgeblendeten Kachel zusammen,
+        die Luecke waere unsichtbar und die Vorschau flackerte."""
+        policy = section.sizePolicy()
+        policy.setRetainSizeWhenHidden(keep)
+        section.setSizePolicy(policy)
+
+    def _tile_rects(self, order: list[str]) -> dict[str, QRect]:
+        """Rasterzellen der Kacheln in `order`, gerechnet aus pack_tiles und der
+        festen Basiszelle (_cell_width/_cell_height, siehe _relayout_grid) --
+        nicht aus section.geometry(), die waehrend einer Animation eine
+        Zwischenposition zeigt, und auch nicht wie im Dashboard aus
+        QGridLayout.cellRect(): das lieferte hier direkt nach einem Relayout
+        veraltete Zellen (im Test nachgemessen, auch nach activate()). Das
+        Raster ist ohnehin fest: Zelle = Basiszelle, Abstand = _grid_spacing,
+        oben links ausgerichtet."""
+        spans = {device_id: self._tile_span(device_id) for device_id in order}
+        positions = pack_tiles(order, spans, self._max_cols)
+        step_x = self._cell_width + self._grid_spacing
+        step_y = self._cell_height + self._grid_spacing
+        margin = self._grid.contentsMargins()
+        rects: dict[str, QRect] = {}
+        for device_id, (row, col) in positions.items():
+            col_span, row_span = spans[device_id]
+            rects[device_id] = QRect(
+                margin.left() + col * step_x, margin.top() + row * step_y,
+                col_span * step_x - self._grid_spacing, row_span * step_y - self._grid_spacing,
+            )
+        return rects
+
+    def _order_with_dragged_at(self, dragged_id: str, pos) -> list[str]:
+        """Reihenfolge, WENN die gezogene Kachel jetzt bei `pos` (relativ zum
+        Raster-Container) fallen wuerde -- dieselbe Regel wie
+        dashboard._order_with_dragged_at (siehe dort, ausfuehrlich): Treffer-
+        Kachel in der ANGEZEIGTEN Anordnung suchen (im Zwischenraum die
+        naechstgelegene), die gezogene davor oder dahinter einsortieren, je
+        nach dominanter Richtung der Abweichung von deren Mitte (rechts/unten
+        = dahinter, passend zur zeilenweisen Packung von pack_tiles)."""
+        current = self._placed_order()
+        order = [d for d in current if d != dragged_id]
+        if not order:
+            return [dragged_id]
+        point = pos.toPoint()
+        rects = self._tile_rects(current)
+
+        own_rect = rects.get(dragged_id)
+        if own_rect is not None and own_rect.contains(point):
+            # Zeiger noch ueber der eigenen Luecke -- nichts umsortieren.
+            return current
+
+        target = next((d for d in order if rects[d].contains(point)), None)
+        if target is None:
+            target = min(order, key=lambda d: rect_distance(rects[d], point))
+        rect = rects[target]
+        offset_x = (point.x() - rect.center().x()) / max(rect.width() / 2, 1)
+        offset_y = (point.y() - rect.center().y()) / max(rect.height() / 2, 1)
+        after = (offset_x if abs(offset_x) >= abs(offset_y) else offset_y) >= 0
+        order.insert(order.index(target) + (1 if after else 0), dragged_id)
+        return order
+
+    def _preview_tile_drag(self, dragged_id: str, pos) -> None:
+        """Waehrend DragMove: uebrige Kacheln schon so anordnen, als waere hier
+        losgelassen worden ("Nachbarn machen Platz", wie im Dashboard)."""
         if dragged_id not in self._sections:
             return
-        unit_w = self._cell_width + self._grid_spacing
-        unit_h = self._cell_height + self._grid_spacing
-        if unit_w <= 0 or unit_h <= 0 or self._max_cols <= 0:
+        order = self._order_with_dragged_at(dragged_id, pos)
+        if order == self._drag_preview_order:
             return
-        target_col = max(0, int(drop_pos.x()) // unit_w)
-        target_row = max(0, int(drop_pos.y()) // unit_h)
-        target_key = target_row * self._max_cols + target_col
+        self._drag_preview_order = order
+        self._animate_relayout()
 
-        visible_order = [
-            d for d in self._tile_order if d in self._sections and not self._sections[d].isHidden()
-        ]
-        if dragged_id in visible_order:
-            visible_order.remove(dragged_id)
-        spans = {device_id: self._tile_span(device_id) for device_id in visible_order}
-        positions = pack_tiles(visible_order, spans, self._max_cols)
+    def _animate_relayout(self) -> None:
+        """Wie _relayout_grid(), laesst aber verschobene Kacheln kurz an ihren
+        neuen Platz gleiten statt zu springen (siehe dashboard._animate_relayout)."""
+        old_positions = {s: s.pos() for s in self._sections.values() if s.isVisible()}
+        self._relayout_grid()
+        self._grid.activate()
+        for section, old_pos in old_positions.items():
+            new_pos = section.pos()
+            if new_pos == old_pos:
+                continue
+            animation = QPropertyAnimation(section, b"pos", section)
+            animation.setDuration(140)
+            animation.setStartValue(old_pos)
+            animation.setEndValue(new_pos)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
-        insert_before = None
-        for device_id in visible_order:
-            row, col = positions[device_id]
-            if row * self._max_cols + col >= target_key:
-                insert_before = device_id
-                break
-
-        self._tile_order.remove(dragged_id)
-        if insert_before is None:
-            self._tile_order.append(dragged_id)
-        else:
-            self._tile_order.insert(self._tile_order.index(insert_before), dragged_id)
+    def _drop_tile(self, dragged_id: str, drop_pos) -> None:
+        """Uebernimmt die zuletzt VORGESCHAUTE Reihenfolge, statt aus drop_pos
+        neu zu rechnen -- die Vorschau hat die Kacheln schon umsortiert, derselbe
+        Punkt meint jetzt eine andere Stelle (sonst springt die Kachel beim
+        Loslassen nochmal, siehe dashboard._drop_panel)."""
+        if dragged_id not in self._sections:
+            return
+        placed = self._drag_preview_order
+        if placed is None:
+            placed = self._order_with_dragged_at(dragged_id, drop_pos)
+        # Getrennte (versteckte) Geraete stehen nicht in `placed`, behalten
+        # aber ihren relativen Platz in der gespeicherten Reihenfolge: sie
+        # bleiben an ihrer Stelle, nur die platzierten werden neu verteilt.
+        placed_iter = iter(placed)
+        placed_set = set(placed)
+        self._tile_order = [next(placed_iter) if d in placed_set else d for d in self._tile_order]
+        self._finish_tile_drag()
         self._relayout_grid()
         self.tile_order_changed.emit(list(self._tile_order))
 
@@ -2133,6 +2448,19 @@ class ControlTab(QWidget):
 
     def set_fg_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_picoscope_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def update_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PicoscopeControlGroup):
+            section.set_state(status, variant, serial)
+
+    def update_picoscope_capture(self, device_id: str, capture_id: str, text: str) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PicoscopeControlGroup):
+            section.set_last_capture(text)
 
     def set_fg_state(self, device_id: str, state: dict) -> None:
         section = self._sections.get(device_id)
@@ -2196,7 +2524,10 @@ class ControlTab(QWidget):
         # hide()/show()-Flag der Sektion wider (siehe Qt-Doku), unabhaengig
         # vom Sichtbarkeitszustand der Vorfahren -- genau das hier benoetigte
         # "ist diese Sektion fuer ihr Geraet als verbunden markiert".
-        self._empty_tile.setVisible(not any(not s.isHidden() for s in self._sections.values()))
+        # Die gerade gezogene Kachel ist nur ausgeblendet, zaehlt also mit.
+        self._empty_tile.setVisible(not any(
+            not s.isHidden() or s is self._drag_hidden_section for s in self._sections.values()
+        ))
 
     def _set_online(self, device_id: str, online: bool) -> None:
         section = self._sections.get(device_id)
