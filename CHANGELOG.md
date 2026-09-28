@@ -69,8 +69,12 @@ Semantic Versioning (`lab_gui/version.py`).
     Token** -- der MCP-Server hatte den der `.exe` und bekam beim Erfassen 401 (Lesen geht
     tokenfrei, deshalb fiel es erst dort auf). Behoben durch Eintragen des Tokens der
     Repo-Version in die MCP-Konfiguration; beim Wechsel zurück zur `.exe` Token angleichen.
-    **Noch offen:** „PicoScope 7 öffnen“ während einer MCP-Verbindung (Klick durch den Nutzer,
-    T3 im Entscheidungsboard) und die gebaute `.exe`.
+  - **„PicoScope 7 öffnen“ während einer MCP-Verbindung verifiziert (T3, 2026-09-28):** nach
+    einer Erfassung zeigte die Kachel „Verbunden (MCP)“; Klick durch den Nutzer → LabControl
+    trennt (Zustand über MCP danach `idle`), PicoScope 7 startet und findet das 2204A. Solange
+    PicoScope 7 offen ist, lehnt `acquire` mit **409 `scope_busy_external`** und Hinweis ab,
+    ohne etwas belegt zurückzulassen (Zustand bleibt `idle`). Den Knopf „Trennen“ hat der
+    Nutzer dabei nicht gesondert geprüft. **Noch offen:** die gebaute `.exe`.
 - **Oszilloskope über MCP, Phase 1: herstellerneutrale Schicht `scope_api/` (0.15.0,
   Nutzerwunsch).** Ziel: der KI-Assistent misst und wertet über den MCP-Server mit dem
   PicoScope 2204A aus, und ein zweites Oszilloskop (entschieden: SCPI-Tischgerät per LAN)
