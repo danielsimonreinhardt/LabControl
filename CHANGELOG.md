@@ -37,8 +37,24 @@ Semantic Versioning (`lab_gui/version.py`).
     Bilder mit echten Schriften gerendert und angesehen (Mock: Rechteck + Sinus, Zoom auf die
     Flanke). **Mit echten Messdaten:** die CSV der T2-Messung am 2204A gerendert -- 10 Perioden,
     reales ±1-LSB-Rauschen, im Zoom genau ein Sample in der Flanke (Auflösungsgrenze bei
-    1,28 µs). **Noch offen:** `plot_capture` über deine laufende App (Neustart + MCP neu
-    verbinden, T4 im Entscheidungsboard), gebaute `.exe`.
+    1,28 µs).
+  - **Über die laufende App verifiziert (T4, 2026-09-28):** LabControl 0.18.0 mit echtem
+    2204A, JDS2915 Kanal 1 (Sinus 10 kHz/5 Vss, vorgefundene Einstellung, nur eingeschaltet und
+    danach wieder aus): `acquire` 10 005 Hz, 5,06 Vss, eff 1,766 V (Soll 1,768 V);
+    `plot_capture` gesamt (fünf Perioden, Kanal B flach) und gezoomt auf ±5 µs (8-Bit-Stufen
+    von ~39 mV, Nulldurchgang genau bei t = 0) vom Assistenten angesehen und ausgewertet. Der
+    Nutzer bestätigte Kachelzeile und Knopf „Kurve“ (öffnet das Bild).
+- **Behoben: Knöpfe „Kurve“ und „Trennen“ auf der Oszilloskop-Kachel verschwanden beim
+  Überfahren mit der Maus (0.18.1, Nutzerfeedback).** Ursache: ihre Zeilen nutzten
+  `theme.no_own_background()`, dessen nacktes `background: transparent;` auch für die Knöpfe
+  darin gilt. Beim Hover werden Schrift und Symbol hell (für den Akzent-Hintergrund gedacht),
+  der Hintergrund blieb aber transparent -- hell auf heller Kachel. Außerhalb des Hovers sahen
+  sie nur wie flacher Text aus. Fix wie in `control_tab._row_stylesheet`: transparent per
+  `QWidget`-Typ-Selektor, danach `theme.form_control_qss()`, dessen Knopfregeln gewinnen;
+  bei Theme-Wechsel neu gesetzt. **Verifiziert:** Kachel gerendert (Knöpfe jetzt mit normalem
+  Hintergrund und Rahmen), `check_network_share.py app i18n` grün. Den Hover selbst konnte ich
+  nicht auslösen (Mausbewegung per QTest kommt in der Remote-Sitzung nicht als Hover an) --
+  **Bestätigung durch den Nutzer nach Neustart offen.**
 - **„Gerätezuordnung löschen“ zweigeteilt (0.17.0, Nutzerwunsch).** Einstellungen → Geräte hat
   jetzt zwei Knöpfe:
   - **„Nicht verbundene Geräte löschen“** (neu): vergisst nur Geräte, die gerade nicht

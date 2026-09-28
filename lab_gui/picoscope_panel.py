@@ -38,7 +38,7 @@ from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 from i18n import Translator, tr
 from icons import IconButton
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER
-from theme import Palette, ThemeManager, no_own_background
+from theme import Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
 
 STATUS_ICON = {
@@ -50,6 +50,17 @@ STATUS_TEXT = {
     "mcp": "Verbunden (MCP)",
 }
 STATUS_ICON_SIZE = 18
+
+
+def _button_row_stylesheet(pal: Palette) -> str:
+    """Fuer Zeilen MIT Knoepfen statt no_own_background(): dessen nacktes
+    "background: transparent;" gilt auch fuer die Knoepfe darin -- beim Hover
+    wurden Schrift und Symbol hell (fuer den Akzent-Hintergrund gedacht), der
+    Hintergrund blieb aber transparent, der Knopf "verschwand" (Nutzerfeedback
+    zu "Kurve", 2026-09-28; "Trennen" betraf es genauso). Selbes Muster wie
+    control_tab._row_stylesheet: transparent per Typ-Selektor, danach die
+    normalen Knopfregeln, die dank hoeherer Spezifitaet fuer die Knoepfe gewinnen."""
+    return f"QWidget {{ background: transparent; }}\n{form_control_qss(pal)}"
 
 
 class PicoscopePanel(QGroupBox):
@@ -81,7 +92,9 @@ class PicoscopePanel(QGroupBox):
         # erbte und als sichtbar andersfarbiger Kasten von der individuellen
         # Panel-Faerbung absetzte (Nutzer-Screenshot: weisses Rechteck auf
         # sonst pfirsichfarbener Kachel).
-        status_row = no_own_background(QWidget())
+        status_row = QWidget()
+        status_row.setStyleSheet(_button_row_stylesheet(current_palette()))
+        self._status_row = status_row
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
         self._status_icon = QLabel()
@@ -99,7 +112,8 @@ class PicoscopePanel(QGroupBox):
         outer.addWidget(status_row)
 
         # Letzte Erfassung ueber Netzwerk/MCP -- erst sichtbar, wenn es eine gibt.
-        capture_row = no_own_background(QWidget())
+        capture_row = QWidget()
+        capture_row.setStyleSheet(_button_row_stylesheet(current_palette()))
         capture_layout = QHBoxLayout(capture_row)
         capture_layout.setContentsMargins(0, 0, 0, 0)
         self._capture_label = QLabel()
@@ -142,6 +156,8 @@ class PicoscopePanel(QGroupBox):
         self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
+        self._status_row.setStyleSheet(_button_row_stylesheet(palette))
+        self._capture_row.setStyleSheet(_button_row_stylesheet(palette))
         self._apply_style(palette)
         self._apply_status_icon(palette)
         self._apply_variant_style(palette)
