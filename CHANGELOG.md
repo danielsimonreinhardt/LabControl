@@ -53,8 +53,9 @@ Semantic Versioning (`lab_gui/version.py`).
   `QWidget`-Typ-Selektor, danach `theme.form_control_qss()`, dessen Knopfregeln gewinnen;
   bei Theme-Wechsel neu gesetzt. **Verifiziert:** Kachel gerendert (Knöpfe jetzt mit normalem
   Hintergrund und Rahmen), `check_network_share.py app i18n` grün. Den Hover selbst konnte ich
-  nicht auslösen (Mausbewegung per QTest kommt in der Remote-Sitzung nicht als Hover an) --
-  **Bestätigung durch den Nutzer nach Neustart offen.**
+  nicht auslösen (Mausbewegung per QTest kommt in der Remote-Sitzung nicht als Hover an).
+  **Am echten Gerät bestätigt (T5):** nach Neustart eine Erfassung über MCP am 2204A, der
+  Nutzer fuhr über „Trennen“ und „Kurve“ -- beide bleiben sichtbar.
 - **„Gerätezuordnung löschen“ zweigeteilt (0.17.0, Nutzerwunsch).** Einstellungen → Geräte hat
   jetzt zwei Knöpfe:
   - **„Nicht verbundene Geräte löschen“** (neu): vergisst nur Geräte, die gerade nicht
