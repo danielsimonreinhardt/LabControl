@@ -40,6 +40,9 @@ DEFAULT_BAUDRATE = 9600
 # Timeout und der Treiber wuerde das faelschlich als Verbindungsabbruch werten.
 MIN_VOLTAGE = 1.0
 
+# Schreibversuche je Sollwert, bevor ein Fehler gemeldet wird (siehe _set_verified).
+SET_ATTEMPTS = 3
+
 
 class PowerSupplyError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Labornetzteil."""
@@ -158,6 +161,28 @@ class HCS34xx:
 
     # -- setpoints -----------------------------------------------------------
 
+    def _set_verified(self, cmd: str, value: float, index: int) -> None:
+        """Sollwert setzen und per GETS zuruecklesen (BUGS_OFFEN #37).
+
+        Das Geraet quittiert mit "OK", uebernimmt den Wert aber gelegentlich
+        nicht (an der Hardware reproduziert: erster Schreibbefehl nach einer
+        Pause geht verloren, erst der zweite wirkt). "OK" allein beweist
+        deshalb nichts -- sicherheitsrelevant bei Ausgang AUS (Strom 0 A).
+        Bis zu SET_ATTEMPTS Versuche; stimmt der Sollwert danach nicht,
+        PowerSupplyValueError (Verbindung ist ok, der Wert wirkt aber nicht).
+        """
+        want = round(value * 10)
+        got = None
+        for _ in range(SET_ATTEMPTS):
+            self._query(cmd + self._encode_field(value, 3, 10))
+            got = self.get_setpoint()[index]
+            if round(got * 10) == want:
+                return
+        raise PowerSupplyValueError(
+            f"{cmd} {value}A/V nicht uebernommen: Sollwert nach {SET_ATTEMPTS} "
+            f"Versuchen {got} (Geraet quittierte trotzdem mit OK)."
+        )
+
     def set_voltage(self, volts: float) -> None:
         if volts < MIN_VOLTAGE:
             raise PowerSupplyValueError(
@@ -165,7 +190,9 @@ class HCS34xx:
                 "(Geraet nimmt Werte darunter kommentarlos nicht an)."
             )
         try:
-            self._query("VOLT" + self._encode_field(volts, 3, 10))
+            self._set_verified("VOLT", volts, 0)
+        except PowerSupplyValueError:
+            raise
         except PowerSupplyError:
             if self._probe_alive():
                 raise PowerSupplyValueError(
@@ -176,7 +203,9 @@ class HCS34xx:
 
     def set_current(self, amps: float) -> None:
         try:
-            self._query("CURR" + self._encode_field(amps, 3, 10))
+            self._set_verified("CURR", amps, 1)
+        except PowerSupplyValueError:
+            raise
         except PowerSupplyError:
             if self._probe_alive():
                 raise PowerSupplyValueError(
