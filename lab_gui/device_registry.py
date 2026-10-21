@@ -25,6 +25,7 @@ KIND_DISPLAY = {
     "picoscope": "Oszilloskop",
     "scpiscope": "Oszilloskop",
     "fg": "Funktionsgenerator",
+    "battsim": "Batterie-Simulator",
 }
 
 

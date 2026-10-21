@@ -22,7 +22,7 @@ from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
 from device_registry import DeviceRegistry
-from device_worker import SIM_CAN_ID, DeviceWorker, can_device_id
+from device_worker import SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id
 from i18n import Translator, tr
 from live_state import LiveState
 from paths import app_dir
@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         self._device_online: dict[str, bool] = {}
         self._online_devices: dict[str, set[str]] = {
             "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
-            "scpiscope": set(),
+            "scpiscope": set(), "battsim": set(),
         }
 
         self._registry = DeviceRegistry()
@@ -265,6 +265,12 @@ class MainWindow(QMainWindow):
         self._worker.scpiscope_connected.connect(self._scope_service.on_scope_connected)
         self._worker.scpiscope_state.connect(self._scope_service.on_scope_state)
         self._worker.scpiscope_state.connect(self._live_state.on_picoscope_state)
+        # Batterie-Simulator (CAN-Knoten an einem konfigurierten Interface, seit 0.22.0).
+        self._worker.battsim_connected.connect(self._on_battsim_connected)
+        self._worker.battsim_state.connect(self.dashboard.update_battsim)
+        self._worker.battsim_state.connect(self.control_tab.set_battsim_state)
+        self._worker.battsim_state.connect(self._live_state.on_battsim_state)
+        self._worker.set_battsim_voltage_limits(self._settings.battsim_voltage_limits)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
@@ -441,6 +447,8 @@ class MainWindow(QMainWindow):
                 self._on_picoscope_connected(device_id, False)
             elif kind == "scpiscope":
                 self._on_scpiscope_connected(device_id, False)
+            elif kind == "battsim":
+                self._on_battsim_connected(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -500,6 +508,19 @@ class MainWindow(QMainWindow):
         elif kind == "scpiscope":
             section.release_requested.connect(self._scope_service.release_async)
             section.plot_requested.connect(self._show_scope_plot)
+        elif kind == "battsim":
+            limit = self._settings.battsim_voltage_limits.get(device_id)
+            if limit is not None:
+                section.set_voltage_limit(limit)
+            section.set_remote.connect(self._worker.set_battsim_remote)
+            section.set_output.connect(self._worker.set_battsim_output)
+            section.set_cell_voltage.connect(self._worker.set_battsim_cell_voltage)
+            section.set_all_voltages.connect(self._worker.set_battsim_all_voltages)
+            section.set_cell_enabled.connect(self._worker.set_battsim_cell_enabled)
+            section.set_all_enabled.connect(self._worker.set_battsim_all_enabled)
+            section.reset_fail.connect(self._worker.reset_battsim_fail)
+            section.voltage_limit_changed.connect(self._settings.set_battsim_voltage_limit)
+            section.voltage_limit_changed.connect(self._worker.set_battsim_voltage_limit)
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -684,8 +705,15 @@ class MainWindow(QMainWindow):
         Simulationsmodus-Umschalter, waere also hier faelschlich IMMER
         "fehlend"."""
         wanted_ids = {can_device_id(cfg) for cfg in configs}
+        # Batterie-Simulator: nur, solange sein Interface ihn in der Spalte
+        # "Geraet am Bus" fuehrt -- sonst wie ein geloeschtes Interface vergessen.
+        wanted_battsims = {battsim_device_id(can_device_id(cfg)) for cfg in configs
+                           if cfg.get("device") == "battsim"}
         for kind, device_id, _label in self._registry.known_devices():
             if kind == "can" and device_id != SIM_CAN_ID and device_id not in wanted_ids:
+                self._registry.forget(device_id)
+                self._forget_device(device_id)
+            elif kind == "battsim" and device_id != SIM_BATTSIM_ID and device_id not in wanted_battsims:
                 self._registry.forget(device_id)
                 self._forget_device(device_id)
 
@@ -1291,6 +1319,12 @@ class MainWindow(QMainWindow):
         self.control_tab.set_picoscope_online(device_id, online)
 
     @Slot(str, bool)
+    def _on_battsim_connected(self, device_id: str, online: bool) -> None:
+        self._set_online("battsim", device_id, online)
+        self.dashboard.set_battsim_online(device_id, online)
+        self.control_tab.set_battsim_online(device_id, online)
+
+    @Slot(str, bool)
     def _on_scpiscope_connected(self, device_id: str, online: bool) -> None:
         self._set_online("scpiscope", device_id, online)
         self.dashboard.set_picoscope_online(device_id, online)
@@ -1400,6 +1434,11 @@ class MainWindow(QMainWindow):
             "all_outputs_off",
             Qt.ConnectionType.BlockingQueuedConnection,
             Q_ARG(str, "window close"),
+        )
+        # CAN-Knoten geordnet beenden (Batterie-Simulator: Ausgang sperren und
+        # Fernsteuerung abgeben), bevor ihre Sende-Threads mit dem Worker enden.
+        QMetaObject.invokeMethod(
+            self._worker, "shutdown_can_nodes", Qt.ConnectionType.BlockingQueuedConnection,
         )
         self._thread.quit()
         self._thread.wait(2000)

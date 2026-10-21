@@ -106,6 +106,7 @@ TILE_SPANS: dict[str, tuple[int, int]] = {
 # Breite.
 TILE_SIZE_BY_KIND: dict[str, str] = {
     "load": "small", "psu": "small", "hil": "big", "fg": "big", "picoscope": "small", "scpiscope": "small",
+    "battsim": "big",
 }
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
@@ -1113,6 +1114,247 @@ class FgControlGroup(QGroupBox):
                 self.set_output.emit(self._device_id, n, bool(saved["output_on"]))
 
 
+class BattSimControlGroup(QGroupBox):
+    """Steuersektion des Batterie-Simulators (battsim, CAN-Knoten, seit 0.22.0).
+
+    Oben Fernsteuerung, Ausgang und Zuruecksetzen aus FAIL, darunter je Zelle
+    Sollwert, Freigabe und die vom Geraet gemeldete Istspannung. Sollwerte
+    gehen sofort an den Treiber, der sie im naechsten Sendetakt verschickt;
+    der Ausgang wirkt erst bei eingeschalteter Fernsteuerung (Firmware:
+    REMOTE/STOP -> RUN). Die Schalter zeigen den vom Geraet gemeldeten Zustand
+    (BATTSIM_STATUS, BATTSIM_OUTPUT_STATUS), die Haken die Vorgabe."""
+
+    set_remote = Signal(str, bool)
+    set_output = Signal(str, bool)
+    set_cell_voltage = Signal(str, int, float)
+    set_all_voltages = Signal(str, float)
+    set_cell_enabled = Signal(str, int, bool)
+    set_all_enabled = Signal(str, bool)
+    reset_fail = Signal(str)
+    voltage_limit_changed = Signal(str, float)
+    panel_color_requested = Signal(str, object)
+    rename_requested = Signal(str, str, str)
+
+    def __init__(self, device_id: str, label: str, cell_count: int = 14,
+                 voltage_limit: float = 4.30) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self._remote_on: bool | None = None
+        self._output_on: bool | None = None
+        self.setTitle(label)
+
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(lambda key: self.panel_color_requested.emit(self._device_id, key))
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+
+        self._status_label = QLabel()
+        self._status_label.setWordWrap(True)
+        outer.addWidget(self._status_label)
+
+        self._remote_on_button = QPushButton()
+        self._remote_off_button = QPushButton()
+        self._output_on_button = QPushButton()
+        self._output_off_button = QPushButton()
+        self._reset_button = QPushButton()
+        self._remote_on_button.clicked.connect(lambda: self.set_remote.emit(self._device_id, True))
+        self._remote_off_button.clicked.connect(lambda: self.set_remote.emit(self._device_id, False))
+        self._output_on_button.clicked.connect(lambda: self.set_output.emit(self._device_id, True))
+        self._output_off_button.clicked.connect(lambda: self.set_output.emit(self._device_id, False))
+        self._reset_button.clicked.connect(lambda: self.reset_fail.emit(self._device_id))
+
+        self._form = QFormLayout()
+        self._remote_row = _row(self._remote_on_button, self._remote_off_button)
+        self._output_row = _row(self._output_on_button, self._output_off_button, self._reset_button)
+        self._all_spin = SteppedDoubleSpinBox(small_step=0.001, large_step=0.1)
+        self._all_spin.setDecimals(4)
+        self._all_spin.setSuffix(" V")
+        self._all_spin.setValue(3.7)
+        self._all_button = IconButton("mdi.check", "")
+        self._all_button.clicked.connect(lambda: self.set_all_voltages.emit(self._device_id, self._all_spin.value()))
+        self._all_on_button = QPushButton()
+        self._all_off_button = QPushButton()
+        self._all_on_button.clicked.connect(lambda: self.set_all_enabled.emit(self._device_id, True))
+        self._all_off_button.clicked.connect(lambda: self.set_all_enabled.emit(self._device_id, False))
+        self._all_row = _row(self._all_spin, self._all_button, self._all_on_button, self._all_off_button)
+        self._limit_spin = SteppedDoubleSpinBox(small_step=0.01, large_step=0.1)
+        self._limit_spin.setDecimals(2)
+        self._limit_spin.setRange(0.1, 5.0)
+        self._limit_spin.setSuffix(" V")
+        self._limit_button = IconButton("mdi.check", "")
+        self._limit_button.clicked.connect(self._on_limit_clicked)
+        self._limit_row = _row(self._limit_spin, self._limit_button)
+        for row in (self._remote_row, self._output_row, self._all_row, self._limit_row):
+            self._form.addRow(" ", row)
+            _detint_label(self._form, row)
+        outer.addLayout(self._form)
+
+        grid_host = QWidget()
+        grid_host.setStyleSheet(_row_stylesheet(current_palette()))
+        self._grid_host = grid_host
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(2)
+        self._grid_headers = [QLabel() for _ in range(4)]
+        for col, header in enumerate(self._grid_headers):
+            grid.addWidget(header, 0, col + 1 if col else 0)
+        self._cell_spins: list[SteppedDoubleSpinBox] = []
+        self._cell_checks: list[QCheckBox] = []
+        self._cell_actuals: list[QLabel] = []
+        for i in range(cell_count):
+            n = i + 1
+            grid.addWidget(QLabel(f"{n}"), n, 0)
+            spin = SteppedDoubleSpinBox(small_step=0.001, large_step=0.1)
+            spin.setDecimals(4)
+            spin.setSuffix(" V")
+            spin.setMaximumWidth(130)
+            button = IconButton("mdi.check", "")
+            button.clicked.connect(lambda _=False, n=n, s=spin: self.set_cell_voltage.emit(self._device_id, n, s.value()))
+            check = QCheckBox()
+            check.clicked.connect(lambda on, n=n: self.set_cell_enabled.emit(self._device_id, n, bool(on)))
+            actual = QLabel("--")
+            actual.setMinimumWidth(90)
+            grid.addWidget(spin, n, 1)
+            grid.addWidget(button, n, 2)
+            grid.addWidget(check, n, 3)
+            grid.addWidget(actual, n, 4)
+            self._cell_spins.append(spin)
+            self._cell_checks.append(check)
+            self._cell_actuals.append(actual)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(grid_host)
+        outer.addWidget(scroll, 1)
+
+        self.set_voltage_limit(voltage_limit)
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._retranslate()
+        self._on_theme_changed(current_palette())
+
+    def _retranslate(self) -> None:
+        self._subtitle.setText(tr("Batterie-Simulator (CAN, {n} Zellen)", n=len(self._cell_spins)))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._form.labelForField(self._remote_row).setText(tr("Fernsteuerung:"))
+        self._form.labelForField(self._output_row).setText(tr("Ausgang:"))
+        self._form.labelForField(self._all_row).setText(tr("Alle Zellen:"))
+        self._form.labelForField(self._limit_row).setText(tr("Grenzwert je Zelle:"))
+        self._remote_on_button.setText(tr("EIN"))
+        self._remote_off_button.setText(tr("AUS"))
+        self._output_on_button.setText(tr("EIN"))
+        self._output_off_button.setText(tr("AUS"))
+        self._reset_button.setText(tr("FAIL zurücksetzen"))
+        self._reset_button.setToolTip(tr("Aus dem Fehlerzustand zurück in die Fernsteuerung (Ausgang bleibt aus)"))
+        self._all_button.setToolTip(tr("Allen Zellen diesen Sollwert geben"))
+        self._all_on_button.setText(tr("alle ein"))
+        self._all_off_button.setText(tr("alle aus"))
+        self._limit_button.setToolTip(tr("Grenzwert übernehmen (höhere Sollwerte werden abgelehnt)"))
+        for header, text in zip(self._grid_headers, (tr("Zelle"), tr("Sollwert"), tr("ein"), tr("Istwert"))):
+            header.setText(text)
+        self._render_status(None)
+
+    def _on_limit_clicked(self) -> None:
+        self.set_voltage_limit(self._limit_spin.value())
+        self.voltage_limit_changed.emit(self._device_id, self._limit_spin.value())
+
+    def set_voltage_limit(self, volts: float) -> None:
+        self._limit_spin.setValue(volts)
+        for spin in [self._all_spin, *self._cell_spins]:
+            spin.setRange(0.0, volts)
+
+    def set_state(self, state: dict) -> None:
+        self._remote_on = bool(state.get("remote"))
+        self._output_on = state.get("output_on")
+        pal = current_palette()
+        _style_toggle_buttons(self._remote_on_button, self._remote_off_button, self._remote_on, pal)
+        _style_toggle_buttons(self._output_on_button, self._output_off_button, self._output_on, pal)
+        for button in (self._output_on_button, self._output_off_button, self._reset_button):
+            button.setEnabled(self._remote_on)
+        self._reset_button.setVisible(bool(state.get("failed")))
+        if abs(self._limit_spin.value() - float(state.get("voltage_limit", 0.0))) > 1e-6 \
+                and not self._limit_spin.hasFocus():
+            self.set_voltage_limit(float(state["voltage_limit"]))
+        for cell, spin, check, actual in zip(state.get("cells", []), self._cell_spins,
+                                             self._cell_checks, self._cell_actuals):
+            if not spin.hasFocus():
+                spin.blockSignals(True)
+                spin.setValue(float(cell["setpoint"]))
+                spin.blockSignals(False)
+            check.setChecked(bool(cell["enable"]))
+            volts = cell.get("voltage")
+            text = "--" if volts is None else f"{volts:.3f} V"
+            if cell.get("error"):
+                text += " " + tr("(Sollwertfehler)")
+            elif cell.get("enabled") is False:
+                text += " " + tr("(aus)")
+            actual.setText(text)
+        self._render_status(state)
+
+    def _render_status(self, state: dict | None) -> None:
+        if not state:
+            self._status_label.setText(tr("Zustand: --"))
+            return
+        parts = [tr("Zustand: {name}", name=state.get("status_name", "--"))]
+        stack = state.get("stack_voltage")
+        if stack is not None:
+            parts.append(tr("Stapel {v} V", v=f"{stack:.3f}"))
+        if state.get("tx_error"):
+            parts.append(tr("Senden gestört: {err}", err=state["tx_error"]))
+        self._status_label.setText(" · ".join(parts))
+        pal = current_palette()
+        color = pal.danger if state.get("failed") else pal.text
+        self._status_label.setStyleSheet(f"color: {color}; background: transparent;")
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        for row in (self._remote_row, self._output_row, self._all_row, self._limit_row, self._grid_host):
+            row.setStyleSheet(_row_stylesheet(palette))
+        apply_panel_tint(self, self._color_key)
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(self, tr("Gerät umbenennen"), tr("Name:"), text=self.title())
+        if ok and new_label.strip():
+            self.rename_requested.emit("battsim", self._device_id, new_label.strip())
+
+    def capture_state(self) -> dict:
+        """Preset: Sollwerte und Freigaben, bewusst NICHT Fernsteuerung und
+        Ausgang -- ein Preset soll keine Spannung an einen Pruefling legen."""
+        return {
+            "setpoints": [s.value() for s in self._cell_spins],
+            "enables": [c.isChecked() for c in self._cell_checks],
+        }
+
+    def apply_state(self, state: dict) -> None:
+        for n, (volts, on) in enumerate(zip(state.get("setpoints", []), state.get("enables", [])), start=1):
+            try:
+                self.set_cell_voltage.emit(self._device_id, n, float(volts))
+                self.set_cell_enabled.emit(self._device_id, n, bool(on))
+            except (TypeError, ValueError):
+                continue
+
+
 class CanControlGroup(QGroupBox):
     """Steuersektion fuer ein CAN-Interface: Formular zum Senden eines
     einzelnen Frames + eine kleine Live-Traffic-Tabelle. Anders als Last/
@@ -2083,6 +2325,8 @@ class ControlTab(QWidget):
             section = PicoscopeControlGroup(device_id, label)
         elif kind == "scpiscope":
             section = PicoscopeControlGroup(device_id, label, kind="scpiscope")
+        elif kind == "battsim":
+            section = BattSimControlGroup(device_id, label)
         else:
             section = CanControlGroup(device_id, label)
         # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion
@@ -2532,6 +2776,14 @@ class ControlTab(QWidget):
     def set_fg_state(self, device_id: str, state: dict) -> None:
         section = self._sections.get(device_id)
         if isinstance(section, FgControlGroup):
+            section.set_state(state)
+
+    def set_battsim_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_battsim_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, BattSimControlGroup):
             section.set_state(state)
 
     def on_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:

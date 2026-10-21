@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -240,6 +241,13 @@ class CanBus:
         self.bitrate = bitrate
         self.serial_baudrate = kwargs.get("tty_baudrate")
         self._opened = time.monotonic()
+        # send()/recv() kommen seit den CAN-Knoten (node.py, 0.22.0) aus zwei
+        # Threads: dem DeviceWorker (Empfang, Einzelframes) und dem
+        # CanScheduler (zyklisches Senden). python-can sichert seine Backends
+        # nicht durchgaengig gegen gleichzeitige Zugriffe ab (SLCAN teilt sich
+        # z.B. einen seriellen Port fuer beide Richtungen) -- deshalb hier
+        # serialisiert. recv() laeuft mit timeout=0.0, haelt den Lock also nie lange.
+        self._io_lock = threading.Lock()
 
     @staticmethod
     def backend_problem(interface: str) -> str:
@@ -341,7 +349,8 @@ class CanBus:
     def send(self, arbitration_id: int, data: bytes, extended: bool = False) -> None:
         msg = can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=extended)
         try:
-            self._bus.send(msg)
+            with self._io_lock:
+                self._bus.send(msg)
         except Exception as exc:
             raise CanError(f"Senden fehlgeschlagen: {exc}") from exc
 
@@ -368,7 +377,8 @@ class CanBus:
         angezeigt wird")."""
         try:
             while True:
-                msg = self._bus.recv(timeout=timeout)
+                with self._io_lock:
+                    msg = self._bus.recv(timeout=timeout)
                 if msg is None or msg.is_rx:
                     break
         except Exception as exc:

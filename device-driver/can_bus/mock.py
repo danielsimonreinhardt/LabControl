@@ -18,7 +18,9 @@ Botschaften ... fuellen den Log").
 """
 from __future__ import annotations
 
+import threading
 import time
+from collections import deque
 from itertools import count
 
 from can_bus.driver import CanFrame
@@ -33,6 +35,9 @@ DEMO_FRAMES: list[tuple[int, bytes]] = [
 # echter Busverkehr wirkt, statt bei jedem Poll-Zyklus (100 ms, siehe
 # device_worker.POLL_INTERVAL_MS) sofort neue Daten zu liefern.
 DEMO_INTERVAL_S = 0.5
+
+# Obergrenze fuer sent_frames (siehe MockCanBus.send).
+SENT_FRAMES_KEEP = 500
 
 
 class MockCanBus:
@@ -56,6 +61,24 @@ class MockCanBus:
         self._demo_index = count()
         self._start = time.monotonic()
         self._next_demo_at = self._start + DEMO_INTERVAL_S
+        # Simulierte Gegenstellen am Bus (seit 0.22.0, z.B. battsim.mock.
+        # SimulatedBattSim): bekommen jeden gesendeten Frame (on_frame) und
+        # liefern eigene Antworten (poll), die recv() vor den Demo-Frames
+        # ausgibt. So laeuft im Simulationsmodus der echte Treibercode eines
+        # CAN-Geraets gegen ein nachgebildetes Geraet.
+        self._peers: list = []
+        self._rx_queue: deque[CanFrame] = deque()
+        # send() kommt aus dem CanScheduler-Thread, recv() aus dem DeviceWorker.
+        self._lock = threading.Lock()
+
+    def attach_peer(self, peer) -> None:
+        with self._lock:
+            self._peers.append(peer)
+
+    def detach_peer(self, peer) -> None:
+        with self._lock:
+            if peer in self._peers:
+                self._peers.remove(peer)
 
     def close(self) -> None:
         pass
@@ -67,12 +90,26 @@ class MockCanBus:
         self.close()
 
     def send(self, arbitration_id: int, data: bytes, extended: bool = False) -> None:
-        self.sent_frames.append(
-            CanFrame(arbitration_id, bytes(data), extended, time.monotonic() - self._start)
-        )
+        frame = CanFrame(arbitration_id, bytes(data), extended, time.monotonic() - self._start)
+        with self._lock:
+            self.sent_frames.append(frame)
+            # Nur die letzten Frames behalten -- mit zyklisch sendenden
+            # CAN-Knoten wuchse die Liste sonst unbegrenzt.
+            if len(self.sent_frames) > SENT_FRAMES_KEEP:
+                del self.sent_frames[: len(self.sent_frames) - SENT_FRAMES_KEEP]
+            peers = list(self._peers)
+        for peer in peers:
+            peer.on_frame(frame)
 
     def recv(self, timeout: float = 0.0) -> CanFrame | None:
         now = time.monotonic()
+        with self._lock:
+            peers = list(self._peers)
+        for peer in peers:
+            for arb_id, data in peer.poll(now):
+                self._rx_queue.append(CanFrame(arb_id, bytes(data), False, now - self._start))
+        if self._rx_queue:
+            return self._rx_queue.popleft()
         if now < self._next_demo_at:
             return None
         self._next_demo_at = now + DEMO_INTERVAL_S

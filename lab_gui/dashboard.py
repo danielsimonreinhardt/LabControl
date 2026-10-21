@@ -125,18 +125,24 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "rx_count": ("Empfangen", ""),
     "fg_ch1": ("Kanal 1", ""),
     "fg_ch2": ("Kanal 2", ""),
+    "bs_state": ("Zustand", ""),
+    "bs_output": ("Ausgang", ""),
+    "bs_stack": ("Stapel", "V"),
+    "bs_cell_min": ("Zelle min", "V"),
+    "bs_cell_max": ("Zelle max", "V"),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 CAN_FIELD_KEYS = ["tx_count", "rx_count"]
 FG_FIELD_KEYS = ["fg_ch1", "fg_ch2"]
+BATTSIM_FIELD_KEYS = ["bs_state", "bs_output", "bs_stack", "bs_cell_min", "bs_cell_max"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus",
-              "fg": "Funktionsgenerator"}
+              "fg": "Funktionsgenerator", "battsim": "Batterie-Simulator"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
 KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip",
-             "fg": "mdi.sine-wave"}
+             "fg": "mdi.sine-wave", "battsim": "mdi.battery-charging-outline"}
 
 # "Verbindung getrennt"-Badge oben rechts im Panel, siehe
 # _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
@@ -162,6 +168,11 @@ FIELD_ICONS: dict[str, str] = {
     "rx_count": "mdi.download-outline",
     "fg_ch1": "mdi.numeric-1-box-outline",
     "fg_ch2": "mdi.numeric-2-box-outline",
+    "bs_state": "mdi.state-machine",
+    "bs_output": "mdi.power",
+    "bs_stack": "mdi.battery-outline",
+    "bs_cell_min": "mdi.arrow-collapse-down",
+    "bs_cell_max": "mdi.arrow-collapse-up",
 }
 
 
@@ -1188,7 +1199,8 @@ class DashboardWidget(QGroupBox):
                 panel.release_requested.connect(self.picoscope_release_requested)
                 panel.plot_requested.connect(self.picoscope_plot_requested)
             else:
-                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS}.get(
+                field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS,
+                              "battsim": BATTSIM_FIELD_KEYS}.get(
                     kind, CAN_FIELD_KEYS
                 )
                 panel = _DevicePanel(kind, device_id, label, field_keys)
@@ -1271,6 +1283,10 @@ class DashboardWidget(QGroupBox):
     def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    @Slot(str, bool)
+    def set_battsim_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
     def _set_online(self, device_id: str, online: bool) -> None:
         panel = self._panels.get(device_id)
         if panel is None:
@@ -1315,6 +1331,25 @@ class DashboardWidget(QGroupBox):
                 f"fg_ch{n}",
                 f"{tr(waveform_name(ch['waveform']))}  {_format_frequency(ch['frequency'])}  {ch['amplitude']:.2f} V",
             )
+
+    @Slot(str, object)
+    def update_battsim(self, device_id: str, state: dict) -> None:
+        """Zusammenfassung des Batterie-Simulators: Zustand, Ausgang, Stapel und
+        kleinste/groesste Zellspannung (die Einzelwerte zeigt die Control-Kachel)."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_value("bs_state", state.get("status_name") or "--")
+        output_on = state.get("output_on")
+        panel.set_value("bs_output", "--" if output_on is None else (tr("ein") if output_on else tr("aus")))
+        stack = state.get("stack_voltage")
+        panel.set_value("bs_stack", "--" if stack is None else f"{stack:.3f}")
+        # Nur eingeschaltete Zellen: eine abgeschaltete ist gebrueckt (0 V) und
+        # wuerde das Minimum der simulierten Zellen verdecken.
+        volts = [c["voltage"] for c in state.get("cells", [])
+                 if c.get("voltage") is not None and c.get("enabled")]
+        panel.set_value("bs_cell_min", f"{min(volts):.3f}" if volts else "--")
+        panel.set_value("bs_cell_max", f"{max(volts):.3f}" if volts else "--")
 
     @Slot(str, int, int)
     def update_can(self, device_id: str, tx_count: int, rx_count: int) -> None:

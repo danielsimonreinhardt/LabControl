@@ -83,8 +83,8 @@ HINTS = {
 }
 
 INSTRUCTIONS = """\
-Steuert reale Laborgeraete (Netzteile, elektronische Last, microHIL, Funktionsgenerator) ueber
-LabControl und misst mit Oszilloskopen. Das ist Hardware: ein falscher Befehl kann Prueflinge
+Steuert reale Laborgeraete (Netzteile, elektronische Last, microHIL, Funktionsgenerator,
+Batterie-Simulator) ueber LabControl und misst mit Oszilloskopen. Das ist Hardware: ein falscher Befehl kann Prueflinge
 beschaedigen.
 
 Vorgehen:
@@ -96,6 +96,10 @@ Vorgehen:
 - Nach jedem Schreiben den Zustand mit read_device gegenpruefen (Messwert, nicht nur 'ok').
 - Bei Auffaelligkeiten (unerwartete Werte, Fehlermeldungen) sofort all_off und den Nutzer informieren.
 - Netzteil HCS-34xx: 'Ausgang AUS' ist nur Strom = 0 A; PSU_CURR > 0 schaltet den Ausgang wieder EIN.
+- Batterie-Simulator (battsim, 14 Zellen, Kanal = Zelle): erst BS_REMOTE_ON, dann Sollwerte
+  (BS_CELL_VOLT/BS_ALL_VOLT) und Freigaben (BS_CELL_ON/BS_ALL_ON), zuletzt BS_OUT_ON. Ueber dem
+  Grenzwert je Zelle (Feld voltage_limit) wird abgelehnt. Istwerte in cellN_voltage, Zustand in
+  status ('Fernsteuerung' im Betrieb; 'FAIL' -> BS_RESET_FAIL, danach BS_OUT_ON erneut).
 
 Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,
 release_scope):

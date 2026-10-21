@@ -28,6 +28,7 @@ from testcase_model import (
     COND_FIELD_UNITS,
     TestStep,
     action_label,
+    battsim_step_detail,
     check_summary,
     kind_label,
 )
@@ -140,6 +141,8 @@ def _step_started_text(record: RunRecord, index: int) -> str:
         detail = tr("Kanal {ch}", ch=step.hil_channel)
         if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
             detail += f": {step.value:g}"
+    elif step.device_kind == "battsim":
+        detail = battsim_step_detail(step)
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)

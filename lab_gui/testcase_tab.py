@@ -48,6 +48,8 @@ from theme import current as current_palette
 from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
+    BATTSIM_CHECK_FIELD_LABELS,
+    BATTSIM_READ_CHECK_FIELD,
     COND_FIELD_UNITS,
     COND_DEVICE_KINDS,
     CONTROL_STEP_LABELS,
@@ -67,6 +69,7 @@ from testcase_model import (
     TestStep,
     action_label,
     arb_shape_label,
+    battsim_step_detail,
     check_summary,
     condition_summary,
     is_arb_action,
@@ -922,8 +925,8 @@ class TestcaseTab(QWidget):
         hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(step.action, 8))
         hil_channel_spin.setValue(max(1, step.hil_channel))
         hil_value_spin = SteppedDoubleSpinBox(small_step=1.0, large_step=50.0)
-        if step.device_kind == "fg":
-            # Funktionsgenerator: Nachkommastellen (0,01 Hz, mV) und ein weiter
+        if step.device_kind in ("fg", "battsim"):
+            # Funktionsgenerator/Batterie-Simulator: Nachkommastellen (0,01 Hz, mV) und ein weiter
             # Rahmen, bevor on_action_changed den Bereich der Aktion setzt --
             # sonst wuerde ein gespeicherter Wert schon beim Laden auf den
             # Vorgabebereich 0..99,99 bzw. auf ganze Zahlen gekuerzt.
@@ -1022,14 +1025,16 @@ class TestcaseTab(QWidget):
         def open_check_dialog() -> None:
             code = action_combo.currentData() or ""
             field_choices = None
-            field_code = HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
+            field_code = (HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
+                          or BATTSIM_READ_CHECK_FIELD.get(code))
             if field_code is not None:
                 # Nur der eine Wert, den die jeweilige Lese-Aktion (HIL_AIN_READ/
                 # HIL_IN_READ/PICO_*) tatsaechlich liefert -- die drei
                 # generischen Last/Netzteil-Messgroessen (Default in
                 # CheckDialog) waeren hier bedeutungslos.
                 unit = COND_FIELD_UNITS.get(field_code, "")
-                label = HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS[field_code]
+                label = (HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS.get(field_code)
+                         or BATTSIM_CHECK_FIELD_LABELS[field_code])
                 field_choices = {field_code: (label, unit)}
             # Nur eine Lese-Aktion (microHIL oder PicoScope) liefert ueberhaupt
             # einen Wert, der sich sinnvoll in eine Variable schreiben laesst
@@ -1161,9 +1166,13 @@ class TestcaseTab(QWidget):
             elif code == "CAN_SEND":
                 refresh_can_summary()
                 value_stack.setCurrentIndex(2)
-            elif kind in ("hil", "fg"):
-                hil_channel_spin.setRange(1, HIL_CHANNEL_COUNTS.get(code, 8))
-                hil_value_spin.setDecimals(3 if kind == "fg" else 0)
+            elif kind in ("hil", "fg", "battsim"):
+                channels = HIL_CHANNEL_COUNTS.get(code, 8)
+                hil_channel_spin.setRange(1, max(1, channels))
+                # 0 = Aktion ohne Kanal (Batterie-Simulator: Fernsteuerung, Ausgang, ...)
+                hil_channel_spin.setVisible(channels > 0)
+                hil_channel_label.setVisible(channels > 0)
+                hil_value_spin.setDecimals({"fg": 3, "battsim": 4}.get(kind, 0))
                 hil_value_spin.setSuffix(f" {unit}" if unit else "")
                 hil_value_spin.setRange(lo, hi)
                 # Nicht nur deaktivieren, sondern ganz ausblenden: bei
@@ -1878,7 +1887,7 @@ class TestcaseTab(QWidget):
         # hil_page-Spinbox statt in value_spin; PicoScope-Aktionen tragen den
         # gewaehlten Spannungsbereichs-Code (siehe TestStep.value-Docstring)
         # aus picoscope_page._range_combo (siehe _build_action_row).
-        if kind in ("hil", "fg"):
+        if kind in ("hil", "fg", "battsim"):
             value = hil_page._value_spin.value()
         elif kind == "picoscope":
             value = float(picoscope_page._range_combo.currentData())
@@ -2263,6 +2272,8 @@ class TestcaseTab(QWidget):
             detail = tr("Kanal {ch}", ch=step.hil_channel)
             if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
                 detail += f": {step.value:g}"
+        elif step.device_kind == "battsim":
+            detail = battsim_step_detail(step)
         elif step.device_kind == "picoscope":
             ch = "A" if step.hil_channel != 2 else "B"
             range_name = _PICO_RANGE_BY_CODE.get(int(step.value), "?")

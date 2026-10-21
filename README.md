@@ -37,6 +37,10 @@ A new release is compiled after every master-push. Just download and run the .ex
 - UNI-T MSO1000HD series oscilloscope, e.g. MSO1154HD-S (SCPI over LAN via pyvisa-py, no NI-VISA
   needed; same tiles and MCP measurement as the PicoScope). **Simulator-tested only so far** --
   the hardware check is pending, see `device-driver/unit_mso1000hd/README.md`
+- Battery simulator (self-built, 14 isolated cell channels, Longboard project) controlled over CAN.
+  It has no bus of its own: it attaches as a CAN node to an interface already configured in
+  LabControl (column "Gerät am Bus"), shows up as its own device and can be driven from the GUI,
+  test sequences and MCP. **Mock-tested only so far**, see `device-driver/battsim/README.md`
 
 ## Contributing
 

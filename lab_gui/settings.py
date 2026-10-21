@@ -298,6 +298,28 @@ class Settings(QObject):
         self.scpi_scopes_changed.emit(list(cleaned))
 
     @property
+    def battsim_voltage_limits(self) -> dict[str, float]:
+        """Grenzwert je Zelle je Batterie-Simulator (device_id -> V, seit 0.22.0).
+        Fehlt ein Eintrag, gilt battsim.driver.DEFAULT_VOLTAGE_LIMIT_V (4,30 V,
+        Board-Entscheidung bs-grenzwert); erlaubt sind 0,1-5,0 V."""
+        stored = self._data.get("battsim_voltage_limits")
+        if not isinstance(stored, dict):
+            return {}
+        result = {}
+        for device_id, volts in stored.items():
+            try:
+                result[str(device_id)] = min(5.0, max(0.1, float(volts)))
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def set_battsim_voltage_limit(self, device_id: str, volts: float) -> None:
+        limits = self.battsim_voltage_limits
+        limits[device_id] = min(5.0, max(0.1, float(volts)))
+        self._data["battsim_voltage_limits"] = limits
+        self._save()
+
+    @property
     def language(self) -> str:
         return str(self._data.get("language", DEFAULT_LANGUAGE))
 

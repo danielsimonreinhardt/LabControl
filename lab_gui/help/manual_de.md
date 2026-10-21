@@ -152,6 +152,45 @@ IP-Adresse:
 Nach einer Erfassung über den MCP-Server bleibt das Oszilloskop gestoppt und
 zeigt die Erfassung an. *Bisher nur mit dem Simulator getestet.*
 
+### Batterie-Simulator (14 Zellen, über CAN)
+
+Der Simulator hat keinen eigenen USB-Anschluss, er hängt an einem
+CAN-Interface, das in LabControl schon eingerichtet ist (Vector, PCAN oder
+SLCAN). Einrichten:
+
+1. **Einstellungen → CAN-Interfaces**: das Interface eintragen, an dem der
+   Simulator hängt (500 kbit/s), und in der Spalte **„Gerät am Bus“**
+   „Batterie-Simulator“ wählen. Das Interface kann gleichzeitig für andere
+   Teilnehmer (z. B. das BCU-Board) genutzt werden.
+2. Sobald der Simulator antwortet, erscheint seine Kachel. Bleibt seine
+   Statusbotschaft eine Sekunde aus, gilt er als getrennt.
+
+Bedienung in der Sektion:
+
+- **Fernsteuerung EIN** übernimmt das Gerät (Zustand „Fernsteuerung“), der
+  Ausgang bleibt dabei aus. Solange die Fernsteuerung aus ist, sendet
+  LabControl nichts – das Gerät lässt sich dann normal am Bedienfeld nutzen.
+- **Sollwerte** je Zelle oder für **alle Zellen** setzen, Zellen mit dem
+  Haken **ein**- oder **aus**schalten. Eine ausgeschaltete Zelle ist am
+  Ausgang gebrückt (0 V), der Stapel bleibt geschlossen.
+- **Ausgang EIN** legt die eingeschalteten Zellen an. **ALLE AUS** sperrt den
+  Ausgang, die Fernsteuerung bleibt dabei bestehen.
+- **Grenzwert je Zelle** (Voreinstellung 4,30 V, bis 5,0 V): höhere Sollwerte
+  werden abgelehnt – auch aus Testablauf und Fernsteuerung.
+- **Istwert** je Zelle und die **Stapelspannung** meldet das Gerät selbst.
+- **Zustand „FAIL“**: Fällt die Verbindung zu LabControl aus (Programm
+  beendet sich unerwartet, Kabel ab), schaltet der Simulator nach 4,5–6
+  Sekunden ab. **„FAIL zurücksetzen“** holt ihn zurück; den Ausgang danach
+  wieder einschalten. Beim normalen Beenden gibt LabControl die
+  Fernsteuerung vorher geordnet ab.
+- Im **Testablauf** gibt es Aktionen für Fernsteuerung, Ausgang,
+  Zellspannung (einzeln/alle), Zelle ein/aus und zum Lesen von Zell- und
+  Stapelspannung (mit Pass/Fail-Prüfung). Die Zelle wird in der Zeile
+  gewählt.
+
+*Bisher nur gegen einen nachgebildeten Simulator getestet, die Prüfung am
+Gerät steht aus.*
+
 ---
 
 ## 3. Reiter „Testablauf“
@@ -416,7 +455,8 @@ erfüllt sein:
    Lesen tokenfrei erlaubt ist — und nur als Kopfzeile
    (`Authorization: Bearer …`), nie in der Adresse.
 2. **Steuern** ist beim Gerät in der Tabelle angehakt (setzt „Lesen“ voraus).
-   Möglich ist das für Last, Netzteil, microHIL und Funktionsgenerator; CAN und
+   Möglich ist das für Last, Netzteil, microHIL, Funktionsgenerator und
+   Batterie-Simulator; CAN und
    Oszilloskop lassen sich nicht fernsteuern (zum Oszilloskop siehe „Messen“ unten).
 3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet (nicht nötig für
    Zugriffe vom selben Rechner, siehe „Ausnahme für diesen PC“). Er ist nach

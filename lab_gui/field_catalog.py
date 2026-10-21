@@ -74,6 +74,20 @@ FG_STATE_FIELDS = {
     **{f"duty{n}": (f"Tastverhältnis {n}", "%") for n in (1, 2)},
     "phase": ("Phase", "°"),
 }
+# Batterie-Simulator (seit 0.22.0): Zustand und je Zelle Istwert, Sollwert und
+# gemeldete Freigabe. 14 bestueckte Zellen (battsim.driver.CELL_COUNT), hier
+# als Zahl statt Import -- dieses Modul soll ausser microhil nichts ziehen.
+BATTSIM_CELL_COUNT = 14
+BATTSIM_STATE_FIELDS = {
+    "status": ("Zustand", ""),
+    "output": ("Ausgang", ""),
+    "remote": ("Fernsteuerung", ""),
+    "stack_voltage": ("Stapelspannung", "V"),
+    "voltage_limit": ("Grenzwert je Zelle", "V"),
+    **{f"cell{n}_voltage": (f"Zelle {n} Istwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
+    **{f"cell{n}_setpoint": (f"Zelle {n} Sollwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
+    **{f"cell{n}_on": (f"Zelle {n} ein", "") for n in range(1, BATTSIM_CELL_COUNT + 1)},
+}
 
 # -- Flacher Gesamtkatalog fuer die Netzwerk-Freigabe ---------------------
 # (kind, field) -> (deutscher Basis-Anzeigename, Einheit). Anders als
@@ -89,6 +103,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
     **{("picoscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
     **{("scpiscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
     **{("fg", f): v for f, v in FG_STATE_FIELDS.items()},
+    **{("battsim", f): v for f, v in BATTSIM_STATE_FIELDS.items()},
 }
 
 # Anzeigereihenfolge je Geraeteart -- bestimmt, in welcher Reihenfolge die
@@ -103,6 +118,7 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
     "picoscope": ["status"],
     "scpiscope": ["status"],
     "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
+    "battsim": list(BATTSIM_STATE_FIELDS),
 }
 
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter

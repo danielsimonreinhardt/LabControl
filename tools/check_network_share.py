@@ -560,11 +560,13 @@ def section_remote() -> None:
     check("HIL-Kanalzahlen stimmen mit testcase_model.HIL_CHANNEL_COUNTS ueberein",
           all(remote_actions.REMOTE_ACTIONS["hil"][c].channels == n
               for c, n in tm.HIL_CHANNEL_COUNTS.items() if c in remote_actions.REMOTE_ACTIONS["hil"]))
-    known = set(tm.LOAD_ACTIONS) | set(tm.PSU_ACTIONS) | set(tm.HIL_ACTIONS) | set(tm.FG_ACTIONS)
+    known = (set(tm.LOAD_ACTIONS) | set(tm.PSU_ACTIONS) | set(tm.HIL_ACTIONS) | set(tm.FG_ACTIONS)
+             | set(tm.BATTSIM_ACTIONS))
     check("jede Fernsteuer-Aktion ist ein bekannter Testeditor-Aktionscode",
           all(c in known for a in remote_actions.REMOTE_ACTIONS.values() for c in a))
     check("nie enthalten: CAN_SEND, PICO_*, ARB, Lese-Aktionen",
-          not any(c in {"CAN_SEND", "ARB", "PSU_ARB", "HIL_IN_READ", "HIL_AIN_READ"} or c.startswith("PICO_")
+          not any(c in {"CAN_SEND", "ARB", "PSU_ARB", "HIL_IN_READ", "HIL_AIN_READ", "BS_CELL_READ",
+                        "BS_STACK_READ"} or c.startswith("PICO_")
                   for a in remote_actions.REMOTE_ACTIONS.values() for c in a))
 
 

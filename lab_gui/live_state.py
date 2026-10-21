@@ -227,6 +227,27 @@ class LiveState(QObject):
             })
         self._write(device_id, **fields)
 
+    @Slot(str, object)
+    def on_battsim_state(self, device_id: str, state: dict) -> None:
+        """Zustand des Batterie-Simulators (siehe device_worker.battsim_state).
+        Ausgang/Freigabe als 0/1, None solange das Geraet nichts gemeldet hat."""
+        def _flag(value):
+            return None if value is None else int(bool(value))
+
+        fields: dict = {
+            "status": state.get("status_name"),
+            "output": _flag(state.get("output_on")),
+            "remote": int(bool(state.get("remote"))),
+            "stack_voltage": state.get("stack_voltage"),
+            "voltage_limit": state.get("voltage_limit"),
+        }
+        for cell in state.get("cells", []):
+            n = cell["index"]
+            fields[f"cell{n}_voltage"] = cell.get("voltage")
+            fields[f"cell{n}_setpoint"] = cell.get("setpoint")
+            fields[f"cell{n}_on"] = _flag(cell.get("enabled"))
+        self._write(device_id, **fields)
+
     # -- Sperrzustand --------------------------------------------------------
 
     @Slot(str)

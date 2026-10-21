@@ -143,6 +143,16 @@ zum Timeout und darf den Poll-Zyklus nicht einfrieren, siehe
 `DeviceWorker._probe_scpiscopes`), und ein Simulator auf SCPI-Ebene
 (`mock.SimulatedInstrument`), damit der echte Treibercode mitläuft.
 
+Für Geräte, die **über CAN** gesteuert werden, ist `battsim` die Vorlage: der
+Treiber ist ein `CanNode` (`can_bus/node.py`) mit `rx_ids`, `on_frame`,
+`due_frames`, `online` und `shutdown_frames`, ohne eigenen Bus. Konfiguriert
+wird er über die Spalte „Gerät am Bus“ der CAN-Tabelle
+(`device_worker.CAN_NODE_DEVICES`, `settings.py::can_configs` Schlüssel
+`"device"`); `DeviceWorker._sync_can_nodes` hängt ihn an, sobald das
+Interface offen ist, als verbunden gilt er erst, wenn er antwortet. Zyklisch
+gesendet wird im `CanScheduler`-Thread, nicht im Poll. Der Mock bildet das
+**Gerät** nach (`MockCanBus.attach_peer`), damit der echte Treiber mitläuft.
+
 ## 10. Dokumentation & Test
 
 - Root-`README.md`, Abschnitt "Supported Devices", ergänzen.

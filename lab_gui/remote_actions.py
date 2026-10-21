@@ -30,12 +30,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from battsim.driver import CELL_COUNT as BATTSIM_CELL_COUNT
+from battsim.driver import MAX_CELL_VOLTAGE_V as BATTSIM_MAX_CELL_VOLTAGE_V
 from jds66xx.driver import MAX_AMPLITUDE_V, MAX_FREQUENCY_HZ, MAX_OFFSET_V, MIN_FREQUENCY_HZ
 from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, RELAY_COUNT
 
 # Geraetearten, die ueberhaupt fernsteuerbar sind. CAN und Oszilloskop bleiben
 # bewusst draussen (siehe Modul-Docstring).
-CONTROL_KINDS = ("load", "psu", "hil", "fg")
+CONTROL_KINDS = ("load", "psu", "hil", "fg", "battsim")
 # Geraetearten mit Erfassungen ueber Netzwerk/MCP (scope_api, Haekchen "Messen").
 SCOPE_KINDS = ("picoscope", "scpiscope")
 
@@ -102,6 +104,27 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
         _a("FG_WAVE_DC", "Wellenform DC", channels=2),
         _a("FG_OUT_ON", "Ausgang EIN", channels=2),
         _a("FG_OUT_OFF", "Ausgang AUS", channels=2),
+    )},
+    # Batterie-Simulator (seit 0.22.0). Bewusst eine eigene Geraeteart, nicht
+    # "CAN senden": es gehen nur diese Befehle raus, keine beliebigen Frames.
+    "battsim": {a.code: a for a in (
+        _a("BS_REMOTE_ON", "Fernsteuerung EIN",
+           note="Voraussetzung fuer alle anderen Befehle; Ausgang bleibt dabei aus"),
+        _a("BS_REMOTE_OFF", "Fernsteuerung AUS", note="Geraet geht in STANDBY, alle Zellen aus"),
+        _a("BS_OUT_ON", "Ausgang EIN", note="legt die freigegebenen Zellspannungen an"),
+        _a("BS_OUT_OFF", "Ausgang AUS", note="alle Zellen gebrueckt (0 V)"),
+        _a("BS_CELL_VOLT", "Zellspannung setzen", "V", 0, BATTSIM_MAX_CELL_VOLTAGE_V, True,
+           channels=BATTSIM_CELL_COUNT,
+           note="Werte ueber dem eingestellten Grenzwert je Zelle (Voreinstellung 4,30 V) "
+                "lehnt der Treiber ab"),
+        _a("BS_ALL_VOLT", "Alle Zellspannungen setzen", "V", 0, BATTSIM_MAX_CELL_VOLTAGE_V, True,
+           note="gleicher Grenzwert wie bei BS_CELL_VOLT"),
+        _a("BS_CELL_ON", "Zelle EIN", channels=BATTSIM_CELL_COUNT),
+        _a("BS_CELL_OFF", "Zelle AUS", channels=BATTSIM_CELL_COUNT),
+        _a("BS_ALL_ON", "Alle Zellen EIN"),
+        _a("BS_ALL_OFF", "Alle Zellen AUS"),
+        _a("BS_RESET_FAIL", "FAIL zuruecksetzen",
+           note="nach Ausfall der Fernsteuerung; danach Ausgang erneut einschalten"),
     )},
 }
 

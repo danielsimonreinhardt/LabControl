@@ -142,3 +142,24 @@ with CanBus(interface="pcan", channel="PCAN_USBBUS1", bitrate=500_000) as bus:
   empfangenen Frame zusätzlich zu den unverändert weiter gemeldeten
   Rohdaten (`can_signals_decoded`-Signal neben `can_frame_received`),
   sichtbar in `control_tab.CanControlGroup`. Siehe FEATURES.md Punkt 3.
+
+## CAN-Geräte am Interface (`node.py`, seit 0.22.0)
+
+Geräte, die selbst über CAN gesteuert werden (zuerst der Batterie-Simulator,
+`device-driver/battsim`), öffnen keinen eigenen Bus. Sie hängen als
+`CanNode` an einem konfigurierten Interface (Spalte „Gerät am Bus“ in den
+Einstellungen, `settings.py::can_configs` Schlüssel `"device"`):
+
+- Empfang: der DeviceWorker-Poll gibt jeden Frame zusätzlich an die Knoten,
+  deren `rx_ids` ihn enthalten. Rohdaten-Anzeige und DBC-Decodierung bleiben
+  unverändert.
+- Senden: ein `CanScheduler` je Interface (eigener Thread, 10-ms-Takt) holt
+  die fälligen Frames (`due_frames`) aller Knoten und sendet sie. Gesendete
+  Frames zählen im TX-Zähler des Interfaces mit.
+- `CanBus.send()`/`recv()` sind dafür per Lock serialisiert; `recv()` läuft
+  weiterhin nur mit `timeout=0.0`.
+- Beim Schließen eines Interfaces senden die Knoten ihre `shutdown_frames()`
+  (geordnetes Ende); fällt das Interface aus, enden sie ohne.
+- `MockCanBus.attach_peer()` hängt eine nachgebildete Gegenstelle an den
+  simulierten Bus (z. B. `battsim.mock.SimulatedBattSim`), damit der echte
+  Knoten-Code im Simulationsmodus mitläuft.

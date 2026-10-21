@@ -145,6 +145,41 @@ address:
 After an acquisition through the MCP server the oscilloscope stays stopped
 and shows that acquisition. *Tested with the simulator only so far.*
 
+### Battery simulator (14 cells, over CAN)
+
+The simulator has no USB connection of its own; it sits on a CAN interface
+already set up in LabControl (Vector, PCAN or SLCAN). Setup:
+
+1. **Settings → CAN interfaces**: add the interface the simulator is wired to
+   (500 kbit/s) and pick "Battery simulator" in the column **"Device on
+   bus"**. The interface can be shared with other nodes (e.g. the BCU board).
+2. Its tile appears as soon as the simulator answers. If its status message
+   is missing for one second, it counts as disconnected.
+
+Operation:
+
+- **Remote control ON** takes over the device (state "Fernsteuerung"); the
+  output stays off. While remote control is off, LabControl sends nothing and
+  the front panel works as usual.
+- Set **setpoints** per cell or for **all cells**, switch cells **on/off**
+  with the tick. A cell that is off is bridged at the output (0 V), the stack
+  stays closed.
+- **Output ON** applies the enabled cells. **ALL OFF** blocks the output and
+  keeps remote control.
+- **Limit per cell** (default 4.30 V, up to 5.0 V): higher setpoints are
+  rejected, also from test sequences and remote control.
+- **Measured** value per cell and the **stack voltage** come from the device.
+- **State "FAIL"**: if the link to LabControl is lost (crash, cable), the
+  simulator switches off after 4.5–6 seconds. **"Reset FAIL"** brings it
+  back; switch the output on again afterwards. On a normal exit LabControl
+  hands over remote control in an orderly way first.
+- **Test sequences** offer actions for remote control, output, cell voltage
+  (single/all), cell on/off and reading cell and stack voltage (with
+  pass/fail check). The cell is chosen in the row.
+
+*Tested against an emulated simulator only so far; the hardware check is
+pending.*
+
 ---
 
 ## 3. "Testcase" tab
@@ -397,7 +432,8 @@ following must hold:
    allowed without one — and only as a header (`Authorization: Bearer …`),
    never in the address.
 2. **Control** is ticked for the device in the table (requires “Read”). This
-   is possible for load, power supply, microHIL and function generator; CAN and
+   is possible for load, power supply, microHIL, function generator and battery
+   simulator; CAN and
    oscilloscope cannot be remote-controlled (for the oscilloscope see “Measure” below).
 3. The master switch **“Remote control active”** is on (not needed for access from
    the same computer, see “Exception for this PC”). It is off after every

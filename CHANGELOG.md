@@ -65,6 +65,54 @@ Semantic Versioning (`lab_gui/version.py`).
     Übrige Prüfskripte grün. **Noch offen:** Test mit der `.exe` (T7).
 
 ### Hinzugefügt
+- **Batterie-Simulator als eigenes Gerät über CAN (0.22.0, Nutzerwunsch, Plan BS-1.1–1.7).** Der
+  selbst gebaute Simulator des Longboard-Projekts (14 isolierte Zellkanäle, S32K146) lässt sich jetzt aus
+  LabControl fernsteuern – Voraussetzung für die MC33771C-Nachweise am BCU-Board (neXtBSW IO-115/IO-27).
+  Entscheidungen im Longboard-Entscheidungsboard (bs-architektur, bs-umfang-v1, bs-grenzwert, bs-aufbau).
+  **Nur gegen einen nachgebildeten Simulator verifiziert, die Prüfung am Gerät (BS-1.8) steht aus.**
+  - **Neue Schicht CAN-Geräte** (`device-driver/can_bus/node.py`): ein Gerät, das über CAN spricht, öffnet
+    keinen eigenen Bus, sondern hängt als `CanNode` an einem konfigurierten Interface. Grund: PCAN/SLCAN
+    lassen einen Kanal nur einmal öffnen, und der Simulator soll den Bus mit dem Prüfling teilen. Damit geht
+    jedes Interface, das LabControl kennt (Nutzer: „alle CAN-Interfaces müssen gehen“). Zyklisch gesendet wird
+    in einem eigenen `CanScheduler`-Thread je Interface (10-ms-Takt), **nicht** im 100-ms-Poll: der Simulator
+    verlangt 0x130 alle 100 ms und fällt sonst aus der Fernsteuerung, und der Poll-Thread kann durch
+    blockierende Zugriffe anderer Geräte länger stehen. `CanBus.send()/recv()` dafür per Lock serialisiert.
+    `MockCanBus` kennt jetzt Gegenstellen (`attach_peer`), `sent_frames` ist auf 500 begrenzt.
+  - **Treiber** `device-driver/battsim/` (`driver.py`, `mock.py`, `README.md`, `BattSimV1.dbc` als Kopie
+    aus dem Simulator-Projekt): Kodierung per cantools, Alive-Zähler je Botschaft, 0x130 alle 100 ms,
+    Zellbotschaften jede Sekunde und jeweils sofort bei Änderung. Online, solange 0x120 kommt (Timeout 1 s).
+    Gesendet wird **nur bei „Fernsteuerung EIN“** – ein zyklisches REMOTE=1 würde eine am Bedienfeld gewählte
+    Fernsteuerung sonst sofort beenden. Der Mock bildet das **Gerät** nach (Zustandsautomat der Firmware).
+  - **Verhalten der bestehenden Firmware** vorab aus dem Simulink-Modell gelesen (BS-1.0, Workspace
+    `BatterieSimulator/doc/can-verhalten.md`) und im Treiber berücksichtigt: Zellfreigabe wird in der
+    Firmware nach boolean gewandelt (1 „disable“ der DBC wirkt als EIN) – der Treiber sendet 0 für aus;
+    Zellstatus meldet 0 für „ein“ (DBC: 2); ohne 0x130 sind die Ausgänge nach 4,5–6 s aus (FAIL), Rückweg
+    MODE=1 → MODE=2 („FAIL zurücksetzen“); Kanal 15/16 der DBC sind auch in der Firmware aus (14 Kanäle).
+  - **Einstellungen**: neue Spalte „Gerät am Bus“ in der CAN-Tabelle (`can_configs` Schlüssel `"device"`).
+    Gerät-ID `battsim:<Interface>`; ein Simulator je Bus (feste CAN-IDs).
+  - **Kacheln**: Dashboard (Zustand, Ausgang, Stapel, kleinste/größte Spannung der eingeschalteten Zellen),
+    Control-Reiter (Fernsteuerung, Ausgang, FAIL zurücksetzen, alle Zellen, Grenzwert, je Zelle Sollwert,
+    Freigabe, Istwert). Grenzwert je Zelle 4,30 V voreingestellt, bis 5,0 V, gespeichert in
+    `settings.battsim_voltage_limits`; der Treiber lehnt höhere Sollwerte ab – aus jeder Quelle.
+  - **ALLE AUS** sperrt den Ausgang und sendet weiter (sonst FAIL nach 4,5–6 s); **Schließen der App**
+    gibt die Fernsteuerung geordnet ab (`DeviceWorker.shutdown_can_nodes`, synchron im `closeEvent`).
+  - **Testablauf**: Aktionen `BS_*` (Fernsteuerung, Ausgang, Zellspannung einzeln/alle, Zelle ein/aus,
+    FAIL zurücksetzen) und Lese-Aktionen Zell-/Stapelspannung mit Pass/Fail-Prüfung; Kanal = Zelle,
+    bei Aktionen ohne Zelle wird die Kanalwahl ausgeblendet.
+  - **Netzwerk/MCP**: `battsim` in `CONTROL_KINDS` mit denselben Aktionen ohne Lese-Aktionen; Lesefelder
+    Zustand, Ausgang, Fernsteuerung, Stapel, Grenzwert und je Zelle Ist-/Sollwert/ein. MCP-Anweisungen
+    um die Reihenfolge (Fernsteuerung → Sollwerte → Ausgang) ergänzt. Freigabe-Tabelle kennt die Geräteart.
+  - Doku: Treiber-README, `can_bus/README.md` (Abschnitt CAN-Geräte), `NEUEN_TREIBER_ANLEGEN.md` (Vorlage
+    für CAN-Geräte), Root-README, Benutzerhandbuch DE/EN, Übersetzungen.
+  - **Verifiziert nur gegen die Nachbildung:** neues `tools/check_battsim.py` grün (44 Prüfungen: Takt
+    und Alive von 0x130/0x100, Grenzwert, Zelle aus = 0, FAIL nach 5,2 s ohne 0x130 und Rückweg,
+    Fernsteuerung aus beendet das Senden, Shutdown-Frames, offline nach 1 s; dazu der Weg über den
+    `DeviceWorker` im Simulationsmodus mit Testablauf-Dispatch, ALLE AUS ohne FAIL, `shutdown_can_nodes`).
+    Übrige Prüfskripte grün (`check_network_share`, `check_control_tab`, `check_dashboard_detach`,
+    `check_device_reset`, `check_unit_mso`, `check_scope_api`), Kacheln im Offscreen-Rendering angesehen.
+    **Offen (BS-1.8, mit dem Nutzer am Gerät):** `check_battsim.py --hardware --interface … --channel …`
+    (nur lesen), dann `--remote --volts 3.7`; dabei vor allem prüfen, ob Freigabe 0/2 und Zellstatus 0/1
+    so wirken wie aus dem Modell gelesen, und das FAIL-Verhalten beim Beenden ohne Abschied.
 - **Oszilloskop UNI-T MSO1000HD (MSO1154HD-S) über SCPI/LAN (0.21.0, Nutzerwunsch „analog zum
   PicoScope“).** **Nur gegen den Simulator verifiziert -- das Gerät ist noch nicht da;
   Hardware-Prüfung steht aus.** Grundlage: UNI-T MSO1000HD Programming Manual V1.0.

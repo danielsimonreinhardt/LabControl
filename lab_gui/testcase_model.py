@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from i18n import tr
+from battsim.driver import CELL_COUNT as BATTSIM_CELL_COUNT
+from battsim.driver import MAX_CELL_VOLTAGE_V as BATTSIM_MAX_CELL_VOLTAGE_V
 from jds66xx.driver import MAX_AMPLITUDE_V as FG_MAX_AMPLITUDE_V
 from jds66xx.driver import MAX_FREQUENCY_HZ as FG_MAX_FREQUENCY_HZ
 from jds66xx.driver import MAX_OFFSET_V as FG_MAX_OFFSET_V
@@ -75,6 +77,11 @@ HIL_CHANNEL_COUNTS = {
     **{code: 2 for code in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE", "FG_WAVE_SINE",
                              "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
                              "FG_OUT_ON", "FG_OUT_OFF")},
+    # Batterie-Simulator: Kanal = Zelle (1..14) bei den Zell-Aktionen, 0 = ohne
+    # Kanal (testcase_tab blendet die Kanalwahl dann aus).
+    **{code: BATTSIM_CELL_COUNT for code in ("BS_CELL_VOLT", "BS_CELL_ON", "BS_CELL_OFF", "BS_CELL_READ")},
+    **{code: 0 for code in ("BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF", "BS_ALL_VOLT",
+                            "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_STACK_READ")},
 }
 
 # Lese-Aktionen (siehe HIL_ACTIONS-Kommentar): liefern anders als alle
@@ -126,11 +133,43 @@ FG_ACTIONS = {
 }
 FG_CHANNELS = 2
 
+# Batterie-Simulator (device-driver/battsim, seit 0.22.0). Kanal-Slot wie beim
+# Funktionsgenerator (TestStep.hil_channel) = Zelle. Ausgang EIN wirkt nur bei
+# eingeschalteter Fernsteuerung (BS_REMOTE_ON zuerst). Die Lese-Aktionen
+# liefern den zuletzt gemeldeten Istwert (V) fuer eine Pass/Fail-Pruefung.
+BATTSIM_ACTIONS = {
+    "BS_REMOTE_ON": "Fernsteuerung EIN",
+    "BS_REMOTE_OFF": "Fernsteuerung AUS",
+    "BS_OUT_ON": "Ausgang EIN",
+    "BS_OUT_OFF": "Ausgang AUS",
+    "BS_CELL_VOLT": "Zellspannung setzen",
+    "BS_ALL_VOLT": "Alle Zellspannungen setzen",
+    "BS_CELL_ON": "Zelle EIN",
+    "BS_CELL_OFF": "Zelle AUS",
+    "BS_ALL_ON": "Alle Zellen EIN",
+    "BS_ALL_OFF": "Alle Zellen AUS",
+    "BS_RESET_FAIL": "FAIL zurücksetzen",
+    "BS_CELL_READ": "Zellspannung lesen",
+    "BS_STACK_READ": "Stapelspannung lesen",
+}
+BATTSIM_READ_ACTIONS = {"BS_CELL_READ", "BS_STACK_READ"}
+
+
+def battsim_step_detail(step) -> str:
+    """Kurzbeschreibung eines Batterie-Simulator-Schritts fuer Statuszeile und
+    Laufbericht (testcase_tab, run_report): Zelle und ggf. Spannung."""
+    parts = []
+    if HIL_CHANNEL_COUNTS.get(step.action, 0):
+        parts.append(tr("Zelle {n}", n=step.hil_channel))
+    if step.action in ("BS_CELL_VOLT", "BS_ALL_VOLT"):
+        parts.append(f"{step.value:g} V")
+    return ", ".join(parts) or "–"
+
 # Vereinigung aller Lese-Aktionen ueber alle Geraetearten -- Aktionscodes
 # sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
 # zur Codepruefung ist daher nicht noetig (siehe testcase_runner.py:
 # on_action_completed/_finish_step).
-READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS
+READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS
 
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
@@ -159,6 +198,7 @@ DEVICE_ACTIONS = {
     "hil": HIL_ACTIONS,
     "picoscope": PICO_ACTIONS,
     "fg": FG_ACTIONS,
+    "battsim": BATTSIM_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -169,6 +209,7 @@ DEVICE_KIND_LABELS = {
     "hil": "microHIL",
     "picoscope": "Oszilloskop",
     "fg": "Funktionsgenerator",
+    "battsim": "Batterie-Simulator",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -217,6 +258,8 @@ VALUELESS_ACTIONS = {
     "PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS",
     "FG_WAVE_SINE", "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
     "FG_OUT_ON", "FG_OUT_OFF",
+    "BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF", "BS_CELL_ON", "BS_CELL_OFF",
+    "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -269,6 +312,13 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "FG_WAVE_DC": ("", 0, 0),
     "FG_OUT_ON": ("", 0, 0),
     "FG_OUT_OFF": ("", 0, 0),
+    # Geraetegrenze 5 V; der eingestellte Grenzwert je Zelle (Voreinstellung
+    # 4,30 V) wird im Treiber geprueft und lehnt hoehere Werte mit Meldung ab.
+    "BS_CELL_VOLT": ("V", 0, BATTSIM_MAX_CELL_VOLTAGE_V),
+    "BS_ALL_VOLT": ("V", 0, BATTSIM_MAX_CELL_VOLTAGE_V),
+    **{code: ("", 0, 0) for code in ("BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF",
+                                      "BS_CELL_ON", "BS_CELL_OFF", "BS_ALL_ON", "BS_ALL_OFF",
+                                      "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ")},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -304,6 +354,7 @@ COND_TIME_REFS = ("block", "run")
 COND_FIELD_UNITS = {
     "voltage": "V", "current": "A", "power": "W", "hil_ain": "mV", "hil_in": "",
     "pico_vmax": "mV", "pico_vmin": "mV", "pico_vpp": "mV", "pico_vrms": "mV",
+    "bs_cell": "V", "bs_stack": "V",
 }
 COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
 
@@ -335,6 +386,9 @@ PICO_READ_CHECK_FIELD = {
     "PICO_VMAX": "pico_vmax", "PICO_VMIN": "pico_vmin",
     "PICO_VPP": "pico_vpp", "PICO_VRMS": "pico_vrms",
 }
+# Batterie-Simulator: Lese-Aktionen wie oben, Wert in V.
+BATTSIM_CHECK_FIELD_LABELS = {"bs_cell": "Zellspannung", "bs_stack": "Stapelspannung"}
+BATTSIM_READ_CHECK_FIELD = {"BS_CELL_READ": "bs_cell", "BS_STACK_READ": "bs_stack"}
 
 # Kurzsymbole fuer die kompakte Pruefungs-Zusammenfassung in der
 # Testcase-Tabelle (siehe check_summary()) -- sprachunabhaengig, daher nicht
@@ -344,6 +398,7 @@ PICO_READ_CHECK_FIELD = {
 CHECK_FIELD_SYMBOLS = {
     "voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN",
     "pico_vmax": "VMAX", "pico_vmin": "VMIN", "pico_vpp": "VPP", "pico_vrms": "VRMS",
+    "bs_cell": "UZ", "bs_stack": "US",
 }
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1

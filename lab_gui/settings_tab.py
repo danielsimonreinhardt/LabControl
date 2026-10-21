@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from can_bus.dbc import DbcError, load_dbc
+from device_worker import CAN_NODE_DEVICES
 from can_bus.driver import (
     INTERFACE_LIST as CAN_INTERFACE_LIST,
     CanBus,
@@ -224,7 +225,7 @@ class _DeviceInfoGroup(QGroupBox):
 
 
 _CAN_TABLE_COLUMNS = (
-    "interface", "channel", "pick", "status", "bitrate", "serial_baudrate", "label", "dbc", "remove",
+    "interface", "channel", "pick", "status", "bitrate", "serial_baudrate", "label", "dbc", "device", "remove",
 )
 
 
@@ -337,7 +338,7 @@ class _CanConfigTable(QTableWidget):
         self.verticalHeader().setVisible(False)
         for col in (1, 6, 7):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-        for col in (0, 2, 3, 4, 5, 8):
+        for col in (0, 2, 3, 4, 5, 8, 9):
             self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         # Ein interaktiv bearbeitetes Feld macht den zuletzt angezeigten
@@ -352,7 +353,7 @@ class _CanConfigTable(QTableWidget):
         self.setHorizontalHeaderLabels(
             [
                 tr("Interface"), tr("Kanal"), "", "", tr("Bitrate"), tr("Serial-Baudrate"),
-                tr("Bezeichnung"), tr("DBC-Datei"), "",
+                tr("Bezeichnung"), tr("DBC-Datei"), tr("Gerät am Bus"), "",
             ]
         )
         for row in range(self.rowCount()):
@@ -433,13 +434,28 @@ class _CanConfigTable(QTableWidget):
         dbc_cell.retranslate()
         self.setCellWidget(row, 7, dbc_cell)
 
+        # Geraet, das UEBER dieses Interface spricht (seit 0.22.0, siehe
+        # can_bus/node.py). Die CAN-IDs eines Batterie-Simulators sind fest,
+        # mehr als einer je Bus geht also ohnehin nicht -- deshalb eine Spalte
+        # statt einer eigenen Geraeteliste.
+        device_combo = QComboBox()
+        for code, label in CAN_NODE_DEVICES:
+            device_combo.addItem(tr(label), code)
+        index = device_combo.findData(cfg.get("device", ""))
+        device_combo.setCurrentIndex(max(index, 0))
+        device_combo.setToolTip(tr(
+            "Gerät, das über dieses Interface gesteuert wird. Es erscheint als "
+            "eigene Kachel, sobald es antwortet."))
+        device_combo.currentIndexChanged.connect(lambda _=None: self.changed.emit())
+        self.setCellWidget(row, 8, device_combo)
+
         remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
         remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
-        self.setCellWidget(row, 8, remove_button)
+        self.setCellWidget(row, 9, remove_button)
 
     def _remove_row_of(self, widget: QWidget) -> None:
         for row in range(self.rowCount()):
-            if self.cellWidget(row, 8) is widget:
+            if self.cellWidget(row, 9) is widget:
                 self.removeRow(row)
                 self.changed.emit()
                 return
@@ -512,6 +528,7 @@ class _CanConfigTable(QTableWidget):
             serial_baud_spin: QSpinBox = self.cellWidget(row, 5)
             label_edit: QLineEdit = self.cellWidget(row, 6)
             dbc_cell: _DbcFileCell = self.cellWidget(row, 7)
+            device_combo: QComboBox = self.cellWidget(row, 8)
             # Zeigt das Feld gerade den sprechenden Namen aus dem
             # Auswahl-Popup an (siehe _pick_channel/add_row, BUGS_
             # GESCHLOSSEN.md #34), gilt weiterhin das dort hinterlegte
@@ -528,6 +545,8 @@ class _CanConfigTable(QTableWidget):
                 label=label_edit.text().strip(),
                 dbc_path=dbc_cell.path(),
             )
+            if device_combo.currentData():
+                cfg["device"] = device_combo.currentData()
             # serial_baudrate nur bei "slcan" mit abspeichern -- fuer
             # vector/pcan bedeutungslos (siehe can_bus/README.md), wuerde
             # settings.json sonst mit einem fuer diese Zeile irrelevanten
@@ -600,7 +619,7 @@ class _ShareTable(QTableWidget):
     # remote_actions.CONTROL_KINDS (CAN ist lesbar, aber nie fernsteuerbar),
     # Messen nur fuer remote_actions.SCOPE_KINDS (Erfassungen ueber
     # Netzwerk/MCP, seit 0.16.0 -- vorher blieb das Oszilloskop ganz draussen).
-    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope", "scpiscope")
+    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope", "scpiscope", "battsim")
 
     def __init__(self) -> None:
         super().__init__(0, 5)

@@ -44,6 +44,16 @@ from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
 from can_bus.dbc import DbcError, decode_frame, load_dbc
+from can_bus.node import CanNode, CanScheduler
+from battsim.driver import (
+    CELL_COUNT as BATTSIM_CELL_COUNT,
+    DEFAULT_VOLTAGE_LIMIT_V as BATTSIM_DEFAULT_LIMIT_V,
+    KIND as BATTSIM_KIND,
+    BattSim,
+    BattSimError,
+    BattSimValueError,
+)
+from battsim.mock import SimulatedBattSim
 from microhil.driver import (
     AIN_COUNT as HIL_AIN_COUNT,
     AOUT_COUNT as HIL_AOUT_COUNT,
@@ -175,6 +185,21 @@ SIM_CAN_ID = "can:mock:SIM"
 SIM_HIL_ID = "hil:SIM"
 SIM_PICOSCOPE_ID = "picoscope:SIM"
 SIM_FG_ID = "fg:SIM"
+
+# Geraete, die UEBER ein CAN-Interface sprechen (Spalte "Geraet am Bus" in der
+# CAN-Tabelle der Einstellungen, settings.py::can_configs Schluessel "device").
+# (Code, Anzeigename) -- "" = kein Geraet, nur Rohdaten.
+CAN_NODE_DEVICES = (("", "—"), (BATTSIM_KIND, "Batterie-Simulator"))
+
+
+def battsim_device_id(can_id: str) -> str:
+    """Device-ID eines Batterie-Simulators aus der ID seines CAN-Interfaces:
+    "can:vector:75816:0" -> "battsim:vector:75816:0". Ein Simulator je Bus
+    (feste CAN-IDs), die Interface-ID ist also eindeutig und stabil."""
+    return f"{BATTSIM_KIND}:{can_id.split(':', 1)[1]}"
+
+
+SIM_BATTSIM_ID = battsim_device_id(SIM_CAN_ID)
 
 # FG_*-Aktionscode (testcase_model.FG_ACTIONS) -> Wellenformcode.
 FG_WAVE_ACTIONS = {
@@ -351,6 +376,13 @@ class DeviceWorker(QObject):
     # als Ganzes gelesen wird (siehe FG_POLL_INTERVAL_MS).
     fg_state = Signal(str, object)
 
+    # Batterie-Simulator (Geraeteart "battsim", CAN-Knoten an einem
+    # konfigurierten Interface, seit 0.22.0): device_id, online -- online heisst,
+    # das Geraet meldet sich mit 0x120 (nicht nur: das Interface ist offen).
+    battsim_connected = Signal(str, bool)
+    # device_id, Zustand als dict (siehe _battsim_state_dict), alle POLL_INTERVAL_MS.
+    battsim_state = Signal(str, object)
+
     def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None,
                  scpi_scopes: list[str] | None = None) -> None:
         super().__init__()
@@ -382,6 +414,18 @@ class DeviceWorker(QObject):
         # Neuparsen bei jedem _reconnect_can()-Tick, wenn sich nur ein
         # anderes Feld (z.B. Bezeichnung) geaendert hat.
         self._can_dbc_paths: dict[str, str] = {}
+        # CAN-Knoten (siehe can_bus/node.py): je Interface ein Sende-Thread,
+        # angelegt beim ersten Knoten. Der Batterie-Simulator wird angehaengt,
+        # sobald sein Interface offen ist, und gilt erst als verbunden, wenn er
+        # antwortet (_battsim_online).
+        self._can_schedulers: dict[str, CanScheduler] = {}
+        self._battsims: dict[str, BattSim] = {}
+        self._battsim_bus: dict[str, str] = {}      # battsim-ID -> CAN-Interface-ID
+        self._battsim_online: dict[str, bool] = {}
+        # Grenzwert je Simulator (Einstellungen, settings.battsim_voltage_limits).
+        self._battsim_limits: dict[str, float] = {}
+        # Nachgebildeter Simulator am simulierten Bus (Simulationsmodus).
+        self._sim_battsim: SimulatedBattSim | None = None
         self._hils: dict[str, MicroHIL] = {}
         # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
         # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
@@ -582,6 +626,9 @@ class DeviceWorker(QObject):
             if device_id != SIM_CAN_ID and device_id not in wanted_ids:
                 self._close_can(device_id)
         self._reconnect_can()
+        # Spalte "Geraet am Bus" kann sich bei offenem Interface geaendert haben.
+        for device_id in list(self._can_buses):
+            self._sync_can_nodes(device_id)
 
     def _add_mock_psu(self) -> None:
         if SIM_PSU_ID in self._psus:
@@ -736,18 +783,134 @@ class DeviceWorker(QObject):
     def _add_mock_can(self) -> None:
         if SIM_CAN_ID in self._can_buses:
             return
-        self._can_buses[SIM_CAN_ID] = MockCanBus()
+        bus = MockCanBus()
+        # Am simulierten Bus haengt immer ein nachgebildeter Batterie-Simulator
+        # (battsim/mock.py) -- der echte Treiber laeuft dagegen.
+        self._sim_battsim = SimulatedBattSim()
+        bus.attach_peer(self._sim_battsim)
+        self._can_buses[SIM_CAN_ID] = bus
         self._can_stats[SIM_CAN_ID] = [0, 0]
         self.device_added.emit("can", SIM_CAN_ID)
         self.can_connected.emit(SIM_CAN_ID, True)
+        self._sync_can_nodes(SIM_CAN_ID)
 
     def _close_can(self, device_id: str) -> None:
+        self._detach_can_nodes(device_id, send_shutdown=True)
         bus = self._can_buses.pop(device_id, None)
         self._can_stats.pop(device_id, None)
         if bus is not None:
             bus.close()
             self.can_connected.emit(device_id, False)
             self.device_removed.emit("can", device_id)
+        if device_id == SIM_CAN_ID:
+            self._sim_battsim = None
+
+    # -- CAN-Knoten (Geraete, die ueber ein Interface sprechen) --------------
+
+    def _wanted_can_device(self, can_id: str) -> str:
+        """Geraeteart am Bus laut Einstellungen ("" = keins). Am simulierten
+        Bus immer der Batterie-Simulator."""
+        if can_id == SIM_CAN_ID:
+            return BATTSIM_KIND
+        for cfg in self._can_configs:
+            if can_device_id(cfg) == can_id:
+                return cfg.get("device", "") or ""
+        return ""
+
+    def _sync_can_nodes(self, can_id: str) -> None:
+        """Haengt den laut Einstellungen gewuenschten Knoten an ein offenes
+        Interface an bzw. entfernt einen nicht mehr gewuenschten."""
+        if can_id not in self._can_buses:
+            return
+        battsim_id = battsim_device_id(can_id)
+        wanted = self._wanted_can_device(can_id) == BATTSIM_KIND
+        if wanted and battsim_id not in self._battsims:
+            limit = self._battsim_limits.get(battsim_id, BATTSIM_DEFAULT_LIMIT_V)
+            node = BattSim(voltage_limit_v=limit)
+            self._battsims[battsim_id] = node
+            self._battsim_bus[battsim_id] = can_id
+            self._battsim_online[battsim_id] = False
+            scheduler = self._can_schedulers.get(can_id)
+            if scheduler is None:
+                scheduler = CanScheduler(self._can_buses[can_id], name=can_id)
+                self._can_schedulers[can_id] = scheduler
+            scheduler.attach(node)
+            logger.info("Batterie-Simulator %s an %s angehaengt", battsim_id, can_id)
+        elif not wanted and battsim_id in self._battsims:
+            self._drop_battsim(battsim_id, send_shutdown=True)
+
+    def _drop_battsim(self, battsim_id: str, send_shutdown: bool) -> None:
+        node = self._battsims.pop(battsim_id, None)
+        can_id = self._battsim_bus.pop(battsim_id, "")
+        if node is None:
+            return
+        scheduler = self._can_schedulers.get(can_id)
+        if scheduler is not None:
+            scheduler.detach(node, send_shutdown=send_shutdown)
+            if not scheduler.nodes:
+                scheduler.stop(send_shutdown=False)
+                del self._can_schedulers[can_id]
+        if self._battsim_online.pop(battsim_id, False):
+            self.battsim_connected.emit(battsim_id, False)
+            self.device_removed.emit(BATTSIM_KIND, battsim_id)
+
+    def _detach_can_nodes(self, can_id: str, send_shutdown: bool) -> None:
+        """Alle Knoten eines Interfaces abhaengen (Interface wird geschlossen
+        oder ist ausgefallen). Abschiedsframes nur, wenn der Bus noch geht."""
+        for battsim_id in [b for b, c in self._battsim_bus.items() if c == can_id]:
+            self._drop_battsim(battsim_id, send_shutdown=send_shutdown)
+        scheduler = self._can_schedulers.pop(can_id, None)
+        if scheduler is not None:
+            scheduler.stop(send_shutdown=send_shutdown)
+
+    def _nodes_for(self, can_id: str) -> list[CanNode]:
+        return [self._battsims[b] for b, c in self._battsim_bus.items() if c == can_id]
+
+    def _update_battsims(self, can_id: str) -> None:
+        """Nach dem Empfang eines Poll-Zyklus: Verbindungswechsel melden und den
+        Zustand an Kachel/LiveState geben."""
+        for battsim_id in [b for b, c in self._battsim_bus.items() if c == can_id]:
+            node = self._battsims[battsim_id]
+            online = node.online()
+            if online != self._battsim_online.get(battsim_id, False):
+                self._battsim_online[battsim_id] = online
+                logger.info("Batterie-Simulator %s %s", battsim_id, "antwortet" if online else "antwortet nicht mehr")
+                if online:
+                    self.device_added.emit(BATTSIM_KIND, battsim_id)
+                    self.battsim_connected.emit(battsim_id, True)
+                else:
+                    self.battsim_connected.emit(battsim_id, False)
+                    self.device_removed.emit(BATTSIM_KIND, battsim_id)
+            if online:
+                self.battsim_state.emit(battsim_id, self._battsim_state_dict(node))
+
+    @staticmethod
+    def _battsim_state_dict(node: BattSim) -> dict:
+        st = node.get_state()
+        return {
+            "status": st.status,
+            "status_name": st.status_name,
+            "failed": st.failed,
+            "output_on": st.output_on,
+            "remote": st.remote_requested,
+            "output_requested": st.output_requested,
+            "voltage_limit": st.voltage_limit_v,
+            "stack_voltage": st.stack_voltage_v,
+            "tx_error": st.last_tx_error,
+            "cells": [
+                {"index": c.index, "setpoint": c.setpoint_v, "enable": c.enable_requested,
+                 "voltage": c.voltage_v, "enabled": c.enabled, "error": c.setpoint_error}
+                for c in st.cells
+            ],
+        }
+
+    @Slot()
+    def shutdown_can_nodes(self) -> None:
+        """Geordnetes Ende beim Schliessen der App: jeder Knoten sendet seine
+        Abschiedsframes (Batterie-Simulator: Ausgang sperren, Fernsteuerung
+        abgeben), dann enden die Sende-Threads."""
+        for can_id in list(self._can_schedulers):
+            self._detach_can_nodes(can_id, send_shutdown=True)
 
     def _add_mock_hil(self) -> None:
         if SIM_HIL_ID in self._hils:
@@ -990,6 +1153,7 @@ class DeviceWorker(QObject):
             logger.info("CAN-Interface verbunden: %s", device_id)
             self.device_added.emit("can", device_id)
             self.can_connected.emit(device_id, True)
+            self._sync_can_nodes(device_id)
 
     def _reload_can_dbcs(self) -> None:
         """Haelt self._can_dbcs/self._can_dbc_paths mit der aktuellen
@@ -1245,6 +1409,7 @@ class DeviceWorker(QObject):
                 self.device_removed.emit("psu", device_id)
 
         for device_id, bus in list(self._can_buses.items()):
+            nodes = self._nodes_for(device_id)
             try:
                 drained = 0
                 while drained < CAN_DRAIN_LIMIT:
@@ -1252,6 +1417,9 @@ class DeviceWorker(QObject):
                     if frame is None:
                         break
                     self._can_stats[device_id][1] += 1
+                    for node in nodes:
+                        if frame.arbitration_id in node.rx_ids:
+                            node.on_frame(frame)
                     self.can_frame_received.emit(
                         device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
                         frame.extended, frame.timestamp,
@@ -1264,6 +1432,7 @@ class DeviceWorker(QObject):
                     drained += 1
             except CanError as exc:
                 logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
+                self._detach_can_nodes(device_id, send_shutdown=False)
                 bus.close()
                 del self._can_buses[device_id]
                 self._can_stats.pop(device_id, None)
@@ -1271,6 +1440,10 @@ class DeviceWorker(QObject):
                 self.can_connect_error.emit(device_id, str(exc))
                 self.device_removed.emit("can", device_id)
                 continue
+            scheduler = self._can_schedulers.get(device_id)
+            if scheduler is not None:
+                self._can_stats[device_id][0] += scheduler.take_sent_count()
+            self._update_battsims(device_id)
             tx, rx = self._can_stats[device_id]
             self.can_stats.emit(device_id, tx, rx)
 
@@ -1374,6 +1547,7 @@ class DeviceWorker(QObject):
             action(bus)
             return True, ""
         except CanError as exc:
+            self._detach_can_nodes(device_id, send_shutdown=False)
             bus.close()
             del self._can_buses[device_id]
             self._can_stats.pop(device_id, None)
@@ -1447,7 +1621,25 @@ class DeviceWorker(QObject):
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Funktionsgenerator %s", device_id)
                 failures.append(device_id)
+        for device_id, node in list(self._battsims.items()):
+            try:
+                self._kill_battsim(device_id, node)
+            except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
+                logger.exception("ALL OFF: unerwarteter Fehler bei Batterie-Simulator %s", device_id)
+                failures.append(device_id)
         self.all_off_finished.emit(";".join(failures))
+
+    def _kill_battsim(self, device_id: str, node: BattSim) -> None:
+        """Ausgang sperren (OUTPUT=1 -> REMOTE/STOP, alle Zellen gebrueckt).
+        Die Fernsteuerung bleibt an und es wird weiter zyklisch gesendet --
+        sonst liefe der Simulator nach 4,5-6 s in FAIL. Ohne Fernsteuerung
+        ueber LabControl gibt es nichts abzuschalten: dann bedient jemand das
+        Geraet von Hand (STANDALONE) oder es steht in STANDBY. Kein Fehlschlag
+        moeglich -- der Frame geht beim naechsten Sendetakt (<= 10 ms) raus;
+        bestaetigt wird ueber BATTSIM_OUTPUT_STATUS in der Kachel."""
+        if node.get_state().remote_requested:
+            node.set_output(False)
+            logger.info("ALL OFF: Batterie-Simulator %s -> Ausgang gesperrt", device_id)
 
     def _kill_load(self, device_id: str, load: KoradKEL102) -> bool:
         for attempt in (1, 2):
@@ -1707,6 +1899,68 @@ class DeviceWorker(QObject):
         # simulierten Geraet (microhil.mock) funktioniert es bereits.
         self._guard_hil(device_id, lambda hil: hil.set_current_limit(channel, milliamps))
 
+    # -- Batterie-Simulator: Steuerung ----------------------------------------
+
+    def _guard_battsim(self, device_id: str, action: Callable[[BattSim], None]) -> tuple[bool, str]:
+        """Steuerbefehle gehen nur an einen antwortenden Simulator. Ein
+        abgelehnter Wert (Bereich, Grenzwert, Zustand) laesst die Verbindung
+        unberuehrt -- getrennt wird ein CAN-Knoten nur ueber sein Interface
+        bzw. wenn 0x120 ausbleibt (_update_battsims)."""
+        node = self._battsims.get(device_id)
+        if node is None or not self._battsim_online.get(device_id, False):
+            return False, "Batterie-Simulator nicht verbunden"
+        try:
+            action(node)
+        except BattSimError as exc:   # inkl. BattSimValueError
+            return False, str(exc)
+        self.battsim_state.emit(device_id, self._battsim_state_dict(node))
+        return True, ""
+
+    @Slot(str, bool)
+    def set_battsim_remote(self, device_id: str, on: bool) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_remote(on))
+
+    @Slot(str, bool)
+    def set_battsim_output(self, device_id: str, on: bool) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_output(on))
+
+    @Slot(str, int, float)
+    def set_battsim_cell_voltage(self, device_id: str, cell: int, volts: float) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_cell_voltage(cell, volts))
+
+    @Slot(str, float)
+    def set_battsim_all_voltages(self, device_id: str, volts: float) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_all_voltages(volts))
+
+    @Slot(str, int, bool)
+    def set_battsim_cell_enabled(self, device_id: str, cell: int, on: bool) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_cell_enabled(cell, on))
+
+    @Slot(str, bool)
+    def set_battsim_all_enabled(self, device_id: str, on: bool) -> None:
+        self._guard_battsim(device_id, lambda n: n.set_all_enabled(on))
+
+    @Slot(str)
+    def reset_battsim_fail(self, device_id: str) -> None:
+        self._guard_battsim(device_id, lambda n: n.reset_fail())
+
+    @Slot(str, float)
+    def set_battsim_voltage_limit(self, device_id: str, volts: float) -> None:
+        """Grenzwert je Zelle (Einstellung, wirkt auch, solange das Geraet noch
+        nicht antwortet -- er gilt dann ab dem Anhaengen)."""
+        self._battsim_limits[device_id] = volts
+        node = self._battsims.get(device_id)
+        if node is not None:
+            try:
+                node.set_voltage_limit(volts)
+            except BattSimValueError as exc:
+                logger.warning("Grenzwert fuer %s abgelehnt: %s", device_id, exc)
+
+    @Slot(object)
+    def set_battsim_voltage_limits(self, limits: object) -> None:
+        for device_id, volts in dict(limits or {}).items():
+            self.set_battsim_voltage_limit(device_id, float(volts))
+
     # -- Testablauf: generischer Dispatch fuer einen Testschritt -------------
 
     @Slot(str, str, str, float, int)
@@ -1861,7 +2115,46 @@ class DeviceWorker(QObject):
         if kind == "picoscope":
             return self._execute_picoscope_action(device_id, action, value, channel)
 
+        if kind == BATTSIM_KIND:
+            return self._dispatch_battsim(device_id, action, value, channel)
+
         return False, f"Unbekanntes Geraet '{kind}'", 0.0
+
+    def _dispatch_battsim(self, device_id: str, action: str, value: float, channel: int) -> tuple[bool, str, float]:
+        """BS_*-Aktionen (testcase_model.BATTSIM_ACTIONS, remote_actions).
+        Lese-Aktionen liefern den zuletzt gemeldeten Istwert."""
+        setters: dict[str, Callable[[BattSim], None]] = {
+            "BS_REMOTE_ON": lambda n: n.set_remote(True),
+            "BS_REMOTE_OFF": lambda n: n.set_remote(False),
+            "BS_OUT_ON": lambda n: n.set_output(True),
+            "BS_OUT_OFF": lambda n: n.set_output(False),
+            "BS_CELL_VOLT": lambda n: n.set_cell_voltage(channel, value),
+            "BS_ALL_VOLT": lambda n: n.set_all_voltages(value),
+            "BS_CELL_ON": lambda n: n.set_cell_enabled(channel, True),
+            "BS_CELL_OFF": lambda n: n.set_cell_enabled(channel, False),
+            "BS_ALL_ON": lambda n: n.set_all_enabled(True),
+            "BS_ALL_OFF": lambda n: n.set_all_enabled(False),
+            "BS_RESET_FAIL": lambda n: n.reset_fail(),
+        }
+        if action in setters:
+            ok, message = self._guard_battsim(device_id, setters[action])
+            return ok, message, 0.0
+        if action in ("BS_CELL_READ", "BS_STACK_READ"):
+            node = self._battsims.get(device_id)
+            if node is None or not self._battsim_online.get(device_id, False):
+                return False, "Batterie-Simulator nicht verbunden", 0.0
+            st = node.get_state()
+            if action == "BS_STACK_READ":
+                if st.stack_voltage_v is None:
+                    return False, "Stapelspannung noch nicht gemeldet", 0.0
+                return True, "", float(st.stack_voltage_v)
+            if not 1 <= channel <= len(st.cells):
+                return False, f"Zelle {channel} gibt es nicht (1..{len(st.cells)})", 0.0
+            volts = st.cells[channel - 1].voltage_v
+            if volts is None:
+                return False, f"Zelle {channel}: noch kein Istwert gemeldet", 0.0
+            return True, "", float(volts)
+        return False, f"Unbekannte Aktion '{action}' fuer Batterie-Simulator", 0.0
 
     def _execute_picoscope_action(
         self, device_id: str, action: str, value: float, channel: int
