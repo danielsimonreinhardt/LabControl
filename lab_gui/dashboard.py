@@ -86,7 +86,7 @@ TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double"}
 # nur der oberen oder nur der unteren Zeile zugewiesen werden -- sie belegt
 # beim Packen (_tile_span/pack_tiles_by_row) immer beide, genau wie eine
 # doppelt hohe Kachel in der Normalansicht.
-COMPACT_TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double", "picoscope": "double"}
+COMPACT_TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double", "picoscope": "double", "scpiscope": "double"}
 
 # Feines horizontales Raster der Kompaktansicht: eine Kachel belegt dort
 # nicht mehr genau EINE inhaltsbreite Spalte, sondern eine SPALTENSPANNE in
@@ -1180,6 +1180,11 @@ class DashboardWidget(QGroupBox):
                 panel = PicoscopePanel(device_id, label)
                 panel.launch_requested.connect(
                     lambda d=device_id: self.launch_picoscope(d))
+                panel.release_requested.connect(self.picoscope_release_requested)
+                panel.plot_requested.connect(self.picoscope_plot_requested)
+            elif kind == "scpiscope":
+                # SCPI-Oszilloskop (UNI-T MSO1000HD): dieselbe Kachel, ohne Start-Knopf.
+                panel = PicoscopePanel(device_id, label, with_launch=False)
                 panel.release_requested.connect(self.picoscope_release_requested)
                 panel.plot_requested.connect(self.picoscope_plot_requested)
             else:

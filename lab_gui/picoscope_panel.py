@@ -28,6 +28,10 @@ Letzte Erfassung (seit 0.18.0): eine Zeile mit Uhrzeit und Kennwerten der
 letzten Erfassung ueber Netzwerk/MCP und ein Knopf "Kurve", der sie als Bild
 zeigt (main_window._show_scope_plot, gezeichnet von scope_plot.py) -- damit
 der Nutzer sieht, was der Assistent gemessen hat.
+
+Seit 0.21.0 auch fuer SCPI-Oszilloskope (Geraeteart "scpiscope", UNI-T
+MSO1000HD ueber LAN): dieselbe Kachel ohne den Knopf "PicoScope 7 oeffnen"
+(with_launch=False) -- das Geraet hat seine Bedienung am eigenen Bildschirm.
 """
 from __future__ import annotations
 
@@ -68,9 +72,10 @@ class PicoscopePanel(QGroupBox):
     release_requested = Signal(str)  # device_id
     plot_requested = Signal(str)  # device_id -- letzte Erfassung als Bild zeigen
 
-    def __init__(self, device_id: str, label: str) -> None:
+    def __init__(self, device_id: str, label: str, with_launch: bool = True) -> None:
         super().__init__()
         self._device_id = device_id
+        self._with_launch = with_launch
         self._online = True
         self._status = "busy"
         self._variant = ""
@@ -139,6 +144,7 @@ class PicoscopePanel(QGroupBox):
         self._launch_button.set_color_override(current_palette().surface)
         self._launch_button.clicked.connect(self.launch_requested)
         outer.addWidget(self._launch_button)
+        self._launch_button.setVisible(with_launch)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)

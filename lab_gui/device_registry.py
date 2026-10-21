@@ -23,6 +23,7 @@ KIND_DISPLAY = {
     "can": "CAN-Bus",
     "hil": "HIL",
     "picoscope": "Oszilloskop",
+    "scpiscope": "Oszilloskop",
     "fg": "Funktionsgenerator",
 }
 

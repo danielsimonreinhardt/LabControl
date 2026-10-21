@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -58,6 +59,17 @@ from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 from picoscope2000.driver import PicoScope2000, PicoScope2000Error, usb_present as picoscope_usb_present
 from picoscope2000.guard import GUARD as PICOSCOPE_GUARD, OWNER_SERVICE, OWNER_WORKER
 from picoscope2000.mock import MockPicoScope2000
+from unit_mso1000hd import guard as scpi_guard
+from unit_mso1000hd.driver import (
+    KIND as SCPISCOPE_KIND,
+    SIM_DEVICE_ID as SIM_SCPISCOPE_ID,
+    SIM_RESOURCE as SCPI_SIM_RESOURCE,
+    MSO1000HDError,
+    device_id_for as scpi_device_id_for,
+    normalize_resource as scpi_normalize_resource,
+    probe as scpi_probe,
+    register_resource as scpi_register_resource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +123,13 @@ HIL_POLL_INTERVAL_MS = 1000
 # exklusive Handle (an echter Hardware reproduziert: ein Testschritt scheitert
 # dann faelschlich mit "belegt", obwohl gar keine externe App im Weg ist).
 PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
+
+# SCPI-Oszilloskope ueber LAN (UNI-T MSO1000HD, seit 0.21.0): Erkennung =
+# kurz oeffnen, *IDN?, schliessen -- in einem eigenen Thread (siehe
+# _scpi_executor), weil eine nicht erreichbare Adresse bis zum Timeout
+# blockiert und sonst den Poll-Zyklus von Netzteil/Last einfrieren wuerde.
+SCPISCOPE_PROBE_INTERVAL_MS = 10000
+SCPISCOPE_PROBE_TIMEOUT_S = 2.0
 
 # Eigenes Poll-Intervall fuer den Funktionsgenerator: ein voller Zustand sind
 # 13 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
@@ -314,6 +333,16 @@ class DeviceWorker(QObject):
     # zuletzt bekannten Stand stehen (siehe _reconnect_picoscope).
     picoscope_state = Signal(str, str, str, str)
 
+    # SCPI-Oszilloskop (Geraeteart "scpiscope"): device_id, online -- erreichbar
+    # unter der eingetragenen Adresse und meldet sich mit *IDN? als UNI-T.
+    scpiscope_connected = Signal(str, bool)
+    # device_id, status ("free"), Modell, Seriennummer -- gleiche Form wie
+    # picoscope_state, damit Kachel, LiveState und ScopeService beide bedienen.
+    scpiscope_state = Signal(str, str, str, str)
+    # intern: Ergebnis einer Erkennung aus dem Probe-Thread zurueck in den
+    # Worker-Thread (device_id, erreichbar, Modell, Seriennummer).
+    _scpi_probe_done = Signal(str, bool, str, str)
+
     fg_connected = Signal(str, bool)         # device_id, online
     # device_id, Zustand als dict: {"outputs": [bool, bool], "channels":
     # [{"waveform", "frequency", "amplitude", "offset", "duty"} x2], "phase"}.
@@ -322,8 +351,18 @@ class DeviceWorker(QObject):
     # als Ganzes gelesen wird (siehe FG_POLL_INTERVAL_MS).
     fg_state = Signal(str, object)
 
-    def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None) -> None:
+    def __init__(self, simulation_mode: bool = False, can_configs: list[dict] | None = None,
+                 scpi_scopes: list[str] | None = None) -> None:
         super().__init__()
+        # SCPI-Oszilloskope: device_id -> VISA-Ressource aus den Einstellungen
+        # (settings.scpi_scopes), Erreichbarkeit und Geraeteinfo.
+        self._scpi_resources: dict[str, str] = {}
+        self._scpi_present: dict[str, bool] = {}
+        self._scpi_info: dict[str, tuple[str, str]] = {}
+        self._scpi_pending: set[str] = set()
+        self._scpi_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="scpi-probe")
+        self._mock_scpiscope_active = False
+        self._set_scpi_addresses(scpi_scopes or [])
         self._fgs: dict[str, JDS66xx] = {}
         # Port -> monotonic()-Zeitpunkt, vor dem er nicht erneut geprobt wird
         # (siehe FG_REPROBE_INTERVAL_S).
@@ -403,6 +442,9 @@ class DeviceWorker(QObject):
         self._picoscope_reconnect_timer.timeout.connect(self._reconnect_picoscope)
         self._fg_poll_timer = QTimer(self)
         self._fg_poll_timer.timeout.connect(self._poll_fgs)
+        self._scpi_probe_timer = QTimer(self)
+        self._scpi_probe_timer.timeout.connect(self._probe_scpiscopes)
+        self._scpi_probe_done.connect(self._on_scpi_probe_done)
 
     @Slot()
     def start(self) -> None:
@@ -413,8 +455,11 @@ class DeviceWorker(QObject):
             self._add_mock_hil()
             self._add_mock_picoscope()
             self._add_mock_fg()
+            self._add_mock_scpiscope()
         self._try_reconnect()
         self._reconnect_picoscope()
+        self._probe_scpiscopes()
+        self._scpi_probe_timer.start(SCPISCOPE_PROBE_INTERVAL_MS)
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._reconnect_timer.start(RECONNECT_INTERVAL_MS)
         self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
@@ -514,6 +559,7 @@ class DeviceWorker(QObject):
             self._add_mock_hil()
             self._add_mock_picoscope()
             self._add_mock_fg()
+            self._add_mock_scpiscope()
         else:
             self._remove_mock_psu()
             self._remove_mock_load()
@@ -521,6 +567,7 @@ class DeviceWorker(QObject):
             self._remove_mock_hil()
             self._remove_mock_picoscope()
             self._remove_mock_fg()
+            self._remove_mock_scpiscope()
 
     # -- CAN-Interface-Konfiguration (siehe settings.py: can_configs) --------
     # Anders als Last/Netzteil kein Hotplug: welche Interfaces ueberhaupt
@@ -568,6 +615,108 @@ class DeviceWorker(QObject):
             load.close()
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
+
+    def _add_mock_scpiscope(self) -> None:
+        if self._mock_scpiscope_active:
+            return
+        from unit_mso1000hd.mock import SIM_MODEL, SIM_SERIAL
+        self._mock_scpiscope_active = True
+        scpi_register_resource(SIM_SCPISCOPE_ID, SCPI_SIM_RESOURCE)
+        self.device_added.emit(SCPISCOPE_KIND, SIM_SCPISCOPE_ID)
+        self.scpiscope_connected.emit(SIM_SCPISCOPE_ID, True)
+        self.scpiscope_state.emit(SIM_SCPISCOPE_ID, "free", SIM_MODEL, SIM_SERIAL)
+
+    def _remove_mock_scpiscope(self) -> None:
+        if not self._mock_scpiscope_active:
+            return
+        self._mock_scpiscope_active = False
+        self.scpiscope_connected.emit(SIM_SCPISCOPE_ID, False)
+        self.device_removed.emit(SCPISCOPE_KIND, SIM_SCPISCOPE_ID)
+
+    # -- SCPI-Oszilloskope (settings.scpi_scopes) ---------------------------
+
+    def _set_scpi_addresses(self, addresses: list[str]) -> dict[str, str]:
+        resources: dict[str, str] = {}
+        for address in addresses:
+            try:
+                resource = scpi_normalize_resource(str(address))
+            except ValueError:
+                continue
+            if resource == SCPI_SIM_RESOURCE:
+                continue   # die Simulation kommt ueber den Simulationsmodus
+            device_id = scpi_device_id_for(resource)
+            resources[device_id] = resource
+            scpi_register_resource(device_id, resource)
+        old = self._scpi_resources
+        self._scpi_resources = resources
+        return old
+
+    @Slot(list)
+    def set_scpi_scopes(self, addresses: list) -> None:
+        """Adressliste aus den Einstellungen geaendert: entfernte Geraete
+        abmelden, neue sofort pruefen."""
+        old = self._set_scpi_addresses(list(addresses))
+        for device_id in set(old) - set(self._scpi_resources):
+            if self._scpi_present.pop(device_id, False):
+                self.scpiscope_connected.emit(device_id, False)
+                self.device_removed.emit(SCPISCOPE_KIND, device_id)
+            self._scpi_info.pop(device_id, None)
+        self._probe_scpiscopes()
+
+    @Slot()
+    def _probe_scpiscopes(self) -> None:
+        for device_id, resource in self._scpi_resources.items():
+            if device_id in self._scpi_pending:
+                continue
+            # Haelt der ScopeService die Verbindung, ist das Geraet erreichbar
+            # -- nicht dazwischenfunken (siehe unit_mso1000hd/guard.py).
+            if scpi_guard.guard_for(device_id).owner == scpi_guard.OWNER_SERVICE:
+                continue
+            self._scpi_pending.add(device_id)
+            self._scpi_executor.submit(self._scpi_probe_job, device_id, resource)
+
+    def _scpi_probe_job(self, device_id: str, resource: str) -> None:
+        """Laeuft im Probe-Thread, meldet ueber _scpi_probe_done zurueck."""
+        guard = scpi_guard.guard_for(device_id)
+        if not guard.try_acquire(scpi_guard.OWNER_WORKER):
+            # ScopeService hat gerade geoeffnet: erreichbar, Info unveraendert.
+            model, serial = self._scpi_info.get(device_id, ("", ""))
+            self._scpi_probe_done.emit(device_id, True, model, serial)
+            return
+        try:
+            info = scpi_probe(resource, SCPISCOPE_PROBE_TIMEOUT_S)
+            self._scpi_probe_done.emit(device_id, True, info.model, info.serial)
+        except MSO1000HDError as exc:
+            logger.debug("SCPI-Oszilloskop %s (%s) nicht erreichbar: %s", device_id, resource, exc)
+            self._scpi_probe_done.emit(device_id, False, "", "")
+        except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben
+            logger.exception("SCPI-Oszilloskop %s: Erkennung gescheitert", device_id)
+            self._scpi_probe_done.emit(device_id, False, "", "")
+        finally:
+            guard.release()
+
+    @Slot(str, bool, str, str)
+    def _on_scpi_probe_done(self, device_id: str, ok: bool, model: str, serial: str) -> None:
+        self._scpi_pending.discard(device_id)
+        if device_id not in self._scpi_resources:
+            return   # inzwischen aus den Einstellungen entfernt
+        was_present = self._scpi_present.get(device_id, False)
+        if ok:
+            if not was_present:
+                self._scpi_present[device_id] = True
+                logger.info("SCPI-Oszilloskop %s erreichbar (%s %s)", device_id, model, serial)
+                self.device_added.emit(SCPISCOPE_KIND, device_id)
+                self.scpiscope_connected.emit(device_id, True)
+            # Nur bei Erstkontakt oder geaenderter Info -- sonst wuerde ein
+            # spaetes Ergebnis einen inzwischen "mcp"-Zustand ueberschreiben.
+            if model and (not was_present or self._scpi_info.get(device_id) != (model, serial)):
+                self._scpi_info[device_id] = (model, serial)
+                self.scpiscope_state.emit(device_id, "free", model, serial)
+        elif was_present:
+            self._scpi_present[device_id] = False
+            logger.info("SCPI-Oszilloskop %s nicht mehr erreichbar", device_id)
+            self.scpiscope_connected.emit(device_id, False)
+            self.device_removed.emit(SCPISCOPE_KIND, device_id)
 
     def _add_mock_fg(self) -> None:
         if SIM_FG_ID in self._fgs:

@@ -74,6 +74,8 @@ class Settings(QObject):
     # der HTTP-Server hat EINEN Lebenszyklus, sechs getrennte Neustart-Pfade
     # waeren nur fehleranfaelliger. Traegt den kompletten Freigabe-Block.
     share_config_changed = Signal(dict)
+    # Adressen der SCPI-Oszilloskope (IP oder VISA-Adresse), siehe scpi_scopes.
+    scpi_scopes_changed = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -275,6 +277,25 @@ class Settings(QObject):
         self._data["can_configs"] = copy.deepcopy(configs)
         self._save()
         self.can_configs_changed.emit(copy.deepcopy(configs))
+
+    @property
+    def scpi_scopes(self) -> list[str]:
+        """Adressen der SCPI-Oszilloskope (UNI-T MSO1000HD, seit 0.21.0): IP-Adresse,
+        Hostname oder vollstaendige VISA-Adresse. Keine Autodiscovery im LAN --
+        wie bei CAN ist die Liste die einzige Quelle (siehe
+        device-driver/unit_mso1000hd/README.md)."""
+        stored = self._data.get("scpi_scopes")
+        if not isinstance(stored, list):
+            return []
+        return [str(a).strip() for a in stored if str(a).strip()]
+
+    def set_scpi_scopes(self, addresses: list[str]) -> None:
+        cleaned = [str(a).strip() for a in addresses if str(a).strip()]
+        if cleaned == self.scpi_scopes:
+            return
+        self._data["scpi_scopes"] = cleaned
+        self._save()
+        self.scpi_scopes_changed.emit(list(cleaned))
 
     @property
     def language(self) -> str:

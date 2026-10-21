@@ -135,6 +135,23 @@ zeigt:
 - Wie bei den anderen Geräten **umbenennen** (Stift) und **Panel-Farbe**
   (Farbkreis); beides gilt auch für die Dashboard-Kachel.
 
+### Oszilloskop im Netzwerk (UNI-T MSO1000HD, z. B. MSO1154HD-S)
+
+Dieselbe Sektion wie beim PicoScope, nur ohne Start-Knopf – das Gerät wird am
+eigenen Bildschirm bedient. Es wird nicht per USB gefunden, sondern über seine
+IP-Adresse:
+
+1. Am Oszilloskop eine **feste IP-Adresse** einstellen (oder im Router
+   reservieren). Die Adresse ist zugleich seine Kennung in LabControl – Name,
+   Farbe und Freigaben hängen daran.
+2. **Einstellungen → Geräte → „Oszilloskope im Netzwerk (SCPI)“**: Adresse
+   eintragen, mehrere durch Komma getrennt.
+3. LabControl prüft alle 10 Sekunden, ob das Gerät antwortet; dann erscheint
+   die Sektion.
+
+Nach einer Erfassung über den MCP-Server bleibt das Oszilloskop gestoppt und
+zeigt die Erfassung an. *Bisher nur mit dem Simulator getestet.*
+
 ---
 
 ## 3. Reiter „Testablauf“

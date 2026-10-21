@@ -34,6 +34,9 @@ A new release is compiled after every master-push. Just download and run the .ex
   does not replicate its channel/trigger/waveform UI, see
   `device-driver/picoscope2000/README.md`). An AI assistant can measure with it through the
   MCP server via the vendor-neutral `scope_api/` layer (see `scope_api/README.md`)
+- UNI-T MSO1000HD series oscilloscope, e.g. MSO1154HD-S (SCPI over LAN via pyvisa-py, no NI-VISA
+  needed; same tiles and MCP measurement as the PicoScope). **Simulator-tested only so far** --
+  the hardware check is pending, see `device-driver/unit_mso1000hd/README.md`
 
 ## Contributing
 

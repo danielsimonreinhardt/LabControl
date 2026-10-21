@@ -87,6 +87,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
     **{("can", f): v for f, v in CAN_STATE_FIELDS.items()},
     **{("hil", f): v for f, v in HIL_SIGNAL_FIELDS.items()},
     **{("picoscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
+    **{("scpiscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
     **{("fg", f): v for f, v in FG_STATE_FIELDS.items()},
 }
 
@@ -100,6 +101,7 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
     "picoscope": ["status"],
+    "scpiscope": ["status"],
     "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
 }
 

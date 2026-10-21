@@ -600,7 +600,7 @@ class _ShareTable(QTableWidget):
     # remote_actions.CONTROL_KINDS (CAN ist lesbar, aber nie fernsteuerbar),
     # Messen nur fuer remote_actions.SCOPE_KINDS (Erfassungen ueber
     # Netzwerk/MCP, seit 0.16.0 -- vorher blieb das Oszilloskop ganz draussen).
-    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope")
+    SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope", "scpiscope")
 
     def __init__(self) -> None:
         super().__init__(0, 5)
@@ -745,6 +745,7 @@ class SettingsTab(QWidget):
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
     can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/serial_baudrate/label/dbc_path
+    scpi_scopes_changed = Signal(list)  # list[str]: Adressen der SCPI-Oszilloskope
     # Nutzer hat die Rueckfrage in _on_reset_devices_clicked bereits mit Ja
     # bestaetigt -- main_window._on_reset_devices_requested fuehrt den
     # eigentlichen Reset aus (DeviceRegistry/Settings kennt dieses Widget
@@ -867,6 +868,23 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
+        # -- SCPI-Oszilloskope ueber LAN (seit 0.21.0) -------------------------
+        # Keine Autodiscovery im Netz: Adressen von Hand, durch Komma getrennt.
+        # Uebernommen wird beim Verlassen des Felds bzw. Enter.
+        self._scpi_title = QLabel()
+        self._scpi_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self._scpi_title)
+        self._scpi_hint = QLabel()
+        self._scpi_hint.setWordWrap(True)
+        self._scpi_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        layout.addWidget(self._scpi_hint)
+        self._scpi_edit = QLineEdit()
+        self._scpi_edit.setPlaceholderText("192.168.1.50")
+        self._scpi_edit.editingFinished.connect(self._on_scpi_edited)
+        layout.addWidget(self._scpi_edit)
+
+        layout.addWidget(_separator())
+
         # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) --------------
         self._info_hint = QLabel()
         self._info_hint.setWordWrap(True)
@@ -880,6 +898,19 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
         return page
+
+    def set_scpi_scopes(self, addresses: list[str]) -> None:
+        self._scpi_edit.blockSignals(True)
+        self._scpi_edit.setText(", ".join(addresses))
+        self._scpi_edit.blockSignals(False)
+
+    def _on_scpi_edited(self) -> None:
+        from unit_mso1000hd.driver import is_valid_address
+        parts = [p.strip() for p in self._scpi_edit.text().replace(";", ",").split(",")]
+        valid = [p for p in parts if p and is_valid_address(p)]
+        invalid = [p for p in parts if p and not is_valid_address(p)]
+        self._scpi_edit.setToolTip(tr("Ungültig und ignoriert: {items}", items=", ".join(invalid)) if invalid else "")
+        self.scpi_scopes_changed.emit(valid)
 
     def _build_can_page(self) -> QWidget:
         """Reiter "CAN-Bus": explizit konfigurierte CAN-Interfaces (siehe
@@ -1191,6 +1222,15 @@ class SettingsTab(QWidget):
             )
         )
         self._info_hint.setText(tr("Geräte-Info -- z. B. die aktuell geflashte Firmware-Version."))
+        self._scpi_title.setText(tr("Oszilloskope im Netzwerk (SCPI)"))
+        self._scpi_hint.setText(
+            tr(
+                "IP-Adresse oder VISA-Adresse je Oszilloskop, mehrere durch Komma getrennt, z. B. "
+                "192.168.1.50 für ein UNI-T MSO1000HD (MSO1154HD-S) am LAN. Dem Gerät eine feste IP "
+                "geben, die Adresse ist zugleich seine Kennung in LabControl. USB geht nur mit "
+                "installiertem NI-VISA (Adresse USB0::...::INSTR)."
+            )
+        )
         for section in self._info_sections.values():
             section.retranslate()
         self._safety_hint.setText(

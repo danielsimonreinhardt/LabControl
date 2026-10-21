@@ -393,5 +393,8 @@
   "Letzte Erfassung:": "Last acquisition:",
   "Presets": "Presets",
   "alle Geräte auf einmal": "all devices at once",
-  "PicoScope 7 öffnen": "Open PicoScope 7"
+  "PicoScope 7 öffnen": "Open PicoScope 7",
+  "Oszilloskope im Netzwerk (SCPI)": "Network oscilloscopes (SCPI)",
+  "IP-Adresse oder VISA-Adresse je Oszilloskop, mehrere durch Komma getrennt, z. B. 192.168.1.50 für ein UNI-T MSO1000HD (MSO1154HD-S) am LAN. Dem Gerät eine feste IP geben, die Adresse ist zugleich seine Kennung in LabControl. USB geht nur mit installiertem NI-VISA (Adresse USB0::...::INSTR).": "IP address or VISA address per oscilloscope, several separated by commas, e.g. 192.168.1.50 for a UNI-T MSO1000HD (MSO1154HD-S) on the LAN. Give the device a fixed IP; the address is also its identifier in LabControl. USB only works with NI-VISA installed (address USB0::...::INSTR).",
+  "Ungültig und ignoriert: {items}": "Invalid and ignored: {items}"
 }

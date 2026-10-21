@@ -128,6 +128,23 @@ The section shows:
 - As for the other devices: **rename** (pencil) and **panel colour** (colour
   wheel); both also apply to the dashboard tile.
 
+### Network oscilloscope (UNI-T MSO1000HD, e.g. MSO1154HD-S)
+
+The same section as for the PicoScope, just without the launch button – the
+device is operated on its own screen. It is not found via USB but by its IP
+address:
+
+1. Give the oscilloscope a **fixed IP address** (or reserve one in the
+   router). The address is also its identifier in LabControl – name, colour
+   and sharing settings are tied to it.
+2. **Settings → Devices → "Network oscilloscopes (SCPI)"**: enter the
+   address, several separated by commas.
+3. LabControl checks every 10 seconds whether the device answers; then the
+   section appears.
+
+After an acquisition through the MCP server the oscilloscope stays stopped
+and shows that acquisition. *Tested with the simulator only so far.*
+
 ---
 
 ## 3. "Testcase" tab

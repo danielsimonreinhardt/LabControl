@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
         self._device_online: dict[str, bool] = {}
         self._online_devices: dict[str, set[str]] = {
             "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
+            "scpiscope": set(),
         }
 
         self._registry = DeviceRegistry()
@@ -233,6 +234,7 @@ class MainWindow(QMainWindow):
         self._worker = DeviceWorker(
             simulation_mode=self._settings.simulation_mode,
             can_configs=self._settings.can_configs,
+            scpi_scopes=self._settings.scpi_scopes,
         )
         self._worker.moveToThread(self._thread)
 
@@ -255,6 +257,14 @@ class MainWindow(QMainWindow):
         self.dashboard.picoscope_release_requested.connect(self._scope_service.release_async)
         self._scope_service.capture_added.connect(self._on_scope_capture_added)
         self.dashboard.picoscope_plot_requested.connect(self._show_scope_plot)
+        # SCPI-Oszilloskope (UNI-T MSO1000HD ueber LAN, seit 0.21.0): dieselben
+        # Kacheln und derselbe ScopeService wie beim PicoScope.
+        self._worker.scpiscope_connected.connect(self._on_scpiscope_connected)
+        self._worker.scpiscope_state.connect(self.dashboard.update_picoscope_state)
+        self._worker.scpiscope_state.connect(self.control_tab.update_picoscope_state)
+        self._worker.scpiscope_connected.connect(self._scope_service.on_scope_connected)
+        self._worker.scpiscope_state.connect(self._scope_service.on_scope_state)
+        self._worker.scpiscope_state.connect(self._live_state.on_picoscope_state)
         self._worker.load_measurement.connect(self.dashboard.update_load)
         self._worker.psu_measurement.connect(self.dashboard.update_psu)
         self._worker.can_stats.connect(self.dashboard.update_can)
@@ -429,6 +439,8 @@ class MainWindow(QMainWindow):
                 self._on_fg_connected(device_id, False)
             elif kind == "picoscope":
                 self._on_picoscope_connected(device_id, False)
+            elif kind == "scpiscope":
+                self._on_scpiscope_connected(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -483,6 +495,9 @@ class MainWindow(QMainWindow):
             section.set_phase.connect(self._worker.set_fg_phase)
         elif kind == "picoscope":
             section.launch_requested.connect(self.dashboard.launch_picoscope)
+            section.release_requested.connect(self._scope_service.release_async)
+            section.plot_requested.connect(self._show_scope_plot)
+        elif kind == "scpiscope":
             section.release_requested.connect(self._scope_service.release_async)
             section.plot_requested.connect(self._show_scope_plot)
         else:
@@ -585,6 +600,10 @@ class MainWindow(QMainWindow):
         self._settings.can_configs_changed.connect(self._worker.set_can_configs)
         self._worker.can_connect_error.connect(self.settings_tab.on_can_connect_error)
         self._worker.can_connected.connect(self.settings_tab.on_can_connected)
+
+        self.settings_tab.set_scpi_scopes(self._settings.scpi_scopes)
+        self.settings_tab.scpi_scopes_changed.connect(self._settings.set_scpi_scopes)
+        self._settings.scpi_scopes_changed.connect(self._worker.set_scpi_scopes)
 
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.
@@ -1268,6 +1287,12 @@ class MainWindow(QMainWindow):
     @Slot(str, bool)
     def _on_picoscope_connected(self, device_id: str, online: bool) -> None:
         self._set_online("picoscope", device_id, online)
+        self.dashboard.set_picoscope_online(device_id, online)
+        self.control_tab.set_picoscope_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_scpiscope_connected(self, device_id: str, online: bool) -> None:
+        self._set_online("scpiscope", device_id, online)
         self.dashboard.set_picoscope_online(device_id, online)
         self.control_tab.set_picoscope_online(device_id, online)
 

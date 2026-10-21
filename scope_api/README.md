@@ -2,9 +2,13 @@
 
 Grundlage dafür, dass ein KI-Assistent über den LabControl-MCP-Server mit
 Oszilloskopen misst und auswertet. Die Schnittstelle ist so geschnitten, dass
-ein zweites Oszilloskop (geplant: SCPI-Tischgerät per LAN) nur einen weiteren
-Adapter braucht. Auswertung, Speicher, Netzwerk-Schnittstelle und
-MCP-Werkzeuge bleiben dabei gleich.
+ein zweites Oszilloskop nur einen weiteren Adapter braucht. Auswertung,
+Speicher, Netzwerk-Schnittstelle und MCP-Werkzeuge bleiben dabei gleich.
+
+Seit **0.21.0** gibt es diesen zweiten Adapter: UNI-T MSO1000HD (z. B.
+MSO1154HD-S) über SCPI per LAN, `unit_mso_adapter.py`, Geräteart `scpiscope`.
+Bisher **nur gegen den Simulator geprüft** (Gerät noch nicht da), siehe
+`device-driver/unit_mso1000hd/README.md`.
 
 Stand: **Phase 3** (seit 0.18.0): Erfassungen als Bild -- `lab_gui/scope_plot.py`
 (QPainter, keine neue Abhängigkeit), Endpunkt `GET /api/v1/captures/{cid}/plot`,
@@ -27,6 +31,7 @@ Plan und Entscheidungen vom 2026-09-28:
 | `analysis.py` | Kennwerte, Flanken, Hüllkurve, Verdichtung, kompakter Bericht (`report`) |
 | `store.py` | Erfassungen mit `capture_id` im Speicher (Standard: die letzten 50) plus CSV-Datei |
 | `pico2000_adapter.py` | PicoScope 2204A/2205A über `picoscope2000` (echtes Gerät oder Mock) |
+| `unit_mso_adapter.py` | UNI-T MSO1000HD über `unit_mso1000hd` (SCPI, LAN oder Simulator `"SIM"`), Kanäle `CH1`…`CH4` |
 
 ## Verwendung
 
@@ -130,9 +135,28 @@ Erfassung aus dem Speicher verdrängt wird.
 - Noch nicht: erweiterte Trigger (Pulsbreite, Fenster, Runt, Dropout),
   Streaming für lange Aufnahmen, Signalgenerator. Alles kommt in Phase 4.
 
+## MSO1000HD-Adapter: Eigenheiten
+
+- Kanäle heißen `CH1` … `CH4` (auch `1`, `C1`, `CHANNEL1` werden angenommen).
+- Bereiche: ±4 Teilungen, 1 mV/div … 10 V/div (±4 mV … ±40 V am Eingang,
+  mal Tastkopf). **Analoger Offset** vorhanden (`offset_v` = Bereichsmitte).
+- 12 Bit, Bandbreite aus dem Modellnamen (MSO1154 → 150 MHz), bis 2,5 GS/s
+  (geteilt durch die aktiven Kanäle).
+- Zeitbasis im 1-2-5-Raster über 10 Teilungen; das Fenster ist daher meist
+  etwas länger als `duration_s`. Speichertiefe 25K/250K/500K/5M, standardmäßig
+  250 000 Samples.
+- Trigger: Einzelerfassung mit Flankentrigger, Status wird gepollt; `triggered`
+  bei `auto` wie beim 2204A am Signal abgelesen.
+- Daten als ASCII in Volt -- langsamer als binär, dafür ohne Skalierungsrätsel.
+- Das Gerät bleibt nach der Erfassung gestoppt und zeigt sie an.
+- Annahmen, die am Gerät zu prüfen sind: siehe README des Treibers
+  (Abschnitt „Eigenheiten und Annahmen“).
+
 ## Prüfen
 
 ```
+.venv\Scripts\python.exe tools\check_unit_mso.py               # MSO1000HD: Simulator + ScopeService
+.venv\Scripts\python.exe tools\check_unit_mso.py --hardware --address 192.168.1.50
 .venv\Scripts\python.exe tools\check_scope_api.py              # nur Mock + bekannte Signale
 .venv\Scripts\python.exe tools\check_scope_api.py --hardware   # zusätzlich echtes 2204A
 .venv\Scripts\python.exe tools\check_scope_api.py --hardware --signal-a rechteck:1000:3.3

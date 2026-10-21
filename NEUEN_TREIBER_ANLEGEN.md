@@ -4,7 +4,8 @@ Checkliste für die Integration eines neuen Gerätetyps in LabControl, abgeleite
 aus dem tatsächlichen Aufbau der bestehenden Treiber
 ([hcs34xx](device-driver/hcs34xx/), [korad_kel102](device-driver/korad_kel102/),
 [can_bus](device-driver/can_bus/), [microhil](device-driver/microhil/),
-[jds66xx](device-driver/jds66xx/), [picoscope2000](device-driver/picoscope2000/)). Als Vorlage eignet sich für ein "einfaches" USB/
+[jds66xx](device-driver/jds66xx/), [picoscope2000](device-driver/picoscope2000/),
+[unit_mso1000hd](device-driver/unit_mso1000hd/)). Als Vorlage eignet sich für ein "einfaches" USB/
 Seriell-Gerät mit Live-Messwerten am besten `hcs34xx` (Netzteil) oder
 `korad_kel102` (Last); `can_bus`/`microhil` zeigen die Variante ohne
 automatische USB-Discovery bzw. mit mehreren Kanälen pro Gerät.
@@ -134,6 +135,13 @@ Hat das Gerät keine sichere USB-VID/PID-Autodiscovery (wie bei CAN-
 Interfaces), braucht es stattdessen eine vom Nutzer gepflegte Konfiguration.
 Vorlage: `settings.py`/`settings_tab.py` (`can_configs`) plus
 `DeviceWorker.set_<kind>_configs()` nach Vorbild von `set_can_configs()`.
+
+Für Geräte im **Netzwerk** (SCPI/VISA über LAN) ist `unit_mso1000hd` die
+Vorlage: Adressliste in den Einstellungen (`scpi_scopes`), Erkennung per
+`*IDN?` in einem eigenen Thread (eine nicht erreichbare Adresse blockiert bis
+zum Timeout und darf den Poll-Zyklus nicht einfrieren, siehe
+`DeviceWorker._probe_scpiscopes`), und ein Simulator auf SCPI-Ebene
+(`mock.SimulatedInstrument`), damit der echte Treibercode mitläuft.
 
 ## 10. Dokumentation & Test
 

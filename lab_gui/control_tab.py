@@ -105,7 +105,7 @@ TILE_SPANS: dict[str, tuple[int, int]] = {
 # Traffic-Tisch (CanControlGroup._traffic_table) braucht mehr Hoehe als
 # Breite.
 TILE_SIZE_BY_KIND: dict[str, str] = {
-    "load": "small", "psu": "small", "hil": "big", "fg": "big", "picoscope": "small",
+    "load": "small", "psu": "small", "hil": "big", "fg": "big", "picoscope": "small", "scpiscope": "small",
 }
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
@@ -1307,9 +1307,12 @@ class PicoscopeControlGroup(QGroupBox):
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
-    def __init__(self, device_id: str, label: str) -> None:
+    def __init__(self, device_id: str, label: str, kind: str = "picoscope") -> None:
         super().__init__()
         self._device_id = device_id
+        # "scpiscope" (UNI-T MSO1000HD ueber LAN, seit 0.21.0): ohne
+        # "PicoScope 7 oeffnen", sonst gleich.
+        self._kind = kind
         self._color_key: str | None = None
         self._status = "busy"
         self._variant = ""
@@ -1335,6 +1338,9 @@ class PicoscopeControlGroup(QGroupBox):
         self._form.addRow(" ", self._status_label)
         _detint_label(self._form, self._status_label)
         self._device_label = QLabel()
+        # "Modell (Seriennummer)" kann lang sein (UNI-T MSO1000HD, seit 0.21.0) --
+        # umbrechen statt die Basiszellbreite des ganzen Rasters hochzuziehen.
+        self._device_label.setWordWrap(True)
         self._form.addRow(" ", self._device_label)
         _detint_label(self._form, self._device_label)
         self._capture_label = QLabel()
@@ -1348,6 +1354,7 @@ class PicoscopeControlGroup(QGroupBox):
         self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
         self._plot_button = IconButton("mdi.chart-line", "", text=tr("Kurve"))
         self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
+        self._launch_button.setVisible(kind == "picoscope")
         self._button_row = _row(self._launch_button, self._release_button, self._plot_button)
         outer.addWidget(self._button_row)
         outer.addStretch(1)
@@ -1411,7 +1418,7 @@ class PicoscopeControlGroup(QGroupBox):
             self, tr("Gerät umbenennen"), tr("Name:"), text=self.title()
         )
         if ok and new_label.strip():
-            self.rename_requested.emit("picoscope", self._device_id, new_label.strip())
+            self.rename_requested.emit(self._kind, self._device_id, new_label.strip())
 
     def capture_state(self) -> dict:
         return {}
@@ -2074,6 +2081,8 @@ class ControlTab(QWidget):
             # Seit 0.20.0 mit eigener Kachel (Name, Farbe, Status), siehe
             # PicoscopeControlGroup -- vorher fiel es hier bewusst heraus.
             section = PicoscopeControlGroup(device_id, label)
+        elif kind == "scpiscope":
+            section = PicoscopeControlGroup(device_id, label, kind="scpiscope")
         else:
             section = CanControlGroup(device_id, label)
         # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion

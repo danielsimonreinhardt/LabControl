@@ -10,6 +10,10 @@ cantools>=40.0
 picosdk>=1.1
 # scope_api (Auswertung, Erfassungsspeicher); kam bisher nur indirekt ueber asammdf.
 numpy>=1.26
+# SCPI-Oszilloskope (UNI-T MSO1000HD, device-driver/unit_mso1000hd) ueber VISA;
+# pyvisa-py ist das reine Python-Backend fuer LAN (VXI-11), kein NI-VISA noetig.
+pyvisa>=1.14
+pyvisa-py>=0.7
 
 # nur zum Bauen der .exe (siehe lab_gui/README.md)
 pyinstaller>=6.0

@@ -37,7 +37,7 @@ from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, RELAY_COUNT
 # bewusst draussen (siehe Modul-Docstring).
 CONTROL_KINDS = ("load", "psu", "hil", "fg")
 # Geraetearten mit Erfassungen ueber Netzwerk/MCP (scope_api, Haekchen "Messen").
-SCOPE_KINDS = ("picoscope",)
+SCOPE_KINDS = ("picoscope", "scpiscope")
 
 
 @dataclass(frozen=True)

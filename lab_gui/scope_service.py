@@ -15,6 +15,12 @@ wird erst IDLE_CLOSE_S nach der letzten getrennt -- oder sofort per release()
 Vorrang des Testablaufs: begin_test() sperrt neue Erfassungen, wartet eine
 laufende ab und trennt, bevor der DeviceWorker seine Session öffnet. Das
 exklusive Handle teilen sich beide über picoscope2000/guard.py.
+
+Seit 0.21.0 auch für SCPI-Oszilloskope (Geräteart "scpiscope", UNI-T MSO1000HD
+über LAN, scope_api/unit_mso_adapter.py). Welcher Adapter gilt, steht im
+Präfix der Geräte-ID. Ein Executor-Thread für alle Geräte: zwei Erfassungen an
+zwei Oszilloskopen laufen also nacheinander, nicht gleichzeitig -- bei
+Erfassungszeiten von Sekunden ist das kein Engpass und hält die Sache einfach.
 """
 from __future__ import annotations
 
@@ -32,6 +38,9 @@ from scope_api import analysis
 from scope_api.base import AcquireRequest, ScopeError
 from scope_api.pico2000_adapter import PicoScope2000Scope, open_pico2000
 from scope_api.store import CaptureStore
+from scope_api.unit_mso_adapter import capabilities_for as unit_mso_capabilities, open_unit_mso
+from unit_mso1000hd import guard as mso_guard
+from unit_mso1000hd.driver import KIND as SCPI_KIND, SIM_DEVICE_ID as SCPI_SIM_ID, resource_for
 import scope_plot
 
 logger = logging.getLogger(__name__)
@@ -60,7 +69,7 @@ class ScopeService(QObject):
         self._lock = threading.Lock()
         # device_id -> {"present", "variant", "serial"}
         self._devices: dict[str, dict] = {}
-        self._open: dict[str, PicoScope2000Scope] = {}
+        self._open: dict[str, object] = {}   # PicoScope2000Scope | UnitMsoScope
         self._busy: set[str] = set()
         self._test: set[str] = set()
         self._last_use: dict[str, float] = {}
@@ -71,6 +80,14 @@ class ScopeService(QObject):
         self._idle_timer.start(IDLE_CHECK_MS)
 
     # -- Gerätestand (GUI-Thread, aus DeviceWorker-Signalen) -----------------
+
+    @Slot(str, bool)
+    def on_scope_connected(self, device_id: str, online: bool) -> None:
+        self.on_picoscope_connected(device_id, online)
+
+    @Slot(str, str, str, str)
+    def on_scope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
+        self.on_picoscope_state(device_id, status, variant, serial)
 
     @Slot(str, bool)
     def on_picoscope_connected(self, device_id: str, online: bool) -> None:
@@ -141,6 +158,9 @@ class ScopeService(QObject):
             entry = dict(self._devices.get(device_id, {}))
         if not entry:
             raise ScopeError("device_offline", "Oszilloskop nicht verbunden.")
+        if _kind(device_id) == SCPI_KIND:
+            return unit_mso_capabilities(entry.get("variant", ""), entry.get("serial") or "?",
+                                         simulated=device_id == SCPI_SIM_ID).to_dict()
         scope = PicoScope2000Scope(None, entry.get("variant") or "2204A", entry.get("serial") or "?",
                                    simulated=device_id == SIM_DEVICE_ID)
         return scope.capabilities().to_dict()
@@ -247,11 +267,13 @@ class ScopeService(QObject):
                 self._close_job(device_id)
             raise
 
-    def _ensure_open(self, device_id: str) -> PicoScope2000Scope:
+    def _ensure_open(self, device_id: str):
         scope = self._open.get(device_id)
         if scope is not None:
             return scope
-        if device_id == SIM_DEVICE_ID:
+        if _kind(device_id) == SCPI_KIND:
+            scope = self._open_scpi(device_id)
+        elif device_id == SIM_DEVICE_ID:
             scope = open_pico2000(simulate=True)
         else:
             if not GUARD.try_acquire(OWNER_SERVICE):
@@ -277,6 +299,20 @@ class ScopeService(QObject):
         self.connection_changed.emit(device_id, "mcp")
         return scope
 
+    def _open_scpi(self, device_id: str):
+        resource = resource_for(device_id)
+        if not resource:
+            raise ScopeError("device_offline", "Für dieses Oszilloskop ist keine Adresse eingetragen "
+                                               "(Einstellungen, Geräte).")
+        guard = mso_guard.guard_for(device_id)
+        if not guard.try_acquire(mso_guard.OWNER_SERVICE):
+            raise ScopeError("scope_busy", "LabControl prüft das Oszilloskop gerade (Erkennung). Kurz warten.")
+        try:
+            return open_unit_mso(resource)
+        except ScopeError:
+            guard.release()
+            raise
+
     def _close_job(self, device_id: str) -> bool:
         with self._lock:
             scope = self._open.pop(device_id, None)
@@ -287,7 +323,9 @@ class ScopeService(QObject):
         except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
             logger.exception("Oszilloskop %s: Fehler beim Schließen", device_id)
         finally:
-            if device_id != SIM_DEVICE_ID:
+            if _kind(device_id) == SCPI_KIND:
+                mso_guard.guard_for(device_id).release()
+            elif device_id != SIM_DEVICE_ID:
                 GUARD.release()
         logger.info("Oszilloskop %s getrennt (Netzwerk/MCP)", device_id)
         self.connection_changed.emit(device_id, "free")
@@ -304,8 +342,12 @@ class ScopeService(QObject):
             self._executor.submit(self._close_job, device_id)
 
 
+def _kind(device_id: str) -> str:
+    return device_id.split(":", 1)[0]
+
+
 _BLOCK_MESSAGES = {
-    "device_offline": "Oszilloskop nicht verbunden (USB?).",
+    "device_offline": "Oszilloskop nicht verbunden (USB bzw. LAN prüfen).",
     "scope_in_test_run": "Ein Testablauf nutzt das Oszilloskop. Erfassungen gehen wieder nach dessen Ende.",
     "scope_busy": "Es läuft bereits eine Erfassung an diesem Oszilloskop. Kurz warten.",
 }

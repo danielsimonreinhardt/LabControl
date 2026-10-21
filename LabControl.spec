@@ -70,6 +70,12 @@ for _interface in INTERFACE_LIST:
     # PyInstaller folgt ab hier aber wieder normalen Importen.
     CAN_HIDDENIMPORTS.append(_module)
 
+# pyvisa findet sein Backend "@py" ebenfalls erst zur Laufzeit ueber den
+# Modulnamen (pyvisa.highlevel.get_wrapper_class -> import_module("pyvisa_py")),
+# dieselbe Falle wie oben. Ohne diesen Eintrag faende die .exe kein
+# SCPI-Oszilloskop (UNI-T MSO1000HD ueber LAN, seit 0.21.0).
+VISA_HIDDENIMPORTS = ["pyvisa_py", "pyvisa_py.tcpip"]
+
 a = Analysis(
     ['lab_gui/main.py'],
     pathex=['.', 'device-driver'],
@@ -88,7 +94,7 @@ a = Analysis(
         ('lab_gui/translations', 'translations'),
         ('lab_gui/help', 'help'),
     ],
-    hiddenimports=CAN_HIDDENIMPORTS,
+    hiddenimports=CAN_HIDDENIMPORTS + VISA_HIDDENIMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -6,6 +6,21 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **Netzteil: „Ausgang AUS“ meldete „ok“, der Ausgang blieb an (0.21.1, BUGS_OFFEN #37, sicherheitsrelevant).**
+  Das HCS-34xx quittiert Schreibbefehle mit „OK“, verwirft aber gelegentlich den ersten (am Board
+  reproduziert). Der Treiber liest jetzt nach `set_current`/`set_voltage` den Sollwert per `GETS`
+  zurück und wiederholt bis zu 3-mal; stimmt er dann nicht, gibt es einen Fehler
+  (`PowerSupplyValueError`) statt „ok“. Gilt damit auch für `PSU_OUT_OFF`, `PSU_CURR`, den
+  Testablauf und `all_off` (meldet das Netzteil als fehlgeschlagen).
+  - **Mock-verifiziert** (`tools/check_hcs34xx_verify.py`: verworfener erster Befehl wird nachgeholt,
+    dauerhaft verworfener Sollwert wird als Fehler gemeldet), `check_control_tab` grün.
+  - **Hardware-verifiziert (2026-10-19, App 0.21.1, 5 V / 0,5 A, `psu:COM6` mit Board, `psu:0001` ohne Last):**
+    `PSU_OUT_OFF` und `all_off` schalteten jeweils beim ersten Senden ab, auch nach 20 s Pause
+    (`psu:COM6`: 0,09–0,12 V nach 5–8 s; `psu:0001`: 0,78 V und fallend nach ~20 s, 1,11 V nach 8 s --
+    die Spannung sinkt am Gerät langsam). Nur wenige Durchläufe; ob die Wiederholung im Treiber
+    je ansprang, wurde nicht geprüft (Log nicht ausgewertet).
+
 ### Geändert
 - **Repo-Struktur: alle Geräte-Treiber in `device-driver/` (0.20.2, Nutzerwunsch).** `can_bus`,
   `hcs34xx`, `jds66xx`, `korad_kel102`, `microhil` und `picoscope2000` liegen jetzt unter
@@ -50,6 +65,45 @@ Semantic Versioning (`lab_gui/version.py`).
     Übrige Prüfskripte grün. **Noch offen:** Test mit der `.exe` (T7).
 
 ### Hinzugefügt
+- **Oszilloskop UNI-T MSO1000HD (MSO1154HD-S) über SCPI/LAN (0.21.0, Nutzerwunsch „analog zum
+  PicoScope“).** **Nur gegen den Simulator verifiziert -- das Gerät ist noch nicht da;
+  Hardware-Prüfung steht aus.** Grundlage: UNI-T MSO1000HD Programming Manual V1.0.
+  - **Treiber** `device-driver/unit_mso1000hd/`: `driver.py` (SCPI über pyvisa, LAN per
+    VXI-11 mit dem reinen Python-Backend pyvisa-py -- kein NI-VISA nötig, auch nicht in der
+    `.exe`; USB nur mit NI-VISA), `mock.py` (das *Gerät* auf SCPI-Ebene nachgebildet, der echte
+    Treiber- und Adaptercode läuft im Simulationsmodus mit), `guard.py` (Erkennung und
+    Erfassungen fallen sich nicht ins Wort), `README.md` mit allen Annahmen.
+  - **scope_api-Adapter** `scope_api/unit_mso_adapter.py`: herstellerneutrale Anfrage → Kanäle
+    (1-2-5 V/div, Tastkopf, analoger Offset), Zeitbasis (10 Teilungen, Speichertiefe 25K…5M nach
+    gewünschter Auflösung über das ganze Fenster), Pre-Trigger über `TIMebase:OFFSet`,
+    Flankentrigger als Einzelerfassung mit Status-Polling (auto/none per `TRIGger:FORCe`,
+    single mit `trigger_timeout`), Rücklesen der tatsächlichen Einstellungen, Daten als ASCII in
+    Volt. Kanäle `CH1`…`CH4`, 12 bit, Bandbreite aus dem Modellnamen.
+  - **LabControl:** neue Geräteart `scpiscope` (ID `scpiscope:<IP>`). Einstellungen → Geräte →
+    „Oszilloskope im Netzwerk (SCPI)“: Adressen eintragen; der DeviceWorker prüft sie alle 10 s
+    per `*IDN?` in einem eigenen Thread (eine nicht erreichbare Adresse friert den Poll-Zyklus
+    nicht ein). Dashboard- und Control-Kachel wie beim PicoScope, ohne Start-Knopf;
+    `ScopeService` bedient beide Gerätearten, damit gehen Häkchen „Messen“, Netzwerk-Endpunkte
+    und alle MCP-Werkzeuge (`list_scopes`, `acquire`, `plot_capture`, …) unverändert. Im
+    Simulationsmodus zusätzlich `scpiscope:SIM`. Testablauf-Aktionen (wie `PICO_VPP`) gibt es für
+    dieses Gerät noch nicht.
+  - **Abhängigkeiten:** `pyvisa>=1.14`, `pyvisa-py>=0.7` in `requirements.txt`;
+    `LabControl.spec` bindet `pyvisa_py` als hiddenimport ein (pyvisa lädt sein Backend nur über
+    den Modulnamen, dieselbe Falle wie bei python-can).
+  - Nebenbei: in der Oszilloskop-Control-Kachel bricht die Zeile „Modell (Seriennummer)“ jetzt um
+    -- die lange MSO-Bezeichnung zog sonst die Zellbreite des ganzen Rasters hoch (3 → 2 Spalten,
+    von `check_control_tab.py` gefunden).
+  - Doku: Treiber-README, `scope_api/README.md`, Root-README, `NEUEN_TREIBER_ANLEGEN.md`
+    (Vorlage für Netzwerkgeräte), Benutzerhandbuch DE/EN, MCP-Anweisungen (Kanalnamen).
+  - **Verifiziert nur im Simulationsmodus:** neues `tools/check_unit_mso.py` grün (Modell/
+    Adressen, Erfassungen über Treiber + Adapter: Rechteck/Sinus/Offset-Welligkeit, Pre-Trigger,
+    steigende/fallende Flanke, auto/none/single, Fehlerfälle, hängendes Gerät; Weg über
+    `ScopeService` wie bei Netzwerk/MCP); übrige Prüfskripte grün (`check_scope_api`,
+    `check_network_share`, `check_dashboard_detach`, `check_device_reset`, `check_control_tab`).
+    **Offen, sobald das Gerät da ist:** `check_unit_mso.py --hardware --address <IP>
+    --signal-ch1 rechteck:1000:3` (Vorzeichen von `CHANnel:OFFSet`/`TIMebase:OFFSet`, Bezug von
+    `SCALe` auf den Tastkopf, RAW-Speicher = Bildschirmfenster, Statusfolge nach `RUN`,
+    Übertragungsdauer ASCII), Erkennung in der App, `.exe`-Build mit pyvisa-py.
 - **Control-Reiter: Oszilloskop-Kachel, abgesetzte Preset-Leiste, Anordnen wie im Dashboard
   (0.20.0, Nutzerwunsch).**
   - **Oszilloskop-Kachel** (`control_tab.PicoscopeControlGroup`). Konzeptlücke: Name und
