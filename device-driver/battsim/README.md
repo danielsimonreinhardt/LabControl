@@ -62,6 +62,9 @@ Alle aus dem Simulink-Modell der bestehenden Firmware gelesen, **am Gerät noch 
 - **Ausfall**: fehlt 0x130 1,5–3 s, wird die Steuerbotschaft ungültig; im Zustand RUN bleiben die Ausgänge noch
   3 s an, dann FAIL (alle Zellen aus). Ausgänge sind also 4,5–6 s nach dem letzten Frame aus. „FAIL zurücksetzen“
   sendet MODE=1 und nach 0,5 s wieder MODE=2.
+- **Überlast** (48-V-Strom über 1,28 A) wird in der Firmware gespeichert und lässt sich nur mit der Taste ALL ON/OFF
+  am Gerät zurücksetzen, nicht per CAN. Danach hilft „FAIL zurücksetzen“ nicht, und der Wechsel in die Fernsteuerung
+  wird verweigert (Firmware-Analyse F5, Workspace BatterieSimulator `doc/firmware-analyse.html`).
 - **Fernsteuerung nur auf Anforderung**: ohne „Fernsteuerung EIN“ sendet der Treiber nichts. Ein zyklisches
   REMOTE=1 würde das Gerät sonst aus einer am Bedienfeld gewählten Fernsteuerung herausholen.
 - **„Alles aus“** sperrt nur den Ausgang (OUTPUT=1) und sendet weiter – Abbruch des Sendens hieße nach 4,5–6 s FAIL.
