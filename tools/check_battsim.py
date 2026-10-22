@@ -11,8 +11,10 @@ Zelle 5 aus, Ausgang aus, Fernsteuerung aus) -- nur mit Freigabe des Nutzers und
 ohne angeschlossenen Pruefling oder mit einem, der das vertraegt.
 
     python tools/check_battsim.py
-    python tools/check_battsim.py --hardware --interface vector --channel 75816:0
-    python tools/check_battsim.py --hardware --interface vector --channel 75816:0 --remote --volts 3.7
+    python tools/check_battsim.py --hardware --interface vector --channel 59177:1
+    python tools/check_battsim.py --hardware --interface vector --channel 59177:1 --remote --volts 3.7 --hold 15
+
+--hold <s> haelt jede Stufe der Folge (alle Zellen ein, Zelle 5 aus) zum Ablesen am Multimeter.
 """
 from __future__ import annotations
 
@@ -267,10 +269,16 @@ def run_hardware(args) -> None:
             for c in st.cells:
                 print(f"      Zelle {c.index:2d}: soll {c.setpoint_v:.3f} V, ist {c.voltage_v} V, "
                       f"{'ein' if c.enabled else 'aus'}")
+            if args.hold:
+                print(f"      Halte {args.hold:.0f} s: alle Zellen ein (Multimeter ablesen)", flush=True)
+                pump(bus, node, args.hold)
             node.set_cell_enabled(5, False)
             pump(bus, node, 1.5)
             st = node.get_state()
             check(st.cells[4].enabled is False, f"Zelle 5 aus (Istwert {st.cells[4].voltage_v} V)")
+            if args.hold:
+                print(f"      Halte {args.hold:.0f} s: Zelle 5 aus, Rest ein (Multimeter ablesen)", flush=True)
+                pump(bus, node, args.hold)
             node.set_output(False)
             pump(bus, node, 1.0)
             check(node.get_state().output_on is False, "Ausgang aus")
@@ -291,6 +299,8 @@ def main() -> int:
     parser.add_argument("--bitrate", type=int, default=500_000)
     parser.add_argument("--remote", action="store_true", help="Fernsteuer-Folge am Geraet fahren")
     parser.add_argument("--volts", type=float, default=3.7)
+    parser.add_argument("--hold", type=float, default=0.0,
+                        help="Sekunden, die jede Stufe der Folge gehalten wird (zum Ablesen am Multimeter)")
     args = parser.parse_args()
     if args.hardware:
         run_hardware(args)

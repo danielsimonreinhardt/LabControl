@@ -69,7 +69,8 @@ Semantic Versioning (`lab_gui/version.py`).
   selbst gebaute Simulator des Longboard-Projekts (14 isolierte Zellkanäle, S32K146) lässt sich jetzt aus
   LabControl fernsteuern – Voraussetzung für die MC33771C-Nachweise am BCU-Board (neXtBSW IO-115/IO-27).
   Entscheidungen im Longboard-Entscheidungsboard (bs-architektur, bs-umfang-v1, bs-grenzwert, bs-aufbau).
-  **Nur gegen einen nachgebildeten Simulator verifiziert, die Prüfung am Gerät (BS-1.8) steht aus.**
+  **Mock-verifiziert und am Gerät geprüft (2026-10-22, BS-1.8, siehe „Hardware-verifiziert“ am Ende dieses
+  Eintrags).**
   - **Neue Schicht CAN-Geräte** (`device-driver/can_bus/node.py`): ein Gerät, das über CAN spricht, öffnet
     keinen eigenen Bus, sondern hängt als `CanNode` an einem konfigurierten Interface. Grund: PCAN/SLCAN
     lassen einen Kanal nur einmal öffnen, und der Simulator soll den Bus mit dem Prüfling teilen. Damit geht
@@ -110,9 +111,29 @@ Semantic Versioning (`lab_gui/version.py`).
     `DeviceWorker` im Simulationsmodus mit Testablauf-Dispatch, ALLE AUS ohne FAIL, `shutdown_can_nodes`).
     Übrige Prüfskripte grün (`check_network_share`, `check_control_tab`, `check_dashboard_detach`,
     `check_device_reset`, `check_unit_mso`, `check_scope_api`), Kacheln im Offscreen-Rendering angesehen.
-    **Offen (BS-1.8, mit dem Nutzer am Gerät):** `check_battsim.py --hardware --interface … --channel …`
-    (nur lesen), dann `--remote --volts 3.7`; dabei vor allem prüfen, ob Freigabe 0/2 und Zellstatus 0/1
-    so wirken wie aus dem Modell gelesen, und das FAIL-Verhalten beim Beenden ohne Abschied.
+  - **Hardware-verifiziert (2026-10-22, BS-1.8, App/Treiber 0.22.0 aus dem Quellstand, CANcaseXL Kanal 2 =
+    `vector:59177:1`, 500 kbit/s, Zellabgriff J19 unbelegt, mit dem Nutzer am Gerät):**
+    - `check_battsim.py --hardware` (nur lesen) und `--remote --volts 3.7` grün: Status 0x120 kommt, Fernsteuerung,
+      Sollwert, Ausgang ein/aus, Zelle 5 aus (≈ 0,03 V, Multimeter 0,028 V), alle 14 Zellen folgen innerhalb 0,5 s;
+      Zellstatus roh 1 = aus, 0 = ein bestätigt. Neue Option `--hold <s>` hält jede Stufe zum Ablesen am Multimeter
+      (nur Prüfskript, Treiber unverändert, daher keine Versionsänderung).
+    - **FAIL-Verhalten:** Senden hart abgebrochen (RUN, Ausgang ein) → FAIL nach **5,16 s**, alle Zellen < 1 V nach
+      5,36 s (Modell 4,5–6 s); „FAIL zurücksetzen“ (`MODE=1`, dann `MODE=2`) führt zurück in REMOTE, Ausgang aus.
+      In STOP (Fernsteuerung über die Fronttaste, nie ein 0x130) gibt es erwartungsgemäß kein FAIL (11 s beobachtet).
+    - **App und MCP:** Spalte „Gerät am Bus“ mit `vector:59177:1`, Kachel erscheint, Gerät antwortet; MCP
+      `list_devices`/`read_device`/`control_device` (nach Freigabe Lesen + Steuern der Kachel in den Einstellungen):
+      Fernsteuerung, alle Zellen 3,7 V, Ausgang ein/aus, Zelle 5 aus und wieder ein, Fernsteuerung aus, jeweils
+      gegengelesen. Das Bedienen in der Kachel selbst (Sollwert, Zelle ein/aus, FAIL zurücksetzen) hat der Nutzer
+      nicht gemeldet, ist also **nicht bestätigt**.
+    - **Abweichungen vom Modell:** keine am Protokoll. Gefunden: Istwerte und Ausgang je Kanal weichen ab (Soll
+      3,7 V, Multimeter −15 … +40 mV, Meldung −16 … +73 mV gegen Multimeter, Zelle 13 mit festem Offset ≈ +70 mV),
+      der Handbetrieb startet mit dem zuletzt gesetzten Sollwert, einmal blieb Zelle 5 nach „Alle ein“ aus
+      (nicht reproduzierbar), das Kachelfeld „Fernsteuerung“ zeigt die Anforderung, nicht den Gerätezustand.
+      Details und Reset-/Einschaltpulse am Zellabgriff: Workspace `BatterieSimulator`, `doc/can-verhalten.md` (letzter
+      Abschnitt) und die Hardware-Analysen. Treiber-README entsprechend ergänzt.
+    - **Gefunden, nicht behoben:** BUGS_OFFEN #38 (Poll-Zyklus der App ≈ 1,3 s statt 100 ms, CAN-Zähler springt um
+      32, Zustand kommt mit ≈ 1 s Verzögerung). Das Senden an den Simulator läuft im eigenen Thread und ist nicht betroffen,
+      der Empfang (Istwerte, Online-Erkennung mit 1 s Timeout) läuft im Poll und geht dadurch nach.
 - **Oszilloskop UNI-T MSO1000HD (MSO1154HD-S) über SCPI/LAN (0.21.0, Nutzerwunsch „analog zum
   PicoScope“).** **Nur gegen den Simulator verifiziert -- das Gerät ist noch nicht da;
   Hardware-Prüfung steht aus.** Grundlage: UNI-T MSO1000HD Programming Manual V1.0.

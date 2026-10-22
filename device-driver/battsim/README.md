@@ -6,7 +6,7 @@ Projektdateien: `C:\DATA\Hobby-Projekte\Longboard\03_TOOLS\Batterie-Simulator`, 
 `BatterieSimulator` (`doc/can-verhalten.md`).
 
 Der Simulator ist in LabControl ein **eigenes Gerät** (Geräteart `battsim`, ID `battsim:<Interface>`, z. B.
-`battsim:vector:75816:0`), öffnet aber **keinen eigenen Bus**: er hängt als `CanNode`
+`battsim:vector:59177:1`), öffnet aber **keinen eigenen Bus**: er hängt als `CanNode`
 ([`can_bus/node.py`](../can_bus/node.py)) an einem in den Einstellungen konfigurierten CAN-Interface
 (Spalte „Gerät am Bus“). Damit geht jedes Interface, das LabControl kennt (Vector, PCAN, SLCAN), und der Bus
 kann mit dem Prüfling geteilt werden.
@@ -24,7 +24,7 @@ from can_bus.driver import CanBus
 from can_bus.node import CanScheduler
 from battsim.driver import BattSim
 
-bus = CanBus("vector", "75816:0", 500_000)
+bus = CanBus("vector", "59177:1", 500_000)
 node = BattSim()
 scheduler = CanScheduler(bus)          # sendet im eigenen Thread
 scheduler.attach(node)
@@ -38,7 +38,8 @@ scheduler.stop(send_shutdown=True)     # Ausgang sperren, Fernsteuerung abgeben
 ```
 
 Prüfskript: `python tools/check_battsim.py` (Nachbildung + DeviceWorker im Simulationsmodus),
-`--hardware --interface vector --channel 75816:0` (nur lesen), zusätzlich `--remote --volts 3.7` (Folge am Gerät).
+`--hardware --interface vector --channel 59177:1` (nur lesen, Kanalbezeichnung `<Seriennummer>:<Hardware-Kanal>`, hier CANcaseXL Kanal 2),
+zusätzlich `--remote --volts 3.7` (Folge am Gerät), mit `--hold 15` hält jede Stufe 15 s zum Ablesen am Multimeter.
 
 ## Protokoll in Kürze
 
@@ -53,7 +54,9 @@ Jede Botschaft trägt einen 4-Bit-Alive-Zähler, der Treiber erhöht ihn je Bots
 
 ## Bekannte Eigenheiten / Einschränkungen
 
-Alle aus dem Simulink-Modell der bestehenden Firmware gelesen, **am Gerät noch nicht bestätigt**:
+Aus dem Simulink-Modell der bestehenden Firmware gelesen und **am Gerät am 22.10.2026 geprüft (BS-1.8)**: Zellfreigabe,
+Zellstatus, Ausfall von 0x130 (FAIL nach 5,16 s) und das Zurücksetzen sind bestätigt. Nicht geprüft: Freigabewert 1
+als „ein“ (der Treiber sendet nur 0 und 2) und die Überlast. Details: Workspace BatterieSimulator, `doc/can-verhalten.md`.
 
 - **Zellfreigabe**: die Firmware wandelt `CELLn_ENABLE` nach boolean. 0 = aus, **1 und 2 = ein** – die DBC nennt 1
   „disable“, das würde die Zelle also einschalten. Der Treiber sendet deshalb **0 für aus** und 2 für ein.
@@ -75,3 +78,18 @@ Alle aus dem Simulink-Modell der bestehenden Firmware gelesen, **am Gerät noch 
 - **Dynamisches Zellmodell** (0x131/0x132, MODE=3) ist noch nicht umgesetzt (BS-1.9).
 - Die Alive-Prüfung der Firmware ist wegen einer ODER-Verknüpfung wirkungslos; der Treiber hält den Zähler trotzdem
   korrekt, damit eine neue Firmware ihn prüfen kann.
+
+## Am Gerät beobachtet (22.10.2026)
+
+- **Istwerte sind nur auf etwa ±0,1 V genau.** Soll 3,7 V, Multimeter und Meldung je Zelle: Zelle 2 3,685/3,669 V,
+  Zelle 5 3,700/3,712 V, Zelle 10 3,735/3,773 V, Zelle 13 3,740/3,813 V. Der Ausgang weicht je Kanal um −15 … +40 mV
+  vom Sollwert ab (gesteuert, nicht geregelt), die Rückmeldung zusätzlich um −16 … +73 mV vom Multimeter (Zelle 13 mit
+  festem Offset ≈ +70 mV, im Standby 0,064 V statt 0). Für Genauigkeit am Prüfling ein externes Multimeter verwenden.
+- **Abgeschaltete Zellen zeigen 0,02–0,07 V** (Restwert der Messung), nicht 0.
+- **Handbetrieb** (Taste Output Enable am Gerät) startet mit dem zuletzt gesetzten Sollwert, nicht mit 0 V: Nach einer
+  Fernsteuer-Sitzung mit 3,7 V liegen alle Zellen sofort auf 3,7 V.
+- **Reset und Einschalten:** Beim RESET an der Front der Supply-Platine (5-V-Regler aus) geht jede Zelle für ≈ 40 ms auf
+  ≈ 5,4 V, beim Netz-Ein auf bis 2,3 V. **Mit Prüfling am Zellabgriff nicht drücken oder einschalten.**
+- **Fernsteuerung über die Fronttaste** (Remote Control) ohne 0x130 bleibt ohne FAIL (nur aus RUN gibt es FAIL).
+- Das Kachelfeld „Fernsteuerung“ zeigt die Anforderung des Treibers, nicht den Zustand am Gerät (Feld „Zustand“).
+- Einmal blieb Zelle 5 nach „Alle Zellen ein“ aus (nicht reproduzierbar).
