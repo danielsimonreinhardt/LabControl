@@ -122,7 +122,8 @@ def run_mock() -> None:
     gaps = [b.timestamp - a.timestamp for a, b in zip(ctrl, ctrl[1:])]
     check(len(ctrl) >= 13 and max(gaps) < 0.16, f"0x130 etwa alle 100 ms ({len(ctrl)} in 1,6 s, max {max(gaps):.3f} s)")
     alive = [f.data[0] & 0x0F for f in ctrl]
-    check(all((b - a) % 16 == 1 for a, b in zip(alive, alive[1:])), "Alive 0x130 steigt um 1 (mod 16)")
+    check(all(1 <= a <= 14 for a in alive), f"Alive 0x130 nur 1..14 ({sorted(set(alive))})")
+    check(all(b == a % 14 + 1 for a, b in zip(alive, alive[1:])), "Alive 0x130 steigt um 1, nach 14 folgt 1")
     cells = [f for f in sent_ids(bus, t0) if f.arbitration_id == CELL_CONTROL_IDS[0]]
     check(1 <= len(cells) <= 3, f"0x100 etwa jede Sekunde ({len(cells)} in 1,6 s)")
 

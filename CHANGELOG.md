@@ -22,6 +22,16 @@ Semantic Versioning (`lab_gui/version.py`).
     je ansprang, wurde nicht geprüft (Log nicht ausgewertet).
 
 ### Geändert
+- **Batterie-Simulator: Alive-Zähler der Steuerbotschaften zählt 1..14 statt 0..15 (0.22.1, Entscheidung
+  des Nutzers im neXtBSW-Board `bs-alive-rx` b, 28.10.2026).** Die neue Simulator-Firmware (BattSimFW
+  Stufe B) prüft den Zähler von 0x130, 0x100–0x105 und 0x131/0x132 mit dem Bereich 1..14, so wie die
+  alte Firmware ihn sendet; 0 und 15 sind dort ein Alive-Fehler, bei 0x130 nach der Entprellung FAIL.
+  Der Treiber beginnt bei 1, nach 14 folgt 1. Die Nachbildung sendet ihren Zähler ebenso. Die alte
+  Firmware wertet den Zähler nicht aus, das Verhalten dort bleibt gleich.
+  - **Mock-verifiziert** (`tools/check_battsim.py`: Alive 0x130 nur 1..14 und nach 14 folgt 1, alle
+    übrigen Prüfungen grün).
+  - **Nicht hardware-verifiziert:** Das folgt mit dem Geräteteil von BattSimFW Stufe B
+    (`check_battsim.py --hardware --remote` gegen die neue Firmware).
 - **Repo-Struktur: alle Geräte-Treiber in `device-driver/` (0.20.2, Nutzerwunsch).** `can_bus`,
   `hcs34xx`, `jds66xx`, `korad_kel102`, `microhil` und `picoscope2000` liegen jetzt unter
   `device-driver/` (per `git mv`, Historie bleibt erhalten); **neue Treiber werden ab jetzt

@@ -359,7 +359,8 @@ class BattSim(CanNode):
         self._mark_cells_due()
 
     def _next_alive(self, msg_id: int) -> int:
-        value = (self._alive.get(msg_id, -1) + 1) % 16
+        # 1..14 wie die alte Firmware beim Senden; die neue Firmware prueft genau diesen Bereich (0 und 15 = Fehler)
+        value = self._alive.get(msg_id, 0) % 14 + 1
         self._alive[msg_id] = value
         return value
 

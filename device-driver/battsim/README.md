@@ -50,7 +50,9 @@ zusätzlich `--remote --volts 3.7` (Folge am Gerät), mit `--hold 15` hält jede
 | 0x110–0x115 | ← Simulator | 100 ms | Istspannung (auf mV gerundet) und Status je Zelle |
 | 0x120 | ← Simulator | 100 ms | Gerätezustand, Ausgangszustand |
 
-Jede Botschaft trägt einen 4-Bit-Alive-Zähler, der Treiber erhöht ihn je Botschaft um 1.
+Jede Botschaft trägt einen 4-Bit-Alive-Zähler, der Treiber erhöht ihn je Botschaft um 1 und zählt
+1..14 (nach 14 folgt 1, 0 und 15 kommen nicht vor) – wie die alte Firmware beim Senden. Die neue
+Firmware (BattSimFW ab Stufe B) wertet 0 und 15 als Alive-Fehler.
 
 ## Bekannte Eigenheiten / Einschränkungen
 

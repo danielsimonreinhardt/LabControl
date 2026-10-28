@@ -152,7 +152,7 @@ class SimulatedBattSim:
         return round(max(v, 0.0), 3)    # RoundToMillivolts
 
     def _status_frames(self) -> list[tuple[int, bytes]]:
-        self._alive = (self._alive + 1) % 16
+        self._alive = self._alive % 14 + 1    # 1..14 wie die Firmware
         frames = [(STATUS_ID, bytes(self._db.get_message_by_frame_id(STATUS_ID).encode({
             "ALIVE_STATUS_BATTSIM": self._alive,
             "BATTSIM_STATUS": self.state,
