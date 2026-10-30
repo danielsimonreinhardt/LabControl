@@ -169,12 +169,22 @@ FG_REPROBE_INTERVAL_S = 30.0
 # zwischen zwei Ticks ohnehin PICOSCOPE_RECONNECT_INTERVAL_MS liegt.
 PICOSCOPE_SETTLE_S = 2.0
 
-# Obergrenze empfangener CAN-Frames, die pro Poll-Zyklus UND Interface aus
-# der Empfangs-Queue geleert werden (siehe _poll) -- verhindert, dass ein
+# Zeitbudget (s), das pro Poll-Zyklus UND Interface fuers Leeren der CAN-
+# Empfangs-Queue zur Verfuegung steht (siehe _poll) -- verhindert, dass ein
 # Interface mit sehr hoher Buslast die anderen Geraete im selben Zyklus
 # verhungern laesst. Bei Ueberschreiten bleiben weitere Frames einfach bis
-# zum naechsten Zyklus in der Queue (python-can puffert selbst).
-CAN_DRAIN_LIMIT = 32
+# zum naechsten Zyklus in der Queue (python-can puffert selbst). Frueher eine
+# feste Frameanzahl (32): war ein Zyklus einmal laenger als POLL_INTERVAL_MS,
+# holte der Poll danach je Lauf nur 32 Frames ab und der Rueckstand wuchs
+# (BUGS_OFFEN #38). Ein Zeitbudget skaliert mit der tatsaechlichen Rechenzeit.
+CAN_DRAIN_BUDGET_S = 0.05
+
+# Dauer (s), ab der ein einzelner _poll()-Lauf als zu langsam geloggt wird
+# (mit der Dauer je Geraet), hoechstens alle POLL_SLOW_LOG_EVERY_S Sekunden.
+# Alle Geraete teilen sich den Worker-Thread: ein einzelnes langsames Geraet
+# verzoegert alle Kacheln (BUGS_OFFEN #38).
+POLL_SLOW_S = 0.5
+POLL_SLOW_LOG_EVERY_S = 10.0
 
 # Feste Device-IDs fuer die simulierten Geraete (siehe set_simulation_mode) --
 # im Gegensatz zu echten Geraeten gibt es hier keine USB-Seriennummer/COM-Port,
@@ -367,6 +377,11 @@ class DeviceWorker(QObject):
     # intern: Ergebnis einer Erkennung aus dem Probe-Thread zurueck in den
     # Worker-Thread (device_id, erreichbar, Modell, Seriennummer).
     _scpi_probe_done = Signal(str, bool, str, str)
+    # Intern: Ergebnis eines Verbindungsversuchs aus dem Probe-Thread (siehe
+    # _reconnect_executor): kind ("load"/"psu"/"fg"), device_id, verbundenes
+    # Geraeteobjekt oder None, Port (nur bei kind "fg_rejected": Port, der den
+    # Handshake nicht bestand).
+    _reconnect_done = Signal(str, str, object, str)
 
     fg_connected = Signal(str, bool)         # device_id, online
     # device_id, Zustand als dict: {"outputs": [bool, bool], "channels":
@@ -393,6 +408,14 @@ class DeviceWorker(QObject):
         self._scpi_info: dict[str, tuple[str, str]] = {}
         self._scpi_pending: set[str] = set()
         self._scpi_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="scpi-probe")
+        # Verbindungsversuche zu seriellen Geraeten (Netzteil/Last/Generator) laufen
+        # NICHT im Worker-Thread: ein Port, der in Windows gelistet ist, hinter dem
+        # aber ein ausgeschaltetes Geraet haengt, blockiert bis zum Lese-Timeout
+        # (1 s je Port) -- alle 3 s, und in der Zeit stand der Poll aller Geraete
+        # still (BUGS_OFFEN #38).
+        self._reconnect_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="reconnect-probe")
+        self._reconnect_pending: set[str] = set()
+        self._last_slow_poll_log = 0.0
         self._mock_scpiscope_active = False
         self._set_scpi_addresses(scpi_scopes or [])
         self._fgs: dict[str, JDS66xx] = {}
@@ -489,6 +512,7 @@ class DeviceWorker(QObject):
         self._scpi_probe_timer = QTimer(self)
         self._scpi_probe_timer.timeout.connect(self._probe_scpiscopes)
         self._scpi_probe_done.connect(self._on_scpi_probe_done)
+        self._reconnect_done.connect(self._on_reconnect_done)
 
     @Slot()
     def start(self) -> None:
@@ -969,48 +993,49 @@ class DeviceWorker(QObject):
         # PicoScope NICHT hier: eigener, viel langsamerer Timer (siehe
         # PICOSCOPE_RECONNECT_INTERVAL_MS / _picoscope_reconnect_timer).
 
+    def _submit_reconnect(self, kind: str, device_id: str, job, *args) -> None:
+        """Startet einen Verbindungsversuch im Probe-Thread (je Geraet nur einer
+        gleichzeitig). Ergebnis kommt ueber _reconnect_done in _on_reconnect_done."""
+        key = f"{kind}/{device_id}"
+        if key in self._reconnect_pending:
+            return
+        self._reconnect_pending.add(key)
+        self._reconnect_executor.submit(job, device_id, *args)
+
     def _reconnect_loads(self) -> None:
         candidates = _resolve_device_ids("load", KoradKEL102.discover_ports())
         for device_id, info in candidates.items():
             if device_id in self._loads:
                 continue
+            self._submit_reconnect("load", device_id, self._load_connect_job, info.device)
+
+    def _load_connect_job(self, device_id: str, port: str) -> None:
+        """Laeuft im Probe-Thread (siehe _reconnect_executor)."""
+        candidate = None
+        try:
+            candidate = KoradKEL102(port)
+            candidate.identify()
+        except LoadError:
+            if candidate is not None:
+                candidate.close()
             candidate = None
-            try:
-                candidate = KoradKEL102(info.device)
-                candidate.identify()
-            except LoadError:
-                if candidate is not None:
-                    candidate.close()
-                continue
-            except OSError:
-                # KoradKEL102(info.device) oeffnet den seriellen Port direkt
-                # und wirft dabei KEIN LoadError, sondern pyserial's rohe
-                # SerialException (Unterklasse von OSError) -- z.B. wenn der
-                # Port gerade von einem anderen Prozess/einer zweiten
-                # App-Instanz gehalten wird ("Zugriff verweigert"). Ungefangen
-                # wuerde das hier die Schleife ueber ALLE Last-Kandidaten
-                # abbrechen (nicht nur die Wiederverbindung von PSU/CAN/HIL im
-                # selben Zyklus wie beim analogen microHIL-Fix -- siehe
-                # _reconnect_hils -- sondern zusaetzlich auch die noch nicht
-                # geprueften Last-Kandidaten in DIESER Schleife). Naechster
-                # RECONNECT_INTERVAL_MS-Tick versucht es einfach erneut,
-                # analog zum LoadError-Fall oben.
-                logger.warning("Last-Port %s konnte nicht geoeffnet werden", info.device)
-                if candidate is not None:
-                    candidate.close()
-                continue
-            self._loads[device_id] = candidate
-            logger.info("Last verbunden: %s", device_id)
-            self.device_added.emit("load", device_id)
-            self.load_connected.emit(device_id, True)
-            # Sofort abfragen statt auf den naechsten Poll-Zyklus zu warten
-            # (bis zu POLL_INTERVAL_MS spaeter) -- der EIN/AUS-Button im
-            # Control-Tab soll den echten Zustand so frueh wie moeglich zeigen.
-            try:
-                self.load_input_state.emit(device_id, candidate.get_input())
-                self.load_function_state.emit(device_id, candidate.get_function())
-            except LoadError:
-                pass  # naechster Poll-Zyklus liefert den Status ohnehin nach
+        except OSError:
+            # KoradKEL102(port) oeffnet den seriellen Port direkt und wirft dabei
+            # KEIN LoadError, sondern pyserial's rohe SerialException
+            # (Unterklasse von OSError) -- z.B. wenn der Port gerade von einem
+            # anderen Prozess/einer zweiten App-Instanz gehalten wird ("Zugriff
+            # verweigert"). Naechster RECONNECT_INTERVAL_MS-Tick versucht es
+            # einfach erneut, analog zum LoadError-Fall.
+            logger.warning("Last-Port %s konnte nicht geoeffnet werden", port)
+            if candidate is not None:
+                candidate.close()
+            candidate = None
+        except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben
+            logger.exception("Last %s: Verbindungsversuch gescheitert", device_id)
+            if candidate is not None:
+                candidate.close()
+            candidate = None
+        self._reconnect_done.emit("load", device_id, candidate, "")
 
     def _reconnect_fgs(self) -> None:
         """Verbindet Funktionsgeneratoren. Kandidaten sind alle CH340-Ports,
@@ -1033,26 +1058,31 @@ class DeviceWorker(QObject):
                 continue
             if self._fg_probe_after.get(info.device, 0.0) > now:
                 continue
+            self._submit_reconnect("fg", device_id, self._fg_connect_job, info.device)
+
+    def _fg_connect_job(self, device_id: str, port: str) -> None:
+        """Laeuft im Probe-Thread (siehe _reconnect_executor)."""
+        candidate = None
+        try:
+            candidate = JDS66xx(port)
+            if not candidate.probe():
+                candidate.close()
+                # Die Sperrfrist (FG_REPROBE_INTERVAL_S) setzt der Worker selbst.
+                self._reconnect_done.emit("fg_rejected", device_id, None, port)
+                return
+        except OSError:
+            # Port wird von einem anderen Prozess gehalten -- naechster Tick
+            # versucht es erneut (analog zu _load_connect_job).
+            logger.warning("Funktionsgenerator-Port %s konnte nicht geoeffnet werden", port)
+            if candidate is not None:
+                candidate.close()
             candidate = None
-            try:
-                candidate = JDS66xx(info.device)
-                if not candidate.probe():
-                    candidate.close()
-                    self._fg_probe_after[info.device] = now + FG_REPROBE_INTERVAL_S
-                    logger.info("CH340-Port %s ist kein Funktionsgenerator (Handshake fehlgeschlagen)", info.device)
-                    continue
-            except OSError:
-                # Port wird von einem anderen Prozess gehalten -- naechster Tick
-                # versucht es erneut (analog zu _reconnect_loads).
-                logger.warning("Funktionsgenerator-Port %s konnte nicht geoeffnet werden", info.device)
-                if candidate is not None:
-                    candidate.close()
-                continue
-            self._fgs[device_id] = candidate
-            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, candidate.identify())
-            self.device_added.emit("fg", device_id)
-            self.fg_connected.emit(device_id, True)
-            self._emit_fg_state(device_id)
+        except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben
+            logger.exception("Funktionsgenerator %s: Verbindungsversuch gescheitert", device_id)
+            if candidate is not None:
+                candidate.close()
+            candidate = None
+        self._reconnect_done.emit("fg", device_id, candidate, "")
 
     def _emit_fg_state(self, device_id: str) -> None:
         """Liest den vollen Zustand und meldet ihn per fg_state. Ein Fehler wird
@@ -1093,35 +1123,75 @@ class DeviceWorker(QObject):
         for device_id, info in candidates.items():
             if device_id in self._psus:
                 continue
+            self._submit_reconnect("psu", device_id, self._psu_connect_job, info.device)
+
+    def _psu_connect_job(self, device_id: str, port: str) -> None:
+        """Laeuft im Probe-Thread (siehe _reconnect_executor)."""
+        candidate = None
+        try:
+            candidate = HCS34xx(port)
+            candidate.get_display()
+            # SICHERHEITSKRITISCH: Das Geraet kennt kein echtes Ausgang-
+            # AUS-Kommando (siehe hcs34xx/driver.py) -- "AUS" wird ueber
+            # Strom 0A emuliert. Ohne diesen expliziten Befehl bliebe ein
+            # von einer frueheren Sitzung/manuell eingeschalteter Ausgang
+            # nach dem Verbinden real eingeschaltet, waehrend die GUI
+            # (Standardzustand "Aus") das Gegenteil anzeigt. Deshalb hier
+            # aktiv auf 0A setzen, BEVOR das Geraet als verbunden gilt
+            # (_on_reconnect_done kommt erst danach) -- so ist der reale
+            # Zustand garantiert mit der Anzeige synchron.
+            candidate.set_current(0.0)
+        except PowerSupplyError:
+            if candidate is not None:
+                candidate.close()
             candidate = None
+        except OSError:
+            # HCS34xx(port) oeffnet den seriellen Port direkt und wirft dabei
+            # KEIN PowerSupplyError, sondern pyserial's rohe SerialException --
+            # analog zum Last-Fall und zum microHIL-Fall (siehe
+            # _reconnect_hils). Naechster RECONNECT_INTERVAL_MS-Tick versucht
+            # es einfach erneut.
+            logger.warning("Netzteil-Port %s konnte nicht geoeffnet werden", port)
+            if candidate is not None:
+                candidate.close()
+            candidate = None
+        except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben
+            logger.exception("Netzteil %s: Verbindungsversuch gescheitert", device_id)
+            if candidate is not None:
+                candidate.close()
+            candidate = None
+        self._reconnect_done.emit("psu", device_id, candidate, "")
+
+    @Slot(str, str, object, str)
+    def _on_reconnect_done(self, kind: str, device_id: str, candidate: object, port: str) -> None:
+        """Uebernimmt das Ergebnis eines Verbindungsversuchs im Worker-Thread --
+        ab hier gehoert das Geraeteobjekt wieder allein diesem Thread."""
+        pending_kind = "fg" if kind == "fg_rejected" else kind
+        self._reconnect_pending.discard(f"{pending_kind}/{device_id}")
+        if kind == "fg_rejected":
+            self._fg_probe_after[port] = time.monotonic() + FG_REPROBE_INTERVAL_S
+            logger.info("CH340-Port %s ist kein Funktionsgenerator (Handshake fehlgeschlagen)", port)
+            return
+        if candidate is None:
+            return
+        registry = {"load": self._loads, "psu": self._psus, "fg": self._fgs}[kind]
+        if device_id in registry:
+            candidate.close()   # inzwischen anderweitig verbunden
+            return
+        registry[device_id] = candidate
+        if kind == "load":
+            logger.info("Last verbunden: %s", device_id)
+            self.device_added.emit("load", device_id)
+            self.load_connected.emit(device_id, True)
+            # Sofort abfragen statt auf den naechsten Poll-Zyklus zu warten
+            # (bis zu POLL_INTERVAL_MS spaeter) -- der EIN/AUS-Button im
+            # Control-Tab soll den echten Zustand so frueh wie moeglich zeigen.
             try:
-                candidate = HCS34xx(info.device)
-                candidate.get_display()
-                # SICHERHEITSKRITISCH: Das Geraet kennt kein echtes Ausgang-
-                # AUS-Kommando (siehe hcs34xx/driver.py) -- "AUS" wird ueber
-                # Strom 0A emuliert. Ohne diesen expliziten Befehl bliebe ein
-                # von einer frueheren Sitzung/manuell eingeschalteter Ausgang
-                # nach dem Verbinden real eingeschaltet, waehrend die GUI
-                # (Standardzustand "Aus") das Gegenteil anzeigt. Deshalb hier
-                # aktiv auf 0A setzen, BEVOR das Geraet als verbunden gilt --
-                # so ist der reale Zustand garantiert mit der Anzeige synchron.
-                candidate.set_current(0.0)
-            except PowerSupplyError:
-                if candidate is not None:
-                    candidate.close()
-                continue
-            except OSError:
-                # HCS34xx(info.device) oeffnet den seriellen Port direkt und
-                # wirft dabei KEIN PowerSupplyError, sondern pyserial's rohe
-                # SerialException (Unterklasse von OSError) -- analog zum
-                # Last-Fall oben und zum bereits gefixten microHIL-Fall
-                # (siehe _reconnect_hils). Naechster RECONNECT_INTERVAL_MS-
-                # Tick versucht es einfach erneut.
-                logger.warning("Netzteil-Port %s konnte nicht geoeffnet werden", info.device)
-                if candidate is not None:
-                    candidate.close()
-                continue
-            self._psus[device_id] = candidate
+                self.load_input_state.emit(device_id, candidate.get_input())
+                self.load_function_state.emit(device_id, candidate.get_function())
+            except LoadError:
+                pass  # naechster Poll-Zyklus liefert den Status ohnehin nach
+        elif kind == "psu":
             logger.info("Netzteil verbunden: %s", device_id)
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
@@ -1131,6 +1201,11 @@ class DeviceWorker(QObject):
             # kommen in Sendereihenfolge an).
             self._emit_psu_ratings(device_id)
             self._emit_psu_limits(device_id)
+        else:
+            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, candidate.identify())
+            self.device_added.emit("fg", device_id)
+            self.fg_connected.emit(device_id, True)
+            self._emit_fg_state(device_id)
 
     def _reconnect_can(self) -> None:
         """Verbindet noch nicht verbundene, konfigurierte CAN-Interfaces.
@@ -1393,7 +1468,18 @@ class DeviceWorker(QObject):
             pass  # naechster erfolgreicher Poll-Zyklus deckt einen echten Verbindungsabbruch ohnehin auf
 
     def _poll(self) -> None:
+        t_start = time.monotonic()
+        timings: dict[str, float] = {}
+        self._poll_devices(timings)
+        total = time.monotonic() - t_start
+        if total > POLL_SLOW_S and t_start - self._last_slow_poll_log >= POLL_SLOW_LOG_EVERY_S:
+            self._last_slow_poll_log = t_start
+            detail = ", ".join(f"{d} {t * 1000:.0f} ms" for d, t in sorted(timings.items(), key=lambda kv: -kv[1]))
+            logger.warning("Poll-Zyklus langsam: %.0f ms gesamt (%s)", total * 1000, detail)
+
+    def _poll_devices(self, timings: dict[str, float]) -> None:
         for device_id, load in list(self._loads.items()):
+            t0 = time.monotonic()
             try:
                 m = load.measure()
                 self.load_measurement.emit(device_id, m.voltage, m.current, m.power)
@@ -1405,8 +1491,10 @@ class DeviceWorker(QObject):
                 del self._loads[device_id]
                 self.load_connected.emit(device_id, False)
                 self.device_removed.emit("load", device_id)
+            timings[device_id] = time.monotonic() - t0
 
         for device_id, psu in list(self._psus.items()):
+            t0 = time.monotonic()
             try:
                 d = psu.get_display()
                 self.psu_measurement.emit(device_id, d.voltage, d.current, d.constant_current)
@@ -1416,12 +1504,14 @@ class DeviceWorker(QObject):
                 del self._psus[device_id]
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
+            timings[device_id] = time.monotonic() - t0
 
         for device_id, bus in list(self._can_buses.items()):
+            t0 = time.monotonic()
             nodes = self._nodes_for(device_id)
             try:
-                drained = 0
-                while drained < CAN_DRAIN_LIMIT:
+                drain_until = time.monotonic() + CAN_DRAIN_BUDGET_S
+                while time.monotonic() < drain_until:
                     frame = bus.recv(timeout=0.0)
                     if frame is None:
                         break
@@ -1438,7 +1528,6 @@ class DeviceWorker(QObject):
                         decoded = decode_frame(db, frame)
                         if decoded is not None:
                             self.can_signals_decoded.emit(device_id, frame.arbitration_id, decoded)
-                    drained += 1
             except CanError as exc:
                 logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
                 self._detach_can_nodes(device_id, send_shutdown=False)
@@ -1455,6 +1544,7 @@ class DeviceWorker(QObject):
             self._update_battsims(device_id)
             tx, rx = self._can_stats[device_id]
             self.can_stats.emit(device_id, tx, rx)
+            timings[device_id] = time.monotonic() - t0
 
     def _poll_hils(self) -> None:
         for device_id, hil in list(self._hils.items()):

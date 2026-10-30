@@ -30,6 +30,34 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Behoben
+- **Alle Kacheln standen alle 3 s bis zu 2,3 s still, der CAN-Zähler „Empfangen“ hing hinterher (0.23.2, BUGS_OFFEN #38).**
+  Ursache (am 30.10.2026 an der laufenden App 0.23.0 gemessen): Alle Geräte teilen sich einen Worker-Thread. Dessen
+  Verbindungsversuch (`_try_reconnect`, alle 3 s) öffnete jeden in Windows gelisteten Netzteil-Port und wartete auf die
+  Antwort. Ein ausgeschaltetes Netzteil hält seinen Port (CP210x) aber weiter, dann läuft der Lesevorgang in den Timeout
+  von 1 s. Mit zwei solchen Netzteilen (COM4, COM6) stand der gesamte Poll alle 3 s rund 2,2 s still; CAN-Frames liefen
+  in dieser Zeit in die Warteschlange und kamen danach in 32er-Blöcken (= `CAN_DRAIN_LIMIT`) wieder heraus. Gemessen über
+  die Freigabe-API in 30 s: zehnmal 2,1–2,4 s Pause, dazwischen 7 Zyklen im 0,11-s-Takt mit jeweils genau +32.
+  - **Verbindungsversuche laufen in einem Probe-Thread** (`_reconnect_executor`, wie schon bei den SCPI-Oszilloskopen) für
+    Netzteil, Last und Funktionsgenerator. Der Worker übernimmt nur das fertige Ergebnis (`_on_reconnect_done`); je Gerät
+    läuft höchstens ein Versuch gleichzeitig. Das Netzteil wird weiterhin auf 0 A gesetzt, **bevor** es als verbunden gilt
+    (Sicherheitsregel aus `_reconnect_psus` unverändert, nur im Probe-Thread). Die FG-Sperrfrist nach abgelehntem Handshake
+    (`FG_REPROBE_INTERVAL_S`) bleibt. Folge: Ein frisch eingeschaltetes Gerät erscheint im selben Takt wie bisher (≤ 3 s),
+    aber ohne dass die anderen Geräte dabei einfrieren.
+  - **CAN-Abruf mit Zeitbudget** (`CAN_DRAIN_BUDGET_S` = 50 ms) statt höchstens 32 Frames je Zyklus. War ein Zyklus einmal
+    länger, wächst der Rückstand so nicht mehr; die Rechenzeit je Zyklus bleibt begrenzt.
+  - **Diagnose:** Dauert ein `_poll()`-Lauf länger als 0,5 s, steht im Log „Poll-Zyklus langsam: … (Gerät x ms, …)“, höchstens
+    alle 10 s. Damit lässt sich ein langsames Gerät künftig direkt benennen.
+  - **Mock-verifiziert** (`tools/check_reconnect_async.py`: `_try_reconnect` mit zwei stummen Netzteilen kehrt nach 16 ms zurück
+    statt nach ~2 s, kein doppelter Probe auf einen laufenden Versuch, antwortendes Netzteil wird mit 0 A übernommen, stumme bleiben
+    getrennt und werden im nächsten Tick erneut versucht, Generator mit abgelehntem Handshake bekommt die Sperrfrist, ein Zyklus holt
+    1000 Frames ab statt 32, Warnung bei langsamem Poll); `check_battsim`, `check_hcs34xx_verify`, `check_device_reset`,
+    `check_control_tab` grün.
+  - **Nicht hardware-verifiziert:** Die Messung zeigte den Fehler nur bei ausgeschalteten Netzteilen. Das ursprüngliche
+    Beobachtungsbild (alle Kacheln ~1,3 s alt **bei eingeschalteten** Netzteilen) ist nicht erklärt: Entweder ist es dieselbe
+    Ursache (das zweite, ausgeschaltete Netzteil blockierte schon damals) oder `get_display` ist am Gerät selbst langsam. Nach dem
+    Einbau 0.23.2 bei laufenden Netzteilen `rx_count` über die API wiederholen und das Log auf „Poll-Zyklus langsam“ prüfen;
+    erst danach BUGS_OFFEN #38 schließen. Der microHIL-Verbindungsversuch (`_reconnect_hils`) läuft weiter im Worker-Thread,
+    ist aber nicht als Verursacher belegt.
 - **Netzteil: „Ausgang AUS“ meldete „ok“, der Ausgang blieb an (0.21.1, BUGS_OFFEN #37, sicherheitsrelevant).**
   Das HCS-34xx quittiert Schreibbefehle mit „OK“, verwirft aber gelegentlich den ersten (am Board
   reproduziert). Der Treiber liest jetzt nach `set_current`/`set_voltage` den Sollwert per `GETS`
@@ -43,6 +71,12 @@ Semantic Versioning (`lab_gui/version.py`).
     (`psu:COM6`: 0,09–0,12 V nach 5–8 s; `psu:0001`: 0,78 V und fallend nach ~20 s, 1,11 V nach 8 s --
     die Spannung sinkt am Gerät langsam). Nur wenige Durchläufe; ob die Wiederholung im Treiber
     je ansprang, wurde nicht geprüft (Log nicht ausgewertet).
+  - **Zweite Hardware-Bestätigung (30.10.2026, App 0.23.0, `psu:COM6`, 3 V / 0,5 A, keine Last):** Zwei Zyklen
+    `PSU_OUT_ON` / `PSU_OUT_OFF` mit jeweils über 20 s Pause vor dem Befehl. Beide Aus-Befehle wirkten beim ersten Senden
+    (Spannung 2,97 V → 0,46 V nach ~3 s → 0,09–0,11 V nach ~7 s; zuvor 2,99 V → 0,17 V nach ~4,5 s). Das Einschalten
+    zeigte den Messwert nach 2–3 s (0,04 V → 3,00 V in CV). Nicht beobachtet: ein verlorener erster Befehl; ob die
+    Wiederholung im Treiber je ansprang, ist weiterhin nicht belegt (der Treiber loggt sie nicht). `psu:0001` war
+    ausgeschaltet und wurde nicht erneut geprüft.
 
 ### Geändert
 - **Batterie-Simulator: 0.23.0 am Gerät verifiziert, DBC-Kommentare zum Pegelboden (0.23.1, 30.10.2026).**
