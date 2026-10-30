@@ -2,9 +2,14 @@
 
 Der Simulator ist ein eigenes Geraet, oeffnet aber keinen eigenen Bus: er haengt
 als CanNode (can_bus/node.py) an einem in LabControl konfigurierten CAN-Interface.
-Das Protokoll beschreibt die mitgelieferte BattSimV1.dbc (Kopie aus dem
-Projektordner des Simulators, SOFTWARE/BattSimV1.dbc); kodiert und dekodiert wird
-mit cantools.
+Das Protokoll beschreibt die mitgelieferte BattSimV2.dbc (Kopie aus BattSimFW,
+projects/battsim_master/BattSimV2.dbc; der Inhalt von BattSimV1 bleibt unveraendert
+enthalten, dazu kommen die Knoten, die Statusbotschaft 0x121 und der Kanalstatus 4);
+kodiert und dekodiert wird mit cantools.
+
+Die Statusbotschaft 0x121 (STATUS_BATTSIM_EXT) gibt es nur bei der neuen Firmware
+(BattSimFW ab Stufe B/C): FAIL-Grund 1..6, Versorgungsstrom, LIMIT, Ueberlast, Regler ein/aus
+und Firmware-Version. Die alte Firmware sendet sie nicht; die Felder bleiben dann None.
 
 Verhalten der Firmware, wie es aus dem Simulink-Modell gelesen wurde (Workspace
 BatterieSimulator, doc/can-verhalten.md) -- am Geraet noch zu bestaetigen:
@@ -36,7 +41,7 @@ import cantools
 from can_bus.driver import CanFrame
 from can_bus.node import CanNode, TxFrame
 
-DBC_PATH = Path(__file__).resolve().parent / "BattSimV1.dbc"
+DBC_PATH = Path(__file__).resolve().parent / "BattSimV2.dbc"
 
 KIND = "battsim"
 
@@ -51,6 +56,7 @@ DEFAULT_VOLTAGE_LIMIT_V = 4.30
 
 CONTROL_ID = 0x130
 STATUS_ID = 0x120
+STATUS_EXT_ID = 0x121
 CELL_CONTROL_IDS = (0x100, 0x101, 0x102, 0x103, 0x104, 0x105)
 CELL_STATUS_IDS = (0x110, 0x111, 0x112, 0x113, 0x114, 0x115)
 
@@ -83,6 +89,23 @@ STATUS_NAMES = {
 STATUS_FAIL = 5
 STATUS_REMOTE = 3
 
+# BATTSIM_FAIL_REASON in 0x121 (DBC VAL_ 289; die Firmware haelt den Grund auch in STANDBY nach
+# einem Watchdog-Reset, bis zum ersten Zustandswechsel).
+FAIL_REASON_NAMES = {
+    0: "keiner", 1: "Timeout 0x130", 2: "Alive-Fehler 0x130", 3: "Überlast 48 V",
+    4: "Watchdog-/Safety-Reset", 5: "Strommessung ungültig", 6: "Überspannung Zelle",
+    15: "unbekannt",
+}
+# CELLnn_STATUS (DBC VAL_ 272..277). Die alte Firmware sendet 0 fuer "ein" (siehe Docstring);
+# die neue 2 = ein, 1 = aus, 3 = Sollwertfehler, 4 = Sollwert unter dem Pegelboden der Endstufe
+# (kein FAIL, der Kanal laeuft mit seinem Boden von etwa 0,7 V).
+CELL_STATUS_NAMES = {
+    0: "kein Wert (alte Firmware: ein)", 1: "aus", 2: "ein", 3: "Sollwertfehler",
+    4: "Sollwert unter Pegelboden", 5: "reserviert", 6: "reserviert", 7: "ungültig",
+}
+CELL_STATUS_SETPOINT_ERROR = 3
+CELL_STATUS_BELOW_FLOOR = 4
+
 
 class BattSimError(RuntimeError):
     """Fehler im Batterie-Simulator-Treiber."""
@@ -100,6 +123,9 @@ class CellState:
     voltage_v: float | None       # vom Geraet gemeldete Istspannung
     enabled: bool | None          # vom Geraet gemeldet (None = noch nichts empfangen)
     setpoint_error: bool = False
+    status: int | None = None     # CELLnn_STATUS roh (None = nichts empfangen)
+    status_name: str = ""
+    below_floor: bool = False     # Status 4: Sollwert unter dem Pegelboden der Endstufe
 
 
 @dataclass
@@ -114,6 +140,14 @@ class BattSimState:
     cells: list[CellState] = field(default_factory=list)
     stack_voltage_v: float | None = None
     last_tx_error: str = ""
+    # Statusbotschaft 0x121 (nur neue Firmware, sonst None)
+    fail_reason: int | None = None
+    fail_reason_name: str = ""
+    controller_on: bool | None = None      # Spannungsregler der Kanaele arbeitet
+    overload: bool | None = None
+    limit_active: bool | None = None       # LIMIT-Leitung der 48-V-Versorgung
+    supply_current_a: float | None = None
+    fw_version: str | None = None
 
     @property
     def failed(self) -> bool:
@@ -128,7 +162,7 @@ def load_database(path: Path | str = DBC_PATH):
 
 
 class BattSim(CanNode):
-    rx_ids = frozenset((STATUS_ID, *CELL_STATUS_IDS))
+    rx_ids = frozenset((STATUS_ID, STATUS_EXT_ID, *CELL_STATUS_IDS))
 
     def __init__(self, cell_count: int = CELL_COUNT, voltage_limit_v: float = DEFAULT_VOLTAGE_LIMIT_V,
                  dbc_path: Path | str = DBC_PATH) -> None:
@@ -154,6 +188,8 @@ class BattSim(CanNode):
         self._last_status_at: float | None = None
         self._voltages: list[float | None] = [None] * DBC_CELL_COUNT
         self._cell_status: list[int | None] = [None] * DBC_CELL_COUNT
+        self._ext: dict[str, float | int] = {}
+        self._last_ext_at: float | None = None
 
     # -- Grenzwert ---------------------------------------------------------
 
@@ -252,12 +288,19 @@ class BattSim(CanNode):
                     setpoint_v=self._setpoints[i],
                     enable_requested=self._enables[i],
                     voltage_v=self._voltages[i] if online else None,
-                    enabled=None if st is None else st in (0, 2),
-                    setpoint_error=st == 3,
+                    # Status 4 (Sollwert unter Pegelboden): der Kanal ist freigegeben und laeuft
+                    enabled=None if st is None else st in (0, 2, CELL_STATUS_BELOW_FLOOR),
+                    setpoint_error=st == CELL_STATUS_SETPOINT_ERROR,
+                    status=st,
+                    status_name="" if st is None else CELL_STATUS_NAMES.get(st, f"unbekannt ({st})"),
+                    below_floor=st == CELL_STATUS_BELOW_FLOOR,
                 ))
             voltages = [c.voltage_v for c in cells]
             stack = sum(voltages) if online and all(v is not None for v in voltages) else None
             status = self._status if online else None
+            ext = (self._ext if online and self._last_ext_at is not None
+                   and now - self._last_ext_at <= STATUS_TIMEOUT_S else {})
+            reason = int(ext["fail_reason"]) if "fail_reason" in ext else None
             return BattSimState(
                 online=online,
                 status=status,
@@ -269,6 +312,14 @@ class BattSim(CanNode):
                 cells=cells,
                 stack_voltage_v=stack,
                 last_tx_error=self.last_tx_error,
+                fail_reason=reason,
+                fail_reason_name="" if reason is None else FAIL_REASON_NAMES.get(reason, f"unbekannt ({reason})"),
+                controller_on=None if "controller_on" not in ext else bool(ext["controller_on"]),
+                overload=None if "overload" not in ext else bool(ext["overload"]),
+                limit_active=None if "limit" not in ext else bool(ext["limit"]),
+                supply_current_a=ext.get("supply_current"),
+                fw_version=(None if "fw_major" not in ext
+                            else f"{int(ext['fw_major'])}.{int(ext['fw_minor'])}.{int(ext['fw_patch'])}"),
             )
 
     # -- CanNode -----------------------------------------------------------
@@ -287,6 +338,19 @@ class BattSim(CanNode):
                 self._status = int(values.get("BATTSIM_STATUS", 0))
                 self._output_status = int(values.get("BATTSIM_OUTPUT_STATUS", 0))
                 self._last_status_at = now
+                return
+            if frame.arbitration_id == STATUS_EXT_ID:
+                self._ext = {
+                    "fail_reason": int(values.get("BATTSIM_FAIL_REASON", 0)),
+                    "controller_on": int(values.get("BATTSIM_CONTROLLER_ON", 0)),
+                    "overload": int(values.get("BATTSIM_OVERLOAD", 0)),
+                    "limit": int(values.get("BATTSIM_LIMIT", 0)),
+                    "supply_current": float(values.get("BATTSIM_SUPPLY_CURRENT", 0.0)),
+                    "fw_major": int(values.get("FW_VERSION_MAJOR", 0)),
+                    "fw_minor": int(values.get("FW_VERSION_MINOR", 0)),
+                    "fw_patch": int(values.get("FW_VERSION_PATCH", 0)),
+                }
+                self._last_ext_at = now
                 return
             base = CELL_STATUS_IDS.index(frame.arbitration_id) * CELLS_PER_MESSAGE
             for k in range(CELLS_PER_MESSAGE):

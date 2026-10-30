@@ -1296,6 +1296,8 @@ class BattSimControlGroup(QGroupBox):
             text = "--" if volts is None else f"{volts:.3f} V"
             if cell.get("error"):
                 text += " " + tr("(Sollwertfehler)")
+            elif cell.get("below_floor"):
+                text += " " + tr("(Sollwert unter Pegelboden)")
             elif cell.get("enabled") is False:
                 text += " " + tr("(aus)")
             actual.setText(text)
@@ -1309,6 +1311,17 @@ class BattSimControlGroup(QGroupBox):
         stack = state.get("stack_voltage")
         if stack is not None:
             parts.append(tr("Stapel {v} V", v=f"{stack:.3f}"))
+        reason = state.get("fail_reason")
+        if reason:   # 0 = keiner, None = alte Firmware ohne 0x121
+            parts.append(tr("Grund: {name}", name=state.get("fail_reason_name") or str(reason)))
+        controller = state.get("controller_on")
+        if controller is not None:
+            parts.append(tr("Regler ein") if controller else tr("Regler aus"))
+        current = state.get("supply_current")
+        if current is not None:
+            parts.append(tr("48 V {a} A", a=f"{current:.2f}"))
+        if state.get("fw_version"):
+            parts.append(tr("Firmware {v}", v=state["fw_version"]))
         if state.get("tx_error"):
             parts.append(tr("Senden gestört: {err}", err=state["tx_error"]))
         self._status_label.setText(" · ".join(parts))

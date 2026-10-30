@@ -96,7 +96,7 @@ a = Analysis(
         # Protokoll des Batterie-Simulators (seit 0.22.0). battsim/driver.py
         # sucht die DBC neben sich selbst (Path(__file__).parent) -- in der
         # .exe ist das "<MEIPASS>/battsim", deshalb dieses Ziel.
-        ('device-driver/battsim/BattSimV1.dbc', 'battsim'),
+        ('device-driver/battsim/BattSimV2.dbc', 'battsim'),
     ],
     hiddenimports=CAN_HIDDENIMPORTS + VISA_HIDDENIMPORTS,
     hookspath=[],

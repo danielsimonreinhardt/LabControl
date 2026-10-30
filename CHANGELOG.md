@@ -6,6 +6,29 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Batterie-Simulator: Treiber und Anzeige für die neue Firmware BattSimFW (0.23.0, Board `labcontrol-battsim-v2` a, 30.10.2026).**
+  Der Treiber liest jetzt `BattSimV2.dbc` (Kopie aus BattSimFW, `projects/battsim_master/BattSimV2.dbc`; `BattSimV1.dbc` entfällt,
+  V2 enthält den Inhalt von V1 unverändert) und wertet die Statusbotschaft **0x121** aus, die nur die neue Firmware sendet.
+  - **FAIL-Grund 1..6** (`fail_reason`, Klartext in `fail_reason_name`): Timeout 0x130, Alive-Fehler 0x130, Überlast 48 V,
+    Watchdog-/Safety-Reset, **Strommessung ungültig** (5, Stufe C, Review C-1) und **Überspannung Zelle** (6, Review C-2). Der Grund steht in
+    der Zeile „Zustand“ der Control-Kachel, als Kachelfeld „FAIL-Grund“ im Dashboard und in der Netzwerk-Freigabe/MCP (`fail_reason`).
+  - **Kanalstatus 0..7** je Zelle (`CellState.status`, `status_name`; Netzwerk/MCP `cellN_status`), neu **4 „Sollwert unter Pegelboden“**:
+    Ohne Last kommt die Endstufe nicht unter etwa 0,70 V (am Gerät am 30.10.2026 gemessen, BattSimFW Sicherheitsdoku Abschnitt 6.4/7). Ein
+    freigegebener Kanal mit Sollwert zwischen 0 und 0,7 V meldet Status 4, ist weiter freigegeben und liegt bei seinem Boden; die Kachel zeigt
+    „(Sollwert unter Pegelboden)“. Das ist kein FAIL.
+  - **Regler** (`controller_on`, Kachelfeld „Regler“, Netzwerk/MCP `controller`), **Versorgungsstrom** (`supply_current`, 48 V), Überlast, LIMIT und
+    **Firmware-Version** (`fw_version`, z. B. 0.3.1) aus 0x121. Bei der alten Firmware bleiben diese Felder `None`/leer, nichts ändert sich.
+  - **Nachbildung** (`SimulatedBattSim(firmware="v2")`, im Simulationsmodus der App): Kanalstatus 2/1/4, 0x121, FAIL-Gründe 1 (Timeout, nach 300 ms),
+    3 (Überlast) und für Tests 5/6 über `inject_fail()`. Die Prüfungen der Firmware selbst (200 ms ungültige Strommessung, 0,2 V Überspannung) laufen im
+    SIL-Test von BattSimFW, nicht hier.
+  - **Mock-verifiziert** (`tools/check_battsim.py`: neue Prüfungen für 0x121, Kanalstatus 4, FAIL-Gründe 1, 3, 5, 6 mit Rückweg, Version, Gegenprobe alte
+    Firmware, DeviceWorker-Zustand und Live-Anzeige; `check_control_tab`, `check_network_share`, `check_dashboard_detach` grün; Kachel und
+    Control-Zeile offscreen gerendert).
+  - **Nicht hardware-verifiziert:** `check_battsim.py --hardware` mit der Anzeige der neuen Felder (0x121, Status 4) am Gerät folgt, die
+    Pegelboden-Messung mit Last (Prüfling) ebenso.
+  - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
+
 ### Behoben
 - **Netzteil: „Ausgang AUS“ meldete „ok“, der Ausgang blieb an (0.21.1, BUGS_OFFEN #37, sicherheitsrelevant).**
   Das HCS-34xx quittiert Schreibbefehle mit „OK“, verwirft aber gelegentlich den ersten (am Board

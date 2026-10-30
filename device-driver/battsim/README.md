@@ -15,7 +15,7 @@ kann mit dem Prüfling geteilt werden.
 |---|---|
 | `driver.py` | `BattSim` (CanNode): Sollzustand, zyklisches Senden, Auswertung der Rückmeldungen |
 | `mock.py` | `SimulatedBattSim`: nachgebildetes **Gerät** am `MockCanBus` (nicht ein Ersatz-Treiber) |
-| `BattSimV1.dbc` | Protokoll, Kopie aus `SOFTWARE/BattSimV1.dbc` des Simulator-Projekts |
+| `BattSimV2.dbc` | Protokoll, Kopie aus BattSimFW (`projects/battsim_master/BattSimV2.dbc`); enthält BattSimV1 unverändert, dazu Knoten, Statusbotschaft 0x121 und Kanalstatus 4 |
 
 ## Verwendung (ohne GUI)
 
@@ -53,6 +53,28 @@ zusätzlich `--remote --volts 3.7` (Folge am Gerät), mit `--hold 15` hält jede
 Jede Botschaft trägt einen 4-Bit-Alive-Zähler, der Treiber erhöht ihn je Botschaft um 1 und zählt
 1..14 (nach 14 folgt 1, 0 und 15 kommen nicht vor) – wie die alte Firmware beim Senden. Die neue
 Firmware (BattSimFW ab Stufe B) wertet 0 und 15 als Alive-Fehler.
+
+## Neue Firmware (BattSimFW) und Statusbotschaft 0x121
+
+Die neue Simulator-Firmware (BattSimFW, Stufe B/C) sendet zusätzlich **0x121 STATUS_BATTSIM_EXT** (100 ms). Der Treiber wertet sie
+aus (`BattSimState`, `CellState`); bei der alten Firmware kommt sie nicht, die Felder bleiben `None`:
+
+| Feld | Bedeutung |
+|---|---|
+| `fail_reason`, `fail_reason_name` | Grund des FAIL, auch in STANDBY nach einem Watchdog-Reset: 0 keiner, 1 Timeout 0x130, 2 Alive-Fehler 0x130, 3 Überlast 48 V, 4 Watchdog-/Safety-Reset, 5 Strommessung ungültig, 6 Überspannung Zelle |
+| `controller_on` | Spannungsregler der Kanäle arbeitet (nach jedem Start an, per Diagnose abschaltbar) |
+| `overload`, `limit_active`, `supply_current_a` | Überlast, LIMIT-Leitung und Strom der 48-V-Versorgung |
+| `fw_version` | Firmware-Version `Major.Minor.Patch` (BattSimFW Stufe C: 0.3.1) |
+| `CellState.status`, `status_name` | Kanalstatus 1 aus, 2 ein, 3 Sollwertfehler, **4 Sollwert unter Pegelboden**, 7 ungültig |
+
+**Pegelboden (Stufe C, Gerät am 30.10.2026 gemessen):** Ohne Last kommt die Endstufe nicht unter etwa **0,70 V**. Ein freigegebener Kanal
+mit Sollwert zwischen 0 und 0,7 V meldet Status 4 (kein FAIL) und liegt bei seinem Boden. Der Boden ist mit angeschlossenem Prüfling
+(Last) noch nicht gemessen. Die Firmware **schaltet bei Überspannung** (Istwert länger als 100 ms mehr als 0,2 V über max(Soll, Boden)) und bei
+**ungültiger Strommessung** (länger als 200 ms) alle Ausgänge ab (FAIL Grund 6 bzw. 5); zurück geht es mit „FAIL zurücksetzen“. Die Version der
+Firmware, die am Gerät läuft, steht in `fw_version`.
+
+Die Nachbildung (`SimulatedBattSim(firmware="v2")`, im Simulationsmodus der App) bildet das nach, einschließlich `inject_fail(5 | 6)`;
+die Prüfungen der Firmware selbst (200 ms, 0,2 V) laufen im SIL-Test von BattSimFW.
 
 ## Bekannte Eigenheiten / Einschränkungen
 

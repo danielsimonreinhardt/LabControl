@@ -240,12 +240,18 @@ class LiveState(QObject):
             "remote": int(bool(state.get("remote"))),
             "stack_voltage": state.get("stack_voltage"),
             "voltage_limit": state.get("voltage_limit"),
+            # nur neue Firmware (0x121), sonst None
+            "fail_reason": state.get("fail_reason_name") or None,
+            "controller": _flag(state.get("controller_on")),
+            "supply_current": state.get("supply_current"),
+            "fw_version": state.get("fw_version"),
         }
         for cell in state.get("cells", []):
             n = cell["index"]
             fields[f"cell{n}_voltage"] = cell.get("voltage")
             fields[f"cell{n}_setpoint"] = cell.get("setpoint")
             fields[f"cell{n}_on"] = _flag(cell.get("enabled"))
+            fields[f"cell{n}_status"] = cell.get("status_name") or None
         self._write(device_id, **fields)
 
     # -- Sperrzustand --------------------------------------------------------

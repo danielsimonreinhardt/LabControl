@@ -178,6 +178,11 @@ Bedienung in der Sektion:
 - **Grenzwert je Zelle** (Voreinstellung 4,30 V, bis 5,0 V): höhere Sollwerte
   werden abgelehnt – auch aus Testablauf und Fernsteuerung.
 - **Istwert** je Zelle und die **Stapelspannung** meldet das Gerät selbst.
+- **Neue Firmware (BattSimFW):** Die Zeile „Zustand“ zeigt zusätzlich den **Grund** eines FAIL (z. B. „Timeout 0x130“,
+  „Überlast 48 V“, „Strommessung ungültig“, „Überspannung Zelle“), ob der **Regler** arbeitet, den Strom der 48-V-Versorgung
+  und die Firmware-Version; die Kachel im Dashboard zeigt FAIL-Grund und Regler. Eine Zelle mit einem Sollwert unter etwa
+  0,7 V meldet „(Sollwert unter Pegelboden)“: die Endstufe kommt ohne Last nicht unter diesen Pegel, das ist kein Fehler.
+  Bei der alten Firmware bleiben diese Angaben leer.
 - **Zustand „FAIL“**: Fällt die Verbindung zu LabControl aus (Programm
   beendet sich unerwartet, Kabel ab), schaltet der Simulator nach 4,5–6
   Sekunden ab. **„FAIL zurücksetzen“** holt ihn zurück; den Ausgang danach

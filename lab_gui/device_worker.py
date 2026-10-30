@@ -786,7 +786,7 @@ class DeviceWorker(QObject):
         bus = MockCanBus()
         # Am simulierten Bus haengt immer ein nachgebildeter Batterie-Simulator
         # (battsim/mock.py) -- der echte Treiber laeuft dagegen.
-        self._sim_battsim = SimulatedBattSim()
+        self._sim_battsim = SimulatedBattSim(firmware="v2")   # neue Firmware (BattSimFW), mit 0x121
         bus.attach_peer(self._sim_battsim)
         self._can_buses[SIM_CAN_ID] = bus
         self._can_stats[SIM_CAN_ID] = [0, 0]
@@ -897,9 +897,18 @@ class DeviceWorker(QObject):
             "voltage_limit": st.voltage_limit_v,
             "stack_voltage": st.stack_voltage_v,
             "tx_error": st.last_tx_error,
+            # Statusbotschaft 0x121 (nur neue Firmware, sonst None)
+            "fail_reason": st.fail_reason,
+            "fail_reason_name": st.fail_reason_name,
+            "controller_on": st.controller_on,
+            "overload": st.overload,
+            "limit_active": st.limit_active,
+            "supply_current": st.supply_current_a,
+            "fw_version": st.fw_version,
             "cells": [
                 {"index": c.index, "setpoint": c.setpoint_v, "enable": c.enable_requested,
-                 "voltage": c.voltage_v, "enabled": c.enabled, "error": c.setpoint_error}
+                 "voltage": c.voltage_v, "enabled": c.enabled, "error": c.setpoint_error,
+                 "status": c.status, "status_name": c.status_name, "below_floor": c.below_floor}
                 for c in st.cells
             ],
         }

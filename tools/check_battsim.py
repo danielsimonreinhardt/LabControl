@@ -172,6 +172,98 @@ def run_mock() -> None:
     check(not node.get_state().online, "Geraet antwortet nicht -> offline nach 1 s")
 
 
+def run_mock_v2() -> None:
+    """Neue Firmware (BattSimFW, BattSimV2.dbc): 0x121 mit FAIL-Grund, Regler, Strom, Version; Kanalstatus 4."""
+    print()
+    print("Batterie-Simulator, neue Firmware (V2) gegen Nachbildung")
+    bus = MockCanBus()
+    sim = SimulatedBattSim(seed=2, firmware="v2")
+    bus.attach_peer(sim)
+    node = BattSim()
+    sched = CanScheduler(bus, name="testv2")
+    sched.attach(node)
+
+    pump(bus, node, 0.4)
+    st = node.get_state()
+    check(st.online and st.fail_reason == 0 and st.fail_reason_name == "keiner", "0x121 kommt, FAIL-Grund 0 'keiner'")
+    check(st.controller_on is True, "Regler ein aus 0x121")
+    check(st.fw_version == "0.3.1", f"Firmware-Version aus 0x121 ({st.fw_version})")
+    check(st.supply_current_a is not None and st.supply_current_a < 0.2 and st.overload is False and st.limit_active is False,
+          f"Versorgungsstrom {st.supply_current_a} A, keine Ueberlast, kein LIMIT")
+
+    node.set_remote(True)
+    node.set_voltage_limit(5.0)
+    node.set_all_voltages(3.7)
+    node.set_cell_voltage(1, 0.5)     # unter dem Pegelboden 0,7 V
+    node.set_cell_voltage(2, 0.7)     # genau der Boden: erreichbar
+    node.set_all_enabled(True)
+    node.set_output(True)
+    pump(bus, node, 0.8)
+    st = node.get_state()
+    c1, c2, c3 = st.cells[0], st.cells[1], st.cells[2]
+    check(c1.status == 4 and c1.below_floor and c1.enabled is True and not c1.setpoint_error,
+          f"Zelle 1 (0,5 V): Status 4 '{c1.status_name}', freigegeben, kein Sollwertfehler")
+    check(abs(c1.voltage_v - 0.7) < 0.002, f"Zelle 1 liegt bei ihrem Boden ({c1.voltage_v} V)")
+    check(c2.status == 2 and not c2.below_floor and c3.status == 2 and c3.status_name == "ein",
+          "Zelle 2 (0,7 V) und 3 (3,7 V): Status 2 'ein'")
+    check(sim.sub == "RUN" and st.fail_reason == 0, "kein FAIL durch den Kanalstatus 4")
+    node.set_cell_enabled(3, False)
+    pump(bus, node, 0.5)
+    c3 = node.get_state().cells[2]
+    check(c3.status == 1 and c3.enabled is False and c3.status_name == "aus", "Zelle 3 aus: Status 1 'aus'")
+
+    # FAIL-Gruende 5 und 6 (die Firmware loest sie aus, die Nachbildung auf Anforderung), Anzeige und Rueckweg
+    for reason, name in ((5, "Strommessung ungültig"), (6, "Überspannung Zelle")):
+        sim.inject_fail(reason)
+        pump(bus, node, 0.5)
+        st = node.get_state()
+        check(st.failed and st.fail_reason == reason and st.fail_reason_name == name and st.output_on is False,
+              f"FAIL-Grund {reason}: '{st.fail_reason_name}', Ausgang aus")
+        check(all(c.voltage_v == 0.0 for c in st.cells), f"Grund {reason}: alle Zellen 0 V")
+        node.reset_fail()
+        pump(bus, node, 1.2)
+        st = node.get_state()
+        check(st.status == STATUS_REMOTE and st.fail_reason == 0, f"Zuruecksetzen nach Grund {reason} -> REMOTE/STOP, Grund 0")
+        node.set_output(True)
+        pump(bus, node, 0.5)
+
+    # Ueberlast: FAIL Grund 3 aus jedem Zustand, Zuruecksetzen erst ohne Ueberlast
+    sim.overload = True
+    pump(bus, node, 0.5)
+    st = node.get_state()
+    check(st.failed and st.fail_reason == 3 and st.overload is True and st.fail_reason_name == "Überlast 48 V",
+          "Ueberlast: FAIL Grund 3, 'overload' aus 0x121")
+    sim.overload = False
+    node.reset_fail()
+    pump(bus, node, 1.2)
+    check(node.get_state().fail_reason == 0, "ohne Ueberlast: zurueckgesetzt")
+    node.set_output(True)
+    pump(bus, node, 0.5)
+
+    # Ausfall von 0x130: FAIL Grund 1 nach 300 ms (neue Firmware)
+    sched.stop(send_shutdown=False)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 3.0 and sim.state != STATUS_FAIL:
+        pump(bus, node, 0.05)
+    check(sim.state == STATUS_FAIL and sim.fail_reason == 1, f"ohne 0x130: FAIL Grund 1 nach {time.monotonic() - t0:.1f} s")
+    pump(bus, node, 0.3)
+    st = node.get_state()
+    check(st.failed and st.fail_reason == 1 and st.fail_reason_name == "Timeout 0x130", "Treiber zeigt 'Timeout 0x130'")
+
+    # Gegenprobe alte Firmware: kein 0x121, die Felder bleiben leer
+    bus2 = MockCanBus()
+    old = SimulatedBattSim(seed=3)
+    bus2.attach_peer(old)
+    node2 = BattSim()
+    sched2 = CanScheduler(bus2, name="testv1")
+    sched2.attach(node2)
+    pump(bus2, node2, 0.5)
+    st2 = node2.get_state()
+    check(st2.online and st2.fail_reason is None and st2.controller_on is None and st2.fw_version is None
+          and st2.supply_current_a is None, "alte Firmware: keine 0x121-Felder (None)")
+    sched2.stop(send_shutdown=False)
+
+
 def run_worker() -> None:
     """Derselbe Weg wie in der App: DeviceWorker im Simulationsmodus, der
     nachgebildete Simulator haengt am simulierten CAN-Bus."""
@@ -216,6 +308,16 @@ def run_worker() -> None:
     st = seen["state"]
     check(st is not None and st["output_on"] is True and st["status_name"] == "Fernsteuerung",
           f"Zustand {st and st['status_name']}, Ausgang {st and st['output_on']}")
+    check(st["fail_reason"] == 0 and st["controller_on"] is True and st["fw_version"] == "0.3.1"
+          and st["cells"][0]["status_name"] == "ein", "Zustands-Dict: FAIL-Grund, Regler, Firmware, Kanalstatus")
+    # Weg bis zur Live-Anzeige (Netzwerk-Freigabe, ESP32-Display) und zur Kachel
+    from live_state import LiveState
+    live = LiveState()
+    live.on_battsim_state(sid, st)
+    fields = live.snapshot()["devices"][sid]["fields"]
+    check(fields.get("fail_reason") == "keiner" and fields.get("controller") == 1
+          and fields.get("cell1_status") == "ein" and fields.get("fw_version") == "0.3.1",
+          f"LiveState: FAIL-Grund, Regler, Kanalstatus, Firmware ({fields.get('fail_reason')})")
     ok, msg, volts = act("BS_CELL_READ", channel=7)
     check(ok and abs(volts - 3.6) < 0.002, f"BS_CELL_READ Zelle 7 = {volts:.4f} V")
     ok, msg, stack = act("BS_STACK_READ")
@@ -269,7 +371,11 @@ def run_hardware(args) -> None:
             check(st.output_on is True, "Ausgang ein")
             for c in st.cells:
                 print(f"      Zelle {c.index:2d}: soll {c.setpoint_v:.3f} V, ist {c.voltage_v} V, "
-                      f"{'ein' if c.enabled else 'aus'}")
+                      f"{'ein' if c.enabled else 'aus'}"
+                      + (f" ({c.status_name})" if c.status in (3, 4) else ""))
+            if st.fw_version is not None:
+                print(f"      0x121: Firmware {st.fw_version}, FAIL-Grund {st.fail_reason} ({st.fail_reason_name}), "
+                      f"Regler {'ein' if st.controller_on else 'aus'}, 48 V {st.supply_current_a:.3f} A")
             if args.hold:
                 print(f"      Halte {args.hold:.0f} s: alle Zellen ein (Multimeter ablesen)", flush=True)
                 pump(bus, node, args.hold)
@@ -307,6 +413,7 @@ def main() -> int:
         run_hardware(args)
     else:
         run_mock()
+        run_mock_v2()
         run_worker()
     print()
     if FAILS:

@@ -84,9 +84,15 @@ BATTSIM_STATE_FIELDS = {
     "remote": ("Fernsteuerung", ""),
     "stack_voltage": ("Stapelspannung", "V"),
     "voltage_limit": ("Grenzwert je Zelle", "V"),
+    # Statusbotschaft 0x121 der neuen Firmware (BattSimFW); bei der alten bleibt der Wert leer
+    "fail_reason": ("FAIL-Grund", ""),
+    "controller": ("Regler", ""),
+    "supply_current": ("Versorgungsstrom", "A"),
+    "fw_version": ("Firmware", ""),
     **{f"cell{n}_voltage": (f"Zelle {n} Istwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
     **{f"cell{n}_setpoint": (f"Zelle {n} Sollwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
     **{f"cell{n}_on": (f"Zelle {n} ein", "") for n in range(1, BATTSIM_CELL_COUNT + 1)},
+    **{f"cell{n}_status": (f"Zelle {n} Status", "") for n in range(1, BATTSIM_CELL_COUNT + 1)},
 }
 
 # -- Flacher Gesamtkatalog fuer die Netzwerk-Freigabe ---------------------

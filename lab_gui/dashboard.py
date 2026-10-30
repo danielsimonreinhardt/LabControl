@@ -130,12 +130,14 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "bs_stack": ("Stapel", "V"),
     "bs_cell_min": ("Zelle min", "V"),
     "bs_cell_max": ("Zelle max", "V"),
+    "bs_fail": ("FAIL-Grund", ""),
+    "bs_controller": ("Regler", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 CAN_FIELD_KEYS = ["tx_count", "rx_count"]
 FG_FIELD_KEYS = ["fg_ch1", "fg_ch2"]
-BATTSIM_FIELD_KEYS = ["bs_state", "bs_output", "bs_stack", "bs_cell_min", "bs_cell_max"]
+BATTSIM_FIELD_KEYS = ["bs_state", "bs_output", "bs_stack", "bs_cell_min", "bs_cell_max", "bs_fail", "bs_controller"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus",
               "fg": "Funktionsgenerator", "battsim": "Batterie-Simulator"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
@@ -173,6 +175,8 @@ FIELD_ICONS: dict[str, str] = {
     "bs_stack": "mdi.battery-outline",
     "bs_cell_min": "mdi.arrow-collapse-down",
     "bs_cell_max": "mdi.arrow-collapse-up",
+    "bs_fail": "mdi.alert-circle-outline",
+    "bs_controller": "mdi.tune-variant",
 }
 
 
@@ -1350,6 +1354,10 @@ class DashboardWidget(QGroupBox):
                  if c.get("voltage") is not None and c.get("enabled")]
         panel.set_value("bs_cell_min", f"{min(volts):.3f}" if volts else "--")
         panel.set_value("bs_cell_max", f"{max(volts):.3f}" if volts else "--")
+        # FAIL-Grund und Regler kommen aus 0x121 der neuen Firmware; die alte sendet sie nicht
+        panel.set_value("bs_fail", state.get("fail_reason_name") or "--")
+        controller_on = state.get("controller_on")
+        panel.set_value("bs_controller", "--" if controller_on is None else (tr("ein") if controller_on else tr("aus")))
 
     @Slot(str, int, int)
     def update_can(self, device_id: str, tx_count: int, rx_count: int) -> None:

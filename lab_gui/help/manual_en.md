@@ -169,6 +169,11 @@ Operation:
 - **Limit per cell** (default 4.30 V, up to 5.0 V): higher setpoints are
   rejected, also from test sequences and remote control.
 - **Measured** value per cell and the **stack voltage** come from the device.
+- **New firmware (BattSimFW):** the "State" line also shows the **reason** of a FAIL (e.g. "Timeout 0x130",
+  "Overload 48 V", "Current measurement invalid", "Overvoltage cell"), whether the **regulator** is working, the
+  current of the 48 V supply and the firmware version; the dashboard tile shows FAIL reason and regulator. A cell
+  with a setpoint below about 0.7 V reports "(setpoint below level floor)": without a load the output stage does
+  not go below that level, this is not a fault. With the old firmware these entries stay empty.
 - **State "FAIL"**: if the link to LabControl is lost (crash, cable), the
   simulator switches off after 4.5–6 seconds. **"Reset FAIL"** brings it
   back; switch the output on again afterwards. On a normal exit LabControl
