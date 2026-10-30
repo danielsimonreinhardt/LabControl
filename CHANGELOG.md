@@ -25,8 +25,8 @@ Semantic Versioning (`lab_gui/version.py`).
   - **Mock-verifiziert** (`tools/check_battsim.py`: neue Prüfungen für 0x121, Kanalstatus 4, FAIL-Gründe 1, 3, 5, 6 mit Rückweg, Version, Gegenprobe alte
     Firmware, DeviceWorker-Zustand und Live-Anzeige; `check_control_tab`, `check_network_share`, `check_dashboard_detach` grün; Kachel und
     Control-Zeile offscreen gerendert).
-  - **Nicht hardware-verifiziert:** `check_battsim.py --hardware` mit der Anzeige der neuen Felder (0x121, Status 4) am Gerät folgt, die
-    Pegelboden-Messung mit Last (Prüfling) ebenso.
+  - **Hardware-verifiziert am 30.10.2026 gegen BattSimFW 0.3.3** (Master V1 am CANcaseXL Kanal 2, kein Prüfling, keine Last; Details beim Eintrag 0.23.1).
+    Nicht hardware-verifiziert bleibt nur die Pegelboden-Messung mit dem Prüfling (BCU-Board).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Behoben
@@ -45,6 +45,22 @@ Semantic Versioning (`lab_gui/version.py`).
     je ansprang, wurde nicht geprüft (Log nicht ausgewertet).
 
 ### Geändert
+- **Batterie-Simulator: 0.23.0 am Gerät verifiziert, DBC-Kommentare zum Pegelboden (0.23.1, 30.10.2026).**
+  Die Anzeige der neuen Firmware ist am echten Gerät geprüft (BattSimFW 0.3.3, Master V1, ohne Prüfling und ohne Last); dazu eine Textkorrektur.
+  - **Hardware-verifiziert (30.10.2026, App 0.23.0 gegen BattSimFW 0.3.3):**
+    - `tools/check_battsim.py --hardware` lesend und mit `--remote`: Alles ok; 0x121 meldet Firmware 0.3.3, FAIL-Grund 0, Regler ein, 48 V 0,260 A bei 14 Zellen mit 3,7 V.
+    - Treiber am Gerät (eigenes Skript mit dem LabControl-Treiber): Zelle 1 mit 0,5 V ohne Last: Ist 0,706 V, Kanalstatus **4 „Sollwert unter Pegelboden“**, freigegeben, kein FAIL;
+      bei 1,0 V Status 2 „ein“; Stopp von 0x130 ohne Abschiedsframes: Zustand FAIL, **FAIL-Grund 1 „Timeout 0x130“** im Klartext, Ausgang aus; danach FAIL zurückgesetzt.
+    - **In der laufenden App über die Netzwerk-/MCP-Freigabe** (`read_device`, `control_device`): Die Kachel „Batterie-Simulator 1“ liefert die neuen Felder `fail_reason` („keiner“),
+      `controller` (1), `supply_current` (0,216 A im Standby, 0,22 A mit Zelle 1), `fw_version` („0.3.3“) und `cellN_status` („aus“, „Sollwert unter Pegelboden“). Zelle 1 mit 0,5 V
+      über `BS_CELL_VOLT`/`BS_CELL_ON`/`BS_OUT_ON`: `cell1_status` = „Sollwert unter Pegelboden“, `fail_reason` weiter „keiner“. **Regler:** Nach `2E 0211 01` (Diagnose, auf dem
+      von der App geteilten CAN-Kanal) zeigt die App `controller` = 0, nach `2E 0211 00` wieder 1.
+    - Ende: Ausgang aus, Fernsteuerung aus, Standby, Werkskalibrierung, Regler an.
+  - **Ohne Last:** Der Boden von etwa 0,70 V tritt nur **ohne äußere Last** auf (BattSimFW Sicherheitsdoku Abschnitt 10.3: schon mit 1 kΩ oder 100 Ω folgt der Ausgang dem Sollwert bis 0,3 V herab).
+    Status 4 ist ein Hinweis, kein Fehler (BattSimFW Review T-1). Die Kommentare in `device-driver/battsim/driver.py` und `README.md` sagen das jetzt.
+  - `device-driver/battsim/BattSimV2.dbc`: neue Signalkommentare der 16 `CELLnn_STATUS` aus BattSimFW (nur Kommentare, keine Änderung der Signale).
+  - **Nicht hardware-verifiziert:** Die Pegelboden-Messung mit dem Prüfling (BCU-Board); der FAIL-Grund in der App selbst (dort nur der Grund 1 über das Skript, nicht über die Kachel).
+
 - **Batterie-Simulator: Alive-Zähler der Steuerbotschaften zählt 1..14 statt 0..15 (0.22.1, Entscheidung
   des Nutzers im neXtBSW-Board `bs-alive-rx` b, 28.10.2026).** Die neue Simulator-Firmware (BattSimFW
   Stufe B) prüft den Zähler von 0x130, 0x100–0x105 und 0x131/0x132 mit dem Bereich 1..14, so wie die

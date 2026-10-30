@@ -98,7 +98,7 @@ FAIL_REASON_NAMES = {
 }
 # CELLnn_STATUS (DBC VAL_ 272..277). Die alte Firmware sendet 0 fuer "ein" (siehe Docstring);
 # die neue 2 = ein, 1 = aus, 3 = Sollwertfehler, 4 = Sollwert unter dem Pegelboden der Endstufe
-# (kein FAIL, der Kanal laeuft mit seinem Boden von etwa 0,7 V).
+# (kein FAIL; ohne aeussere Last liegt der Kanal bei seinem Boden von etwa 0,7 V, mit Last folgt er dem Sollwert; Status 4 ist ein Hinweis).
 CELL_STATUS_NAMES = {
     0: "kein Wert (alte Firmware: ein)", 1: "aus", 2: "ein", 3: "Sollwertfehler",
     4: "Sollwert unter Pegelboden", 5: "reserviert", 6: "reserviert", 7: "ungültig",
