@@ -1297,10 +1297,11 @@ class BattSimControlGroup(QGroupBox):
             if cell.get("error"):
                 text += " " + tr("(Sollwertfehler)")
             elif cell.get("below_floor"):
-                text += " " + tr("(Sollwert unter Pegelboden)")
+                text += " " + tr("(OL)")
             elif cell.get("enabled") is False:
                 text += " " + tr("(aus)")
             actual.setText(text)
+            actual.setToolTip(tr("Open Load") if cell.get("below_floor") and not cell.get("error") else "")
         self._render_status(state)
 
     def _render_status(self, state: dict | None) -> None:

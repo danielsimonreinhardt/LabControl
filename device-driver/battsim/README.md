@@ -65,7 +65,7 @@ aus (`BattSimState`, `CellState`); bei der alten Firmware kommt sie nicht, die F
 | `controller_on` | Spannungsregler der Kanäle arbeitet (nach jedem Start an, per Diagnose abschaltbar) |
 | `overload`, `limit_active`, `supply_current_a` | Überlast, LIMIT-Leitung und Strom der 48-V-Versorgung |
 | `fw_version` | Firmware-Version `Major.Minor.Patch` (BattSimFW Stufe C: 0.3.1) |
-| `CellState.status`, `status_name` | Kanalstatus 1 aus, 2 ein, 3 Sollwertfehler, **4 Sollwert unter Pegelboden**, 7 ungültig |
+| `CellState.status`, `status_name` | Kanalstatus 1 aus, 2 ein, 3 Sollwertfehler, **4 OL** (open load: Sollwert unter dem Pegelboden ohne Last), 7 ungültig |
 
 **Pegelboden (Stufe C, Gerät am 30.10.2026 gemessen):** Ohne Last kommt die Endstufe nicht unter etwa **0,70 V**. Ein freigegebener Kanal
 mit Sollwert zwischen 0 und 0,7 V meldet Status 4 (kein FAIL) und liegt bei seinem Boden. Der Boden ist mit angeschlossenem Prüfling

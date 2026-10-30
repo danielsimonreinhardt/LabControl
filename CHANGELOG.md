@@ -79,6 +79,18 @@ Semantic Versioning (`lab_gui/version.py`).
     ausgeschaltet und wurde nicht erneut geprüft.
 
 ### Geändert
+- **Batterie-Simulator: Kanalstatus 4 heißt jetzt „OL“ (Open Load) (0.23.3, 30.10.2026).**
+  Der Anzeigetext „Sollwert unter Pegelboden“ war unverständlich und zu lang. Die Kachel zeigt hinter dem Istwert jetzt „(OL)“, mit Tooltip „Open Load“;
+  `status_name` des Treibers und das Netzwerk-/MCP-Feld `cellN_status` liefern „OL“. Das Verhalten ist unverändert: Status 4 ist weiter ein
+  Hinweis (kein FAIL, Kanal freigegeben, `below_floor`).
+  - `device-driver/battsim/BattSimV2.dbc`: Wert 4 der 16 `CELLnn_STATUS` heißt „OL“, die Signalkommentare sagen „OL (open load): Sollwert unter dem Pegelboden ohne Last“
+    (gleiche Änderung wie in BattSimFW, Zweig `status4-ol`; dort kein neuer Firmware-Stand, 0.3.3 bleibt).
+  - Treiber (`CELL_STATUS_NAMES[4]`), Übersetzungen de/en (`(OL)`, `Open Load`), Hilfetexte der MCP-Schnittstelle und der Treiber-README angepasst.
+  - **Erklärung nur im Handbuch** (de/en, Abschnitt Batterie-Simulator, neuer Punkt „Kanalstatus OL“): ohne Last bleibt der Ausgang bei etwa 0,7 V, mit Last folgt er bis 0,3 V;
+    kein Fehler, kein FAIL, der Regler arbeitet in diesem Bereich nicht; auch mit Prüfling kann der Hinweis erscheinen, weil die Firmware den Strom einzelner Kanäle nicht kennt.
+  - **Geprüft gegen die Nachbildung** (`check_battsim.py`, `check_control_tab.py`, `check_network_share.py`); **nicht am Gerät geprüft** (reine Textänderung, kein Gerätezugriff).
+  - Die Einträge 0.23.0 und 0.23.1 unten nennen noch den alten Text; das war der Stand zur Zeit der Messung.
+
 - **Batterie-Simulator: 0.23.0 am Gerät verifiziert, DBC-Kommentare zum Pegelboden (0.23.1, 30.10.2026).**
   Die Anzeige der neuen Firmware ist am echten Gerät geprüft (BattSimFW 0.3.3, Master V1, ohne Prüfling und ohne Last); dazu eine Textkorrektur.
   - **Hardware-verifiziert (30.10.2026, App 0.23.0 gegen BattSimFW 0.3.3):**

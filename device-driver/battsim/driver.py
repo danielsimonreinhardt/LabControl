@@ -97,11 +97,11 @@ FAIL_REASON_NAMES = {
     15: "unbekannt",
 }
 # CELLnn_STATUS (DBC VAL_ 272..277). Die alte Firmware sendet 0 fuer "ein" (siehe Docstring);
-# die neue 2 = ein, 1 = aus, 3 = Sollwertfehler, 4 = Sollwert unter dem Pegelboden der Endstufe
+# die neue 2 = ein, 1 = aus, 3 = Sollwertfehler, 4 = OL (open load: Sollwert unter dem Pegelboden der Endstufe ohne Last)
 # (kein FAIL; ohne aeussere Last liegt der Kanal bei seinem Boden von etwa 0,7 V, mit Last folgt er dem Sollwert; Status 4 ist ein Hinweis).
 CELL_STATUS_NAMES = {
     0: "kein Wert (alte Firmware: ein)", 1: "aus", 2: "ein", 3: "Sollwertfehler",
-    4: "Sollwert unter Pegelboden", 5: "reserviert", 6: "reserviert", 7: "ungültig",
+    4: "OL", 5: "reserviert", 6: "reserviert", 7: "ungültig",
 }
 CELL_STATUS_SETPOINT_ERROR = 3
 CELL_STATUS_BELOW_FLOOR = 4
@@ -125,7 +125,7 @@ class CellState:
     setpoint_error: bool = False
     status: int | None = None     # CELLnn_STATUS roh (None = nichts empfangen)
     status_name: str = ""
-    below_floor: bool = False     # Status 4: Sollwert unter dem Pegelboden der Endstufe
+    below_floor: bool = False     # Status 4 "OL" (open load): Sollwert unter dem Pegelboden der Endstufe ohne Last
 
 
 @dataclass
@@ -288,7 +288,7 @@ class BattSim(CanNode):
                     setpoint_v=self._setpoints[i],
                     enable_requested=self._enables[i],
                     voltage_v=self._voltages[i] if online else None,
-                    # Status 4 (Sollwert unter Pegelboden): der Kanal ist freigegeben und laeuft
+                    # Status 4 (OL): der Kanal ist freigegeben und laeuft
                     enabled=None if st is None else st in (0, 2, CELL_STATUS_BELOW_FLOOR),
                     setpoint_error=st == CELL_STATUS_SETPOINT_ERROR,
                     status=st,

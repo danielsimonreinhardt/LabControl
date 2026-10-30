@@ -18,8 +18,8 @@ doc/can-verhalten.md), einschliesslich ihrer Abweichungen von der DBC:
 - Fehlende Zellbotschaften: letzte Werte bleiben stehen.
 
 Mit ``firmware="v2"`` bildet die Nachbildung stattdessen die neue Firmware nach (BattSimFW,
-Stufe B/C, BattSimV2.dbc): Zellstatus 2 = ein, 1 = aus, 4 = Sollwert unter dem Pegelboden
-(0 < Sollwert < 0,7 V, die Endstufe liegt dann bei ihrem Boden von 0,70 V), dazu die Statusbotschaft
+Stufe B/C, BattSimV2.dbc): Zellstatus 2 = ein, 1 = aus, 4 = OL (open load, Sollwert
+unter dem Pegelboden ohne Last; 0 < Sollwert < 0,7 V, die Endstufe liegt dann bei ihrem Boden von 0,70 V), dazu die Statusbotschaft
 0x121 mit FAIL-Grund, Regler ein, Ueberlast, Versorgungsstrom und Firmware-Version. FAIL-Gruende:
 1 Timeout von 0x130, 3 Ueberlast (``overload``); 5 und 6 (Strommessung ungueltig, Ueberspannung)
 lassen sich fuer Tests mit ``inject_fail(reason)`` ausloesen: in RUN folgt FAIL mit diesem Grund,

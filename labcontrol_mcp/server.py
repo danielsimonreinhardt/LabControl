@@ -102,8 +102,8 @@ Vorgehen:
   status ('Fernsteuerung' im Betrieb; 'FAIL' -> BS_RESET_FAIL, danach BS_OUT_ON erneut).
   Neue Firmware (BattSimFW, Statusbotschaft 0x121): fail_reason nennt den Grund ('Timeout 0x130',
   'Ueberlast 48 V', 'Strommessung ungueltig', 'Ueberspannung Zelle' ...), controller = Regler 1/0,
-  supply_current in A, cellN_status = Kanalstatus (u. a. 'Sollwert unter Pegelboden': Sollwert unter
-  etwa 0,7 V, die Endstufe liegt dann bei ihrem Boden, KEIN FAIL), fw_version. Bei der alten Firmware
+  supply_current in A, cellN_status = Kanalstatus (u. a. 'OL' = open load: Sollwert unter
+  etwa 0,7 V ohne Last, die Endstufe liegt dann bei ihrem Boden, KEIN FAIL), fw_version. Bei der alten Firmware
   sind diese Felder leer.
 
 Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,

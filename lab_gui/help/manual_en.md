@@ -172,8 +172,19 @@ Operation:
 - **New firmware (BattSimFW):** the "State" line also shows the **reason** of a FAIL (e.g. "Timeout 0x130",
   "Overload 48 V", "Current measurement invalid", "Overvoltage cell"), whether the **regulator** is working, the
   current of the 48 V supply and the firmware version; the dashboard tile shows FAIL reason and regulator. A cell
-  with a setpoint below about 0.7 V reports "(setpoint below level floor)": without a load the output stage does
-  not go below that level, this is not a fault. With the old firmware these entries stay empty.
+  with a setpoint below about 0.7 V shows "(OL)" (open load) after the measured value, see below – this is not a fault.
+  With the old firmware these entries stay empty.
+- **Channel status "OL" (open load):** With the new firmware a cell shows "(OL)" after its measured value (channel status 4;
+  network/MCP: `cellN_status` = "OL") when its setpoint is above 0 V but below the **level floor** of the output stage
+  (parameter `OutputFloor_V`, default 0.7 V). This means:
+  - **Without a load** the output stage does not go below about 0.7 V. A setpoint below that cannot be reached, the output stays at
+    about 0.7 V.
+  - **With a load** (measured with 100 Ω and 1 kΩ) the voltage follows the setpoint down to about 0.3 V.
+  - The channel stays **released**. It is **not a fault and not a FAIL**, only a hint.
+  - In this range **the voltage regulator does not work** (without a load the setpoint cannot be reached). The overvoltage detection of
+    the firmware then compares against the floor plus 0.2 V, not against the setpoint.
+  - The firmware does not know the current of the individual channels. The "OL" hint therefore also appears **with a test object
+    connected**, although the voltage is then mostly right; it does not show whether a load is really missing.
 - **State "FAIL"**: if the link to LabControl is lost (crash, cable), the
   simulator switches off after 4.5–6 seconds. **"Reset FAIL"** brings it
   back; switch the output on again afterwards. On a normal exit LabControl

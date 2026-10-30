@@ -181,8 +181,19 @@ Bedienung in der Sektion:
 - **Neue Firmware (BattSimFW):** Die Zeile „Zustand“ zeigt zusätzlich den **Grund** eines FAIL (z. B. „Timeout 0x130“,
   „Überlast 48 V“, „Strommessung ungültig“, „Überspannung Zelle“), ob der **Regler** arbeitet, den Strom der 48-V-Versorgung
   und die Firmware-Version; die Kachel im Dashboard zeigt FAIL-Grund und Regler. Eine Zelle mit einem Sollwert unter etwa
-  0,7 V meldet „(Sollwert unter Pegelboden)“: die Endstufe kommt ohne Last nicht unter diesen Pegel, das ist kein Fehler.
+  0,7 V zeigt hinter dem Istwert „(OL)“ (Open Load), siehe unten – das ist kein Fehler.
   Bei der alten Firmware bleiben diese Angaben leer.
+- **Kanalstatus „OL“ (Open Load):** Bei der neuen Firmware zeigt eine Zelle „(OL)“ hinter dem Istwert (Kanalstatus 4; Netzwerk/MCP:
+  `cellN_status` = „OL“), wenn ihr Sollwert größer als 0 V, aber kleiner als der **Pegelboden** der Endstufe ist (Parameter
+  `OutputFloor_V`, Vorgabe 0,7 V). Das heißt:
+  - **Ohne Last** geht die Endstufe nicht unter etwa 0,7 V. Ein Sollwert darunter ist nicht erreichbar, der Ausgang bleibt bei etwa
+    0,7 V.
+  - **Mit Last** (gemessen mit 100 Ω und 1 kΩ) folgt die Spannung dem Sollwert bis herab zu etwa 0,3 V.
+  - Der Kanal bleibt **freigegeben**. Es ist **kein Fehler und kein FAIL**, nur ein Hinweis.
+  - In diesem Bereich **arbeitet der Spannungsregler nicht** (der Sollwert ist ohne Last nicht erreichbar). Die Überspannungserkennung
+    der Firmware vergleicht dann gegen den Boden plus 0,2 V, nicht gegen den Sollwert.
+  - Die Firmware kennt den Strom der einzelnen Kanäle nicht. Der Hinweis „OL“ erscheint deshalb **auch mit angeschlossenem Prüfling**,
+    obwohl die Spannung dann meist stimmt; ob wirklich keine Last hängt, zeigt er nicht.
 - **Zustand „FAIL“**: Fällt die Verbindung zu LabControl aus (Programm
   beendet sich unerwartet, Kabel ab), schaltet der Simulator nach 4,5–6
   Sekunden ab. **„FAIL zurücksetzen“** holt ihn zurück; den Ausgang danach

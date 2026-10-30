@@ -201,8 +201,8 @@ def run_mock_v2() -> None:
     pump(bus, node, 0.8)
     st = node.get_state()
     c1, c2, c3 = st.cells[0], st.cells[1], st.cells[2]
-    check(c1.status == 4 and c1.below_floor and c1.enabled is True and not c1.setpoint_error,
-          f"Zelle 1 (0,5 V): Status 4 '{c1.status_name}', freigegeben, kein Sollwertfehler")
+    check(c1.status == 4 and c1.status_name == "OL" and c1.below_floor and c1.enabled is True and not c1.setpoint_error,
+          f"Zelle 1 (0,5 V): Status 4 '{c1.status_name}' (OL), freigegeben, kein Sollwertfehler")
     check(abs(c1.voltage_v - 0.7) < 0.002, f"Zelle 1 liegt bei ihrem Boden ({c1.voltage_v} V)")
     check(c2.status == 2 and not c2.below_floor and c3.status == 2 and c3.status_name == "ein",
           "Zelle 2 (0,7 V) und 3 (3,7 V): Status 2 'ein'")
