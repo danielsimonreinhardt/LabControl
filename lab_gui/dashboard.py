@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QRect,
     QSize,
     Qt,
+    QTimer,
     Signal,
     Slot,
 )
@@ -65,6 +66,10 @@ _WIDGET_SIZE_MAX = 16777215
 # Zusätzlicher Platz für die Scrollleiste am unteren Rand (falls horizontal
 # gescrollt werden muss) sowie den Rahmen der ScrollArea.
 SCROLL_AREA_MARGIN = 24
+# Abstand (ms) der Kontrolle, ob die Kachelanordnung noch zu den Kachelgroessen passt
+# (siehe DashboardWidget._layout_check_timer).
+LAYOUT_CHECK_INTERVAL_MS = 500
+
 # Abstand zwischen den Kacheln im Raster (siehe DashboardWidget._relayout_panels).
 GRID_SPACING = 12
 
@@ -549,6 +554,18 @@ class DashboardWidget(QGroupBox):
         # TILE_HEIGHT_BY_KIND/_relayout_panels) -- doppelte Kacheln
         # bekommen 2*_cell_height + Spacing.
         self._cell_height = 0
+        # (kompakt?, Reihenfolge) der letzten vollstaendigen Anordnung -- damit ein
+        # LayoutRequest ohne echte Aenderung nichts neu berechnet
+        # (siehe _layout_is_current).
+        self._laid_out: tuple[bool, tuple[str, ...]] | None = None
+        # Sicherheitsnetz: Wuchs eine Kachel, ohne dass danach ein LayoutRequest kam (die
+        # Reihenfolge der Ereignisse beim Start entscheidet das), bliebe die Anordnung sonst
+        # veraltet -- frueher heilte das die LayoutRequest-Dauerschleife zufaellig. Billig, weil
+        # ohne Aenderung nur die sizeHints gelesen werden (siehe _layout_is_current).
+        self._layout_check_timer = QTimer(self)
+        self._layout_check_timer.setInterval(LAYOUT_CHECK_INTERVAL_MS)
+        self._layout_check_timer.timeout.connect(self._check_layout)
+        self._layout_check_timer.start()
         # Eigene Zellhoehen-Ratsche fuer die Kompaktansicht (siehe
         # COMPACT_TILE_HEIGHT_BY_KIND) -- unabhaengig von _cell_height, da
         # die natuerlichen Groessen dort viel kleiner sind als in der
@@ -706,7 +723,7 @@ class DashboardWidget(QGroupBox):
         if obj is self._container:
             event_type = event.type()
             if event_type == QEvent.Type.LayoutRequest:
-                self._relayout_panels()
+                self._relayout_panels(only_if_changed=True)
             elif event_type == QEvent.Type.DragEnter:
                 if event.mimeData().hasFormat(PANEL_DRAG_MIME_TYPE):
                     event.acceptProposedAction()
@@ -1015,7 +1032,35 @@ class DashboardWidget(QGroupBox):
         self._relayout_panels()
         self.panel_order_changed.emit(order)
 
-    def _relayout_panels(self, reset_width: bool = False) -> None:
+    def _check_layout(self) -> None:
+        if self.isVisible():
+            self._relayout_panels(only_if_changed=True)
+
+    def _layout_is_current(self, order: list[str]) -> bool:
+        """True, wenn eine vollstaendige Neuanordnung nichts veraendern wuerde: gleiche
+        Ansicht und Reihenfolge wie beim letzten Mal, und keine der Ratschen (Breite je
+        Kachel/gemeinsame Breite, Zellhoehe) wuerde wachsen.
+
+        Jede Textaenderung in einer Kachel (Messwerte, 10 Hz je Geraet) loest ein LayoutRequest
+        am Container aus. Die volle Neuanordnung (sizeHint aller Kacheln, alle Widgets aus dem
+        Layout nehmen und neu einfuegen, Packen, activate) war dafuer jedes Mal fuellig: in der
+        Kompaktansicht ~11 ms je Aufruf, rund 60-90 % der GUI-Last. Die Ratschen sorgen dafuer,
+        dass sich die Breite nach unten ohnehin nicht aendert -- hier wird nur noch geprueft,
+        ob sie wachsen muessten."""
+        if self._laid_out != (self._compact, tuple(order)):
+            return False
+        if self._compact:
+            for device_id in order:
+                if self._panels[device_id].sizeHint().width() > self._compact_widths.get(device_id, 0):
+                    return False
+            height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
+            return cell_size_ratchet(self._compact_cell_height, height_sizes) == self._compact_cell_height
+        if max(panel.sizeHint().width() for panel in self._panels.values()) > self._panel_width:
+            return False
+        height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
+        return cell_size_ratchet(self._cell_height, height_sizes) == self._cell_height
+
+    def _relayout_panels(self, reset_width: bool = False, only_if_changed: bool = False) -> None:
         # Panel-Breite/-Hoehe ergeben sich aus dem tatsaechlichen Inhalt
         # (Schrift, Uebersetzung, DPI, ...), nicht aus festen Konstanten --
         # sonst werden bei laengeren Texten/anderen Schriftarten Werte oder
@@ -1047,6 +1092,9 @@ class DashboardWidget(QGroupBox):
                 self._panel_width = 0
                 self._compact_widths.clear()
             order = self._current_order()
+            if only_if_changed and not reset_width and self._layout_is_current(order):
+                return
+            self._laid_out = (self._compact, tuple(order))
             if self._compact:
                 # Kompaktansicht: jede Kachel behaelt ihre eigene, an den
                 # Inhalt geschmiegte Breite (Ratsche je Geraet, siehe Punkt 2

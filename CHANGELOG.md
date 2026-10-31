@@ -44,6 +44,31 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Prozessorlast der GUI stark gesenkt (0.24.3).** Gemessen an der laufenden App 0.24.0 (py-spy, 20 s): Der GUI-Thread lag bei rund
+  60 % eines Kerns, davon etwa 55 % der aktiven Zeit im Dashboard-Layout (`DashboardWidget.eventFilter` -> `_relayout_panels` ->
+  `pack_tiles`), der Worker-Thread nur bei rund 6 %.
+  - **Ursache:** Jede Textänderung in einer Kachel (Messwerte, 10 Hz je Gerät) löst ein `LayoutRequest` am Container aus, und der Handler
+    berechnete jedes Mal das komplette Layout neu (sizeHint aller Kacheln, alle Widgets aus dem Layout nehmen und wieder einfügen,
+    Packen, `activate()`). Das Umsortieren löste selbst wieder `LayoutRequest`s aus, die Neuberechnung hielt sich also in einer
+    Dauerschleife am Laufen: im Simulationsmodus 190 Neuberechnungen je Sekunde in der Normalansicht, in der Kompaktansicht 50 je Sekunde
+    zu je 11 ms.
+  - **Fix:** Bei einem `LayoutRequest` wird nur neu angeordnet, wenn sich etwas ändert: Reihenfolge oder Ansicht, oder eine der Ratschen
+    (Breite, Zellhöhe) müsste wachsen (`_layout_is_current`). Weil die Breiten ohnehin nur wachsen, ändert sich am Ergebnis nichts.
+    Ein 500-ms-Timer prüft dasselbe als Sicherheitsnetz, falls eine Kachel wächst, ohne dass ein `LayoutRequest` folgt.
+    Gewollte Änderungen (Ansichtswechsel, Drag & Drop, neue Kachel) rechnen wie bisher sofort.
+  - **Kleinere Posten:** Die Ein/Aus-Knöpfe (`_style_toggle_buttons`, `_style_digital_out_toggle`) setzen ihr Stylesheet nur noch bei
+    geändertem Zustand statt bei jedem Update, und die LED-Punkte des microHIL (`_dot_pixmap`) werden je Zustand und Farbe
+    zwischengespeichert, statt bei jedem Update aus der Icon-Schrift gerendert zu werden.
+  - **Gemessen** (`tools/bench_gui_load.py`, Simulationsmodus, offscreen, Schwankung von Lauf zu Lauf): Normalansicht 43 % -> 13-18 % eines
+    Kerns, Kompaktansicht 86 % -> 21-28 %; Neuberechnungen des Layouts im Dauerbetrieb von 190 je Sekunde auf rund 0 (nur noch beim
+    Start und bei echten Änderungen). **Mock-verifiziert** (`tools/check_dashboard_relayout.py`: keine Dauerschleife, breitere/höhere
+    Kachel und neue Reihenfolge rechnen weiterhin neu, Ansichtswechsel stellt die Normalansicht wieder her, keine Überlappung);
+    `check_control_tab`, `check_dashboard_detach`, `check_battsim`, `check_battsim_tile`, `check_can_delta` grün.
+    **Nicht an der laufenden App gemessen:** Die Last mit echten Geräten ist erst mit der gebauten 0.24.3 nachzumessen
+    (Task-Manager oder `py-spy record -p <PID>`).
+  - **Nicht angefasst:** Der Rest der Last liegt im Qt-Hauptteil (Zeichnen), im Abruf der Netzteile (`get_display`, ~2,5 %) und beim
+    Auflisten der COM-Ports (`comports`, ~1 %, alle 3 s mehrfach); jeweils klein, ohne Messung nicht lohnend.
+
 - **CAN-Kachel: Delta-Ansicht als Icon-Knopf statt Checkbox mit Text (0.24.1, Nutzerwunsch).** Der Umschalter ist jetzt ein
   einrastender Knopf mit Delta-Icon (Δ, `mdi.delta`) ohne Beschriftung, links neben „Anzeige leeren“; die Erklärung steht im
   Tooltip. Verhalten der Ansicht unverändert (siehe 0.24.0). Der Checkbox-Text entfällt aus den Sprachdateien, der Tooltip ist
@@ -51,6 +76,22 @@ Semantic Versioning (`lab_gui/version.py`).
   laufenden App angesehen.
 
 ### Behoben
+- **Batterie-Simulator-Kachel: Zellspannungs-Vorgabe sprang auf den alten Wert zurück (z. B. 4,2 V), die Eingabe kam nie am Gerät an (0.24.2).**
+  Ursache: Das Sollwertfeld einer Zelle wurde bei jedem Zustandsupdate (10 Hz) mit dem im Treiber gehaltenen Sollwert überschrieben,
+  sobald es den Fokus nicht hatte. Ein Klick auf den Haken (✓) nimmt dem Feld aber schon beim **Drücken** den Fokus, das Senden folgt
+  erst beim **Loslassen**. Ein Zustandsupdate dazwischen setzte das Feld auf den alten Treiberwert zurück, und gesendet wurde dieser
+  Wert statt der Eingabe. Der Treiber hielt hier für alle 14 Zellen noch 4,2 V aus einer früheren Vorgabe (an der laufenden App
+  0.24.0 über die Freigabe-API gelesen); daher immer 4,2 V. Dasselbe galt für das Grenzwert-Feld mit seinem Haken.
+  - **Fix:** Eine Eingabe im Feld bleibt stehen, bis der gemeldete Zustand sie bestätigt (gleicher Wert) oder 30 s nach dem letzten
+    Tippen vergangen sind (`BATTSIM_EDIT_HOLD_S`); danach zeigt das Feld wieder den Gerätezustand. Pfeil-Schritte am Feld zählen als
+    Eingabe. Felder ohne Eingabe folgen dem Zustand wie bisher, auch Änderungen von außen (MCP, Netzwerk) werden wieder übernommen.
+  - **Enter sendet wie der Haken (Nutzerwunsch):** In den Feldern „Zelle“, „Alle Zellen“ und „Grenzwert je Zelle“ löst Enter
+    (auch Ziffernblock-Enter) den Haken daneben aus; getippter Text wird vorher als Wert übernommen. Fokuswechsel ohne Enter sendet
+    weiterhin nichts. Die Eingabe bleibt nach Enter stehen, bis der Zustand sie bestätigt (wie nach dem Klick).
+  - **Mock-verifiziert** (`tools/check_battsim_tile.py`, 22 Prüfungen: Druck-/Loslass-Ablauf mit Zustandsupdate dazwischen, Bestätigung,
+    Änderung von außen, Pfeil-Schritte, Ablauf nach 30 s, Grenzwert-Feld, Enter in allen drei Feldern); der Fehler ließ sich vor dem Fix offscreen nachstellen
+    (gesendet wurde 4,2 statt 3,3). `check_battsim`, `check_control_tab` grün. **Nicht an der laufenden App/am Gerät geprüft.**
+    Am Gerät wurde dafür nichts gesendet (Fernsteuerung war aktiv).
 - **Alle Kacheln standen alle 3 s bis zu 2,3 s still, der CAN-Zähler „Empfangen“ hing hinterher (0.23.2, BUGS_OFFEN #38).**
   Ursache (am 30.10.2026 an der laufenden App 0.23.0 gemessen): Alle Geräte teilen sich einen Worker-Thread. Dessen
   Verbindungsversuch (`_try_reconnect`, alle 3 s) öffnete jeden in Windows gelisteten Netzteil-Port und wartete auf die

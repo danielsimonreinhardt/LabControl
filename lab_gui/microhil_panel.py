@@ -56,6 +56,8 @@ _relayout_panels, compact-Zweig).
 """
 from __future__ import annotations
 
+import functools
+
 import qtawesome as qta
 from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -80,9 +82,15 @@ CURRENT_ICON_SIZE = 14
 SECTION_TITLES = ["Digital IO", "Analog IO", "Relais", "12V-OUT"]
 
 
-def _dot_pixmap(on: bool, palette: Palette):
-    color = palette.check_pass if on else palette.text_muted
+@functools.lru_cache(maxsize=16)
+def _dot_pixmap_for_color(on: bool, color: str):
     return qta.icon(DOT_ON if on else DOT_OFF, color=color).pixmap(DOT_ICON_SIZE, DOT_ICON_SIZE)
+
+
+def _dot_pixmap(on: bool, palette: Palette):
+    # Gecacht je (Zustand, Farbe): set_states() laeuft mit jedem Zustandsupdate, und das Rendern
+    # eines Icons aus der Schrift kostete dort jedes Mal den Hauptteil der Zeit.
+    return _dot_pixmap_for_color(on, palette.check_pass if on else palette.text_muted)
 
 
 def _dot_cell(number: int, label: str | None = None) -> tuple[QWidget, QLabel, QLabel]:

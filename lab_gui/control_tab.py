@@ -10,9 +10,10 @@ keine eingestellten Werte verloren gehen.
 from __future__ import annotations
 
 import bisect
+import time
 
 import qtawesome as qta
-from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,7 +56,7 @@ from microhil.driver import (
     RELAY_COUNT,
     defects_for_device_id,
 )
-from microhil_panel import DOT_ICON_SIZE, DOT_OFF, DOT_ON
+from microhil_panel import _dot_pixmap
 from no_device_tile import NoDeviceTile
 from panel_color import PanelColorButton, apply_panel_tint
 from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
@@ -75,6 +76,11 @@ from tile_grid import (
 # CanControlGroup.append_frame) -- reine GUI-Anzeige, kein Log/Export, daher
 # reicht ein kleiner Ausschnitt der zuletzt empfangenen Frames.
 CAN_TRAFFIC_ROW_LIMIT = 50
+
+# So lange (s) nach der letzten Eingabe in einem Sollwert-/Grenzwertfeld des
+# Batterie-Simulators ueberschreibt der gemeldete Zustand das Feld nicht (siehe
+# BattSimControlGroup._keeps_user_edit). Danach zeigt es wieder den Geraetezustand.
+BATTSIM_EDIT_HOLD_S = 30.0
 CAN_STANDARD_ID_MAX = 0x7FF
 CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
 
@@ -214,6 +220,12 @@ def _style_toggle_buttons(
     Information (auf einen Blick erkennbar, ob Spannung/Strom anliegt) und
     muss deshalb in beiden Themes gruen bleiben -- check_pass ist genau dafuer
     vorgesehen (siehe dessen Docstring in theme.py)."""
+    # Zustandsupdates kommen mit 10 Hz je Geraet; setStyleSheet loest jedes Mal ein Neu-Polieren
+    # des Widgets aus, auch wenn sich nichts geaendert hat -- deshalb nur bei Aenderung setzen.
+    style_key = (state, pal.check_pass, pal.danger, pal.surface)
+    if getattr(on_button, "_toggle_style_key", None) == style_key:
+        return
+    on_button._toggle_style_key = style_key
     active_style = "background-color: {color}; color: {text}; font-weight: bold;"
     on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.surface) if state is True else "")
     off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
@@ -266,8 +278,12 @@ def _style_digital_out_toggle(button: _DigitalOutToggle, on: bool, pal: Palette)
     _dot_pixmap (check_pass statt success, siehe dessen Begruendung in
     theme.py: die EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und
     muss deshalb in beiden Themes gruen bleiben)."""
-    color = pal.check_pass if on else pal.text_muted
-    button.dot_label.setPixmap(qta.icon(DOT_ON if on else DOT_OFF, color=color).pixmap(DOT_ICON_SIZE, DOT_ICON_SIZE))
+    # Siehe _style_toggle_buttons: nur bei geaendertem Zustand/geaenderter Palette neu setzen.
+    style_key = (on, pal.check_pass, pal.text_muted, pal.text, pal.border, pal.surface_alt)
+    if getattr(button, "_toggle_style_key", None) == style_key:
+        return
+    button._toggle_style_key = style_key
+    button.dot_label.setPixmap(_dot_pixmap(on, pal))
     button.number_label.setStyleSheet(f"background: transparent; border: none; color: {pal.text};")
     button.setStyleSheet(
         f"QPushButton {{ border: 1px solid {pal.border}; border-radius: 6px; "
@@ -1131,6 +1147,28 @@ class FgControlGroup(QGroupBox):
                 self.set_output.emit(self._device_id, n, bool(saved["output_on"]))
 
 
+class _EnterTriggersButton(QObject):
+    """Enter/Return in einem Eingabefeld loest den Haken-Knopf daneben aus (wie ein Klick).
+
+    QAbstractSpinBox verarbeitet Enter selbst (nimmt den Text als Wert und meldet
+    editingFinished, das aber auch beim Verlassen des Felds kommt) -- deshalb ein Filter auf das
+    Feld und sein Textfeld statt eines Signals: gesendet wird nur auf Enter, nicht beim Wegklicken."""
+
+    def __init__(self, spin: QDoubleSpinBox, button: QPushButton) -> None:
+        super().__init__(spin)
+        self._spin = spin
+        self._button = button
+        spin.installEventFilter(self)
+        spin.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._spin.interpretText()   # getippten Text als Wert uebernehmen, bevor gesendet wird
+            self._button.click()
+            return True
+        return False
+
+
 class BattSimControlGroup(QGroupBox):
     """Steuersektion des Batterie-Simulators (battsim, CAN-Knoten, seit 0.22.0).
 
@@ -1159,6 +1197,11 @@ class BattSimControlGroup(QGroupBox):
         self._color_key: str | None = None
         self._remote_on: bool | None = None
         self._output_on: bool | None = None
+        # Felder, in die der Nutzer getippt hat (Feld -> Zeitpunkt der letzten
+        # Eingabe), und ob gerade der Zustand ins Feld geschrieben wird (dann ist
+        # valueChanged keine Nutzereingabe). Siehe _keeps_user_edit.
+        self._edited_at: dict[QWidget, float] = {}
+        self._applying_state = False
         self.setTitle(label)
 
         outer = QVBoxLayout(self)
@@ -1197,6 +1240,7 @@ class BattSimControlGroup(QGroupBox):
         self._all_spin.setValue(3.7)
         self._all_button = IconButton("mdi.check", "")
         self._all_button.clicked.connect(lambda: self.set_all_voltages.emit(self._device_id, self._all_spin.value()))
+        _EnterTriggersButton(self._all_spin, self._all_button)
         self._all_on_button = QPushButton()
         self._all_off_button = QPushButton()
         self._all_on_button.clicked.connect(lambda: self.set_all_enabled.emit(self._device_id, True))
@@ -1206,8 +1250,10 @@ class BattSimControlGroup(QGroupBox):
         self._limit_spin.setDecimals(2)
         self._limit_spin.setRange(0.1, 5.0)
         self._limit_spin.setSuffix(" V")
+        self._limit_spin.valueChanged.connect(lambda _v, s=self._limit_spin: self._mark_edited(s))
         self._limit_button = IconButton("mdi.check", "")
         self._limit_button.clicked.connect(self._on_limit_clicked)
+        _EnterTriggersButton(self._limit_spin, self._limit_button)
         self._limit_row = _row(self._limit_spin, self._limit_button)
         for row in (self._remote_row, self._output_row, self._all_row, self._limit_row):
             self._form.addRow(" ", row)
@@ -1234,8 +1280,10 @@ class BattSimControlGroup(QGroupBox):
             spin.setDecimals(4)
             spin.setSuffix(" V")
             spin.setMaximumWidth(130)
+            spin.valueChanged.connect(lambda _v, s=spin: self._mark_edited(s))
             button = IconButton("mdi.check", "")
             button.clicked.connect(lambda _=False, n=n, s=spin: self.set_cell_voltage.emit(self._device_id, n, s.value()))
+            _EnterTriggersButton(spin, button)
             check = QCheckBox()
             check.clicked.connect(lambda on, n=n: self.set_cell_enabled.emit(self._device_id, n, bool(on)))
             actual = QLabel("--")
@@ -1285,10 +1333,37 @@ class BattSimControlGroup(QGroupBox):
         self.set_voltage_limit(self._limit_spin.value())
         self.voltage_limit_changed.emit(self._device_id, self._limit_spin.value())
 
+    def _mark_edited(self, spin: QWidget) -> None:
+        if not self._applying_state:
+            self._edited_at[spin] = time.monotonic()
+
+    def _keeps_user_edit(self, spin: QDoubleSpinBox, target: float) -> bool:
+        """True, solange der gemeldete Zustand (`target`) das Feld NICHT ueberschreiben darf.
+
+        Ein Klick auf den Haken neben dem Feld nimmt dem Feld schon beim Druecken den Fokus,
+        das Senden (clicked) folgt erst beim Loslassen. Dazwischen kommt ein Zustandsupdate
+        (10 Hz) und setzte das Feld auf den alten Treiberwert zurueck -- gesendet wurde dann
+        der alte Wert statt der Eingabe. Deshalb gilt eine Eingabe bis BATTSIM_EDIT_HOLD_S
+        nach dem letzten Tippen oder bis der Zustand sie bestaetigt (gleicher Wert)."""
+        if spin.hasFocus():
+            return True
+        edited = self._edited_at.get(spin)
+        if edited is None:
+            return False
+        if abs(spin.value() - target) < 1e-6 or time.monotonic() - edited >= BATTSIM_EDIT_HOLD_S:
+            del self._edited_at[spin]
+            return False
+        return True
+
     def set_voltage_limit(self, volts: float) -> None:
-        self._limit_spin.setValue(volts)
-        for spin in [self._all_spin, *self._cell_spins]:
-            spin.setRange(0.0, volts)
+        was_applying = self._applying_state
+        self._applying_state = True
+        try:
+            self._limit_spin.setValue(volts)
+            for spin in [self._all_spin, *self._cell_spins]:
+                spin.setRange(0.0, volts)
+        finally:
+            self._applying_state = was_applying
 
     def set_state(self, state: dict) -> None:
         self._remote_on = bool(state.get("remote"))
@@ -1300,11 +1375,11 @@ class BattSimControlGroup(QGroupBox):
             button.setEnabled(self._remote_on)
         self._reset_button.setVisible(bool(state.get("failed")))
         if abs(self._limit_spin.value() - float(state.get("voltage_limit", 0.0))) > 1e-6 \
-                and not self._limit_spin.hasFocus():
+                and not self._keeps_user_edit(self._limit_spin, float(state.get("voltage_limit", 0.0))):
             self.set_voltage_limit(float(state["voltage_limit"]))
         for cell, spin, check, actual in zip(state.get("cells", []), self._cell_spins,
                                              self._cell_checks, self._cell_actuals):
-            if not spin.hasFocus():
+            if not self._keeps_user_edit(spin, float(cell["setpoint"])):
                 spin.blockSignals(True)
                 spin.setValue(float(cell["setpoint"]))
                 spin.blockSignals(False)
