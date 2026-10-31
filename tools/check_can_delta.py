@@ -43,11 +43,11 @@ def decoded(**values: float):
 group = ct.CanControlGroup("can:test", "CAN-Bus 1")
 group.resize(520, 420)
 
-print("Umschalter")
+print("Umschalter (Icon-Button)")
 check("Verlauf ist Standard", group._table_stack.currentWidget() is group._traffic_table)
-group._delta_check.setChecked(True)
+group._delta_button.setChecked(True)
 check("Haken zeigt die Delta-Tabelle", group._table_stack.currentWidget() is group._delta_table)
-group._delta_check.setChecked(False)
+group._delta_button.setChecked(False)
 check("Haken weg zeigt wieder den Verlauf", group._table_stack.currentWidget() is group._traffic_table)
 
 print("Eine Zeile je ID, Delta und aktueller Payload")
@@ -108,7 +108,7 @@ if "--shot" in sys.argv:
     for i, (cid, data) in enumerate([(0x120, "02 00 00 00"), (0x121, "05 01 FF 00"), (0x130, "01"), (0x300, "DE AD BE EF")]):
         for k in range(3):
             group.append_frame(cid, data, False, 100.0 + i * 0.002 + k * (0.01 * (i + 1)))
-    group._delta_check.setChecked(True)
+    group._delta_button.setChecked(True)
     group.show()
     app.processEvents()
     group.grab().save(sys.argv[sys.argv.index("--shot") + 1])

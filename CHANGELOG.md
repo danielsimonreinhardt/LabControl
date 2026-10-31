@@ -43,6 +43,13 @@ Semantic Versioning (`lab_gui/version.py`).
     Nicht hardware-verifiziert bleibt nur die Pegelboden-Messung mit dem Prüfling (BCU-Board).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
+### Geändert
+- **CAN-Kachel: Delta-Ansicht als Icon-Knopf statt Checkbox mit Text (0.24.1, Nutzerwunsch).** Der Umschalter ist jetzt ein
+  einrastender Knopf mit Delta-Icon (Δ, `mdi.delta`) ohne Beschriftung, links neben „Anzeige leeren“; die Erklärung steht im
+  Tooltip. Verhalten der Ansicht unverändert (siehe 0.24.0). Der Checkbox-Text entfällt aus den Sprachdateien, der Tooltip ist
+  neu (de/en). **Mock-verifiziert** (`tools/check_can_delta.py` mit dem Knopf, Screenshot offscreen angesehen); nicht an der
+  laufenden App angesehen.
+
 ### Behoben
 - **Alle Kacheln standen alle 3 s bis zu 2,3 s still, der CAN-Zähler „Empfangen“ hing hinterher (0.23.2, BUGS_OFFEN #38).**
   Ursache (am 30.10.2026 an der laufenden App 0.23.0 gemessen): Alle Geräte teilen sich einen Worker-Thread. Dessen

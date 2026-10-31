@@ -447,8 +447,7 @@
   "Zelle {n}": "Zelle {n}",
   "Zellspannung": "Zellspannung",
   "Stapelspannung": "Stapelspannung",
-  "Delta-Ansicht (eine Zeile je ID)": "Delta-Ansicht (eine Zeile je ID)",
-  "Zeigt je ID nur den letzten Frame mit dem Zeitabstand zum vorigen Frame derselben ID.": "Zeigt je ID nur den letzten Frame mit dem Zeitabstand zum vorigen Frame derselben ID.",
+  "Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.": "Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.",
   "Anzeige leeren": "Anzeige leeren",
   "Δt": "Δt"
 }

@@ -1483,13 +1483,15 @@ class CanControlGroup(QGroupBox):
         self._table_stack.addWidget(self._traffic_table)
         self._table_stack.addWidget(self._delta_table)
 
-        self._delta_check = QCheckBox()
-        self._delta_check.toggled.connect(self._on_delta_toggled)
+        self._delta_button = IconButton("mdi.delta", "")
+        self._delta_button.setCheckable(True)
+        self._delta_button.toggled.connect(self._on_delta_toggled)
         self._clear_button = IconButton("mdi.delete-sweep-outline", "")
         self._clear_button.clicked.connect(self.clear_traffic)
         view_row = QHBoxLayout()
-        view_row.addWidget(self._delta_check, 1)
+        view_row.addWidget(self._delta_button)
         view_row.addWidget(self._clear_button)
+        view_row.addStretch(1)
         outer.addLayout(view_row)
         outer.addWidget(self._table_stack, 1)
 
@@ -1510,9 +1512,8 @@ class CanControlGroup(QGroupBox):
         self._delta_table.setHorizontalHeaderLabels(
             [tr("ID"), tr("Δt"), tr("Daten"), tr("Signale (DBC)")]
         )
-        self._delta_check.setText(tr("Delta-Ansicht (eine Zeile je ID)"))
-        self._delta_check.setToolTip(
-            tr("Zeigt je ID nur den letzten Frame mit dem Zeitabstand zum vorigen Frame derselben ID.")
+        self._delta_button.setToolTip(
+            tr("Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.")
         )
         self._clear_button.setToolTip(tr("Anzeige leeren"))
 
