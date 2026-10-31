@@ -7,6 +7,20 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **CAN-Kachel (Control-Reiter): Delta-Ansicht, eine Zeile je ID (0.24.0, Nutzerwunsch).**
+  Über der Tabelle der CAN-Kachel schaltet der Haken „Delta-Ansicht (eine Zeile je ID)“ vom Verlauf (neueste Frames oben, wie
+  bisher, Standard) auf eine Tabelle mit **einer Zeile je ID**: **ID**, **Δt** (Zeit seit dem vorigen Frame derselben ID, unter
+  1 s in ms, sonst in s; beim ersten Frame „–“), **Daten** (aktueller Payload) und **Signale (DBC)** (bei hinterlegter DBC-Datei
+  die Decodierung des aktuellen Frames). Die Zeilen sind nach ID sortiert und springen nicht; Standard- und Extended-ID mit
+  gleichem Zahlenwert sind getrennte Zeilen. Δt kommt aus den Zeitstempeln der Frames (Bus bzw. Treiber), nicht aus der
+  Ankunftszeit in der App; springt der Zeitstempel zurück, steht „–“ statt eines negativen Werts. Beide Ansichten werden
+  laufend gefüllt, das Umschalten zeigt also sofort den aktuellen Stand.
+  - Zusätzlich ein Knopf „Anzeige leeren“ neben dem Haken (leert Verlauf und Delta-Ansicht), damit nicht mehr gesendete IDs
+    nicht bis zum App-Neustart stehen bleiben.
+  - Nur die Anzeige im Control-Reiter; Netzwerk-Freigabe, MCP und Dashboard unverändert. Englische Texte ergänzt.
+  - **Mock-verifiziert** (`tools/check_can_delta.py`, 24 Prüfungen: Umschalter, Sortierung, Δt, Payload, Standard/Extended,
+    Zeitstempelsprung, DBC-Signale, Leeren, 5000 Frames auf 20 IDs; Screenshot offscreen angesehen). **Nicht am Gerät
+    angesehen:** Die Darstellung mit echtem Busverkehr (Vector, BattSimFW) steht aus.
 - **Batterie-Simulator: Treiber und Anzeige für die neue Firmware BattSimFW (0.23.0, Board `labcontrol-battsim-v2` a, 30.10.2026).**
   Der Treiber liest jetzt `BattSimV2.dbc` (Kopie aus BattSimFW, `projects/battsim_master/BattSimV2.dbc`; `BattSimV1.dbc` entfällt,
   V2 enthält den Inhalt von V1 unverändert) und wertet die Statusbotschaft **0x121** aus, die nur die neue Firmware sendet.
@@ -52,12 +66,13 @@ Semantic Versioning (`lab_gui/version.py`).
     getrennt und werden im nächsten Tick erneut versucht, Generator mit abgelehntem Handshake bekommt die Sperrfrist, ein Zyklus holt
     1000 Frames ab statt 32, Warnung bei langsamem Poll); `check_battsim`, `check_hcs34xx_verify`, `check_device_reset`,
     `check_control_tab` grün.
-  - **Nicht hardware-verifiziert:** Die Messung zeigte den Fehler nur bei ausgeschalteten Netzteilen. Das ursprüngliche
-    Beobachtungsbild (alle Kacheln ~1,3 s alt **bei eingeschalteten** Netzteilen) ist nicht erklärt: Entweder ist es dieselbe
-    Ursache (das zweite, ausgeschaltete Netzteil blockierte schon damals) oder `get_display` ist am Gerät selbst langsam. Nach dem
-    Einbau 0.23.2 bei laufenden Netzteilen `rx_count` über die API wiederholen und das Log auf „Poll-Zyklus langsam“ prüfen;
-    erst danach BUGS_OFFEN #38 schließen. Der microHIL-Verbindungsversuch (`_reconnect_hils`) läuft weiter im Worker-Thread,
-    ist aber nicht als Verursacher belegt.
+  - **Hardware-verifiziert (31.10.2026, App 0.23.3 mit dem Fix, `can:vector:59177:1`, 30 s über die Freigabe-API):**
+    längste Pause im `rx_count` 0,25 s (vorher 2,1–2,4 s alle 3 s), mittlere Pause 0,11 s, Schrittgröße 8–16 (vorher
+    immer 32), `age_s` im Mittel 0,06 s (max. 0,23 s); im Log seit dem Start keine Warnung „Poll-Zyklus langsam“.
+    **Einschränkung:** Beide Netzteile waren bei der Messung ausgeschaltet. Das ursprüngliche Bild (alle Kacheln ~1,3 s alt
+    bei eingeschalteten Netzteilen) wurde nicht nachgestellt; die belegte Ursache (blockierende Verbindungsversuche) ist
+    damit beseitigt. Sollte es bei laufenden Netzteilen wieder auftreten, nennt das Log jetzt das langsame Gerät. Der
+    microHIL-Verbindungsversuch (`_reconnect_hils`) läuft weiter im Worker-Thread, ist aber nicht als Verursacher belegt.
 - **Netzteil: „Ausgang AUS“ meldete „ok“, der Ausgang blieb an (0.21.1, BUGS_OFFEN #37, sicherheitsrelevant).**
   Das HCS-34xx quittiert Schreibbefehle mit „OK“, verwirft aber gelegentlich den ersten (am Board
   reproduziert). Der Treiber liest jetzt nach `set_current`/`set_voltage` den Sollwert per `GETS`

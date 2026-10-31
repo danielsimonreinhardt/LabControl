@@ -9,6 +9,8 @@ keine eingestellten Werte verloren gehen.
 """
 from __future__ import annotations
 
+import bisect
+
 import qtawesome as qta
 from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -74,6 +77,20 @@ from tile_grid import (
 CAN_TRAFFIC_ROW_LIMIT = 50
 CAN_STANDARD_ID_MAX = 0x7FF
 CAN_EXTENDED_ID_MAX = 0x1FFFFFFF
+
+
+def _format_can_id(arbitration_id: int, extended: bool) -> str:
+    return f"0x{arbitration_id:X}" if extended else f"0x{arbitration_id:03X}"
+
+
+def _format_can_delta(seconds: float | None) -> str:
+    """Anzeige-Text des Zeitabstands zweier Frames mit gleicher ID (Delta-Ansicht
+    der CAN-Kachel): unter 1 s in ms, darueber in s. None = noch kein Vorgaenger."""
+    if seconds is None:
+        return "–"
+    if seconds < 1.0:
+        return f"{seconds * 1000:.1f} ms"
+    return f"{seconds:.3f} s"
 
 
 def _format_decoded_value(value: object) -> str:
@@ -1390,6 +1407,11 @@ class CanControlGroup(QGroupBox):
         # eintreffende Decodierung wirklich noch zur zuletzt eingefuegten
         # Zeile gehoert (siehe dort).
         self._last_frame_id: int | None = None
+        self._last_frame_extended = False
+        # Delta-Ansicht (eine Zeile je ID): sortierte Schluessel (id, extended),
+        # je Schluessel der Zeitstempel des letzten Frames (fuer das Delta).
+        self._delta_keys: list[tuple[int, bool]] = []
+        self._delta_last_ts: dict[tuple[int, bool], float] = {}
         self.setTitle(label)
 
         outer = QVBoxLayout(self)
@@ -1442,7 +1464,34 @@ class CanControlGroup(QGroupBox):
         self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._traffic_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._traffic_table.setMinimumHeight(160)
-        outer.addWidget(self._traffic_table, 1)
+
+        # Delta-Ansicht: je ID (und Standard/Extended getrennt) EINE Zeile mit dem
+        # Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.
+        # Zeilen nach ID sortiert, damit sie nicht springen.
+        self._delta_table = QTableWidget(0, 4)
+        for column in range(4):
+            self._delta_table.setHorizontalHeaderItem(column, QTableWidgetItem())
+        self._delta_table.verticalHeader().setVisible(False)
+        self._delta_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._delta_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._delta_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._delta_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._delta_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self._delta_table.setMinimumHeight(160)
+
+        self._table_stack = QStackedWidget()
+        self._table_stack.addWidget(self._traffic_table)
+        self._table_stack.addWidget(self._delta_table)
+
+        self._delta_check = QCheckBox()
+        self._delta_check.toggled.connect(self._on_delta_toggled)
+        self._clear_button = IconButton("mdi.delete-sweep-outline", "")
+        self._clear_button.clicked.connect(self.clear_traffic)
+        view_row = QHBoxLayout()
+        view_row.addWidget(self._delta_check, 1)
+        view_row.addWidget(self._clear_button)
+        outer.addLayout(view_row)
+        outer.addWidget(self._table_stack, 1)
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -1458,6 +1507,14 @@ class CanControlGroup(QGroupBox):
         self._traffic_table.setHorizontalHeaderLabels(
             [tr("Zeit (s)"), tr("ID"), tr("Daten"), tr("Signale (DBC)")]
         )
+        self._delta_table.setHorizontalHeaderLabels(
+            [tr("ID"), tr("Δt"), tr("Daten"), tr("Signale (DBC)")]
+        )
+        self._delta_check.setText(tr("Delta-Ansicht (eine Zeile je ID)"))
+        self._delta_check.setToolTip(
+            tr("Zeigt je ID nur den letzten Frame mit dem Zeitabstand zum vorigen Frame derselben ID.")
+        )
+        self._clear_button.setToolTip(tr("Anzeige leeren"))
 
     def _on_extended_toggled(self, extended: bool) -> None:
         self._id_spin.setRange(0, CAN_EXTENDED_ID_MAX if extended else CAN_STANDARD_ID_MAX)
@@ -1468,8 +1525,49 @@ class CanControlGroup(QGroupBox):
             self._extended_check.isChecked(),
         )
 
+    def _on_delta_toggled(self, delta: bool) -> None:
+        self._table_stack.setCurrentWidget(self._delta_table if delta else self._traffic_table)
+
+    def clear_traffic(self) -> None:
+        """Leert Verlauf und Delta-Ansicht (z.B. wenn sich die Bus-Teilnehmer geaendert haben)."""
+        self._traffic_table.setRowCount(0)
+        self._delta_table.setRowCount(0)
+        self._delta_keys.clear()
+        self._delta_last_ts.clear()
+        self._last_frame_id = None
+
+    def _delta_row(self, arbitration_id: int, extended: bool) -> int:
+        """Zeile der ID in der Delta-Tabelle, legt sie sortiert an, falls neu."""
+        key = (arbitration_id, extended)
+        position = bisect.bisect_left(self._delta_keys, key)
+        if position < len(self._delta_keys) and self._delta_keys[position] == key:
+            return position
+        self._delta_keys.insert(position, key)
+        self._delta_table.insertRow(position)
+        id_item = QTableWidgetItem(_format_can_id(arbitration_id, extended))
+        delta_item = QTableWidgetItem("–")
+        delta_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._delta_table.setItem(position, 0, id_item)
+        self._delta_table.setItem(position, 1, delta_item)
+        self._delta_table.setItem(position, 2, QTableWidgetItem(""))
+        self._delta_table.setItem(position, 3, QTableWidgetItem(""))
+        return position
+
+    def _update_delta(self, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
+        key = (arbitration_id, extended)
+        row = self._delta_row(arbitration_id, extended)
+        previous = self._delta_last_ts.get(key)
+        delta = timestamp - previous if previous is not None and timestamp >= previous else None
+        self._delta_last_ts[key] = timestamp
+        self._delta_table.item(row, 1).setText(_format_can_delta(delta))
+        self._delta_table.item(row, 2).setText(data_hex)
+        # Eine zur vorigen Botschaft gehoerende Decodierung nicht stehen lassen --
+        # append_decoded_signals traegt die neue unmittelbar danach nach.
+        self._delta_table.item(row, 3).setText("")
+
     def append_frame(self, arbitration_id: int, data_hex: str, extended: bool, timestamp: float) -> None:
-        id_text = f"0x{arbitration_id:X}" if extended else f"0x{arbitration_id:03X}"
+        id_text = _format_can_id(arbitration_id, extended)
+        self._update_delta(arbitration_id, data_hex, extended, timestamp)
         self._traffic_table.insertRow(0)
         self._traffic_table.setItem(0, 0, QTableWidgetItem(f"{timestamp:.3f}"))
         self._traffic_table.setItem(0, 1, QTableWidgetItem(id_text))
@@ -1479,6 +1577,7 @@ class CanControlGroup(QGroupBox):
         # per append_decoded_signals ein, siehe dort.
         self._traffic_table.setItem(0, 3, QTableWidgetItem(""))
         self._last_frame_id = arbitration_id
+        self._last_frame_extended = extended
         while self._traffic_table.rowCount() > CAN_TRAFFIC_ROW_LIMIT:
             self._traffic_table.removeRow(self._traffic_table.rowCount() - 1)
 
@@ -1505,6 +1604,9 @@ class CanControlGroup(QGroupBox):
             for signal in decoded.signals
         )
         self._traffic_table.setItem(0, 3, QTableWidgetItem(text))
+        key = (arbitration_id, self._last_frame_extended)
+        if key in self._delta_last_ts:
+            self._delta_table.item(self._delta_row(*key), 3).setText(text)
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")

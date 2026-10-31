@@ -449,5 +449,9 @@
   "Stapelspannung lesen": "Read stack voltage",
   "Zelle {n}": "Cell {n}",
   "Zellspannung": "Cell voltage",
-  "Stapelspannung": "Stack voltage"
+  "Stapelspannung": "Stack voltage",
+  "Delta-Ansicht (eine Zeile je ID)": "Delta view (one row per ID)",
+  "Zeigt je ID nur den letzten Frame mit dem Zeitabstand zum vorigen Frame derselben ID.": "Shows only the latest frame per ID with the time since the previous frame of the same ID.",
+  "Anzeige leeren": "Clear display",
+  "Δt": "Δt"
 }
