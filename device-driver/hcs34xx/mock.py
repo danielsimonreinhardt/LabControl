@@ -22,6 +22,8 @@ class MockHCS34xx:
         self._ovp = max_voltage
         self._ocp = max_current
         self._memory: list[tuple[float, float]] = [(0.0, 0.0)] * 3
+        # Wie das echte Geraet nach dem Einschalten der App: Ausgang aus, bis er geschaltet wird.
+        self._output = False
 
     def close(self) -> None:
         pass
@@ -36,6 +38,14 @@ class MockHCS34xx:
 
     def get_max(self) -> tuple[float, float]:
         return self._max_voltage, self._max_current
+
+    # -- output ---------------------------------------------------------------
+
+    def get_output(self) -> bool:
+        return self._output
+
+    def set_output(self, on: bool) -> None:
+        self._output = bool(on)
 
     # -- setpoints -----------------------------------------------------------
 
@@ -55,6 +65,8 @@ class MockHCS34xx:
     # -- live display -----------------------------------------------------
 
     def get_display(self) -> Display:
+        if not self._output:
+            return Display(voltage=0.0, current=0.0, constant_current=False)
         return Display(voltage=self._voltage_set, current=self._current_set, constant_current=False)
 
     # -- protection thresholds --------------------------------------------

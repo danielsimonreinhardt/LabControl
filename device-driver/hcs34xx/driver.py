@@ -16,10 +16,15 @@ fach skalierte Felder (zwei Nachkommastellen) plus eine Statusziffer.
 Alle Werte wurden gegen die reale Hardware (HCS-3404, Max 60.5V/9.0A)
 verifiziert.
 
-Wichtig: Der dokumentierte Befehlssatz enthaelt KEIN Kommando zum
-Ein-/Ausschalten des Ausgangs. Das ist laut Anleitung nur ueber den
-analogen Fernsteueranschluss (8-pol. Rundstecker, Pin 5 gegen Masse)
-oder manuell am Geraet moeglich.
+Ausgang und Reglersperre (in der Anleitung Kap. 12.2 NICHT dokumentiert, laut
+sigrok-Wiki fuer die HCS-3xxx-Reihe und am 04.11.2026 am HCS-3404 (60 V, USB-
+Seriennummer 0001) bestaetigt):
+    SOUT0 / SOUT1   Ausgang EIN / AUS (Antwort OK)
+    GOUT            Ausgangszustand: "0" = EIN, "1" = AUS (Antwort sofort nach SOUT)
+    ENDS            Tastatur freigeben
+Jeder Befehl sperrt die Regler (Spannung/Strom) am Geraet fuer rund 5 s (LED "Rear control");
+bei Dauerabfrage waere es also nie bedienbar. ENDS direkt nach dem Befehl hebt
+die Sperre sofort auf, siehe _release_keyboard.
 """
 from __future__ import annotations
 
@@ -43,6 +48,10 @@ MIN_VOLTAGE = 1.0
 # Schreibversuche je Sollwert, bevor ein Fehler gemeldet wird (siehe _set_verified).
 SET_ATTEMPTS = 3
 
+# Ausgangszustand laut GOUT.
+OUTPUT_ON_REPLY = "0"
+OUTPUT_OFF_REPLY = "1"
+
 
 class PowerSupplyError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Labornetzteil."""
@@ -64,6 +73,10 @@ class Display:
 
 
 class HCS34xx:
+    # Nach jedem Befehl ENDS senden, damit die Regler am Geraet bedienbar bleiben (siehe
+    # _release_keyboard). Faellt auf False, wenn ein Geraet ENDS nicht quittiert.
+    _release_keys = True
+
     def __init__(self, port: str, baudrate: int = DEFAULT_BAUDRATE, timeout: float = 1.0):
         self._ser = serial.Serial(
             port=port, baudrate=baudrate, bytesize=8, parity="N",
@@ -137,7 +150,30 @@ class HCS34xx:
                 f"Keine/unklare Antwort auf {cmd!r} (Timeout): {raw!r}"
             )
         value = raw[: -len(b"OK\r")].strip(b"\r")
+        self._release_keyboard()
         return value.decode("ascii", errors="replace")
+
+    def _release_keyboard(self) -> None:
+        """Gibt die Regler am Geraet wieder frei (ENDS).
+
+        Jeder Befehl schaltet das Geraet fuer rund 5 s in "Rear control" und sperrt die Regler;
+        mit der Dauerabfrage der App war es dadurch nie von Hand bedienbar. ENDS direkt nach dem
+        Befehl hebt die Sperre sofort auf (am Geraet geprueft: auch bei 10 Hz bleibt die LED aus
+        und die Regler reagieren; ein Zyklus Befehl + ENDS dauert ~32 ms).
+
+        Ein Fehler hier ist kein Verbindungsfehler: der naechste Befehl meldet ihn selbst. Quittiert
+        ein Geraet ENDS gar nicht, wird es fuer diese Verbindung abgeschaltet, statt jeden Befehl
+        in den Timeout laufen zu lassen."""
+        if not self._release_keys:
+            return
+        try:
+            self._ser.reset_input_buffer()
+            self._ser.write(b"ENDS\r")
+            raw = self._ser.read_until(b"OK\r")
+        except (serial.SerialException, OSError):
+            return
+        if not raw.endswith(b"OK\r"):
+            self._release_keys = False
 
     @staticmethod
     def _decode_fields(text: str, field_width: int, scale: float) -> list[float]:
@@ -167,7 +203,7 @@ class HCS34xx:
         Das Geraet quittiert mit "OK", uebernimmt den Wert aber gelegentlich
         nicht (an der Hardware reproduziert: erster Schreibbefehl nach einer
         Pause geht verloren, erst der zweite wirkt). "OK" allein beweist
-        deshalb nichts -- sicherheitsrelevant bei Ausgang AUS (Strom 0 A).
+        deshalb nichts.
         Bis zu SET_ATTEMPTS Versuche; stimmt der Sollwert danach nicht,
         PowerSupplyValueError (Verbindung ist ok, der Wert wirkt aber nicht).
         """
@@ -181,6 +217,37 @@ class HCS34xx:
         raise PowerSupplyValueError(
             f"{cmd} {value}A/V nicht uebernommen: Sollwert nach {SET_ATTEMPTS} "
             f"Versuchen {got} (Geraet quittierte trotzdem mit OK)."
+        )
+
+    # -- output ---------------------------------------------------------------
+
+    def get_output(self) -> bool:
+        """True, wenn der Ausgang eingeschaltet ist (GOUT: "0" = EIN, "1" = AUS)."""
+        reply = self._query("GOUT").strip()
+        if reply == OUTPUT_ON_REPLY:
+            return True
+        if reply == OUTPUT_OFF_REPLY:
+            return False
+        raise PowerSupplyValueError(f"Unerwartete Antwort auf GOUT: {reply!r}")
+
+    def set_output(self, on: bool) -> None:
+        """Schaltet den Ausgang ein/aus (SOUT0/SOUT1) und liest den Zustand mit GOUT zurueck.
+
+        Echtes Ausgang-AUS: Sollwerte (Spannung, Strom) bleiben unveraendert. Die Spannung am
+        Ausgang sinkt ohne Last langsam (Entladen, am Geraet ~10 s bis unter 0,6 V), der Schalter
+        selbst wirkt sofort. Wie bei den Sollwerten (siehe _set_verified) beweist "OK" allein
+        nichts -- stimmt der Zustand nach SET_ATTEMPTS Versuchen nicht, gibt es einen Fehler
+        (PowerSupplyValueError: die Verbindung ist ok, der Schalter wirkt aber nicht)."""
+        reply = OUTPUT_ON_REPLY if on else OUTPUT_OFF_REPLY
+        got = None
+        for _ in range(SET_ATTEMPTS):
+            self._query("SOUT" + reply)
+            got = self._query("GOUT").strip()
+            if got == reply:
+                return
+        raise PowerSupplyValueError(
+            f"Ausgang {'EIN' if on else 'AUS'} nicht uebernommen: GOUT meldet nach {SET_ATTEMPTS} "
+            f"Versuchen {got!r} (Geraet quittierte trotzdem mit OK)."
         )
 
     def set_voltage(self, volts: float) -> None:

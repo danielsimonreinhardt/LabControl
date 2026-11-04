@@ -44,6 +44,44 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Netzteil HCS-34xx: echtes „Ausgang AUS“ per `SOUT`, Regler am Gerät bleiben bedienbar (0.25.0, Nutzerwunsch, 04.11.2026).**
+  Bisher stand in Treiber, Doku und App, das Gerät kenne kein Ausgang-Ein/Aus; „AUS“ war ein Strom von 0 A (Workaround, Ursache von
+  BUGS_OFFEN #37 und des Sperrens der Sollwert-Knöpfe bei „Aus“). Das Gerät hat die Befehle aber, nur nicht in der Anleitung
+  ([sigrok-Wiki](https://sigrok.org/wiki/Manson_HCS-3xxx_series)): `SOUT0`/`SOUT1` und `GOUT`.
+  - **Am Gerät geprüft (HCS-3404, 60 V, USB-Seriennummer 0001, COM4, LabControl dabei geschlossen):** `SOUT1` -> `GOUT` = 1, die
+    Spannung sinkt ohne Last in etwa 10 s unter 0,6 V; `SOUT0` -> `GOUT` = 0, 2,5 V nach unter 2 s; Sollwerte (2,5 V / 0,2 A) bleiben
+    unverändert; `GOUT` antwortet sofort nach `SOUT`. Danach mit der neuen Treiberklasse wiederholt (`set_output(False/True)` mit
+    Rückleseprüfung), Gerät wieder im vorgefundenen Zustand (Ausgang an).
+  - **Treiber** (`hcs34xx/driver.py`): `get_output()`, `set_output(on)` (Rückleseprüfung per `GOUT`, bis zu 3 Versuche, sonst
+    `PowerSupplyValueError`). `set_current()` setzt nur noch die Strombegrenzung.
+  - **Worker/Kachel:** Verbinden, „Alle aus“, `PSU_OUT_ON`/`PSU_OUT_OFF` (Fernsteuerung, MCP, Testablauf) und die EIN/AUS-Knöpfe schalten
+    wirklich; die Sollwerte bleiben dabei stehen. „EIN“ setzt erst Spannung und Strom, dann den Ausgang (nie ein alter Sollwert aus einer
+    früheren Sitzung). **„Spannung setzen“/„Strom setzen“ sind bei „Aus“ nicht mehr gesperrt** (die Sperre gab es nur wegen der Emulation).
+    `PSU_CURR` schaltet weder ein noch aus; die Ableitung „Strom > 0 A = ein“ im Worker entfällt. Beim Verbinden wird der Ausgang
+    weiterhin ausgeschaltet (jetzt mit `SOUT1`).
+  - **Ausgang von außen geschaltet** (Fernsteueranschluss auf der Rückseite, anderes Programm; an der Front gibt es keine
+    Ausgangstaste): Alle 5 Abfragen (~1 s) wird `GOUT` gelesen, der Schalter in der Kachel folgt. Am Gerät gemessen (Worker-Kette gegen
+    COM4, Ausgang am Worker vorbei per Treiber umgeschaltet): Meldung nach 0,98 s (AUS) und 0,11 s (EIN).
+  - **Regler am Gerät („Rear control“):** Ursache für „sofort im Fernsteuer-Modus“: Jeder Befehl sperrt die Regler für Spannung und
+    Strom (mehr Bedienelemente hat das Gerät nicht) für ~5 s, die Dauerabfrage hielt die Sperre dauerhaft. Am Gerät gemessen: eine Abfrage -> LED ~5 s an; `GETD` + sofort `ENDS` -> LED bleibt aus und
+    das Gerät ist bedienbar, auch bei 10 Hz; `GETD` alle 5 s ohne `ENDS` -> LED dauerhaft an (langsamer abfragen hilft also nicht).
+    Der Treiber sendet deshalb nach **jedem** Befehl `ENDS` (`_release_keyboard`). Ein Gerät, das `ENDS` nicht quittiert, wird für die
+    Verbindung abgeschaltet statt jeden Befehl in den Timeout laufen zu lassen.
+  - **Netzteil wird mit 5 Hz statt 10 Hz abgefragt** (`PSU_POLL_INTERVAL_S` = 0,2 s): Befehl + `ENDS` kosten am Gerät ~33 ms, zwei
+    Netzteile hätten sonst den größten Teil des 100-ms-Takts im gemeinsamen Worker-Thread belegt.
+  - **Fernsteuerung/MCP/Handbuch:** Beschreibungen der Aktionen (`PSU_CURR`, `PSU_OUT_ON`, `PSU_OUT_OFF`) und Hinweise in
+    `labcontrol_mcp` und `manual_de/en.md` angepasst. Der Mock zeigt wie das Gerät 0 V, solange der Ausgang aus ist.
+  - **Mock-verifiziert:** neu `tools/check_psu_output.py` (Worker: Schalten, Alle aus, Fernsteuer-Aktionen, von außen geschalteter
+    Ausgang wird erkannt, Fehlschlag meldet den wirklichen Zustand, Abfragerate 5 Hz; Kachel: Reihenfolge Spannung/Strom/Ausgang, Knöpfe
+    bei „Aus“ bedienbar), `check_hcs34xx_verify` (SOUT/GOUT, Wiederholung, `ENDS` nach jedem Befehl, Gerät ohne `ENDS`),
+    `check_reconnect_async`, `check_network_share` (an die neue Semantik angepasst), `check_control_tab`, `check_device_reset` grün.
+  - **Am Gerät geprüft (04.11.2026, `DeviceWorker` allein gegen das 60-V-Netzteil COM4, LabControl geschlossen):** Verbinden meldet
+    „verbunden“ und AUS, Dauerabfrage mit ~4-5 Hz ohne Ausfall, `set_psu_output(True)` -> 2,48 V und `GOUT` = an, Wiederherstellen
+    des vorgefundenen Zustands (Ausgang an, 2,5 V / 0,2 A). **Nicht an der gebauten App geprüft:** Kachel EIN/AUS per Klick,
+    LED „Rear control“ bei laufender App, `psu:COM6` (16 V; dort ist `SOUT` nicht erprobt).
+  - **Offen:** `SOUT` wurde nur am HCS-3404 (60 V) getestet; das 16-V-Netzteil (`psu:COM6`) ist baugleiche Reihe, aber nicht geprüft. Antwortet
+    es nicht auf `SOUT`/`GOUT`, schlägt `set_output` mit einem Fehler fehl (kein stilles „ok“).
+
 - **Prozessorlast der GUI stark gesenkt (0.24.3).** Gemessen an der laufenden App 0.24.0 (py-spy, 20 s): Der GUI-Thread lag bei rund
   60 % eines Kerns, davon etwa 55 % der aktiven Zeit im Dashboard-Layout (`DashboardWidget.eventFilter` -> `_relayout_panels` ->
   `pack_tiles`), der Worker-Thread nur bei rund 6 %.

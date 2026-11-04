@@ -87,14 +87,20 @@ Sollwerte und den Schaltzustand:
   der Spannungs- oder Stromsollwert höher als die zugehörige
   OVP/OCP-Schwelle, erscheint eine Warnung – das Gerät lehnt einen
   solchen Wert sonst kommentarlos ab.
-- **Ausgang-Workaround**: Das HCS-34xx kennt kein echtes
-  Software-Ausgang-Aus. „AUS“ setzt intern den Strom auf 0 A; „EIN“
-  übernimmt die eingetragene Spannung und hebt den Strom auf mindestens
-  0,1 A an, ohne einen bereits höher eingestellten Stromwert zu
-  überschreiben. **Solange „AUS“ aktiv ist, sind die Übernehmen-Buttons
-  für Spannung/Strom gesperrt** – das verhindert, dass ein Sollwert-Klick
-  den emulierten Aus-Zustand unbemerkt wieder aufhebt. Erst ein Klick auf
-  „EIN“ schaltet die Sollwert-Buttons wieder frei.
+- **Ausgang EIN/AUS**: Der Ausgang wird wirklich geschaltet (Befehl
+  `SOUT`, der Zustand wird mit `GOUT` zurückgelesen). „AUS“ lässt Spannung und
+  Strom unverändert; „EIN“ übernimmt die eingetragene Spannung und die
+  Strombegrenzung und schaltet dann ein. Spannung und Strom lassen sich auch
+  bei „AUS“ vorgeben (erst einstellen, dann einschalten). Ohne Last sinkt die
+  Ausgangsspannung nach „AUS“ langsam (Entladen, etwa 10 s). Wird der Ausgang
+  von außen geschaltet (z. B. über den Fernsteueranschluss auf der Rückseite
+  oder ein anderes Programm; an der Front gibt es keine Ausgangstaste), folgt
+  der Schalter in der Kachel nach etwa einer Sekunde. Beim Verbinden schaltet LabControl den Ausgang aus.
+- **Regler am Gerät**: Jeder Befehl sperrt die Regler für Spannung und Strom
+  am Gerät sonst für etwa 5 s (LED „Rear control“). LabControl hebt die Sperre
+  nach jedem Befehl sofort wieder auf (`ENDS`); das Gerät bleibt also von Hand
+  bedienbar, auch wenn LabControl läuft. Ein einzelner Drehschritt kann in den
+  wenigen Millisekunden einer Abfrage verloren gehen.
 
 ### Funktionsgenerator (JDS2915 / JDS66xx)
 
@@ -505,8 +511,9 @@ Befehlsfolgen werden gedrosselt, damit ein Stau den Notaus nicht verzögern kann
 Jeder Steuerbefehl **und jede Abweisung** steht mit der Adresse des Aufrufers im
 Protokoll `labdash.log`.
 
-Am Netzteil HCS-34xx ist „Ausgang AUS“ nur ein Strom von 0 A; ein Strom über
-0 A schaltet den Ausgang wieder ein. Der EIN/AUS-Schalter im Reiter „Steuerung“
+Am Netzteil HCS-34xx schalten `PSU_OUT_ON`/`PSU_OUT_OFF` den Ausgang wirklich;
+Spannung und Strombegrenzung bleiben dabei unverändert. `PSU_CURR` setzt nur die
+Strombegrenzung und schaltet nichts. Der EIN/AUS-Schalter im Reiter „Steuerung“
 folgt einer Fernsteuer-Aktion; die Sollwertfelder dort bleiben unverändert, die
 tatsächlichen Werte zeigt das Dashboard.
 

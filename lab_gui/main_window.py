@@ -477,6 +477,7 @@ class MainWindow(QMainWindow):
         elif kind == "psu":
             section.set_voltage.connect(self._worker.set_psu_voltage)
             section.set_current.connect(self._worker.set_psu_current)
+            section.set_output.connect(self._worker.set_psu_output)
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)

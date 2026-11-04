@@ -22,11 +22,24 @@ with HCS34xx.open_first() as psu:
 
 ## Bekannte Eigenheiten / Einschränkungen
 
-- **Kein Software-Ausgang-Ein/Aus.** Der dokumentierte Befehlssatz (Kap. 12.2
-  der Anleitung) enthält keinen Befehl zum Schalten des Ausgangs. Das geht
-  laut Anleitung nur über den analogen Fernsteueranschluss (8-pol. Stecker,
-  Pin 5 gegen Masse = aus) oder manuell am Gerät. `set_voltage()`/
-  `set_current()` wirken direkt auf den laufenden Ausgang.
+- **Ausgang per Software schaltbar (undokumentiert).** Der Befehlssatz der
+  Anleitung (Kap. 12.2) enthält keinen Befehl dafür, das Gerät kennt aber
+  `SOUT0`/`SOUT1` (Ausgang EIN/AUS) und `GOUT` (Zustand, `0` = EIN, `1` = AUS).
+  Quelle: [sigrok-Wiki](https://sigrok.org/wiki/Manson_HCS-3xxx_series),
+  am 04.11.2026 am HCS-3404 (60 V) bestätigt: `SOUT1` schaltet ab (die Spannung
+  sinkt ohne Last langsam, ~10 s bis unter 0,6 V), `SOUT0` schaltet in unter 2 s
+  wieder ein, Sollwerte bleiben unverändert. `get_output()`/`set_output()`
+  benutzen diese Befehle; `set_output()` liest den Zustand mit `GOUT` zurück und
+  wiederholt bis zu 3-mal (wie die Sollwerte, siehe `_set_verified`).
+  `set_voltage()`/`set_current()` setzen nur Sollwerte und schalten nichts.
+  Frühere Fassungen emulierten „AUS“ über Strom 0 A.
+- **Sperre der Regler („Rear control“).** Jeder Befehl sperrt die Regler für
+  Spannung und Strom am Gerät für etwa 5 s (es hat keine weiteren Bedienelemente);
+  bei Dauerabfrage war es nie von Hand bedienbar. `ENDS` direkt
+  nach dem Befehl hebt die Sperre sofort auf (am Gerät geprüft, auch bei 10 Hz).
+  Der Treiber sendet deshalb nach jedem Befehl `ENDS` (`_release_keyboard`,
+  ~16 ms zusätzlich je Befehl). Quittiert ein Gerät `ENDS` nicht, wird das für
+  die Verbindung abgeschaltet.
 - **VID/PID nicht eindeutig.** `10C4:EA60` ist die generische Silicon-Labs-
   Werksvorgabe für CP210x und wird von vielen Geräten verwendet. Sind
   mehrere CP210x-Geräte angeschlossen, wirft `open_first()` einen Fehler –

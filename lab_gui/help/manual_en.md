@@ -83,13 +83,21 @@ panels together:
   device. If the voltage or current setpoint is higher than the
   matching OVP/OCP threshold, a warning appears — the device would
   otherwise silently reject such a value.
-- **Output workaround**: the HCS-34xx has no real software output-off.
-  "OFF" internally sets the current to 0 A; "ON" applies the entered
-  voltage and raises the current to at least 0.1 A, without overwriting
-  an already higher configured current. **While "OFF" is active, the
-  apply buttons for voltage/current are locked** — this prevents a
-  setpoint click from silently undoing the emulated off state. Only
-  clicking "ON" unlocks the setpoint buttons again.
+- **Output ON/OFF**: the output is really switched (command `SOUT`, the
+  state is read back with `GOUT`). "OFF" leaves voltage and current
+  unchanged; "ON" applies the entered voltage and current limit and then
+  switches on. Voltage and current can also be set while "OFF" (set up first,
+  then switch on). Without a load the output voltage falls slowly after "OFF"
+  (discharging, about 10 s). If the output is switched from outside
+  (e.g. via the remote-control connector on the back or another program; there
+  is no output key on the front), the switch in the tile follows after about a
+  second. LabControl
+  switches the output off when it connects.
+- **Controls on the device**: every command otherwise locks the device's
+  voltage and current knobs for about 5 s ("Rear control" LED). LabControl
+  lifts the lock right after every command (`ENDS`), so the device stays
+  operable by hand while LabControl is running. A single turn of a knob can be
+  lost during the few milliseconds of a query.
 
 ### Function generator (JDS2915 / JDS66xx)
 
@@ -481,8 +489,9 @@ sequences are throttled so that a backlog cannot delay the emergency stop.
 Every control command **and every rejection** is written to `labdash.log` with
 the caller's address.
 
-On the HCS-34xx power supply, “output OFF” is merely a current of 0 A; a
-current above 0 A switches the output back on. The ON/OFF switch on the
+On the HCS-34xx power supply, `PSU_OUT_ON`/`PSU_OUT_OFF` really switch the
+output; voltage and current limit stay unchanged. `PSU_CURR` only sets the
+current limit and switches nothing. The ON/OFF switch on the
 “Control” tab follows a remote action; the setpoint fields there stay
 unchanged, the dashboard shows the actual values.
 

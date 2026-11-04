@@ -561,6 +561,7 @@ class LoadControlGroup(QGroupBox):
 class PsuControlGroup(QGroupBox):
     set_voltage = Signal(str, float)   # device_id, volts
     set_current = Signal(str, float)   # device_id, amps
+    set_output = Signal(str, bool)     # device_id, Ausgang ein/aus
     set_ovp = Signal(str, float)       # device_id, volts
     set_ocp = Signal(str, float)       # device_id, amps
     recall_memory = Signal(str, int)   # device_id, index
@@ -819,13 +820,16 @@ class PsuControlGroup(QGroupBox):
             self._on_output_off()
 
     def _on_output_on(self) -> None:
+        # Erst die Sollwerte, dann den Ausgang: so liegt beim Einschalten sofort der gewollte
+        # Wert an und nie ein alter Sollwert aus einer frueheren Sitzung.
         self.set_voltage.emit(self._device_id, self._voltage_spin.value())
-        self.set_current.emit(self._device_id, max(self._current_spin.value(), 0.1))
+        self.set_current.emit(self._device_id, self._current_spin.value())
+        self.set_output.emit(self._device_id, True)
         self._output_on = True
         self._update_output_buttons()
 
     def _on_output_off(self) -> None:
-        self.set_current.emit(self._device_id, 0.0)
+        self.set_output.emit(self._device_id, False)
         self._output_on = False
         self._update_output_buttons()
 
@@ -840,20 +844,10 @@ class PsuControlGroup(QGroupBox):
 
     def _update_output_buttons(self) -> None:
         _style_toggle_buttons(self._output_on_button, self._output_off_button, self._output_on, current_palette())
-        # SICHERHEITSKRITISCH (an echter Hardware reproduziert, siehe BUGS.md
-        # #1b): Das HCS-34xx kennt kein echtes Ausgang-AUS -- "Aus" wird nur
-        # durch Strom=0A emuliert, was eine anliegende Spannung im Leerlauf
-        # (ohne angeschlossene Last) NICHT verhindert. Ohne diese Sperre
-        # koennte "Spannung setzen"/"Strom setzen" bei "Aus" den emulierten
-        # Aus-Zustand unbemerkt aufheben (Strom > 0A setzen, oder eine neue
-        # Spannung bei bereits vorhandenem Reststrom anlegen), waehrend die
-        # GUI weiterhin "Aus" anzeigt. Aendern ist daher erst moeglich, nachdem
-        # der Ausgang ueber den EIN-Button aktiv eingeschaltet wurde (der
-        # Spannung UND einen Mindeststrom bewusst zusammen setzt, siehe
-        # _on_output_on) -- die Sollwert-Felder selbst bleiben editierbar, nur
-        # das Anwenden ist gesperrt.
-        self._voltage_button.setEnabled(bool(self._output_on))
-        self._current_button.setEnabled(bool(self._output_on))
+        # Frueher waren "Spannung setzen"/"Strom setzen" bei "Aus" gesperrt (BUGS.md #1b): "Aus" war
+        # nur ein Strom von 0 A, und ein neuer Sollwert hob es unbemerkt auf. Seit dem echten
+        # Ausgang-AUS (SOUT, 0.25.0) ist das Vorgeben der Sollwerte bei ausgeschaltetem Ausgang
+        # ungefaehrlich -- und sinnvoll: erst einstellen, dann einschalten.
 
 
 class _FgChannelBox(QGroupBox):

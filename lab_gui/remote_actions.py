@@ -19,11 +19,10 @@ Nicht enthalten und damit von aussen nicht ausloesbar:
     TestRunner, nicht als Einzelaktion)
   * HIL_*_READ (Werte liefert ohnehin GET /api/v1/tiles/{id})
 
-Netzteil-Besonderheit (siehe hcs34xx/README.md und BUGS.md #1b): das HCS-34xx
-kennt kein echtes Ausgang-AUS, "AUS" ist ein Stromsollwert von 0 A. Umgekehrt
-schaltet PSU_CURR mit einem Wert > 0 den Ausgang WIEDER EIN, auch wenn er
-zuvor per PSU_OUT_OFF "ausgeschaltet" wurde. Die Beschreibung der Aktionen
-weist im API darauf hin.
+Netzteil (seit 0.25.0): PSU_OUT_ON/PSU_OUT_OFF schalten den Ausgang wirklich (SOUT,
+mit Rueckkontrolle per GOUT), die Sollwerte bleiben dabei unveraendert. PSU_CURR
+setzt nur die Strombegrenzung und schaltet nichts mehr (frueher: 0 A = "aus",
+Strom > 0 A = wieder "ein", siehe BUGS.md #1b).
 """
 from __future__ import annotations
 
@@ -77,11 +76,11 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
            rating_field="max_voltage"),
         _a("PSU_CURR", "Strom setzen", "A", 0, 40, True, limit_field="max_current",
            rating_field="max_current",
-           note="0 A schaltet den Ausgang aus, ein Wert > 0 A wieder ein "
-                "(das HCS-34xx hat kein echtes Ausgang-AUS)"),
+           note="setzt die Strombegrenzung, schaltet den Ausgang weder ein noch aus"),
         _a("PSU_OUT_ON", "Ausgang EIN",
-           note="hebt den Strom auf mindestens 0,1 A, die Spannung bleibt"),
-        _a("PSU_OUT_OFF", "Ausgang AUS", note="setzt den Strom auf 0 A"),
+           note="schaltet den Ausgang ein, Spannung und Strombegrenzung bleiben wie eingestellt"),
+        _a("PSU_OUT_OFF", "Ausgang AUS",
+           note="schaltet den Ausgang aus (Spannung sinkt ohne Last langsam), Sollwerte bleiben"),
     )},
     "hil": {a.code: a for a in (
         _a("HIL_OUT_ON", "Digitalausgang EIN", channels=OUT_COUNT),

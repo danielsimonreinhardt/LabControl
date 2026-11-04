@@ -1435,20 +1435,26 @@ def section_app() -> None:
         # -- Netzteil ------------------------------------------------------------
         code, resp = post(act, {"action": "PSU_VOLT", "value": 5.0})
         check("PSU_VOLT 5 V -> 200", code == 200 and resp["ok"] is True, f"{code} {resp}")
-        check("Messwert folgt dem Sollwert (Mock)", wait_for(lambda: field("psu:SIM", "voltage") == 5.0))
+        check("Ausgang aus: Messwert 0 V trotz Sollwert (wie am Geraet)",
+              wait_for(lambda: field("psu:SIM", "voltage") == 0.0))
         code, resp = post(act, {"action": "PSU_OUT_ON"})
         check("PSU_OUT_ON -> 200", code == 200, f"{code} {resp}")
-        check("Strom auf mindestens 0,1 A gehoben", wait_for(lambda: (field("psu:SIM", "current") or 0) >= 0.1))
+        check("Messwert folgt dem Sollwert (Mock)", wait_for(lambda: field("psu:SIM", "voltage") == 5.0))
         check("Control-Tab zeigt das Netzteil als EIN",
               wait_for(lambda: gui(lambda: window.control_tab._sections["psu:SIM"]._output_on is True)))
         code, resp = post(act, {"action": "PSU_OUT_OFF"})
-        check("PSU_OUT_OFF -> 200, Strom 0 A",
-              code == 200 and wait_for(lambda: field("psu:SIM", "current") == 0.0))
+        check("PSU_OUT_OFF -> 200, Ausgang aus (Messwert 0 V)",
+              code == 200 and wait_for(lambda: field("psu:SIM", "voltage") == 0.0))
         check("Control-Tab zeigt das Netzteil als AUS",
               wait_for(lambda: gui(lambda: window.control_tab._sections["psu:SIM"]._output_on is False)))
         code, resp = post(act, {"action": "PSU_CURR", "value": 0.5})
-        check("PSU_CURR > 0 schaltet wieder ein (Control-Tab folgt)",
-              code == 200 and wait_for(lambda: gui(lambda: window.control_tab._sections["psu:SIM"]._output_on is True)))
+        check("PSU_CURR schaltet den Ausgang NICHT ein (Control-Tab bleibt AUS)",
+              code == 200 and not wait_for(lambda: gui(lambda: window.control_tab._sections["psu:SIM"]._output_on is True), 1.0)
+              and field("psu:SIM", "voltage") == 0.0)
+        code, resp = post(act, {"action": "PSU_CURR", "value": 0.0})
+        check("PSU_CURR 0 A wird angenommen (setzt nur die Strombegrenzung)", code == 200)
+        post(act, {"action": "PSU_OUT_ON"})   # fuer die folgenden Abschnitte wieder ein (Messwert = Sollwert)
+        check("Ausgang wieder EIN", wait_for(lambda: field("psu:SIM", "voltage") == 5.0))
 
         # -- Last --------------------------------------------------------------------
         load = "/api/v1/tiles/load:SIM/actions"
@@ -1522,7 +1528,7 @@ def section_app() -> None:
         check("waehrend Trip: normale Aktion -> 409", post(act, {"action": "PSU_VOLT", "value": 6.0})[0] == 409)
         code, resp = post("/api/v1/all-off")
         check("ALLE AUS trotz Trip -> 200", code == 200 and resp["ok"] is True, f"{code} {resp}")
-        check("ALLE AUS: Netzteil aus", wait_for(lambda: field("psu:SIM", "current") == 0.0))
+        check("ALLE AUS: Netzteil aus (Ausgang, Messwert 0 V)", wait_for(lambda: field("psu:SIM", "voltage") == 0.0))
         check("ALLE AUS: Lasteingang aus (Control-Tab)",
               wait_for(lambda: gui(lambda: window.control_tab._sections["load:SIM"]._input_on is False), 5.0))
         check("ALLE AUS braucht den Token", post("/api/v1/all-off", auth=False)[0] == 401)
@@ -1549,6 +1555,8 @@ def section_app() -> None:
                   "(python -m venv labcontrol_mcp/.venv && pip install -r labcontrol_mcp/requirements.txt)")
         else:
             time.sleep(3.0)   # Token-Eimer der Drosselung wieder fuellen
+            code_on, resp_on = post(act, {"action": "PSU_OUT_ON"})   # ALLE AUS hat den Ausgang abgeschaltet
+            check("Ausgang vor der MCP-Stufe wieder EIN (Messwert soll dem Sollwert folgen)", code_on == 200, f"{code_on} {resp_on}")
             steps = [
                 {"name": "status", "tool": "get_status"},
                 {"name": "devices", "tool": "list_devices"},
@@ -1603,7 +1611,10 @@ def section_app() -> None:
             check("MCP control_device: ok vom Geraet bestaetigt",
                   not out["set"]["error"] and out["set"]["data"]["ok"] is True and out["set"]["data"]["value"] == 7.0,
                   str(out["set"]))
-            check("MCP: Wirkung am Messwert sichtbar", wait_for(lambda: field("psu:SIM", "voltage") == 7.0))
+            # Die Schritte enden mit all_off: der Ausgang ist danach aus (Messwert 0 V). Dass ein Sollwert am
+            # Messwert ankommt, prueft die Netzteil-Stufe weiter oben.
+            check("MCP: all_off schaltet das Netzteil aus (Messwert 0 V)",
+                  wait_for(lambda: field("psu:SIM", "voltage") == 0.0))
             check("MCP: Wert ausser Bereich -> Werkzeugfehler mit Hinweis",
                   out["bad_value"]["error"] and "value_out_of_range" in out["bad_value"]["text"]
                   and "Hinweis" in out["bad_value"]["text"], out["bad_value"]["text"][:120])
@@ -1712,6 +1723,7 @@ def section_app() -> None:
         code, resp = post(act, {"action": "PSU_VOLT", "value": 5.0})
         check("Ausnahme an: PSU_VOLT ohne Hauptschalter -> 200 (ueber die ganze Kette)",
               code == 200 and resp["ok"] is True, f"{code} {resp}")
+        post(act, {"action": "PSU_OUT_ON"})   # Ausgang war aus (ALLE AUS weiter oben): Messwert soll dem Sollwert folgen
         check("... und der Wert kommt am Geraet an", wait_for(lambda: field("psu:SIM", "voltage") == 5.0))
         check("... Token bleibt Pflicht", post(act, {"action": "PSU_VOLT", "value": 5.0}, auth=False)[0] == 401)
         gui(lambda: window._live_state.set_test_running(True))

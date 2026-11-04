@@ -126,8 +126,9 @@ Schreibraten-Begrenzung (5/s), damit ein Stau von Befehlen den Notaus nicht
 verzögert. Jede Aktion und jede Abweisung steht mit Adresse des Aufrufers im
 `labdash.log` von LabControl.
 
-**Netzteil HCS-34xx:** „Ausgang AUS" ist nur Strom = 0 A. `PSU_CURR` mit einem
-Wert über 0 A schaltet den Ausgang wieder ein.
+**Netzteil HCS-34xx:** `PSU_OUT_ON`/`PSU_OUT_OFF` schalten den Ausgang wirklich
+(seit 0.25.0, Sollwerte bleiben). `PSU_CURR` setzt nur die Strombegrenzung und
+schaltet nichts. Ohne Last sinkt die Spannung nach „AUS“ langsam (etwa 10 s).
 
 ## Fehlersuche
 

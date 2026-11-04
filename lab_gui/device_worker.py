@@ -103,6 +103,14 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
+# Netzteile (HCS-34xx) werden seltener abgefragt als der gemeinsame Takt: jeder Befehl kostet am
+# Geraet mit dem folgenden ENDS (Tastensperre aufheben, siehe hcs34xx/driver.py) ~33 ms; zwei
+# Netzteile haetten sonst fast den ganzen 100-ms-Takt des gemeinsamen Worker-Threads belegt. Alle
+# PSU_OUTPUT_POLL_EVERY Abfragen kommt der Ausgangszustand (GOUT) dazu: so folgt die Kachel auch
+# einem von Hand am Geraet geschalteten Ausgang.
+PSU_POLL_INTERVAL_S = 0.2
+PSU_OUTPUT_POLL_EVERY = 5
+
 # Eigenes, deutlich langsameres Poll-Intervall fuer den microHIL statt ihn in
 # denselben POLL_INTERVAL_MS-Zyklus wie Last/Netzteil/CAN zu haengen: ein
 # voller microHIL-Zyklus braucht ca. 21 Kommandos (IN? + 8x OUT? + 4x RELAY?
@@ -415,6 +423,11 @@ class DeviceWorker(QObject):
         # still (BUGS_OFFEN #38).
         self._reconnect_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="reconnect-probe")
         self._reconnect_pending: set[str] = set()
+        # Netzteil-Abfrage (siehe PSU_POLL_INTERVAL_S): naechster Zeitpunkt, Zaehler und zuletzt
+        # gemeldeter Ausgangszustand je Geraet.
+        self._psu_next_poll: dict[str, float] = {}
+        self._psu_poll_count: dict[str, int] = {}
+        self._psu_output_seen: dict[str, bool] = {}
         self._last_slow_poll_log = 0.0
         self._mock_scpiscope_active = False
         self._set_scpi_addresses(scpi_scopes or [])
@@ -1131,16 +1144,14 @@ class DeviceWorker(QObject):
         try:
             candidate = HCS34xx(port)
             candidate.get_display()
-            # SICHERHEITSKRITISCH: Das Geraet kennt kein echtes Ausgang-
-            # AUS-Kommando (siehe hcs34xx/driver.py) -- "AUS" wird ueber
-            # Strom 0A emuliert. Ohne diesen expliziten Befehl bliebe ein
-            # von einer frueheren Sitzung/manuell eingeschalteter Ausgang
-            # nach dem Verbinden real eingeschaltet, waehrend die GUI
-            # (Standardzustand "Aus") das Gegenteil anzeigt. Deshalb hier
-            # aktiv auf 0A setzen, BEVOR das Geraet als verbunden gilt
-            # (_on_reconnect_done kommt erst danach) -- so ist der reale
-            # Zustand garantiert mit der Anzeige synchron.
-            candidate.set_current(0.0)
+            # SICHERHEITSKRITISCH: Ohne diesen expliziten Befehl bliebe ein von einer
+            # frueheren Sitzung/manuell eingeschalteter Ausgang nach dem Verbinden real
+            # eingeschaltet, waehrend die GUI (Standardzustand "Aus") das Gegenteil
+            # anzeigt. Deshalb hier den Ausgang aktiv ausschalten (SOUT1, mit Rueckkontrolle
+            # per GOUT), BEVOR das Geraet als verbunden gilt (_on_reconnect_done kommt erst
+            # danach) -- so ist der reale Zustand garantiert mit der Anzeige synchron.
+            # Die Sollwerte bleiben dabei unveraendert (frueher: Emulation ueber Strom 0 A).
+            candidate.set_output(False)
         except PowerSupplyError:
             if candidate is not None:
                 candidate.close()
@@ -1195,7 +1206,7 @@ class DeviceWorker(QObject):
             logger.info("Netzteil verbunden: %s", device_id)
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
-            self.psu_output_state.emit(device_id, False)
+            self._emit_psu_output(device_id, False)
             # Nennwerte VOR OVP/OCP: die GUI setzt damit erst die Bereiche der
             # Felder, dann passen die Schwellen hinein (Signale desselben Threads
             # kommen in Sendereihenfolge an).
@@ -1493,11 +1504,24 @@ class DeviceWorker(QObject):
                 self.device_removed.emit("load", device_id)
             timings[device_id] = time.monotonic() - t0
 
+        now = time.monotonic()
         for device_id, psu in list(self._psus.items()):
+            if now < self._psu_next_poll.get(device_id, 0.0):
+                continue
+            self._psu_next_poll[device_id] = now + PSU_POLL_INTERVAL_S
             t0 = time.monotonic()
             try:
                 d = psu.get_display()
                 self.psu_measurement.emit(device_id, d.voltage, d.current, d.constant_current)
+                count = self._psu_poll_count.get(device_id, 0) + 1
+                self._psu_poll_count[device_id] = count
+                if count % PSU_OUTPUT_POLL_EVERY == 0:
+                    try:
+                        on = psu.get_output()
+                    except PowerSupplyValueError:
+                        on = self._psu_output_seen.get(device_id)   # unverstaendliche Antwort: nichts melden
+                    if on is not None and self._psu_output_seen.get(device_id) != on:
+                        self._emit_psu_output(device_id, on)
             except PowerSupplyError as exc:
                 logger.warning("Netzteil %s getrennt: %s", device_id, exc)
                 psu.close()
@@ -1675,10 +1699,9 @@ class DeviceWorker(QObject):
         """Schaltet ALLE bekannten Geraete sofort ab, unabhaengig von einem
         laufenden Testablauf.
 
-        Last: echtes Ausgang-AUS (set_input(False)). Netzteil: kein
-        Ausgang-Kommando vorhanden (siehe hcs34xx/README.md) -- Emulation
-        ueber Stromsollwert 0A (dieselbe PSU_OUT_OFF-Konvention wie im
-        Testablauf, siehe _dispatch_action).
+        Last: echtes Ausgang-AUS (set_input(False)). Netzteil: Ausgang aus
+        (SOUT1, mit Rueckkontrolle per GOUT, wie PSU_OUT_OFF im Testablauf,
+        siehe _dispatch_action).
 
         Ein haengendes/fehlerhaftes Geraet darf die anderen nicht blockieren:
         jedes Geraet bekommt einen Versuch + einen Retry, danach wird es wie
@@ -1780,13 +1803,13 @@ class DeviceWorker(QObject):
     def _kill_psu(self, device_id: str, psu: HCS34xx) -> bool:
         for attempt in (1, 2):
             try:
-                psu.set_current(0.0)
-                logger.info("ALL OFF: Netzteil %s -> Strom 0A", device_id)
-                self.psu_output_state.emit(device_id, False)
+                psu.set_output(False)
+                logger.info("ALL OFF: Netzteil %s -> Ausgang aus", device_id)
+                self._emit_psu_output(device_id, False)
                 return True
             except PowerSupplyValueError as exc:
-                # Wert abgelehnt, keine Verbindungsstoerung -- Retry hilft nicht.
-                logger.error("ALL OFF: Netzteil %s lehnte Strom 0A ab: %s", device_id, exc)
+                # Schalter wirkte nicht, keine Verbindungsstoerung -- Retry hilft nicht.
+                logger.error("ALL OFF: Netzteil %s: Ausgang liess sich nicht ausschalten: %s", device_id, exc)
                 return False
             except PowerSupplyError as exc:
                 if attempt == 1:
@@ -1883,6 +1906,21 @@ class DeviceWorker(QObject):
     @Slot(str, float)
     def set_psu_current(self, device_id: str, amps: float) -> None:
         self._guard_psu(device_id, lambda psu: psu.set_current(amps))
+
+    @Slot(str, bool)
+    def set_psu_output(self, device_id: str, on: bool) -> None:
+        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_output(on))
+        if ok:
+            self._emit_psu_output(device_id, on)
+        else:
+            # Schalter wirkte nicht: der EIN/AUS-Schalter der Kachel hat sich schon umgestellt,
+            # also den wirklichen Zustand nachmelden.
+            self._guard_psu(device_id, lambda psu: self._emit_psu_output(device_id, psu.get_output()))
+
+    def _emit_psu_output(self, device_id: str, on: bool) -> None:
+        """Meldet den Ausgangszustand an die GUI und merkt ihn fuer _poll_devices."""
+        self._psu_output_seen[device_id] = on
+        self.psu_output_state.emit(device_id, on)
 
     @Slot(str, float)
     def set_psu_ovp(self, device_id: str, volts: float) -> None:
@@ -2084,16 +2122,6 @@ class DeviceWorker(QObject):
         diesem Zeitpunkt bereits geprueft; hier wird nur ausgefuehrt.
         """
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
-        if ok and kind == "psu":
-            # Das HCS-34xx hat kein echtes Ausgang-AUS: "aus" ist Strom 0 A
-            # (siehe hcs34xx/README.md). Der EIN/AUS-Schalter im Control-Tab
-            # kennt aber nur, was er selbst oder dieser Worker meldet -- ohne
-            # diese Meldung bliebe er nach einer Fernsteuer-Aktion auf dem
-            # alten Zustand stehen (vgl. psu_output_state oben).
-            if action in ("PSU_OUT_ON", "PSU_OUT_OFF"):
-                self.psu_output_state.emit(device_id, action == "PSU_OUT_ON")
-            elif action == "PSU_CURR":
-                self.psu_output_state.emit(device_id, value > 0.0)
         logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) -> %s%s", device_id, action, value,
                     channel, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
         self.remote_action_completed.emit(request_id, ok, message, read_value)
@@ -2129,21 +2157,15 @@ class DeviceWorker(QObject):
             if action == "PSU_CURR":
                 ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(value))
                 return ok, message, 0.0
-            if action == "PSU_OUT_ON":
-                # Workaround (kein echtes Ausgang-Ein/Aus verfuegbar, siehe
-                # hcs34xx/README.md): reine Schaltaktion (siehe BUGS.md #17)
-                # -- laesst einen zuvor gesetzten Spannungs-Sollwert
-                # unangetastet und hebt nur den Strom auf mindestens 0.1A an,
-                # analog zu PSU_OUT_OFF (das nur den Strom auf 0A setzt).
-                def _output_on(psu: HCS34xx) -> None:
-                    _, current = psu.get_setpoint()
-                    if current < 0.1:
-                        psu.set_current(0.1)
-
-                ok, message = self._guard_psu(device_id, _output_on)
-                return ok, message, 0.0
-            if action == "PSU_OUT_OFF":
-                ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(0.0))
+            if action in ("PSU_OUT_ON", "PSU_OUT_OFF"):
+                # Reine Schaltaktion (siehe BUGS.md #17): Spannungs- und Stromsollwert bleiben
+                # unangetastet. Der Schalter wird mit GOUT zurueckgelesen (siehe set_output).
+                # Der EIN/AUS-Schalter im Control-Tab kennt nur, was er selbst oder dieser
+                # Worker meldet -- deshalb hier nachmelden (Fernsteuerung, Testablauf).
+                on = action == "PSU_OUT_ON"
+                ok, message = self._guard_psu(device_id, lambda psu: psu.set_output(on))
+                if ok:
+                    self._emit_psu_output(device_id, on)
                 return ok, message, 0.0
             return False, f"Unbekannte Aktion '{action}' fuer Netzteil", 0.0
 

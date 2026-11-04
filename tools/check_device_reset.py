@@ -97,6 +97,14 @@ def main() -> int:
     check("alte Geraete haben Kacheln", all(d in window.dashboard._panels for d in offline))
 
     print("Nicht verbundene Geraete loeschen")
+    # Erst abwarten, bis die Liste der verbundenen Geraete ruhig ist: der simulierte Batterie-Simulator
+    # meldet sich erst mit seiner ersten Statusbotschaft und kaeme sonst nachtraeglich dazu.
+    settled_since, last = time.monotonic(), set(online())
+    while time.monotonic() - settled_since < 1.5 and time.monotonic() < settled_since + 10:
+        app.processEvents()
+        time.sleep(0.02)
+        if set(online()) != last:
+            last, settled_since = set(online()), time.monotonic()
     sim_before = {d for d in online()}
     window.settings_tab.remove_offline_devices_requested.emit()
     app.processEvents()

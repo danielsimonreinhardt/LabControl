@@ -58,8 +58,8 @@ class FakePsu:
             raise dw.PowerSupplyError("Timeout")
         return SimpleNamespace(voltage=12.0, current=0.1, constant_current=False)
 
-    def set_current(self, amps):
-        calls.append(("set_current", self.port, amps))
+    def set_output(self, on):
+        calls.append(("set_output", self.port, on))
 
     def get_setpoint(self):
         return 12.0, 0.0
@@ -125,7 +125,7 @@ check("Kein zweiter Probe auf einen noch laufenden Port",
 
 ok = spin(2.0, until=lambda: ("psu_connected", "psu:COM_OK", True) in events)
 check("Antwortendes Netzteil wird uebernommen", ok)
-check("Netzteil vor 'verbunden' auf 0 A gesetzt", ("set_current", "COM_OK", 0.0) in calls)
+check("Netzteil vor 'verbunden' ausgeschaltet (SOUT1)", ("set_output", "COM_OK", False) in calls)
 check("Stumme Netzteile bleiben getrennt",
       "psu:COM_SILENT_A" not in worker._psus and "psu:COM_SILENT_B" not in worker._psus)
 spin(1.5)

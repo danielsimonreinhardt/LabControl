@@ -238,11 +238,10 @@ COND_DEVICE_KINDS = MEASUREMENT_DEVICE_KINDS + ("hil", "can")
 _LEGACY_DEVICE_KIND = {"Last": "load", "Netzteil": "psu"}
 
 # Aktionen, die keinen Zahlenwert benoetigen (Wert-Feld wird deaktiviert).
-# PSU_OUT_ON ist eine reine Schaltaktion (siehe BUGS.md #17): sie laesst einen
-# zuvor per PSU_VOLT gesetzten Spannungs-Sollwert unangetastet und hebt nur
-# den Strom auf mindestens 0.1A an, damit ueberhaupt Ausgangsleistung
-# fliesst (siehe DeviceWorker._dispatch_action) -- analog zu PSU_OUT_OFF, das
-# nur den Strom auf 0A setzt, ohne die Spannung anzufassen.
+# PSU_OUT_ON ist eine reine Schaltaktion (siehe BUGS.md #17): sie laesst die
+# per PSU_VOLT/PSU_CURR gesetzten Sollwerte unangetastet und schaltet nur den
+# Ausgang ein (SOUT, siehe DeviceWorker._dispatch_action) -- ebenso PSU_OUT_OFF
+# (seit 0.25.0 ein echtes Ausgang-AUS, vorher Strom 0 A).
 # Arbiträrsignal-Aktionen brauchen ebenfalls keinen Wert im normalen Feld --
 # ihre Parameter (Signalform, Amplitude, ...) kommen aus dem Definieren-Dialog
 # (siehe signal_dialog.py) und liegen in den arb_*-Feldern von TestStep.
