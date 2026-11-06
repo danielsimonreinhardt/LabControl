@@ -2,14 +2,16 @@
   * BUGS_OFFEN #37: set_current/set_voltage/set_output lesen den Zustand zurueck und wiederholen,
     wenn das Geraet trotz "OK" den Wert nicht uebernommen hat.
   * Ausgang: SOUT0/SOUT1 + GOUT ("0" = EIN, "1" = AUS), Sollwerte bleiben dabei unberuehrt.
-  * Tastensperre: nach JEDEM Befehl wird ENDS gesendet; quittiert ein Geraet ENDS nicht, wird es
-    abgeschaltet statt jeden Befehl in den Timeout laufen zu lassen.
+  * Tastensperre: Befehle senden KEIN ENDS mehr mit; release_keyboard() sendet genau ein ENDS.
+  * Langsame Befehle werden geloggt.
 Mock-Pruefung (simuliertes Geraet), keine Hardware."""
+import logging
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "device-driver"))
-from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError  # noqa: E402
+from hcs34xx.driver import SLOW_EXCHANGE_S, HCS34xx, PowerSupplyError, PowerSupplyValueError  # noqa: E402
 
 
 class FakeSerial:
@@ -95,30 +97,19 @@ d = make(3, output_on=True)
 expect_error("nicht uebernommener Ausgang AUS", lambda: d.set_output(False))
 assert d._ser.output_on is True
 
-# --- Tastensperre aufheben: ENDS nach jedem Befehl
+# --- Befehle senden kein ENDS mit; release_keyboard sendet genau eines
 d = make(0)
 d.get_setpoint()
 d.get_output()
 d.set_current(1.5)
-log = d._ser.log
-commands = [c for c in log if c != "ENDS"]
-for i, c in enumerate(log):
-    if c != "ENDS":
-        assert i + 1 < len(log) and log[i + 1] == "ENDS", f"nach {c} fehlt ENDS: {log}"
-assert log.count("ENDS") == len(commands) > 0
-
-# --- Geraet, das ENDS nicht quittiert: einmal versuchen, dann nicht mehr
+assert "ENDS" not in d._ser.log, f"Befehle duerfen kein ENDS mitsenden: {d._ser.log}"
+assert d.release_keyboard() is True
+assert d._ser.log.count("ENDS") == 1 and d._ser.log[-1] == "ENDS"
 d = make(0, ends=False)
-d.get_setpoint()
-d.get_setpoint()
-d.get_output()
-assert log and d._ser.log.count("ENDS") == 1, f"ENDS nur einmal versuchen: {d._ser.log}"
-assert d._release_keys is False
-
-# --- Fehler beim ENDS bricht den eigentlichen Befehl nicht ab
+assert d.release_keyboard() is False, "nicht quittiertes ENDS meldet False statt eines Fehlers"
 d = make(0)
-d._ser.write = lambda data, _orig=d._ser.write: (_ for _ in ()).throw(OSError("weg")) if data.strip() == b"ENDS" else _orig(data)
-assert d.get_setpoint() == (12.0, 10.0), "ENDS-Fehler darf die Antwort des Befehls nicht verlieren"
+d._ser.write = lambda data: (_ for _ in ()).throw(OSError("weg"))
+assert d.release_keyboard() is False, "Portfehler bei ENDS darf nicht werfen (Sperre faellt von selbst)"
 
 # --- unerwartete GOUT-Antwort ist ein Wertfehler, kein Verbindungsabbruch
 d = make(0)
@@ -129,5 +120,32 @@ try:
 except PowerSupplyValueError:
     pass
 assert issubclass(PowerSupplyValueError, PowerSupplyError)
+
+# --- Langsamer Befehl wird mit Namen geloggt, hoechstens einmal je Intervall
+records = []
+
+
+class Grab(logging.Handler):
+    def emit(self, record):
+        records.append(record.getMessage())
+
+
+handler = Grab()
+logging.getLogger("hcs34xx.driver").addHandler(handler)
+d = make(0)
+orig_write = d._ser.write
+
+
+def slow_write(data, _orig=orig_write):
+    if data.strip() == b"GETS":
+        time.sleep(SLOW_EXCHANGE_S + 0.05)
+    return _orig(data)
+
+
+d._ser.write = slow_write
+d.get_setpoint()
+d.get_setpoint()
+logging.getLogger("hcs34xx.driver").removeHandler(handler)
+assert len(records) == 1 and "GETS" in records[0], f"langsamer Befehl: genau eine Meldung erwartet: {records}"
 
 print("check_hcs34xx_verify: OK")

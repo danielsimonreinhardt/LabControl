@@ -61,6 +61,9 @@ class FakePsu:
     def set_output(self, on):
         calls.append(("set_output", self.port, on))
 
+    def get_output(self):
+        return True   # Geraet war schon eingeschaltet (von Hand/frueherer Sitzung)
+
     def get_setpoint(self):
         return 12.0, 0.0
 
@@ -109,7 +112,9 @@ dw.MicroHIL.discover = classmethod(lambda cls: None)
 print("Reconnect blockiert den Worker nicht")
 worker = dw.DeviceWorker()
 events = []
+outputs = []
 worker.psu_connected.connect(lambda d, on: events.append(("psu_connected", d, on)))
+worker.psu_output_state.connect(lambda d, on: outputs.append((d, on)))
 # Ratings/Limits lesen weitere Werte vom Geraet -- hier nicht Gegenstand der Pruefung.
 worker._emit_psu_ratings = lambda d: None
 worker._emit_psu_limits = lambda d: None
@@ -125,7 +130,9 @@ check("Kein zweiter Probe auf einen noch laufenden Port",
 
 ok = spin(2.0, until=lambda: ("psu_connected", "psu:COM_OK", True) in events)
 check("Antwortendes Netzteil wird uebernommen", ok)
-check("Netzteil vor 'verbunden' ausgeschaltet (SOUT1)", ("set_output", "COM_OK", False) in calls)
+check("Ausgang beim Verbinden NICHT veraendert (Geraet hat keine Ein/Aus-Taste)",
+      not any(c[0] == "set_output" for c in calls), str(calls))
+check("Kachel zeigt den wirklichen Ausgangszustand (EIN)", ("psu:COM_OK", True) in outputs, str(outputs))
 check("Stumme Netzteile bleiben getrennt",
       "psu:COM_SILENT_A" not in worker._psus and "psu:COM_SILENT_B" not in worker._psus)
 spin(1.5)

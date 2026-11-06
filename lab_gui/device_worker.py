@@ -39,7 +39,7 @@ from jds66xx.driver import (
     WAVE_TRIANGLE,
 )
 from jds66xx.mock import MockJDS66xx
-from hcs34xx.driver import HCS34xx, PowerSupplyError, PowerSupplyValueError
+from hcs34xx.driver import MIN_VOLTAGE as PSU_MIN_VOLTAGE, HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
@@ -104,12 +104,15 @@ POLL_INTERVAL_MS = 100
 RECONNECT_INTERVAL_MS = 3000
 
 # Netzteile (HCS-34xx) werden seltener abgefragt als der gemeinsame Takt: jeder Befehl kostet am
-# Geraet mit dem folgenden ENDS (Tastensperre aufheben, siehe hcs34xx/driver.py) ~33 ms; zwei
-# Netzteile haetten sonst fast den ganzen 100-ms-Takt des gemeinsamen Worker-Threads belegt. Alle
-# PSU_OUTPUT_POLL_EVERY Abfragen kommt der Ausgangszustand (GOUT) dazu: so folgt die Kachel auch
-# einem von Hand am Geraet geschalteten Ausgang.
+# Geraet ~16 ms, zwei Netzteile haetten sonst einen grossen Teil des 100-ms-Takts des gemeinsamen
+# Worker-Threads belegt. Alle PSU_OUTPUT_POLL_EVERY Abfragen kommt der Ausgangszustand (GOUT) dazu:
+# so folgt die Kachel auch einem von aussen geschalteten Ausgang.
 PSU_POLL_INTERVAL_S = 0.2
 PSU_OUTPUT_POLL_EVERY = 5
+
+# Grund von all_outputs_off beim Beenden der App (siehe MainWindow.closeEvent): Netzteile werden dann
+# nicht ausgeschaltet, sondern zur Handbedienung freigegeben (siehe DeviceWorker._release_psu).
+REASON_WINDOW_CLOSE = "window close"
 
 # Eigenes, deutlich langsameres Poll-Intervall fuer den microHIL statt ihn in
 # denselben POLL_INTERVAL_MS-Zyklus wie Last/Netzteil/CAN zu haengen: ein
@@ -303,15 +306,17 @@ class DeviceWorker(QObject):
     load_input_state = Signal(str, bool)     # device_id, Eingang ein/aus (Hardware-Rueckfrage)
     load_function_state = Signal(str, str)   # device_id, aktiver SCPI-Funktionscode (siehe korad_kel102.driver.FUNCTIONS)
     # device_id, Ausgang ein/aus. Anders als load_input_state KEINE echte
-    # Hardware-Rueckfrage (das HCS-34xx-Protokoll kennt keine, siehe
-    # hcs34xx/driver.py) -- wird nur emittiert, wenn der Worker den Ausgang
-    # SELBST (ausserhalb eines direkten GUI-Klicks in PsuControlGroup) auf
-    # AUS setzt: beim (Wieder-)Verbinden (Sicherheits-Fix, siehe
-    # _reconnect_psus) und bei all_outputs_off (Alle-Aus-Button, Safety-
-    # Watchdog-Trip, Fensterschliessen) -- sonst bliebe der EIN/AUS-Schalter
-    # im Control-Tab faelschlich auf "EIN" stehen, obwohl der Ausgang laengst
-    # abgeschaltet wurde.
+    # Hardware-Rueckfrage (GOUT) bei jedem PSU_OUTPUT_POLL_EVERY-ten Poll, beim
+    # (Wieder-)Verbinden, nach dem Rueckwechsel aus der Handbedienung und wenn der Worker den
+    # Ausgang SELBST (ausserhalb eines direkten GUI-Klicks in PsuControlGroup) schaltet:
+    # all_outputs_off (Alle-Aus-Button, Safety-Watchdog-Trip) und die Freigabe zur
+    # Handbedienung -- sonst bliebe der EIN/AUS-Schalter im Control-Tab auf dem alten Stand.
     psu_output_state = Signal(str, bool)
+    # device_id, Sollspannung (V), Sollstrom (A) laut Geraet: beim Verbinden und nach der
+    # Handbedienung, damit die Felder der Kachel nicht veraltete Werte zeigen.
+    psu_setpoints = Signal(str, float, float)
+    # device_id, Handbedienung an/aus (siehe set_psu_manual)
+    psu_manual_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
     # device_id, maximale Ausgangsspannung (V), maximaler Ausgangsstrom (A) --
     # die vom Geraet selbst gemeldeten Nennwerte (GMAX), siehe _emit_psu_ratings.
@@ -428,6 +433,8 @@ class DeviceWorker(QObject):
         self._psu_next_poll: dict[str, float] = {}
         self._psu_poll_count: dict[str, int] = {}
         self._psu_output_seen: dict[str, bool] = {}
+        # Netzteile in Handbedienung: LabControl spricht sie nicht an (siehe set_psu_manual).
+        self._psu_manual: set[str] = set()
         self._last_slow_poll_log = 0.0
         self._mock_scpiscope_active = False
         self._set_scpi_addresses(scpi_scopes or [])
@@ -678,6 +685,7 @@ class DeviceWorker(QObject):
 
     def _remove_mock_psu(self) -> None:
         psu = self._psus.pop(SIM_PSU_ID, None)
+        self._psu_manual.discard(SIM_PSU_ID)
         if psu is not None:
             psu.close()
             self.psu_connected.emit(SIM_PSU_ID, False)
@@ -1144,14 +1152,10 @@ class DeviceWorker(QObject):
         try:
             candidate = HCS34xx(port)
             candidate.get_display()
-            # SICHERHEITSKRITISCH: Ohne diesen expliziten Befehl bliebe ein von einer
-            # frueheren Sitzung/manuell eingeschalteter Ausgang nach dem Verbinden real
-            # eingeschaltet, waehrend die GUI (Standardzustand "Aus") das Gegenteil
-            # anzeigt. Deshalb hier den Ausgang aktiv ausschalten (SOUT1, mit Rueckkontrolle
-            # per GOUT), BEVOR das Geraet als verbunden gilt (_on_reconnect_done kommt erst
-            # danach) -- so ist der reale Zustand garantiert mit der Anzeige synchron.
-            # Die Sollwerte bleiben dabei unveraendert (frueher: Emulation ueber Strom 0 A).
-            candidate.set_output(False)
+            # Der Ausgang wird beim Verbinden NICHT veraendert: das Geraet hat keine Ein/Aus-Taste,
+            # ausgeschaltet waere es von Hand nicht mehr zu benutzen. Der wirkliche Zustand wird
+            # in _on_reconnect_done gelesen und angezeigt, damit Anzeige und Ausgang nicht
+            # auseinanderlaufen (frueher: Ausgang beim Verbinden ausschalten).
         except PowerSupplyError:
             if candidate is not None:
                 candidate.close()
@@ -1206,12 +1210,9 @@ class DeviceWorker(QObject):
             logger.info("Netzteil verbunden: %s", device_id)
             self.device_added.emit("psu", device_id)
             self.psu_connected.emit(device_id, True)
-            self._emit_psu_output(device_id, False)
-            # Nennwerte VOR OVP/OCP: die GUI setzt damit erst die Bereiche der
-            # Felder, dann passen die Schwellen hinein (Signale desselben Threads
-            # kommen in Sendereihenfolge an).
-            self._emit_psu_ratings(device_id)
-            self._emit_psu_limits(device_id)
+            self._psu_manual.discard(device_id)
+            self.psu_manual_state.emit(device_id, False)
+            self._adopt_psu_state(device_id)
         else:
             logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, candidate.identify())
             self.device_added.emit("fg", device_id)
@@ -1439,6 +1440,18 @@ class DeviceWorker(QObject):
         self._picoscope_serial = info.serial
         self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
 
+    def _adopt_psu_state(self, device_id: str) -> None:
+        """Uebernimmt den Zustand des Geraets in die GUI, ohne ihn zu aendern: Nennwerte, OVP/OCP,
+        Sollwerte und Ausgang. Schlaegt das Lesen fehl, folgt die Kachel dem naechsten Abgleich in
+        _poll_devices.
+
+        Nennwerte VOR OVP/OCP und Sollwerten: die GUI setzt damit erst die Bereiche der Felder, dann
+        passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an)."""
+        self._emit_psu_ratings(device_id)
+        self._emit_psu_limits(device_id)
+        self._guard_psu(device_id, lambda psu: self.psu_setpoints.emit(device_id, *psu.get_setpoint()))
+        self._guard_psu(device_id, lambda psu: self._emit_psu_output(device_id, psu.get_output()))
+
     def _emit_psu_ratings(self, device_id: str) -> None:
         """Meldet die Nennwerte (GMAX) des Netzteils an die GUI.
 
@@ -1506,7 +1519,7 @@ class DeviceWorker(QObject):
 
         now = time.monotonic()
         for device_id, psu in list(self._psus.items()):
-            if now < self._psu_next_poll.get(device_id, 0.0):
+            if device_id in self._psu_manual or now < self._psu_next_poll.get(device_id, 0.0):
                 continue
             self._psu_next_poll[device_id] = now + PSU_POLL_INTERVAL_S
             t0 = time.monotonic()
@@ -1632,6 +1645,8 @@ class DeviceWorker(QObject):
         psu = self._psus.get(device_id)
         if psu is None:
             return False, "Netzteil nicht verbunden"
+        if device_id in self._psu_manual:
+            return False, "Netzteil in Handbedienung"
         try:
             action(psu)
             return True, ""
@@ -1701,7 +1716,9 @@ class DeviceWorker(QObject):
 
         Last: echtes Ausgang-AUS (set_input(False)). Netzteil: Ausgang aus
         (SOUT1, mit Rueckkontrolle per GOUT, wie PSU_OUT_OFF im Testablauf,
-        siehe _dispatch_action).
+        siehe _dispatch_action) -- ausser beim Beenden der App (REASON_WINDOW_CLOSE): dann wird es
+        zur Handbedienung freigegeben (_release_psu), und ein Netzteil in Handbedienung wird nie
+        angefasst.
 
         Ein haengendes/fehlerhaftes Geraet darf die anderen nicht blockieren:
         jedes Geraet bekommt einen Versuch + einen Retry, danach wird es wie
@@ -1722,9 +1739,10 @@ class DeviceWorker(QObject):
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Last %s", device_id)
                 failures.append(device_id)
+        release_psus = reason == REASON_WINDOW_CLOSE
         for device_id, psu in list(self._psus.items()):
             try:
-                if not self._kill_psu(device_id, psu):
+                if not self._kill_psu(device_id, psu, release=release_psus):
                     failures.append(device_id)
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Netzteil %s", device_id)
@@ -1800,9 +1818,27 @@ class DeviceWorker(QObject):
                 return False
         return False
 
-    def _kill_psu(self, device_id: str, psu: HCS34xx) -> bool:
+    def _release_psu(self, psu: HCS34xx) -> None:
+        """Gibt das Netzteil zur Handbedienung frei: Strom 0 A, Spannung auf das Minimum, Ausgang EIN,
+        Reglersperre aufheben. Das Geraet hat keine Ausgangstaste, es muss also eingeschaltet
+        uebergeben werden; 0 V sind nicht einstellbar (MIN_VOLTAGE), mit 0 A Strombegrenzung liegt
+        aber trotzdem nichts an, bis jemand von Hand aufdreht."""
+        psu.set_current(0.0)
+        psu.set_voltage(PSU_MIN_VOLTAGE)
+        psu.set_output(True)
+        psu.release_keyboard()
+
+    def _kill_psu(self, device_id: str, psu: HCS34xx, release: bool = False) -> bool:
+        if device_id in self._psu_manual:
+            logger.info("ALL OFF: Netzteil %s in Handbedienung -> nicht angefasst", device_id)
+            return True
         for attempt in (1, 2):
             try:
+                if release:
+                    self._release_psu(psu)
+                    logger.info("Beenden: Netzteil %s -> 1 V / 0 A, Ausgang EIN, zur Handbedienung freigegeben", device_id)
+                    self._emit_psu_output(device_id, True)
+                    return True
                 psu.set_output(False)
                 logger.info("ALL OFF: Netzteil %s -> Ausgang aus", device_id)
                 self._emit_psu_output(device_id, False)
@@ -1906,6 +1942,38 @@ class DeviceWorker(QObject):
     @Slot(str, float)
     def set_psu_current(self, device_id: str, amps: float) -> None:
         self._guard_psu(device_id, lambda psu: psu.set_current(amps))
+
+    @Slot(str, bool)
+    def set_psu_manual(self, device_id: str, manual: bool) -> None:
+        """Schaltet ein Netzteil zwischen Handbedienung und Kontrolle durch LabControl um.
+
+        Handbedienung: Das Geraet hat keine Ausgangstaste und jeder Befehl sperrt die Regler, ein
+        gleichzeitiges Bedienen von Hand und per Software ist also nicht sinnvoll. LabControl gibt es
+        deshalb frei (_release_psu: 1 V / 0 A, Ausgang EIN, Regler entsperrt) und spricht es danach
+        nicht mehr an -- keine Abfrage, keine Befehle (_guard_psu lehnt sie ab), "Alle aus" laesst
+        es aus. Zurueck: der Zustand des Geraets wird uebernommen (_adopt_psu_state)."""
+        psu = self._psus.get(device_id)
+        if psu is None:
+            self.psu_manual_state.emit(device_id, False)
+            return
+        if manual:
+            if device_id not in self._psu_manual:
+                ok, message = self._guard_psu(device_id, self._release_psu)
+                if not ok:
+                    logger.warning("Netzteil %s: Freigabe zur Handbedienung gescheitert: %s", device_id, message)
+                    self.psu_manual_state.emit(device_id, False)
+                    return
+                self._psu_manual.add(device_id)
+                logger.info("Netzteil %s: Handbedienung (1 V / 0 A, Ausgang EIN)", device_id)
+                self._emit_psu_output(device_id, True)
+            self.psu_manual_state.emit(device_id, True)
+        else:
+            if device_id in self._psu_manual:
+                self._psu_manual.discard(device_id)
+                logger.info("Netzteil %s: Kontrolle durch LabControl", device_id)
+                self._psu_poll_count[device_id] = 0
+                self._adopt_psu_state(device_id)
+            self.psu_manual_state.emit(device_id, device_id in self._psu_manual)
 
     @Slot(str, bool)
     def set_psu_output(self, device_id: str, on: bool) -> None:

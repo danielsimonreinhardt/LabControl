@@ -129,6 +129,9 @@ verzögert. Jede Aktion und jede Abweisung steht mit Adresse des Aufrufers im
 **Netzteil HCS-34xx:** `PSU_OUT_ON`/`PSU_OUT_OFF` schalten den Ausgang wirklich
 (seit 0.25.0, Sollwerte bleiben). `PSU_CURR` setzt nur die Strombegrenzung und
 schaltet nichts. Ohne Last sinkt die Spannung nach „AUS“ langsam (etwa 10 s).
+Steht das Netzteil in **Handbedienung** (Schalter in der Kachel), ist es für MCP
+nicht verfügbar und jede Aktion wird mit „Netzteil in Handbedienung“ abgelehnt;
+den Schalter bedient der Nutzer, nicht MCP.
 
 ## Fehlersuche
 

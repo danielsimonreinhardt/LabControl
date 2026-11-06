@@ -98,6 +98,8 @@ Vorgehen:
 - Netzteil HCS-34xx: PSU_OUT_ON/PSU_OUT_OFF schalten den Ausgang wirklich (Sollwerte bleiben); PSU_CURR
   setzt nur die Strombegrenzung. Ohne Last sinkt die Spannung nach 'Ausgang AUS' langsam (~10 s) --
   fuer 'ist aus' den Zustand per read_device nach einigen Sekunden pruefen, nicht den ersten Messwert.
+  Steht ein Netzteil in 'Handbedienung' (Schalter in der Kachel, nur der Nutzer bedient ihn), ist es nicht
+  verfuegbar und Aktionen werden abgelehnt -- nicht umgehen, den Nutzer fragen.
 - Batterie-Simulator (battsim, 14 Zellen, Kanal = Zelle): erst BS_REMOTE_ON, dann Sollwerte
   (BS_CELL_VOLT/BS_ALL_VOLT) und Freigaben (BS_CELL_ON/BS_ALL_ON), zuletzt BS_OUT_ON. Ueber dem
   Grenzwert je Zelle (Feld voltage_limit) wird abgelehnt. Istwerte in cellN_voltage, Zustand in

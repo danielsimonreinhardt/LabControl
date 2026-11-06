@@ -565,6 +565,7 @@ class PsuControlGroup(QGroupBox):
     set_ovp = Signal(str, float)       # device_id, volts
     set_ocp = Signal(str, float)       # device_id, amps
     recall_memory = Signal(str, int)   # device_id, index
+    set_manual = Signal(str, bool)     # device_id, Handbedienung an/aus
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
@@ -663,10 +664,21 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.valueChanged.connect(self._update_limit_warning)
         self._update_limit_warning()
 
+        # Umschalter Handbedienung / Kontrolle durch LabControl (siehe DeviceWorker.set_psu_manual).
+        self._manual_button = QPushButton()
+        self._manual_button.setCheckable(True)
+        self._manual_button.toggled.connect(self._on_manual_toggled)
+        self._manual_hint = QLabel()
+        self._manual_hint.setWordWrap(True)
+        self._manual_hint.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
+        self._manual_hint.setVisible(False)
+        outer.addWidget(self._manual_hint)
+
         # Ausgang-Schalter ganz unten im Panel (siehe LoadControlGroup) -- der
         # Stretch drueckt sie an den unteren Rand, auch bei angeglichener
         # Panel-Hoehe (ControlTab._relayout_grid).
         outer.addStretch(1)
+        outer.addWidget(self._manual_button)
         self._output_form = QFormLayout()
         self._output_layout = QHBoxLayout()
         self._output_on_button = QPushButton()
@@ -681,13 +693,10 @@ class PsuControlGroup(QGroupBox):
         _detint_label(self._output_form, self._output_layout)
         outer.addLayout(self._output_form)
 
-        # Das HCS-34xx-Protokoll kennt keine Abfrage des tatsaechlichen
-        # Ausgangszustands (siehe hcs34xx/driver.py) -- "AUS" wird nur simuliert,
-        # indem der Strom auf 0 gesetzt wird. Deshalb kein "unbekannter"
-        # Startzustand wie bei der Last: ein frisch verbundenes/simuliertes
-        # Netzteil hat Strom 0, gilt also standardmaessig als AUS, bis hier
-        # geklickt wird.
+        # Startzustand AUS; der Worker meldet den wirklichen Zustand (GOUT) beim Verbinden und
+        # danach laufend (psu_output_state).
         self._output_on: bool | None = False
+        self._manual = False
         self._update_output_buttons()
 
         Translator.instance().language_changed.connect(self._retranslate)
@@ -706,6 +715,44 @@ class PsuControlGroup(QGroupBox):
             button.setToolTip(tr("Setzen"))
         self._output_on_button.setText(tr("EIN"))
         self._output_off_button.setText(tr("AUS"))
+        self._manual_button.setText(tr("Handbedienung"))
+        self._manual_button.setToolTip(
+            tr("Gibt das Netzteil zur Bedienung am Gerät frei: LabControl spricht es dann nicht mehr an.")
+        )
+        self._manual_hint.setText(
+            tr(
+                "Handbedienung: Das Gerät ist freigegeben (1 V, 0 A, Ausgang EIN) und wird von "
+                "LabControl nicht abgefragt. Spannung und Strom am Gerät einstellen; zum Zurückschalten "
+                "den Schalter „Handbedienung“ wieder lösen."
+            )
+        )
+        self._update_limit_warning()
+
+    def _on_manual_toggled(self, checked: bool) -> None:
+        self.set_manual.emit(self._device_id, checked)
+
+    def set_manual_state(self, manual: bool) -> None:
+        """Vom Worker gemeldeter Modus (psu_manual_state): sperrt in der Handbedienung alle Felder,
+        die LabControl sonst an das Geraet schicken wuerde."""
+        self._manual = manual
+        self._manual_button.blockSignals(True)
+        self._manual_button.setChecked(manual)
+        self._manual_button.blockSignals(False)
+        self._manual_hint.setVisible(manual)
+        for widget in (
+            self._voltage_spin, self._voltage_button, self._current_spin, self._current_button,
+            self._ovp_spin, self._ovp_button, self._ocp_spin, self._ocp_button,
+            self._output_on_button, self._output_off_button,
+        ):
+            widget.setEnabled(not manual)
+
+    def set_setpoints(self, volts: float, amps: float) -> None:
+        """Uebernimmt die Sollwerte des Geraets (beim Verbinden und nach der Handbedienung). Nur
+        die Felder, es wird nichts gesendet."""
+        for spin, value in ((self._voltage_spin, volts), (self._current_spin, amps)):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
         self._update_limit_warning()
 
     def set_ratings(self, max_voltage: float, max_current: float) -> None:
@@ -765,6 +812,7 @@ class PsuControlGroup(QGroupBox):
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        self._manual_hint.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
         for row in (self._voltage_row, self._current_row, self._ovp_row, self._ocp_row):
             row.setStyleSheet(_row_stylesheet(palette))
@@ -3061,6 +3109,16 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, PsuControlGroup):
             section.set_output_state(on)
+
+    def set_psu_setpoints(self, device_id: str, volts: float, amps: float) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_setpoints(volts, amps)
+
+    def set_psu_manual_state(self, device_id: str, manual: bool) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_manual_state(manual)
 
     def _on_preset_save(self, slot: int) -> None:
         devices = {

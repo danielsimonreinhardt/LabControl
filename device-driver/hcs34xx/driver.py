@@ -23,11 +23,16 @@ Seriennummer 0001) bestaetigt):
     GOUT            Ausgangszustand: "0" = EIN, "1" = AUS (Antwort sofort nach SOUT)
     ENDS            Tastatur freigeben
 Jeder Befehl sperrt die Regler (Spannung/Strom) am Geraet fuer rund 5 s (LED "Rear control");
-bei Dauerabfrage waere es also nie bedienbar. ENDS direkt nach dem Befehl hebt
-die Sperre sofort auf, siehe _release_keyboard.
+bei Dauerabfrage ist es also nie von Hand bedienbar. ENDS hebt die Sperre sofort auf, siehe
+release_keyboard. Es nach jedem Befehl zu senden (0.25.0/0.25.1) bringt nichts: das Geraet hat keine
+Ausgangstaste, eine gleichzeitige Bedienung von Hand und per Software ist also nicht sinnvoll, und die
+LED blinkt trotzdem im Takt der Abfrage. Befehl und ENDS in einem Schreibvorgang zu senden geht nicht
+(der zweite Befehl wird nicht verarbeitet). Stattdessen gibt LabControl das Geraet zur Handbedienung
+frei (DeviceWorker.set_psu_manual) und spricht es dann gar nicht mehr an.
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -52,6 +57,13 @@ SET_ATTEMPTS = 3
 OUTPUT_ON_REPLY = "0"
 OUTPUT_OFF_REPLY = "1"
 
+# Ein Befehl, der laenger als das dauert, wird als Warnung geloggt (normal ~16 ms). Hoechstens
+# eine Meldung je Intervall.
+SLOW_EXCHANGE_S = 0.15
+SLOW_LOG_INTERVAL_S = 10.0
+
+logger = logging.getLogger(__name__)
+
 
 class PowerSupplyError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Labornetzteil."""
@@ -73,9 +85,7 @@ class Display:
 
 
 class HCS34xx:
-    # Nach jedem Befehl ENDS senden, damit die Regler am Geraet bedienbar bleiben (siehe
-    # _release_keyboard). Faellt auf False, wenn ein Geraet ENDS nicht quittiert.
-    _release_keys = True
+    _slow_logged_at = 0.0
 
     def __init__(self, port: str, baudrate: int = DEFAULT_BAUDRATE, timeout: float = 1.0):
         self._ser = serial.Serial(
@@ -139,6 +149,7 @@ class HCS34xx:
         # SerialException/OSError statt eines PowerSupplyError -- ohne diesen
         # Fang wuerde device_worker.py (faengt nur PowerSupplyError) das
         # Geraet weiterhin als verbunden fuehren, obwohl die Verbindung tot ist.
+        started = time.monotonic()
         try:
             self._ser.reset_input_buffer()
             self._ser.write((cmd + "\r").encode("ascii"))
@@ -150,30 +161,26 @@ class HCS34xx:
                 f"Keine/unklare Antwort auf {cmd!r} (Timeout): {raw!r}"
             )
         value = raw[: -len(b"OK\r")].strip(b"\r")
-        self._release_keyboard()
+        self._log_if_slow(cmd, started)
         return value.decode("ascii", errors="replace")
 
-    def _release_keyboard(self) -> None:
-        """Gibt die Regler am Geraet wieder frei (ENDS).
-
-        Jeder Befehl schaltet das Geraet fuer rund 5 s in "Rear control" und sperrt die Regler;
-        mit der Dauerabfrage der App war es dadurch nie von Hand bedienbar. ENDS direkt nach dem
-        Befehl hebt die Sperre sofort auf (am Geraet geprueft: auch bei 10 Hz bleibt die LED aus
-        und die Regler reagieren; ein Zyklus Befehl + ENDS dauert ~32 ms).
-
-        Ein Fehler hier ist kein Verbindungsfehler: der naechste Befehl meldet ihn selbst. Quittiert
-        ein Geraet ENDS gar nicht, wird es fuer diese Verbindung abgeschaltet, statt jeden Befehl
-        in den Timeout laufen zu lassen."""
-        if not self._release_keys:
+    def _log_if_slow(self, cmd: str, started: float) -> None:
+        now = time.monotonic()
+        if now - started < SLOW_EXCHANGE_S or now - self._slow_logged_at < SLOW_LOG_INTERVAL_S:
             return
+        self._slow_logged_at = now
+        logger.warning("HCS34xx %s: %s dauerte %.0f ms", self._ser.port, cmd, (now - started) * 1000)
+
+    def release_keyboard(self) -> bool:
+        """Gibt die Regler am Geraet wieder frei (ENDS), statt auf das Ende der rund 5 s langen
+        Sperre nach dem letzten Befehl zu warten. Best effort: ein Fehler ist kein Verbindungsfehler
+        (die Sperre faellt von selbst), True nur bei quittiertem ENDS."""
         try:
             self._ser.reset_input_buffer()
             self._ser.write(b"ENDS\r")
-            raw = self._ser.read_until(b"OK\r")
+            return self._ser.read_until(b"OK\r").endswith(b"OK\r")
         except (serial.SerialException, OSError):
-            return
-        if not raw.endswith(b"OK\r"):
-            self._release_keys = False
+            return False
 
     @staticmethod
     def _decode_fields(text: str, field_width: int, scale: float) -> list[float]:

@@ -91,13 +91,21 @@ panels together:
   (discharging, about 10 s). If the output is switched from outside
   (e.g. via the remote-control connector on the back or another program; there
   is no output key on the front), the switch in the tile follows after about a
-  second. LabControl
-  switches the output off when it connects.
-- **Controls on the device**: every command otherwise locks the device's
-  voltage and current knobs for about 5 s ("Rear control" LED). LabControl
-  lifts the lock right after every command (`ENDS`), so the device stays
-  operable by hand while LabControl is running. A single turn of a knob can be
-  lost during the few milliseconds of a query.
+  second. When connecting, LabControl adopts the device's state (output,
+  voltage, current) and changes nothing. "All off" switches the output off.
+- **Manual control**: the device has no output key, and every command locks its
+  knobs for about 5 s ("Rear control" LED; while polling it flashes at 5 Hz).
+  Operating it by hand and from LabControl at the same time therefore does not
+  work. The **Manual control** switch in the tile releases the device: voltage
+  to the minimum (1 V; the device does not accept 0 V), current 0 A, **output
+  ON**, knobs unlocked. After that LabControl no longer talks to the device (no
+  polling, the LED stays off), the fields of the tile are locked, commands from
+  remote control and test runs are rejected with "Netzteil in Handbedienung",
+  and "All off" leaves the device alone. The dashboard shows the device as
+  unavailable, the status bar "Manual control". When switching back, LabControl
+  takes over the values set on the device. **When LabControl is closed, every
+  power supply is released the same way** (1 V, 0 A, output ON), so that it is
+  usable by hand afterwards.
 
 ### Function generator (JDS2915 / JDS66xx)
 

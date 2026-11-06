@@ -22,7 +22,7 @@ class MockHCS34xx:
         self._ovp = max_voltage
         self._ocp = max_current
         self._memory: list[tuple[float, float]] = [(0.0, 0.0)] * 3
-        # Wie das echte Geraet nach dem Einschalten der App: Ausgang aus, bis er geschaltet wird.
+        # Startzustand des simulierten Geraets: Ausgang aus, bis er geschaltet wird.
         self._output = False
 
     def close(self) -> None:
@@ -40,6 +40,9 @@ class MockHCS34xx:
         return self._max_voltage, self._max_current
 
     # -- output ---------------------------------------------------------------
+
+    def release_keyboard(self) -> bool:
+        return True
 
     def get_output(self) -> bool:
         return self._output

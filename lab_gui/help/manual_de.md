@@ -95,12 +95,23 @@ Sollwerte und den Schaltzustand:
   Ausgangsspannung nach „AUS“ langsam (Entladen, etwa 10 s). Wird der Ausgang
   von außen geschaltet (z. B. über den Fernsteueranschluss auf der Rückseite
   oder ein anderes Programm; an der Front gibt es keine Ausgangstaste), folgt
-  der Schalter in der Kachel nach etwa einer Sekunde. Beim Verbinden schaltet LabControl den Ausgang aus.
-- **Regler am Gerät**: Jeder Befehl sperrt die Regler für Spannung und Strom
-  am Gerät sonst für etwa 5 s (LED „Rear control“). LabControl hebt die Sperre
-  nach jedem Befehl sofort wieder auf (`ENDS`); das Gerät bleibt also von Hand
-  bedienbar, auch wenn LabControl läuft. Ein einzelner Drehschritt kann in den
-  wenigen Millisekunden einer Abfrage verloren gehen.
+  der Schalter in der Kachel nach etwa einer Sekunde. Beim Verbinden übernimmt
+  LabControl den Zustand des Geräts (Ausgang, Spannung, Strom) und ändert nichts.
+  „Alle aus“ schaltet den Ausgang aus.
+- **Handbedienung**: Das Gerät hat keine Ausgangstaste, und jeder Befehl sperrt
+  seine Regler für etwa 5 s (LED „Rear control“, sie blinkt bei laufender
+  Abfrage im Takt von 5 Hz). Gleichzeitig von Hand und per LabControl zu
+  bedienen geht deshalb nicht. Mit dem Schalter **Handbedienung** in der Kachel
+  gibt LabControl das Gerät frei: Spannung auf das Minimum (1 V; 0 V nimmt das
+  Gerät nicht an), Strom 0 A, **Ausgang EIN**, Regler entsperrt. Danach spricht
+  LabControl das Gerät nicht mehr an (keine Abfrage, die LED bleibt aus), die
+  Felder der Kachel sind gesperrt, Befehle aus Fernsteuerung und Testablauf
+  werden mit „Netzteil in Handbedienung“ abgelehnt, und „Alle aus“ lässt das
+  Gerät unberührt. Das Dashboard zeigt das Gerät als nicht verfügbar, die
+  Statusleiste „Handbedienung“. Beim Zurückschalten übernimmt LabControl die am
+  Gerät eingestellten Werte in die Felder. **Beim Beenden von LabControl wird
+  jedes Netzteil genauso freigegeben** (1 V, 0 A, Ausgang EIN), damit es
+  danach von Hand benutzbar ist.
 
 ### Funktionsgenerator (JDS2915 / JDS66xx)
 

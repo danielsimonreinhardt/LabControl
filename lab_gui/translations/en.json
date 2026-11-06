@@ -452,5 +452,8 @@
   "Stapelspannung": "Stack voltage",
   "Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.": "Delta view: one row per ID with the time since the previous frame of the same ID and the current payload.",
   "Anzeige leeren": "Clear display",
-  "Δt": "Δt"
+  "Δt": "Δt",
+  "Handbedienung": "Manual control",
+  "Gibt das Netzteil zur Bedienung am Gerät frei: LabControl spricht es dann nicht mehr an.": "Releases the power supply for operation at the device: LabControl then no longer talks to it.",
+  "Handbedienung: Das Gerät ist freigegeben (1 V, 0 A, Ausgang EIN) und wird von LabControl nicht abgefragt. Spannung und Strom am Gerät einstellen; zum Zurückschalten den Schalter „Handbedienung“ wieder lösen.": "Manual control: the device is released (1 V, 0 A, output ON) and not polled by LabControl. Set voltage and current on the device; to switch back, release the \"Manual control\" button."
 }

@@ -35,11 +35,14 @@ with HCS34xx.open_first() as psu:
   Frühere Fassungen emulierten „AUS“ über Strom 0 A.
 - **Sperre der Regler („Rear control“).** Jeder Befehl sperrt die Regler für
   Spannung und Strom am Gerät für etwa 5 s (es hat keine weiteren Bedienelemente);
-  bei Dauerabfrage war es nie von Hand bedienbar. `ENDS` direkt
-  nach dem Befehl hebt die Sperre sofort auf (am Gerät geprüft, auch bei 10 Hz).
-  Der Treiber sendet deshalb nach jedem Befehl `ENDS` (`_release_keyboard`,
-  ~16 ms zusätzlich je Befehl). Quittiert ein Gerät `ENDS` nicht, wird das für
-  die Verbindung abgeschaltet.
+  bei Dauerabfrage ist es nie von Hand bedienbar. `ENDS` hebt die Sperre sofort
+  auf (`release_keyboard()`). Nach jedem Befehl gesendet (so in 0.25.0/0.25.1)
+  hält es die Regler zwar bedienbar, die LED „Rear control“ blinkt aber im Takt
+  der Abfrage, und ohne Ausgangstaste am Gerät ist gleichzeitiges Bedienen von
+  Hand und per Software ohnehin nicht sinnvoll. Befehl und `ENDS` in einem
+  Schreibvorgang zu senden geht nicht (am Gerät geprüft: der zweite Befehl wird
+  nicht verarbeitet). LabControl sendet deshalb `ENDS` nur einmal beim Wechsel
+  in die Handbedienung und fragt das Gerät danach nicht mehr ab.
 - **VID/PID nicht eindeutig.** `10C4:EA60` ist die generische Silicon-Labs-
   Werksvorgabe für CP210x und wird von vielen Geräten verwendet. Sind
   mehrere CP210x-Geräte angeschlossen, wirft `open_first()` einen Fehler –

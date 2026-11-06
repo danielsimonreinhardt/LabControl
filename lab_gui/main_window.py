@@ -22,7 +22,9 @@ from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
 from device_registry import DeviceRegistry
-from device_worker import SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id
+from device_worker import (
+    REASON_WINDOW_CLOSE, SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id,
+)
 from i18n import Translator, tr
 from live_state import LiveState
 from paths import app_dir
@@ -147,6 +149,8 @@ class MainWindow(QMainWindow):
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
+        # Netzteile in Handbedienung (siehe _on_psu_manual_state)
+        self._manual_devices: set[str] = set()
         self._online_devices: dict[str, set[str]] = {
             "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
             "scpiscope": set(), "battsim": set(),
@@ -304,6 +308,8 @@ class MainWindow(QMainWindow):
         self._worker.load_input_state.connect(self.control_tab.set_load_input_state)
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
+        self._worker.psu_setpoints.connect(self.control_tab.set_psu_setpoints)
+        self._worker.psu_manual_state.connect(self._on_psu_manual_state)
         # Nennwerte VOR den Schwellen verbinden (Reihenfolge der Verbindungen =
         # Reihenfolge der Aufrufe): erst die Bereiche der Felder, dann OVP/OCP.
         self._worker.psu_ratings.connect(self.control_tab.set_psu_ratings)
@@ -478,6 +484,7 @@ class MainWindow(QMainWindow):
             section.set_voltage.connect(self._worker.set_psu_voltage)
             section.set_current.connect(self._worker.set_psu_current)
             section.set_output.connect(self._worker.set_psu_output)
+            section.set_manual.connect(self._worker.set_psu_manual)
             section.set_ovp.connect(self._worker.set_psu_ovp)
             section.set_ocp.connect(self._worker.set_psu_ocp)
             section.recall_memory.connect(self._worker.recall_psu_memory)
@@ -1291,9 +1298,25 @@ class MainWindow(QMainWindow):
 
     @Slot(str, bool)
     def _on_psu_connected(self, device_id: str, online: bool) -> None:
+        if not online:
+            self._manual_devices.discard(device_id)
         self._set_online("psu", device_id, online)
         self.dashboard.set_psu_online(device_id, online)
         self.control_tab.set_psu_online(device_id, online)
+
+    @Slot(str, bool)
+    def _on_psu_manual_state(self, device_id: str, manual: bool) -> None:
+        """Netzteil in Handbedienung: fuer Dashboard, Statusleiste, Netzwerk-Freigabe/MCP wie nicht
+        verfuegbar (es werden keine Messwerte mehr geliefert und Befehle abgelehnt), die Kachel im
+        Control-Tab bleibt sichtbar, damit man zurueckschalten kann."""
+        self.control_tab.set_psu_manual_state(device_id, manual)
+        if manual:
+            self._manual_devices.add(device_id)
+        else:
+            self._manual_devices.discard(device_id)
+        self._set_online("psu", device_id, not manual)
+        self.dashboard.set_psu_online(device_id, not manual)
+        self._render_status_label(device_id)
 
     @Slot(str, bool)
     def _on_can_connected(self, device_id: str, online: bool) -> None:
@@ -1361,7 +1384,11 @@ class MainWindow(QMainWindow):
             return
         label = self._device_labels.get(device_id, device_id)
         online = self._device_online.get(device_id, False)
-        status_label.setText(f"{label}: {tr('verbunden') if online else tr('getrennt')}")
+        if device_id in self._manual_devices:
+            state = tr("Handbedienung")
+        else:
+            state = tr("verbunden") if online else tr("getrennt")
+        status_label.setText(f"{label}: {state}")
         pal = ThemeManager.instance().palette
         color = pal.success if online else pal.danger
         status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
@@ -1434,7 +1461,7 @@ class MainWindow(QMainWindow):
             self._worker,
             "all_outputs_off",
             Qt.ConnectionType.BlockingQueuedConnection,
-            Q_ARG(str, "window close"),
+            Q_ARG(str, REASON_WINDOW_CLOSE),
         )
         # CAN-Knoten geordnet beenden (Batterie-Simulator: Ausgang sperren und
         # Fernsteuerung abgeben), bevor ihre Sende-Threads mit dem Worker enden.

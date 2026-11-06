@@ -44,7 +44,31 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Netzteil HCS-34xx: Schalter „Handbedienung“ statt gleichzeitiger Bedienung; Ausgang beim Verbinden unverändert (0.26.0, Nutzerwunsch, 06.11.2026).**
+  Das Gerät hat keine Ausgangstaste, und jeder Befehl sperrt seine Regler (LED „Rear control“). Eine gleichzeitige Bedienung von
+  Hand und per LabControl (`ENDS` nach jedem Befehl, 0.25.0) ist deshalb nicht sinnvoll; die LED blinkte dabei im Takt der Abfrage
+  (am Gerät bestätigt, beide Netzteile). Stattdessen gibt es je Netzteil einen Umschalter in der Kachel des Control-Reiters:
+  - **Handbedienung:** LabControl gibt das Gerät frei – **Strom 0 A, Spannung auf das Minimum 1 V** (0 V nimmt das Gerät nicht an,
+    mit 0 A Strombegrenzung liegt trotzdem nichts an), **Ausgang EIN**, Regler entsperrt (`ENDS`, einmalig) – und spricht es danach
+    nicht mehr an: keine Abfrage, die LED bleibt aus. Die Felder der Kachel sind gesperrt; Fernsteuerung, MCP und Testablauf werden
+    mit „Netzteil in Handbedienung“ abgelehnt; „Alle aus“ lässt das Gerät unberührt. Dashboard: Kachel wie nicht verfügbar,
+    Statusleiste: „Handbedienung“. Scheitert die Freigabe, bleibt das Gerät unter Kontrolle von LabControl.
+  - **Zurück zu LabControl:** der Zustand des Geräts (Ausgang, Sollspannung, Sollstrom) wird in die Kachel übernommen, nichts wird
+    gesendet.
+  - **Beenden von LabControl:** jedes Netzteil wird wie bei der Handbedienung freigegeben (1 V, 0 A, Ausgang EIN), statt wie bisher
+    ausgeschaltet – es ist danach von Hand benutzbar. Sicherheits-Abschaltung („Alle aus“, Grenzwert-Trip) schaltet den Ausgang
+    weiterhin aus.
+  - **Beim Verbinden** wird der Ausgang nicht mehr ausgeschaltet (0.25.0 tat das, das Gerät zeigte „OP OFF“ und war von Hand
+    nicht benutzbar). Der Zustand des Geräts wird übernommen, die Felder zeigen die Sollwerte des Geräts.
+  - Der Treiber sendet kein `ENDS` mehr nach jedem Befehl (halbiert den Verkehr zum Gerät); `release_keyboard()` sendet es einmal.
+    Befehle über 150 ms stehen mit Befehlsname im Log (höchstens eine Meldung je 10 s). Befehl und `ENDS` in einem Schreibvorgang
+    zu bündeln geht nicht (am Gerät geprüft: der zweite Befehl wird nicht verarbeitet).
+  - **Mock-verifiziert** (`check_psu_manual`, `check_psu_manual_window`, `check_hcs34xx_verify`, `check_reconnect_async`,
+    `check_psu_output`, `check_network_share`). **Am Gerät noch nicht gesehen:** Freigabe mit 1 V / 0 A / EIN an beiden Netzteilen,
+    LED aus in der Handbedienung, Rückwechsel, Beenden der App. Offen: die langen Poll-Zyklen aus dem App-Log (bis 766 ms für
+    `psu:COM6`) sind ungeklärt – in 75 s Dauerabfrage ohne App gab es keinen Hänger über 150 ms.
 - **Netzteil HCS-34xx: echtes „Ausgang AUS“ per `SOUT`, Regler am Gerät bleiben bedienbar (0.25.0, Nutzerwunsch, 04.11.2026).**
+  - *Überholt in 0.26.0:* `ENDS` nach jedem Befehl und das Ausschalten des Ausgangs beim Verbinden entfallen, siehe oben.
   Bisher stand in Treiber, Doku und App, das Gerät kenne kein Ausgang-Ein/Aus; „AUS“ war ein Strom von 0 A (Workaround, Ursache von
   BUGS_OFFEN #37 und des Sperrens der Sollwert-Knöpfe bei „Aus“). Das Gerät hat die Befehle aber, nur nicht in der Anleitung
   ([sigrok-Wiki](https://sigrok.org/wiki/Manson_HCS-3xxx_series)): `SOUT0`/`SOUT1` und `GOUT`.
