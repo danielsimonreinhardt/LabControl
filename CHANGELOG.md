@@ -64,9 +64,12 @@ Semantic Versioning (`lab_gui/version.py`).
     Befehle über 150 ms stehen mit Befehlsname im Log (höchstens eine Meldung je 10 s). Befehl und `ENDS` in einem Schreibvorgang
     zu bündeln geht nicht (am Gerät geprüft: der zweite Befehl wird nicht verarbeitet).
   - **Mock-verifiziert** (`check_psu_manual`, `check_psu_manual_window`, `check_hcs34xx_verify`, `check_reconnect_async`,
-    `check_psu_output`, `check_network_share`). **Am Gerät noch nicht gesehen:** Freigabe mit 1 V / 0 A / EIN an beiden Netzteilen,
-    LED aus in der Handbedienung, Rückwechsel, Beenden der App. Offen: die langen Poll-Zyklen aus dem App-Log (bis 766 ms für
-    `psu:COM6`) sind ungeklärt – in 75 s Dauerabfrage ohne App gab es keinen Hänger über 150 ms.
+    `check_psu_output`, `check_network_share`). **Am Gerät verifiziert (Nutzer, 06.11.2026, beide Netzteile):** Start ohne „OP OFF“,
+    Freigabe mit 1 V / 0 A / EIN (Display zeigt die Werte, „OP OFF“ erscheint nur bei abgeschaltetem Ausgang), LED „Rear control“
+    aus in der Handbedienung, Regler am Gerät drehbar, Rückwechsel übernimmt die Geräte-Werte, Beenden der App gibt das Netzteil
+    frei (Log: „Beenden: Netzteil … zur Handbedienung freigegeben“). Offen: die langen Poll-Zyklen aus dem App-Log von 0.25.0
+    (bis 766 ms für `psu:COM6`) sind ungeklärt – in 75 s Dauerabfrage ohne App gab es keinen Hänger über 150 ms; in der
+    0.26.0-Sitzung traten sie nicht auf.
 - **Netzteil HCS-34xx: echtes „Ausgang AUS“ per `SOUT`, Regler am Gerät bleiben bedienbar (0.25.0, Nutzerwunsch, 04.11.2026).**
   - *Überholt in 0.26.0:* `ENDS` nach jedem Befehl und das Ausschalten des Ausgangs beim Verbinden entfallen, siehe oben.
   Bisher stand in Treiber, Doku und App, das Gerät kenne kein Ausgang-Ein/Aus; „AUS“ war ein Strom von 0 A (Workaround, Ursache von
