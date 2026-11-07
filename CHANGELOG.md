@@ -44,6 +44,16 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Batterie-Simulator: Bedienung der Kachel steht im Log (0.26.1, Nutzer, 07.11.2026).**
+  Am 07.11. sendete LabControl gegen 18 Uhr Fernsteuerung, Ausgang EIN und ein Freigabemuster an den Simulator, ohne dass
+  eine Logzeile die Quelle nannte: Fernsteuerung (MCP/Netzwerk) wurde protokolliert („Fernsteuerung: …“), die Bedienung der
+  Kachel im Fenster und Testablauf-Schritte nicht. Der Nutzer hatte die Kachel bedient; der Treiber stellt nach dem
+  Wiederverbinden nichts selbst wieder her (`set_remote(True)` setzt den Ausgang auf gesperrt, der Worker ruft beim Verbinden
+  keine Setter auf). Jetzt schreibt jede Schreibaktion eine Zeile
+  `Batterie-Simulator <id>: <BS_…> (wert=…, kanal=…) per Kachel|Testablauf -> ok|FEHLER [Grund]`; Lese-Aktionen
+  (`BS_CELL_READ`, `BS_STACK_READ`) nicht, Fernsteuerung bleibt bei der bisherigen Zeile (keine Doppelung).
+  **Mock-verifiziert** (`tools/check_battsim_log.py`, 11 Prüfungen; `check_battsim`, `check_battsim_tile` unverändert grün).
+  Verhalten der Kachel und des Treibers sonst unverändert; nicht am Gerät gesehen (reine Logzeile).
 - **Netzteil HCS-34xx: Schalter „Handbedienung“ statt gleichzeitiger Bedienung; Ausgang beim Verbinden unverändert (0.26.0, Nutzerwunsch, 06.11.2026).**
   Das Gerät hat keine Ausgangstaste, und jeder Befehl sperrt seine Regler (LED „Rear control“). Eine gleichzeitige Bedienung von
   Hand und per LabControl (`ENDS` nach jedem Befehl, 0.25.0) ist deshalb nicht sinnvoll; die LED blinkte dabei im Takt der Abfrage

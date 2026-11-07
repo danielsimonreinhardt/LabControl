@@ -2121,33 +2121,48 @@ class DeviceWorker(QObject):
         self.battsim_state.emit(device_id, self._battsim_state_dict(node))
         return True, ""
 
+    def _tile_battsim(self, device_id: str, action_name: str, action: Callable[[BattSim], None],
+                      value: float = 0.0, channel: int = 0) -> None:
+        """Bedienung ueber die Kachel im Fenster: wie _guard_battsim, aber mit Logzeile.
+        Fernsteuerung und Testablauf stehen ohnehin im Log; die Kachel bisher nicht, damit
+        liess sich ein gesendeter Zustand nicht mehr einer Quelle zuordnen (07.11.2026)."""
+        ok, message = self._guard_battsim(device_id, action)
+        self._log_battsim_write(device_id, action_name, value, channel, "Kachel", ok, message)
+
+    @staticmethod
+    def _log_battsim_write(device_id: str, action_name: str, value: float, channel: int, source: str,
+                           ok: bool, message: str) -> None:
+        logger.info("Batterie-Simulator %s: %s (wert=%s, kanal=%s) per %s -> %s%s", device_id, action_name,
+                    value, channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+
     @Slot(str, bool)
     def set_battsim_remote(self, device_id: str, on: bool) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_remote(on))
+        self._tile_battsim(device_id, "BS_REMOTE_ON" if on else "BS_REMOTE_OFF", lambda n: n.set_remote(on))
 
     @Slot(str, bool)
     def set_battsim_output(self, device_id: str, on: bool) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_output(on))
+        self._tile_battsim(device_id, "BS_OUT_ON" if on else "BS_OUT_OFF", lambda n: n.set_output(on))
 
     @Slot(str, int, float)
     def set_battsim_cell_voltage(self, device_id: str, cell: int, volts: float) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_cell_voltage(cell, volts))
+        self._tile_battsim(device_id, "BS_CELL_VOLT", lambda n: n.set_cell_voltage(cell, volts), volts, cell)
 
     @Slot(str, float)
     def set_battsim_all_voltages(self, device_id: str, volts: float) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_all_voltages(volts))
+        self._tile_battsim(device_id, "BS_ALL_VOLT", lambda n: n.set_all_voltages(volts), volts)
 
     @Slot(str, int, bool)
     def set_battsim_cell_enabled(self, device_id: str, cell: int, on: bool) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_cell_enabled(cell, on))
+        self._tile_battsim(device_id, "BS_CELL_ON" if on else "BS_CELL_OFF",
+                           lambda n: n.set_cell_enabled(cell, on), 0.0, cell)
 
     @Slot(str, bool)
     def set_battsim_all_enabled(self, device_id: str, on: bool) -> None:
-        self._guard_battsim(device_id, lambda n: n.set_all_enabled(on))
+        self._tile_battsim(device_id, "BS_ALL_ON" if on else "BS_ALL_OFF", lambda n: n.set_all_enabled(on))
 
     @Slot(str)
     def reset_battsim_fail(self, device_id: str) -> None:
-        self._guard_battsim(device_id, lambda n: n.reset_fail())
+        self._tile_battsim(device_id, "BS_RESET_FAIL", lambda n: n.reset_fail())
 
     @Slot(str, float)
     def set_battsim_voltage_limit(self, device_id: str, volts: float) -> None:
@@ -2171,6 +2186,8 @@ class DeviceWorker(QObject):
     @Slot(str, str, str, float, int)
     def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        if kind == "battsim" and action not in ("BS_CELL_READ", "BS_STACK_READ"):
+            self._log_battsim_write(device_id, action, value, channel, "Testablauf", ok, message)
         self.action_completed.emit(ok, message, read_value)
 
     @Slot(int, str, str, str, float, int)
