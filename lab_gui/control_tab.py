@@ -16,6 +16,8 @@ import qtawesome as qta
 from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -63,6 +65,7 @@ from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
 from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager, form_control_qss
+from touch_keypad import attach_hex_keypad, set_apply_partner
 from theme import current as current_palette
 from tile_grid import (
     CONTROL_TILE_DRAG_MIME_TYPE,
@@ -186,6 +189,11 @@ def _row(*widgets: QWidget) -> QWidget:
     for widget in widgets:
         row_layout.addWidget(widget)
     row_layout.addStretch()
+    # Touch-Profil: "Setzen" im Zahlenfeld loest den Uebernehmen-Knopf (✓) dieser Zeile aus
+    for field, button in zip(widgets, widgets[1:]):
+        # nur echte Knoepfe, kein Haekchen (CAN-ID-Zeile: "Extended" daneben)
+        if isinstance(field, QAbstractSpinBox) and isinstance(button, QAbstractButton) and not button.isCheckable():
+            set_apply_partner(field, button)
     return container
 
 
@@ -1560,6 +1568,7 @@ class CanControlGroup(QGroupBox):
 
         self._data_edit = QLineEdit()
         self._data_edit.setPlaceholderText("01 A2 FF")
+        attach_hex_keypad(self._data_edit)   # Touch-Profil: Hex-Tastenfeld statt Bildschirmtastatur
         self._send_button = IconButton("mdi.send-outline", "")
         self._send_button.clicked.connect(self._on_send_clicked)
         self._data_row = _row(self._data_edit, self._send_button)

@@ -14,6 +14,8 @@ es bei Bildschirmen bis 1024 x 600 vor (MainWindow._wire_touch).
 """
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from typing import Callable
 
 import qtawesome as qta
@@ -41,6 +43,20 @@ TOP_BAR_HEIGHT = 52
 FONT_SCALE = 1.2
 
 
+SPIN_KEY_WIDTH = 40
+_KEY_ICON_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _key_icon_path(name: str, pal: Palette) -> str:
+    """−/+ als PNG fuer QSS-url() (wie theme._spin_arrow_icon_path)."""
+    key = (pal.name, name)
+    if key not in _KEY_ICON_CACHE:
+        path = Path(tempfile.gettempdir()) / f"labcontrol_key_{name}_{pal.name.replace(' ', '_')}.png"
+        qta.icon(f"mdi.{name}", color=pal.text).pixmap(QSize(44, 44)).save(str(path), "PNG")
+        _KEY_ICON_CACHE[key] = path.as_posix()
+    return _KEY_ICON_CACHE[key]
+
+
 def suggest_touch(screen) -> bool:
     """Kleiner Bildschirm (bis 1024 x 600) -> Touch-Profil vorschlagen."""
     if screen is None or QGuiApplication.platformName() == "offscreen":
@@ -59,12 +75,42 @@ def touch_qss(pal: Palette) -> str:
         min-height: {TOUCH_MIN - 8}px;
         padding: 3px 8px;
     }}
-    QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
-        width: 34px;
+    /* Grosse −/+ Tasten links und rechts vom Wert statt kleiner Pfeile uebereinander (PI-6) */
+    QGroupBox QAbstractSpinBox {{
+        padding-left: {SPIN_KEY_WIDTH + 4}px;
+        padding-right: {SPIN_KEY_WIDTH + 4}px;
+        min-height: {TOUCH_MIN - 4}px;
+        min-width: 160px;
+        max-width: 230px;
     }}
-    QAbstractSpinBox::up-arrow, QAbstractSpinBox::down-arrow {{
-        width: 20px;
-        height: 20px;
+    QGroupBox QAbstractSpinBox::up-button, QGroupBox QAbstractSpinBox::down-button {{
+        subcontrol-origin: border;
+        width: {SPIN_KEY_WIDTH}px;
+        height: {TOUCH_MIN - 2}px;
+        border: none;
+        background-color: {pal.surface_alt};
+    }}
+    QGroupBox QAbstractSpinBox::up-button {{
+        subcontrol-position: center right;
+        border-left: 1px solid {pal.border};
+        border-top-right-radius: 4px;
+        border-bottom-right-radius: 4px;
+    }}
+    QGroupBox QAbstractSpinBox::down-button {{
+        subcontrol-position: center left;
+        border-right: 1px solid {pal.border};
+        border-top-left-radius: 4px;
+        border-bottom-left-radius: 4px;
+    }}
+    QGroupBox QAbstractSpinBox::up-arrow {{
+        image: url({_key_icon_path("plus", pal)});
+        width: 22px;
+        height: 22px;
+    }}
+    QGroupBox QAbstractSpinBox::down-arrow {{
+        image: url({_key_icon_path("minus", pal)});
+        width: 22px;
+        height: 22px;
     }}
     QCheckBox, QRadioButton {{
         spacing: 10px;

@@ -403,7 +403,11 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   aus; am Raspberry Pi startet LabControl im Vollbild. Unter Linux gibt es
   dort zusätzlich einen Ein/Aus-Knopf: Er fährt den Rechner nach einer
   Rückfrage herunter oder startet ihn neu, LabControl gibt vorher die
-  Netzteile frei. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  Netzteile frei. Zahlenfelder in den Kacheln haben große −/+-Tasten links
+  und rechts; ein Tipp auf den Wert öffnet ein Zahlenfeld mit Bereich und
+  Einheit („Setzen“ übernimmt und sendet wie der ✓-Knopf, ein Wert außerhalb
+  des Bereichs lässt sich nicht setzen). Für die CAN-ID und die Nutzdaten
+  gibt es dasselbe Feld mit den Tasten A–F. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.

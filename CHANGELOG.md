@@ -7,6 +7,21 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 2: Zahlen- und Hex-Tastenfeld, große −/+ Tasten (0.33.0, Pi-Plan Phase 4, PI-6 a, 10.11.2026).**
+  - Neu `lab_gui/touch_keypad.py`: Im Touch-Profil öffnet ein Tipp auf den Wert eines Zahlenfelds (nicht auf −/+) ein
+    Tastenfeld statt Textcursor und Bildschirmtastatur. Kopfzeile mit Bezeichnung (aus dem Formular), Bereich und Einheit;
+    erster Tastendruck ersetzt den alten Wert, Nachkommastellen wie im Feld, ± nur bei negativem Bereich. Außerhalb des
+    Bereichs ist „Setzen“ gesperrt und der Bereich rot. „Setzen“ übernimmt den Wert und löst den ✓-Knopf derselben Zeile
+    aus (`control_tab._row` merkt ihn sich; ein Häkchen wie „Extended“ zählt nicht), „Abbruch“ ändert nichts.
+  - CAN-ID (Anzeige zur Basis 16) mit Hex-Tasten A–F, CAN-Nutzdaten („01 A2 FF“) mit Hex-Tastenfeld und Leertaste,
+    höchstens 8 Bytes.
+  - Zahlenfelder in den Kacheln: „−“ links und „+“ rechts vom Wert in voller Feldhöhe statt kleiner Pfeile übereinander,
+    Felder mindestens 160 px breit. Halten zählt weiter wie bisher schneller. Die Tabellenzellen im Testablauf-Editor
+    bleiben unverändert (der Editor wird am Pi mit Schritt 3 zur Ausführen-Ansicht).
+  - Bekannt: Mit eingeschalteten individuellen Panel-Farben überschreibt deren Feld-Stil die −/+-Darstellung (am Pi aus).
+  - **Mock-verifiziert** (`tools/check_touch_keypad.py`: Eingabe, Bereich, Hex, Tipp öffnet nur im Touch-Profil, Setzen
+    sendet über den ✓-Knopf, Abbruch, CAN-ID neben „Extended“, Nutzdaten) unter Windows, alle 27 Prüfungen grün;
+    Darstellung am Pi offscreen mit Pi-Schriften angesehen. Fingerbedienung steht aus.
 - **Raspberry Pi: Kiosk-Vollbild und Knopf zum Ausschalten (0.32.1, Nutzerwunsch 10.11.2026).**
   - Der Dienst startet LabControl im Vollbild (`LABCONTROL_WINDOW=fullscreen` in `tools/pi/labcontrol.service`):
     ohne Fensterrahmen und Taskleiste. Der Vollbild-Knopf in der Touch-Leiste verlässt es und schaltet es wieder ein;

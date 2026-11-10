@@ -383,7 +383,11 @@ time-window-limited ring buffer of the live charts.
   The button next to it toggles full screen; on the Raspberry Pi LabControl
   starts in full screen. On Linux there is also a power button: after a
   confirmation it shuts the computer down or restarts it, LabControl
-  releases the power supplies first. As long as the checkbox has
+  releases the power supplies first. Number fields in the tiles have large
+  −/+ keys on the left and right; tapping the value opens a keypad showing
+  range and unit ("Set" applies and sends like the ✓ button, a value outside
+  the range cannot be set). The CAN ID and payload get the same keypad with
+  the keys A–F. As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.

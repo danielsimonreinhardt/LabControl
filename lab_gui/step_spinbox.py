@@ -72,8 +72,21 @@ class _SteppedSpinMixin:
         return True
 
     def mousePressEvent(self, event):
-        if not self._begin_press(event):
-            super().mousePressEvent(event)
+        if self._begin_press(event):
+            return
+        if self._open_touch_keypad(event):
+            return
+        super().mousePressEvent(event)
+
+    def _open_touch_keypad(self, event) -> bool:
+        """Touch-Profil: Tipp auf den Wert (nicht die Pfeile) oeffnet das Zahlenfeld (touch_keypad.py)
+        statt Textcursor und Bildschirmtastatur."""
+        from touch_keypad import open_for_spinbox, touch_active   # lokal: touch_keypad -> theme -> Qt
+        if not touch_active() or not self.isEnabled() or self.isReadOnly() or event.button() != Qt.MouseButton.LeftButton:
+            return False
+        event.accept()
+        QTimer.singleShot(0, lambda: open_for_spinbox(self))
+        return True
 
     def mouseDoubleClickEvent(self, event):
         # Ohne diese Weiterleitung wuerde Qt den zweiten Klick eines schnellen
