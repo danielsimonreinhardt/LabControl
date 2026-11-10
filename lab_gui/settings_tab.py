@@ -759,6 +759,7 @@ class _ShareTable(QTableWidget):
 class SettingsTab(QWidget):
     simulation_mode_toggled = Signal(bool)
     dark_mode_toggled = Signal(bool)
+    touch_mode_toggled = Signal(bool)
     language_selected = Signal(str)
     network_dir_changed = Signal(str)   # Netzlaufwerk fuer Log und Betriebsdaten, leer = nur lokal
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
@@ -839,6 +840,12 @@ class SettingsTab(QWidget):
         self._dark_checkbox = QCheckBox()
         self._dark_checkbox.toggled.connect(self.dark_mode_toggled)
         layout.addWidget(self._dark_checkbox)
+
+        # Touch-Bedienung (touch_ui.py): grosse Bedienelemente, Navigation links, Uebersicht als Reiter
+        self._touch_checkbox = QCheckBox()
+        self._touch_checkbox.toggled.connect(self.touch_mode_toggled)
+        layout.addWidget(self._touch_checkbox)
+        self._touch_auto = False
 
         self._notify_checkbox = QCheckBox()
         self._notify_checkbox.toggled.connect(self.notifications_toggled)
@@ -1247,6 +1254,10 @@ class SettingsTab(QWidget):
             )
         )
         self._dark_checkbox.setText(tr("Dark Mode (Amber Industrial statt Modern Light)"))
+        touch_text = tr("Touch-Bedienung (große Bedienelemente, Navigation links, Übersicht als eigener Reiter)")
+        if self._touch_auto:
+            touch_text += " " + tr("– automatisch, kleiner Bildschirm")
+        self._touch_checkbox.setText(touch_text)
         self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
         self._panel_colors_checkbox.setText(tr("Individuelle Panel-Hintergrundfarben (Dashboard/Control)"))
         self._language_label.setText(tr("Sprache:"))
@@ -1323,6 +1334,15 @@ class SettingsTab(QWidget):
         self._sim_checkbox.blockSignals(True)
         self._sim_checkbox.setChecked(enabled)
         self._sim_checkbox.blockSignals(False)
+
+    def set_touch_mode(self, enabled: bool, automatic: bool = False) -> None:
+        """automatic: noch nie selbst gewaehlt, nach Bildschirmgroesse entschieden (Hinweis im Text)."""
+        self._touch_checkbox.blockSignals(True)
+        self._touch_checkbox.setChecked(enabled)
+        self._touch_checkbox.blockSignals(False)
+        if automatic != self._touch_auto:
+            self._touch_auto = automatic
+            self._retranslate()
 
     def set_dark_mode(self, enabled: bool) -> None:
         self._dark_checkbox.blockSignals(True)

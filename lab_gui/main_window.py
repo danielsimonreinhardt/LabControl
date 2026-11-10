@@ -6,8 +6,9 @@ import os
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -45,6 +46,7 @@ from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
 from theme import PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
+from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch
 from version import __version__
 
 logger = logging.getLogger(__name__)
@@ -95,6 +97,12 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         layout = QVBoxLayout(central)
+        # Touch-Profil (touch_ui.py): Leiste oben statt Statusleiste, Navigation links statt Reiterleiste
+        self._touch = False
+        self._base_font = None
+        self._top_bar = TopBar()
+        self._top_bar.hide()
+        layout.addWidget(self._top_bar)
 
         self._safety_banner = QWidget()
         self._safety_banner.setObjectName("safetyBanner")
@@ -118,6 +126,11 @@ class MainWindow(QMainWindow):
 
         self.dashboard = DashboardWidget()
         layout.addWidget(self.dashboard)
+        # Touch-Profil: das Dashboard (feste Hoehe) oben auf einer eigenen Reiterseite "Uebersicht"
+        self._overview_page = QWidget()
+        self._overview_layout = QVBoxLayout(self._overview_page)
+        self._overview_layout.setContentsMargins(0, 0, 0, 0)
+        self._overview_layout.addStretch(1)
         # Fuer das Abdocken (siehe _detach_dashboard): das Dashboard wird aus
         # diesem Layout genommen und spaeter an derselben Stelle wieder eingesetzt.
         self._central_layout = layout
@@ -137,7 +150,13 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.settings_tab, "")
         # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
         # nie an Dashboard oder Sicherheitsbanner darueber.
-        layout.addWidget(self.tabs, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        self._nav = NavBar()
+        self._nav.hide()
+        body.addWidget(self._nav)
+        body.addWidget(self.tabs, 1)
+        layout.addLayout(body, 1)
 
         self.setCentralWidget(central)
 
@@ -222,6 +241,7 @@ class MainWindow(QMainWindow):
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
+        self._wire_touch()
         self._style_safety_banner()
         self._retranslate()
 
@@ -230,6 +250,9 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(1, tr("Testablauf"))
         self.tabs.setTabText(2, tr("Verlauf"))
         self.tabs.setTabText(3, tr("Einstellungen"))
+        if self.tabs.indexOf(self._overview_page) >= 0:
+            self.tabs.setTabText(self.tabs.indexOf(self._overview_page), tr("Übersicht"))
+        self._nav.retranslate()
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._safety_ack_button.setText(tr("Quittieren"))
@@ -395,10 +418,12 @@ class MainWindow(QMainWindow):
 
     def _style_all_off_button(self) -> None:
         pal = ThemeManager.instance().palette
+        padding = "6px 18px" if self._touch else "2px 10px"   # Touch: mindestens 64 x 44 px
         self._all_off_button.setStyleSheet(
             f"background-color: {pal.danger}; color: #ffffff; font-weight: bold; "
-            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: 2px 10px;"
+            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: {padding};"
         )
+        self._all_off_button.setMinimumSize(*((96, 44) if self._touch else (0, 0)))
 
     def _wire_registry(self) -> None:
         self._registry.device_known.connect(self.dashboard.on_device_known)
@@ -943,8 +968,8 @@ class MainWindow(QMainWindow):
             self._dashboard_window.close()  # -> closed -> _dock_dashboard
 
     def _detach_dashboard(self) -> None:
-        if self._dashboard_window is not None or self._closing:
-            return
+        if self._dashboard_window is not None or self._closing or self._touch:
+            return   # im Touch-Profil ist das Dashboard ein eigener Reiter
         self._central_layout.removeWidget(self.dashboard)
         window = DashboardWindow()
         window.set_dashboard(self.dashboard)
@@ -974,6 +999,80 @@ class MainWindow(QMainWindow):
         if not self._closing:
             self._settings.set_dashboard_detached(False)
         window.deleteLater()
+
+    # -- Touch-Profil (touch_ui.py, Pi-Plan Phase 4) --------------------------
+
+    def _wire_touch(self) -> None:
+        self._nav.add_page(self._overview_page, "mdi.view-dashboard-outline", lambda: tr("Übersicht"))
+        self._nav.add_page(self.control_tab, "mdi.tune-variant", lambda: tr("Steuerung"))
+        self._nav.add_page(self.testcase_tab, "mdi.playlist-play", lambda: tr("Testablauf"))
+        self._nav.add_page(self.timeline_tab, "mdi.chart-line", lambda: tr("Verlauf"))
+        self._nav.add_page(self.settings_tab, "mdi.cog-outline", lambda: tr("Einstellungen"))
+        self._nav.selected.connect(self.tabs.setCurrentWidget)
+        self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))
+        self._top_bar.fullscreen_requested.connect(self._toggle_fullscreen)
+        chosen = self._settings.touch_mode
+        on = suggest_touch(self.screen()) if chosen is None else chosen
+        self.settings_tab.set_touch_mode(on, automatic=chosen is None and on)
+        self.settings_tab.touch_mode_toggled.connect(self._settings.set_touch_mode)
+        self._settings.touch_mode_changed.connect(self._apply_touch)
+        self._settings.touch_mode_changed.connect(lambda value: self.settings_tab.set_touch_mode(value))
+        self._apply_touch(on)
+
+    def _apply_touch(self, on: bool) -> None:
+        if on == self._touch:
+            return
+        if on and self._dashboard_window is not None:
+            self._dashboard_window.close()   # -> _dock_dashboard, danach Reiter
+        self._touch = on
+        ThemeManager.instance().set_touch(on)
+        app = QApplication.instance()
+        if on:
+            self._base_font = app.font()
+            font = QFont(self._base_font)
+            font.setPointSizeF(self._base_font.pointSizeF() * FONT_SCALE)
+            app.setFont(font)
+        elif self._base_font is not None:
+            app.setFont(self._base_font)
+        trailing = [self._remote_status_label, self._all_off_button]
+        visible = {w: not w.isHidden() for w in [self._status_container, *trailing]}
+        if on:
+            self._central_layout.removeWidget(self.dashboard)
+            self._overview_layout.insertWidget(0, self.dashboard)
+            self.tabs.addTab(self._overview_page, tr("Übersicht"))
+            self.tabs.tabBar().hide()
+            self._nav.show()
+            for widget in [self._status_container, *trailing]:
+                self.statusBar().removeWidget(widget)   # versteckt das Widget
+            self._top_bar.adopt(self._status_container, trailing)
+            self.statusBar().hide()
+            self._top_bar.show()
+            self.tabs.setCurrentWidget(self._overview_page)
+        else:
+            self.tabs.removeTab(self.tabs.indexOf(self._overview_page))
+            self._overview_layout.removeWidget(self.dashboard)
+            self._central_layout.insertWidget(self._central_layout.indexOf(self._safety_banner) + 1, self.dashboard)
+            self.tabs.tabBar().show()
+            self._nav.hide()
+            self._top_bar.release()
+            self._top_bar.hide()
+            for widget in [self._status_container, *trailing]:
+                self.statusBar().addPermanentWidget(widget)
+            self.statusBar().show()
+            self.tabs.setCurrentIndex(0)
+        for widget, was_visible in visible.items():
+            widget.setVisible(was_visible)
+        self.dashboard.show()
+        self._nav.set_current(self.tabs.currentWidget())
+        self._style_all_off_button()
+        logger.info("Touch-Bedienung %s", "an" if on else "aus")
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+        self._top_bar.set_fullscreen(self.isFullScreen())
 
     def _wire_notifications(self) -> None:
         # Desktop-Benachrichtigung bei Lauf-Ende/Fehler (FEATURES.md Punkt 8),

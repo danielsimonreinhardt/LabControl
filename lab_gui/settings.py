@@ -63,6 +63,7 @@ def _clamp_control_timeout(minutes: int) -> int:
 class Settings(QObject):
     simulation_mode_changed = Signal(bool)
     dark_mode_changed = Signal(bool)
+    touch_mode_changed = Signal(bool)
     dashboard_compact_changed = Signal(bool)
     language_changed = Signal(str)
     safety_limits_changed = Signal(dict)
@@ -115,6 +116,20 @@ class Settings(QObject):
     @property
     def dark_mode(self) -> bool:
         return bool(self._data.get("dark_mode", False))
+
+    @property
+    def touch_mode(self) -> bool | None:
+        """Touch-Bedienung (touch_ui.py): True/False, None = noch nie gesetzt -> das Hauptfenster
+        entscheidet nach der Bildschirmgroesse (bis 1024 x 600 an)."""
+        value = self._data.get("touch_mode")
+        return value if isinstance(value, bool) else None
+
+    def set_touch_mode(self, enabled: bool) -> None:
+        if enabled == self.touch_mode:
+            return
+        self._data["touch_mode"] = bool(enabled)
+        self._save()
+        self.touch_mode_changed.emit(bool(enabled))
 
     def set_dark_mode(self, enabled: bool) -> None:
         if enabled == self.dark_mode:

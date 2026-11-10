@@ -7,6 +7,23 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 1: Gerüst für kleine Touch-Displays (0.32.0, Pi-Plan Phase 4, PI-5 a, 10.11.2026).**
+  Neue Einstellung „Touch-Bedienung“ (Allgemein), neues Modul `lab_gui/touch_ui.py`. Gleiche Widgets wie am PC, nur
+  anders angeordnet und größer:
+  - Reiter als große Schaltflächen links (Symbol und Text), die Reiterleiste oben entfällt.
+  - Die Übersicht (Dashboard) ist ein eigener Reiter statt eines festen Streifens über allen Reitern; Abdocken gibt es
+    im Touch-Profil nicht.
+  - Oben eine Leiste mit Gerätezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf und ALLE AUS (mindestens
+    96 × 44 px) statt der Statusleiste, die mit vielen Geräten breiter als 1024 px wurde.
+  - Schrift um 20 % größer, Knöpfe und Eingabefelder mindestens etwa 40 px hoch, breitere Spin-Pfeile, große Häkchen
+    und Scrollbalken (zusätzliche Stylesheet-Regeln über dem Theme).
+  - Solange nie gewählt, schaltet LabControl das Profil auf Bildschirmen bis 1024 × 600 von selbst ein (nicht ohne
+    echte Anzeige, also nicht in Tests/CI). Aus- und Einschalten geht ohne Neustart.
+  - Noch nicht enthalten (nächste Schritte): Zahlenfeld für Sollwerte (PI-6), Testabläufe am Pi nur ausführen (PI-7),
+    Wischen in Listen, Beschriftungen statt Tooltips, Kachel-Raster für Übersicht und Batterie-Simulator.
+  - **Mock-verifiziert** (`tools/check_touch_ui.py`: Vorschlag nach Bildschirmgröße, Ein/Aus mit Rückweg, Leiste oben,
+    Navigation, Abdocksperre, Neustart mit gespeicherter Einstellung) unter Windows; alle 26 Prüfungen grün.
+    **Am Pi angesehen** (Display 1024 × 600, Bildschirmfotos aller Reiter); die Bedienung per Finger steht aus.
 - **Raspberry Pi: Abziehen serieller Geräte wird erkannt, CAN per PCAN-USB (0.31.1, 10.11.2026).**
   Beim Umstecken am Pi (Netzteil ab, PCAN-USB an) gefunden: Unter Linux meldet pyserial einen abgezogenen USB-Adapter beim
   Leeren des Eingangspuffers als `termios.error`, das ist kein `OSError`. Die Treiber fingen nur `SerialException`/`OSError`.

@@ -376,6 +376,13 @@ time-window-limited ring buffer of the live charts.
   present in the built `.exe`, for safety reasons.
 - **Dark mode**: switches between the light "Modern Light" and the dark
   "Amber Industrial" color scheme, without restarting.
+- **Touch operation**: for small touch displays such as on the Raspberry Pi
+  (1024 × 600). Larger text and controls, the tabs as large buttons on the
+  left, the overview (dashboard) as its own tab instead of a fixed strip,
+  and a bar at the top with the device status (swipeable) and **ALL OFF**.
+  The button next to it toggles full screen. As long as the checkbox has
+  never been set, LabControl turns the profile on by itself on screens up to
+  1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.
 - **Individual panel background colors**: globally enables/disables
   panel color selection in the "Control" tab (see sections 1/2). The

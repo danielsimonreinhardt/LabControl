@@ -437,6 +437,7 @@ class ThemeManager(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._palette = LIGHT
+        self._touch = False
 
     @classmethod
     def instance(cls) -> "ThemeManager":
@@ -448,12 +449,32 @@ class ThemeManager(QObject):
     def palette(self) -> Palette:
         return self._palette
 
+    @property
+    def touch(self) -> bool:
+        return self._touch
+
     def apply(self, dark: bool) -> None:
         self._palette = AMBER_DARK if dark else LIGHT
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(stylesheet(self._palette))
+        self._restyle()
         self.changed.emit(self._palette)
+
+    def set_touch(self, on: bool) -> None:
+        """Touch-Profil: groessere Bedienelemente (touch_ui.touch_qss) zusaetzlich zum Theme."""
+        if on == self._touch:
+            return
+        self._touch = on
+        self._restyle()
+        self.changed.emit(self._palette)
+
+    def _restyle(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        qss = stylesheet(self._palette)
+        if self._touch:
+            from touch_ui import touch_qss   # lokal: touch_ui importiert theme
+            qss += touch_qss(self._palette)
+        app.setStyleSheet(qss)
 
 
 def current() -> Palette:

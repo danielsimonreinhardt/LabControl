@@ -395,6 +395,14 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Sicherheitsgründen nicht vorhanden.
 - **Dark Mode**: wechselt zwischen dem hellen „Modern Light“- und dem
   dunklen „Amber Industrial“-Farbschema, ohne Neustart.
+- **Touch-Bedienung**: für kleine Touch-Displays wie am Raspberry Pi
+  (1024 × 600). Größere Schrift und Bedienelemente, die Reiter als große
+  Schaltflächen links, die Übersicht (Dashboard) als eigener Reiter statt
+  eines festen Streifens, und oben eine Leiste mit dem Gerätezustand (zum
+  Wischen) und **ALLE AUS**. Der Knopf daneben schaltet Vollbild ein und
+  aus. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
+  Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.
 - **Individuelle Panel-Hintergrundfarben**: schaltet die Panel-Farbwahl
   im Reiter „Steuerung“ global ein/aus (siehe Abschnitt 1/2). Beim
