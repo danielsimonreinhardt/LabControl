@@ -51,7 +51,11 @@ Semantic Versioning (`lab_gui/version.py`).
   - **Mock-verifiziert** (`tools/check_shutdown_inhibit.py`: Ablauf mit nachgebildetem logind, Abbruch, nur einmal schließen,
     Windows; am Pi zusätzlich die echte Sperre in `systemd-inhibit --list`). **Am Pi ausprobiert** (Simulation, ohne Geräte):
     Neustart per `systemctl reboot` -- Log „System wird heruntergefahren“, Netzteil freigegeben, Ende mit Code 0, nach dem
-    Neustart startet der Dienst von selbst und hält die Sperre wieder. **Nicht ausprobiert:** mit echtem Netzteil (Phase 3).
+    Neustart startet der Dienst von selbst und hält die Sperre wieder. **Hardware-verifiziert am Pi** (10.11.2026, HCS-34xx
+    16 V/30 A `psu:0001` am 12-V-Eval-Board, Nutzer am Touch-Display): Neustart über das Desktop-Menü gibt das Netzteil vor
+    dem Desktop-Ende frei (Log und Gerät: 1 V, Ausgang EIN), danach startet LabControl von selbst und verbindet das Netzteil
+    wieder. Ebenso am Gerät bestätigt: Werte in der Kachel wie am Gerät, Sollwert 12 V, Ausgang EIN/AUS, Handbedienung
+    ein/aus, „Nicht verbundene Geräte löschen“ per Touch.
 - **Raspberry Pi: Einrichtung, Autostart als Dienst, Update vom PC (0.30.0, Pi-Plan Phase 2, 10.11.2026).**
   Neuer Ordner `tools/pi` (Überblick in `tools/pi/README.md`):
   - `setup_pi.sh` richtet den Pi ein: Python-Umgebung nur mit den Qt-Basismodulen (`PySide6-Essentials`, spart gut 300 MB),
