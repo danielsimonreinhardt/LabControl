@@ -31,8 +31,10 @@ Semantic Versioning (`lab_gui/version.py`).
   - Einstellungen: unter dem Feld eine zweite Zeile, wohin die Daten gehen und wie viele Dateien lokal warten.
   - **Mock-verifiziert** (`tools/check_data_store.py`: Verschieben, frische und `.part`-Dateien, Namensgleichheit,
     nicht erreichbar mit Grenze und Nachschieben, Kopierfehler, Thread, CSV-Pfad, Anzeige; `check_app_logging.py` an die
-    neuen Pfade angepasst) unter Windows, am Pi siehe unten. **Nicht geprüft:** echtes SMB/NFS-Netzlaufwerk (steht noch
-    nicht fest).
+    neuen Pfade angepasst); alle 24 Prüfungen unter Windows und am Pi grün. **Am Pi ausprobiert** (Dienst, Simulation,
+    `/dev/shm` als Ersatz-Netzlaufwerk): eine 5 min alte Erfassung lag nach dem Start in `raspberrypi/captures/`, lokal
+    gelöscht, Log in `raspberrypi/labdash.log`; Einstellung danach wieder zurückgenommen. **Nicht geprüft:** echtes
+    SMB/NFS-Netzlaufwerk (steht noch nicht fest).
 - **Raspberry Pi: Netzteile auch beim Neustart aus dem Desktop freigeben (0.30.2, 10.11.2026).**
   Beim ersten Neustart des Pi mit laufendem Dienst fehlte im Log das Beenden. Nachgestellt mit einem eigenen kopflosen labwc:
   Endet der Wayland-Compositor vor LabControl, beendet Qt den Prozess sofort („The Wayland connection broke“, Exit-Code 255),
