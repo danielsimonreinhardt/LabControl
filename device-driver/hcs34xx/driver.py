@@ -39,6 +39,12 @@ from dataclasses import dataclass
 import serial
 from serial.tools import list_ports
 
+try:   # Linux: ein abgezogener USB-Adapter meldet tcflush/tcsetattr als termios.error (kein OSError)
+    import termios
+    SERIAL_ERRORS: tuple = (serial.SerialException, OSError, termios.error)
+except ImportError:   # Windows
+    SERIAL_ERRORS = (serial.SerialException, OSError)
+
 USB_VID = 0x10C4
 USB_PID = 0xEA60
 DEFAULT_BAUDRATE = 9600
@@ -154,7 +160,7 @@ class HCS34xx:
             self._ser.reset_input_buffer()
             self._ser.write((cmd + "\r").encode("ascii"))
             raw = self._ser.read_until(b"OK\r")
-        except (serial.SerialException, OSError) as exc:
+        except SERIAL_ERRORS as exc:
             raise PowerSupplyError(f"Kommunikationsfehler auf Port {self._ser.port}: {exc}") from exc
         if not raw.endswith(b"OK\r"):
             raise PowerSupplyError(
@@ -179,7 +185,7 @@ class HCS34xx:
             self._ser.reset_input_buffer()
             self._ser.write(b"ENDS\r")
             return self._ser.read_until(b"OK\r").endswith(b"OK\r")
-        except (serial.SerialException, OSError):
+        except SERIAL_ERRORS:
             return False
 
     @staticmethod

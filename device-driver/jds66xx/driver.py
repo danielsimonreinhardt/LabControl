@@ -27,6 +27,12 @@ from dataclasses import dataclass
 import serial
 from serial.tools import list_ports
 
+try:   # Linux: ein abgezogener USB-Adapter meldet tcflush/tcsetattr als termios.error (kein OSError)
+    import termios
+    SERIAL_ERRORS: tuple = (serial.SerialException, OSError, termios.error)
+except ImportError:   # Windows
+    SERIAL_ERRORS = (serial.SerialException, OSError)
+
 # Generischer WCH-CH340-Wandler. ACHTUNG: dieselbe VID/PID tragen viele fremde
 # Geraete (Arduino-Klone, Entwicklungsboards, ...) -- ein Treffer heisst NICHT,
 # dass ein Funktionsgenerator daran haengt. Deshalb gilt ein Port erst nach
@@ -173,7 +179,7 @@ class JDS66xx:
         for info in cls.discover_ports():
             try:
                 candidate = cls(info.device, baudrate=baudrate, timeout=timeout)
-            except (serial.SerialException, OSError):
+            except SERIAL_ERRORS:
                 continue
             if candidate.probe():
                 return candidate
@@ -210,7 +216,7 @@ class JDS66xx:
             self._ser.reset_input_buffer()
             self._ser.write((frame + "\r\n").encode("ascii"))
             raw = self._ser.readline()
-        except (serial.SerialException, OSError) as exc:
+        except SERIAL_ERRORS as exc:
             raise FunctionGeneratorError(f"Kommunikationsfehler auf Port {self._ser.port}: {exc}") from exc
         if not raw:
             raise FunctionGeneratorError(f"Keine Antwort vom Geraet (Timeout) auf Port {self._ser.port}")

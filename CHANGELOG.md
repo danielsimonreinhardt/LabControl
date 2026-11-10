@@ -7,6 +7,23 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Raspberry Pi: Abziehen serieller Geräte wird erkannt, CAN per PCAN-USB (0.31.1, 10.11.2026).**
+  Beim Umstecken am Pi (Netzteil ab, PCAN-USB an) gefunden: Unter Linux meldet pyserial einen abgezogenen USB-Adapter beim
+  Leeren des Eingangspuffers als `termios.error`, das ist kein `OSError`. Die Treiber fingen nur `SerialException`/`OSError`.
+  Folge: Das Netzteil galt weiter als verbunden, **jeder Abfrage-Zyklus brach ab** (617-mal in 2,5 min, nur im
+  Systemprotokoll, nicht in `labdash.log`), und alle danach abgefragten Geräte -- CAN und Batterie-Simulator -- wären
+  stehen geblieben. Beim Beenden scheiterte die Netzteil-Freigabe mit einem Traceback.
+  - Netzteil, Last, Funktionsgenerator und microHIL: `termios.error` zählt jetzt als Verbindungsfehler
+    (`SERIAL_ERRORS` je Treiber; unter Windows unverändert).
+  - DeviceWorker: Ein unerwarteter Fehler an Netzteil oder Last trennt nur dieses Gerät und steht mit Traceback im Log;
+    der Zyklus fragt die übrigen Geräte trotzdem ab.
+  - CAN am Pi: PCAN-USB (SocketCAN, `can0`) mit dem Batterie-Simulator in Betrieb. `setup_pi.sh` legt eine udev-Regel an,
+    die jeden USB-CAN-Adapter beim Einstecken mit 500 kbit/s hochfährt (LabControl setzt die Bitrate unter Linux nicht
+    selbst, dafür braucht es root).
+  - **Mock-verifiziert** (`tools/check_serial_unplug.py`: alle vier Treiber mit SerialException, OSError und unter Linux
+    termios.error; Worker trennt nur das kaputte Gerät, CAN läuft weiter) unter Windows und am Pi. **Am Gerät:** Batterie-
+    Simulator (BattSimFW 0.5.7) am Pi über PCAN-USB verbunden, Status, Stapelspannung und 48-V-Versorgung in der Kachel,
+    nichts geschaltet. Das Abziehen selbst ist mit dem Netzteil noch einmal nachzuprüfen.
 - **Alle Betriebsdaten aufs Netzlaufwerk (0.31.0, Entscheidungen PI-12 b und PI-13 a, 10.11.2026).**
   Nutzerwunsch: Alles, was LabControl im Betrieb erzeugt, soll aufs Netzlaufwerk, damit man es später auswerten kann. Das
   Feld „Log-Ordner (Netzlaufwerk)“ aus 0.29.0 heißt jetzt **„Netzlaufwerk (Log und Daten)“** (Einstellung `network_dir`,

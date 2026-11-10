@@ -26,6 +26,12 @@ from dataclasses import dataclass
 import serial
 from serial.tools import list_ports
 
+try:   # Linux: ein abgezogener USB-Adapter meldet tcflush/tcsetattr als termios.error (kein OSError)
+    import termios
+    SERIAL_ERRORS: tuple = (serial.SerialException, OSError, termios.error)
+except ImportError:   # Windows
+    SERIAL_ERRORS = (serial.SerialException, OSError)
+
 USB_VID = 0x0483
 USB_PID = 0x5740
 DEFAULT_BAUDRATE = 115200
@@ -350,7 +356,7 @@ class MicroHIL:
         # als verbunden fuehren, obwohl die Verbindung tot ist.
         try:
             self._ser.write((cmd + "\n").encode("ascii"))
-        except (serial.SerialException, OSError) as exc:
+        except SERIAL_ERRORS as exc:
             raise HilError(f"Schreibfehler auf Port {self._ser.port}: {exc}") from exc
 
     def _read_line(self) -> str:
@@ -359,7 +365,7 @@ class MicroHIL:
         # im Puffer und wird per strip() entfernt.
         try:
             raw = self._ser.readline()
-        except (serial.SerialException, OSError) as exc:
+        except SERIAL_ERRORS as exc:
             raise HilError(f"Lesefehler auf Port {self._ser.port}: {exc}") from exc
         if not raw:
             raise HilError(f"Keine Antwort vom Geraet (Timeout) auf Port {self._ser.port}")

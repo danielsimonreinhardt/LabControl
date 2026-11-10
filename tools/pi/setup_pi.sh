@@ -50,6 +50,16 @@ sudo install -Dm644 /dev/stdin /etc/systemd/logind.conf.d/50-labcontrol.conf <<'
 InhibitDelayMaxSec=15
 EOF
 
+echo "== CAN (SocketCAN)"
+# USB-CAN-Adapter (PCAN-USB: Treiber peak_usb im Kernel) erscheinen als can0, can1 ... und sind
+# zunaechst aus. LabControl setzt die Bitrate unter Linux nicht selbst (braucht root); diese Regel
+# faehrt jeden Adapter beim Einstecken mit 500 kbit/s hoch (Batterie-Simulator, 10.11.2026).
+sudo install -Dm644 /dev/stdin /etc/udev/rules.d/80-labcontrol-can.rules <<'EOF'
+# LabControl-Pi: USB-CAN-Adapter (PCAN-USB, peak_usb) mit 500 kbit/s hochfahren (Batterie-Simulator)
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="can*", RUN+="/sbin/ip link set %k type can bitrate 500000 restart-ms 100", RUN+="/sbin/ip link set %k up"
+EOF
+sudo udevadm control --reload
+
 echo "== Rechte fuer Geraete"
 for g in dialout plugdev; do
   id -nG | grep -qw "$g" || { sudo usermod -aG "$g" "$USER"; echo "zur Gruppe $g hinzugefuegt (wirkt nach Neuanmeldung)"; }

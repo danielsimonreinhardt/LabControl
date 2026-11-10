@@ -41,5 +41,8 @@ flowchart LR
 - Daten (Einstellungen, Log, Erfassungen): `~/.local/share/labcontrol`, abweichend über `LABCONTROL_DATA_DIR`
 - Fensterzustand: `LABCONTROL_WINDOW=maximized|fullscreen` im Dienst (heute `maximized`;
   Vollbild kommt mit dem Touch-Profil, damit man es in der App auch wieder verlassen kann)
+- CAN: PCAN-USB erscheint als `can0`, eine udev-Regel aus `setup_pi.sh` fährt ihn beim Einstecken mit
+  500 kbit/s hoch. In LabControl: Schnittstelle `socketcan`, Kanal `can0` (Einstellungen → CAN).
+  Andere Bitrate: Regel `/etc/udev/rules.d/80-labcontrol-can.rules` anpassen.
 - Fenster schließen beendet den Dienst ohne Neustart; nach einem Absturz startet er nach 5 s neu
   (höchstens 5-mal in 10 min). Ein Neustart schaltet keine Geräte ein.

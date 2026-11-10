@@ -1552,9 +1552,15 @@ class DeviceWorker(QObject):
                 self.load_measurement.emit(device_id, m.voltage, m.current, m.power)
                 self.load_input_state.emit(device_id, load.get_input())
                 self.load_function_state.emit(device_id, load.get_function())
-            except LoadError as exc:
-                logger.warning("Last %s getrennt: %s", device_id, exc)
-                load.close()
+            except Exception as exc:  # noqa: BLE001 -- ein Geraet darf den Zyklus fuer die anderen nie abbrechen
+                if isinstance(exc, LoadError):
+                    logger.warning("Last %s getrennt: %s", device_id, exc)
+                else:
+                    logger.exception("Last %s: unerwarteter Fehler, gilt als getrennt", device_id)
+                try:
+                    load.close()
+                except Exception:  # noqa: BLE001
+                    pass
                 del self._loads[device_id]
                 self.load_connected.emit(device_id, False)
                 self.device_removed.emit("load", device_id)
@@ -1578,9 +1584,15 @@ class DeviceWorker(QObject):
                         on = self._psu_output_seen.get(device_id)   # unverstaendliche Antwort: nichts melden
                     if on is not None and self._psu_output_seen.get(device_id) != on:
                         self._emit_psu_output(device_id, on)
-            except PowerSupplyError as exc:
-                logger.warning("Netzteil %s getrennt: %s", device_id, exc)
-                psu.close()
+            except Exception as exc:  # noqa: BLE001 -- ein Geraet darf den Zyklus fuer die anderen nie abbrechen
+                if isinstance(exc, PowerSupplyError):
+                    logger.warning("Netzteil %s getrennt: %s", device_id, exc)
+                else:   # z. B. termios.error unter Linux vor 0.31.1: stand nur auf stderr, CAN blieb stehen
+                    logger.exception("Netzteil %s: unerwarteter Fehler, gilt als getrennt", device_id)
+                try:
+                    psu.close()
+                except Exception:  # noqa: BLE001
+                    pass
                 del self._psus[device_id]
                 self.psu_connected.emit(device_id, False)
                 self.device_removed.emit("psu", device_id)
