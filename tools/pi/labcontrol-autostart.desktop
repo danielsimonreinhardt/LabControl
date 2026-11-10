@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LabControl
+Comment=Startet den LabControl-Dienst beim Anmelden am Desktop (tools/pi/labcontrol.service)
+Exec=sh -c 'systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP; systemctl --user start labcontrol.service'
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

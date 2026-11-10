@@ -1,0 +1,27 @@
+# LabControl als systemd-Benutzerdienst am Raspberry Pi (Phase 2, 10.11.2026).
+# Installiert von tools/pi/setup_pi.sh nach ~/.config/systemd/user/labcontrol.service,
+# gestartet beim Anmelden am Desktop ueber ~/.config/autostart/labcontrol.desktop.
+#
+# Beenden (Herunterfahren, Abmelden, "systemctl --user stop labcontrol") schickt SIGTERM:
+# LabControl gibt dann wie beim Schliessen des Fensters die Netzteile frei
+# (lab_gui/shutdown_signals.py). Schliesst man das Fenster selbst, endet der Dienst
+# mit Code 0 und wird NICHT neu gestartet; nur nach einem Absturz.
+
+[Unit]
+Description=LabControl Laborsteuerung
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/LabControl
+Environment=QT_QPA_PLATFORM=wayland
+Environment=LABCONTROL_WINDOW=maximized
+# Qt meldet auf labwc bei jedem Fokuswechsel eine harmlose Texteingabe-Warnung
+Environment="QT_LOGGING_RULES=qt.qpa.wayland.textinput=false"
+ExecStart=%h/labcontrol-venv/bin/python %h/LabControl/lab_gui/main.py
+Restart=on-failure
+RestartSec=5
+# Netzteile freigeben dauert wenige Sekunden; danach erst hart beenden
+TimeoutStopSec=20
+KillMode=mixed

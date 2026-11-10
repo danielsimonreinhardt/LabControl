@@ -12,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "device-driver")
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (control_tab, ...)
 
 import logging
+import os
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 import app_logging
 from app_icon import icon as app_icon
@@ -37,6 +38,25 @@ try:
 except ImportError:
     pyi_splash = None
 
+# Fensterzustand beim Start, z. B. am Raspberry Pi per systemd-Dienst (tools/pi/labcontrol.service):
+# "maximized" oder "fullscreen"; leer/unbekannt = normales Fenster wie bisher.
+WINDOW_ENV = "LABCONTROL_WINDOW"
+# Feste Wayland-App-ID (sonst "python3"), damit der Compositor das Fenster erkennt.
+DESKTOP_FILE_NAME = "labcontrol"
+
+
+def show_window(window: QWidget, mode: str | None = None) -> str:
+    """Zeigt das Hauptfenster im gewuenschten Zustand und gibt den verwendeten zurueck."""
+    mode = (os.environ.get(WINDOW_ENV, "") if mode is None else mode).strip().lower()
+    if mode == "fullscreen":
+        window.showFullScreen()
+    elif mode == "maximized":
+        window.showMaximized()
+    else:
+        mode = "normal"
+        window.show()
+    return mode
+
 
 def main() -> None:
     # Einstellungen vor dem Logging: der Log-Ordner (Netzlaufwerk) steht darin.
@@ -44,13 +64,16 @@ def main() -> None:
     setup_logging(settings.log_dir)
     logger.info("LAB CONTROL v%s startet", __version__)
     app = QApplication(sys.argv)
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
     app.setWindowIcon(app_icon())
     Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
     window = MainWindow(settings)
     # SIGTERM/Strg+C beenden wie das Schliessen des Fensters (Netzteile freigeben usw.)
     shutdown_signals.install(window.close, app)   # app haelt den Weck-Timer
-    window.show()
+    mode = show_window(window)
+    if mode != "normal":
+        logger.info("Fenster: %s (%s)", mode, WINDOW_ENV)
     if pyi_splash is not None:
         pyi_splash.close()
     exit_code = app.exec()
