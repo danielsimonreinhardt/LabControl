@@ -4,7 +4,8 @@ Unterstuetzt aktuell Vector- (z.B. CANcase XL, benoetigt die Vector XL
 Driver Library) und PEAK-Interfaces (z.B. PCAN-USB, benoetigt PCAN-Basic) --
 beides Fremd-Software, die separat installiert sein muss (siehe README.md) --
 sowie SLCAN (serielles/USB-CDC-Protokoll, u.a. vom microHIL-CAN1-Port
-gesprochen, siehe _slcan_serial_configs() unten). Ausserhalb dieses Moduls
+gesprochen, siehe _slcan_serial_configs() unten), unter Linux statt Vector
+SocketCAN (Kernel-Treiber, z.B. PCAN-USB als can0). Ausserhalb dieses Moduls
 ist nie von einem konkreten Hersteller die Rede, nur noch von
 interface/channel/bitrate (siehe device_worker.py) -- neue Interface-Typen
 lassen sich durch Ergaenzen von INTERFACE_LIST anbinden, sofern python-can
@@ -15,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -25,7 +27,15 @@ from serial.tools import list_ports
 
 logger = logging.getLogger(__name__)
 
-INTERFACE_LIST = ["vector", "pcan", "slcan"]
+# Die Vector XL Driver Library gibt es nur fuer Windows, SocketCAN nur unter
+# Linux (Raspberry Pi, 10.11.2026); PCAN und SLCAN gehen auf beiden. Unter Linux
+# laeuft ein PCAN-USB ueber das Kernelmodul peak_usb als SocketCAN-Kanal "can0".
+if sys.platform == "win32":
+    INTERFACE_LIST = ["vector", "pcan", "slcan"]
+elif sys.platform.startswith("linux"):
+    INTERFACE_LIST = ["socketcan", "pcan", "slcan"]
+else:
+    INTERFACE_LIST = ["pcan", "slcan"]
 DEFAULT_BITRATE = 500_000
 # Baudrate der seriellen/USB-Verbindung ZUM Adapter (python-can-Parameter
 # `tty_baudrate`) -- zu unterscheiden von obigem DEFAULT_BITRATE, der
@@ -230,6 +240,11 @@ class CanBus:
             # serial_baudrate ist fuer vector/pcan bedeutungslos (dort nie
             # gesetzt) -- nur hier verwendet, siehe DEFAULT_SLCAN_SERIAL_BAUDRATE.
             kwargs["tty_baudrate"] = serial_baudrate or DEFAULT_SLCAN_SERIAL_BAUDRATE
+        elif interface == "socketcan":
+            # SocketCAN setzt die Bitrate nicht selbst: sie gehoert zur
+            # Netzwerkschnittstelle ("ip link set can0 up type can bitrate
+            # 500000", root, siehe README.md). python-can ignoriert sie hier.
+            kwargs.pop("bitrate")
         try:
             self._bus = can.interface.Bus(**kwargs)
         except Exception as exc:

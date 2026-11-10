@@ -44,6 +44,30 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Raspberry Pi, Phase 1 (Teil 1): Start unter Linux möglich, Beenden per Signal wie Fenster schließen, SocketCAN (0.27.0, Nutzer, 10.11.2026).**
+  Erster Schritt der Portierung auf einen Raspberry Pi mit 1024×600-Touch-Display (Plan und Entscheidungen PI-1 bis PI-11 im
+  Plan-Artefakt vom 10.11.2026). Unter Windows ändert sich am Verhalten nichts.
+  - **PicoScope-Treiber:** lud beim Import `ctypes.WinDLL("setupapi")`. Unter Linux gibt es `WinDLL` nicht, damit wäre die ganze
+    App schon beim Start abgebrochen, auch ohne Oszilloskop. Die SetupAPI wird jetzt nur unter Windows geladen; `usb_present()`
+    liest unter Linux `/sys/bus/usb/devices/*/idVendor|idProduct`. `launch_app()` liefert ohne `PicoScope.exe` wie bisher False.
+    Die Bibliothek heißt unter Linux `libps2000.so` (Pico-Linux-SDK); ob es sie für arm64 gibt, ist noch nicht geprüft.
+  - **Beenden per Signal:** SIGTERM (z. B. `systemctl stop`, Herunterfahren des Pi), SIGINT (Strg+C) und SIGHUP laufen jetzt
+    über `MainWindow.close()`, also denselben Weg wie das Schließen des Fensters: Netzteile freigeben (1 V / 0 A / Ausgang EIN),
+    CAN-Knoten abmelden, Worker beenden. Bisher beendete ein Signal den Prozess ohne all das. Ein zweites Signal während des
+    Abbaus wird ignoriert. Ein Timer (250 ms) gibt Python im Qt-Event-Loop Gelegenheit, den Handler auszuführen
+    (`lab_gui/shutdown_signals.py`).
+  - **CAN:** `INTERFACE_LIST` hängt vom Betriebssystem ab: Windows `vector`, `pcan`, `slcan` (unverändert), Linux `socketcan`,
+    `pcan`, `slcan`. Für SocketCAN (Entscheidung PI-4: USB-Adapter, Vorschlag PEAK PCAN-USB) setzt das System die Bitrate beim
+    Hochfahren von `can0`; LabControl gibt sie nicht an python-can weiter (siehe `device-driver/can_bus/README.md`).
+  - **Mock-verifiziert:** neu `tools/check_shutdown_signals.py` (SIGTERM im Hauptfenster gibt das simulierte Netzteil frei,
+    zweites Signal ignoriert, Signal aus einem anderen Thread während `app.exec()`; Gegenprobe ohne Weck-Timer: Fenster schloss
+    erst nach 3 s Notbremse) und `tools/check_platform_linux.py` (Linux unter Windows nachgestellt: `sys.platform` = "linux",
+    `ctypes.WinDLL` entfernt; PicoScope-Import, sysfs-Erkennung mit nachgebautem Ordnerbaum, SocketCAN ohne Bitrate, Gegenprobe
+    Windows). Alle 19 `tools/check_*.py` grün. **Nicht geprüft:** echtes Linux, Raspberry Pi, SocketCAN-Adapter, Signal von
+    systemd.
+  - Noch offen in Phase 1: stabile Geräte-IDs (Portnamen wechseln unter Linux; Abläufe müssen zwischen Pi und PC austauschbar
+    sein, PI-1), einstellbarer Datenordner, Schrift statt fest „Segoe UI“, microHIL-Schnittstellenerkennung unter Linux,
+    Linux-Job in der CI.
 - **Batterie-Simulator: Bedienung der Kachel steht im Log (0.26.1, Nutzer, 07.11.2026).**
   Am 07.11. sendete LabControl gegen 18 Uhr Fernsteuerung, Ausgang EIN und ein Freigabemuster an den Simulator, ohne dass
   eine Logzeile die Quelle nannte: Fernsteuerung (MCP/Netzwerk) wurde protokolliert („Fernsteuerung: …“), die Bedienung der

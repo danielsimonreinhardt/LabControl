@@ -3,9 +3,18 @@
 Dünner Wrapper um [`python-can`](https://python-can.readthedocs.io/), der
 nach außen nur `interface`/`channel`/`bitrate` kennt – welcher Hersteller
 dahintersteckt, ist nur beim Verbindungsaufbau relevant, nirgends sonst im
-Code. Aktuell unterstützt (siehe `INTERFACE_LIST` in `driver.py`):
+Code. Aktuell unterstützt (siehe `INTERFACE_LIST` in `driver.py`; die Liste
+hängt vom Betriebssystem ab: Windows `vector`, `pcan`, `slcan`; Linux
+`socketcan`, `pcan`, `slcan`):
 
-- `"vector"` – Vector-Interfaces (z.B. CANcase XL, VN1610). Benötigt die
+- `"socketcan"` (nur Linux, z.B. Raspberry Pi) – jeder Adapter mit
+  Kernel-Treiber, empfohlen PEAK PCAN-USB (Modul `peak_usb`, erscheint als
+  `can0`). **Die Bitrate setzt nicht LabControl**, sondern das System beim
+  Hochfahren der Schnittstelle, z.B.
+  `sudo ip link set can0 up type can bitrate 500000` (dauerhaft per
+  systemd-networkd). Der Bitraten-Wert im Settings-Tab wird bei SocketCAN
+  ignoriert. Am Gerät noch nicht geprüft (Stand 0.27.0).
+- `"vector"` (nur Windows) – Vector-Interfaces (z.B. CANcase XL, VN1610). Benötigt die
   **Vector XL Driver Library** (separat vom Hersteller installieren, nicht
   Teil dieses Repos). `driver.py::_ensure_vector_dll_findable()` ist ein
   billiges, rein defensives Sicherheitsnetz für den (an echter VN1610-

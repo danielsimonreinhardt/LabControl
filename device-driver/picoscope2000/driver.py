@@ -31,14 +31,19 @@ launch_app() funktionieren deshalb auch OHNE die ps2000.dll (reine
 Windows-SetupAPI- bzw. Prozessstart-Funktionen) -- nur open_first() und
 capture_block() brauchen die DLL tatsaechlich und werfen PicoScope2000Error,
 falls sie fehlt.
+
+Linux (Raspberry Pi, 10.11.2026): Aus demselben Grund laedt das Modul die
+SetupAPI nur unter Windows; usb_present() liest dort sysfs. Die Bibliothek
+heisst libps2000.so (Pico-Linux-SDK), picosdk findet sie ueber
+find_library/LD_LIBRARY_PATH. launch_app() liefert ohne PicoScope.exe False.
 """
 from __future__ import annotations
 
 import ctypes
 import os
 import subprocess
+import sys
 import time
-from ctypes import wintypes
 from pathlib import Path
 
 from picoscope2000.common import (
@@ -126,66 +131,86 @@ def _require_dll() -> None:
 # damit kann device_worker.py "frei" von "belegt (andere App offen)"
 # unterscheiden.
 
-_setupapi = ctypes.WinDLL("setupapi", use_last_error=True)
+if sys.platform == "win32":
+    from ctypes import wintypes
 
-_DIGCF_PRESENT = 0x00000002
-_DIGCF_ALLCLASSES = 0x00000004
-_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    _setupapi = ctypes.WinDLL("setupapi", use_last_error=True)
 
+    _DIGCF_PRESENT = 0x00000002
+    _DIGCF_ALLCLASSES = 0x00000004
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
-class _SP_DEVINFO_DATA(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("ClassGuid", ctypes.c_byte * 16),
-        ("DevInst", wintypes.DWORD),
-        ("Reserved", ctypes.POINTER(wintypes.ULONG)),
+    class _SP_DEVINFO_DATA(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("ClassGuid", ctypes.c_byte * 16),
+            ("DevInst", wintypes.DWORD),
+            ("Reserved", ctypes.POINTER(wintypes.ULONG)),
+        ]
+
+    _setupapi.SetupDiGetClassDevsW.restype = wintypes.HANDLE
+    _setupapi.SetupDiGetClassDevsW.argtypes = [
+        ctypes.c_void_p, wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD,
     ]
+    _setupapi.SetupDiEnumDeviceInfo.restype = wintypes.BOOL
+    _setupapi.SetupDiEnumDeviceInfo.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(_SP_DEVINFO_DATA),
+    ]
+    _setupapi.SetupDiGetDeviceInstanceIdW.restype = wintypes.BOOL
+    _setupapi.SetupDiGetDeviceInstanceIdW.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(_SP_DEVINFO_DATA),
+        wintypes.LPWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    _setupapi.SetupDiDestroyDeviceInfoList.restype = wintypes.BOOL
+    _setupapi.SetupDiDestroyDeviceInfoList.argtypes = [wintypes.HANDLE]
+
+    def _usb_present_setupapi(vid: int, pid: int) -> bool:
+        needle = f"VID_{vid:04X}&PID_{pid:04X}"
+        dev_info_set = _setupapi.SetupDiGetClassDevsW(
+            None, "USB", None, _DIGCF_PRESENT | _DIGCF_ALLCLASSES
+        )
+        if dev_info_set == _INVALID_HANDLE_VALUE:
+            return False
+        try:
+            index = 0
+            while True:
+                devinfo = _SP_DEVINFO_DATA()
+                devinfo.cbSize = ctypes.sizeof(_SP_DEVINFO_DATA)
+                if not _setupapi.SetupDiEnumDeviceInfo(dev_info_set, index, ctypes.byref(devinfo)):
+                    return False
+                index += 1
+                buf = ctypes.create_unicode_buffer(512)
+                required = wintypes.DWORD()
+                ok = _setupapi.SetupDiGetDeviceInstanceIdW(
+                    dev_info_set, ctypes.byref(devinfo), buf, 512, ctypes.byref(required)
+                )
+                if ok and needle in buf.value:
+                    return True
+        finally:
+            _setupapi.SetupDiDestroyDeviceInfoList(dev_info_set)
 
 
-_setupapi.SetupDiGetClassDevsW.restype = wintypes.HANDLE
-_setupapi.SetupDiGetClassDevsW.argtypes = [
-    ctypes.c_void_p, wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD,
-]
-_setupapi.SetupDiEnumDeviceInfo.restype = wintypes.BOOL
-_setupapi.SetupDiEnumDeviceInfo.argtypes = [
-    wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(_SP_DEVINFO_DATA),
-]
-_setupapi.SetupDiGetDeviceInstanceIdW.restype = wintypes.BOOL
-_setupapi.SetupDiGetDeviceInstanceIdW.argtypes = [
-    wintypes.HANDLE, ctypes.POINTER(_SP_DEVINFO_DATA),
-    wintypes.LPWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
-]
-_setupapi.SetupDiDestroyDeviceInfoList.restype = wintypes.BOOL
-_setupapi.SetupDiDestroyDeviceInfoList.argtypes = [wintypes.HANDLE]
+def _usb_present_sysfs(vid: int, pid: int, root: Path = Path("/sys/bus/usb/devices")) -> bool:
+    """Linux: jedes USB-Geraet hat unter /sys/bus/usb/devices/<bus-port>/ die
+    Dateien idVendor/idProduct (hex ohne 0x) -- auch wenn eine andere Anwendung
+    das Geraet gerade offen haelt. Gibt es den Ordner nicht (z.B. macOS), False."""
+    for dev in root.glob("*"):
+        try:
+            if (int((dev / "idVendor").read_text().strip(), 16) == vid
+                    and int((dev / "idProduct").read_text().strip(), 16) == pid):
+                return True
+        except (OSError, ValueError):
+            continue   # Schnittstellen-Eintraege (z.B. "1-1:1.0") haben keine idVendor-Datei
+    return False
 
 
 def usb_present(vid: int = USB_VID, pid: int = USB_PID) -> bool:
-    """Prueft per Windows-SetupAPI, ob ein USB-Geraet mit dieser VID/PID
-    physisch angeschlossen ist -- unabhaengig davon, ob ps2000_open_unit()
-    es gerade oeffnen koennte (siehe Modul-Docstring oben)."""
-    needle = f"VID_{vid:04X}&PID_{pid:04X}"
-    dev_info_set = _setupapi.SetupDiGetClassDevsW(
-        None, "USB", None, _DIGCF_PRESENT | _DIGCF_ALLCLASSES
-    )
-    if dev_info_set == _INVALID_HANDLE_VALUE:
-        return False
-    try:
-        index = 0
-        while True:
-            devinfo = _SP_DEVINFO_DATA()
-            devinfo.cbSize = ctypes.sizeof(_SP_DEVINFO_DATA)
-            if not _setupapi.SetupDiEnumDeviceInfo(dev_info_set, index, ctypes.byref(devinfo)):
-                return False
-            index += 1
-            buf = ctypes.create_unicode_buffer(512)
-            required = wintypes.DWORD()
-            ok = _setupapi.SetupDiGetDeviceInstanceIdW(
-                dev_info_set, ctypes.byref(devinfo), buf, 512, ctypes.byref(required)
-            )
-            if ok and needle in buf.value:
-                return True
-    finally:
-        _setupapi.SetupDiDestroyDeviceInfoList(dev_info_set)
+    """Prueft, ob ein USB-Geraet mit dieser VID/PID physisch angeschlossen ist
+    -- unabhaengig davon, ob ps2000_open_unit() es gerade oeffnen koennte
+    (siehe Modul-Docstring oben). Windows: SetupAPI, sonst sysfs."""
+    if sys.platform == "win32":
+        return _usb_present_setupapi(vid, pid)
+    return _usb_present_sysfs(vid, pid)
 
 
 # -- PicoScope-7-App starten --------------------------------------------------

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from app_icon import icon as app_icon
 from app_logging import setup_logging
 from i18n import Translator
+import shutdown_signals
 from main_window import MainWindow
 from settings import Settings
 from theme import ThemeManager
@@ -45,6 +46,8 @@ def main() -> None:
     Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
     window = MainWindow(settings)
+    # SIGTERM/Strg+C beenden wie das Schliessen des Fensters (Netzteile freigeben usw.)
+    shutdown_signals.install(window.close, app)   # app haelt den Weck-Timer
     window.show()
     if pyi_splash is not None:
         pyi_splash.close()
