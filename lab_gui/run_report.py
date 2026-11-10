@@ -211,7 +211,7 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
     )
 
     parts: list[str] = []
-    parts.append('<div style="font-family: Segoe UI, Arial, sans-serif; color: #1e2530; max-width: 900px;">')
+    parts.append('<div style="font-family: 'Segoe UI', 'DejaVu Sans', Arial, sans-serif; color: #1e2530; max-width: 900px;">')
     parts.append(f'<h1 style="margin-bottom:4px;">{html.escape(tr("Testablauf-Report"))}</h1>')
     parts.append(
         f'<p style="color:{_TEXT_MUTED}; margin-top:0;">'

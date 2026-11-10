@@ -24,6 +24,7 @@ import numpy as np
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
 
+from fonts import UI_FONT_FAMILIES
 from scope_api import analysis
 from scope_api.base import Capture, ScopeError
 
@@ -129,6 +130,7 @@ def plot_png(capture: Capture, channels: list[str] | None = None, t_start: float
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     font = QFont("Segoe UI", 9)
+    font.setFamilies(UI_FONT_FAMILIES)
     painter.setFont(font)
     fm = painter.fontMetrics()
 

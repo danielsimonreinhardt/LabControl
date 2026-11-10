@@ -19,6 +19,7 @@ Slots referenziert wird.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -291,9 +292,22 @@ def _resolve_device_ids(kind: str, infos: list) -> dict[str, object]:
         if info.serial_number and serial_counts[info.serial_number] == 1:
             device_id = f"{kind}:{info.serial_number}"
         else:
-            device_id = f"{kind}:{info.device}"
+            device_id = f"{kind}:{_port_fallback_id(info)}"
         result[device_id] = info
     return result
+
+
+def _port_fallback_id(info) -> str:
+    """Ersatz-ID ohne eindeutige Seriennummer. Windows: COM-Name (bleibt je
+    Geraet und USB-Buchse gleich, z.B. "psu:COM6"). Linux (Raspberry Pi,
+    10.11.2026): /dev/ttyUSBn haengt von der Steckreihenfolge ab und wechselt
+    nach Neustart oder Umstecken -- stabil ist der USB-Pfad (pyserial
+    `location`, z.B. "1-1.2:1.0" -> "psu:usb-1-1.2:1.0"), solange das Geraet
+    an derselben Buchse bleibt."""
+    location = getattr(info, "location", None)
+    if sys.platform != "win32" and location:
+        return f"usb-{location}"
+    return info.device
 
 
 class DeviceWorker(QObject):
@@ -553,6 +567,15 @@ class DeviceWorker(QObject):
         self._hil_poll_timer.start(HIL_POLL_INTERVAL_MS)
         self._picoscope_reconnect_timer.start(PICOSCOPE_RECONNECT_INTERVAL_MS)
         self._fg_poll_timer.start(FG_POLL_INTERVAL_MS)
+
+    @Slot()
+    def stop_timers(self) -> None:
+        """Haelt alle Timer des Workers in SEINEM Thread an (MainWindow.closeEvent,
+        vor QThread.quit()). Sonst raeumt Python den Worker erst beim Prozessende
+        im Haupt-Thread ab, und Qt meldet unter Linux "Timers cannot be stopped
+        from another thread" (in WSL gesehen, 10.11.2026)."""
+        for timer in self.findChildren(QTimer):
+            timer.stop()
 
     @Slot(bool)
     def set_test_running(self, running: bool) -> None:
@@ -1317,7 +1340,10 @@ class DeviceWorker(QObject):
         if port is None:
             return
         info = next((i for i in MicroHIL.discover_ports() if i.device == port), None)
-        device_id = f"hil:{info.serial_number}" if info is not None and info.serial_number else f"hil:{port}"
+        if info is not None and info.serial_number:
+            device_id = f"hil:{info.serial_number}"
+        else:
+            device_id = f"hil:{_port_fallback_id(info) if info is not None else port}"
         if device_id in self._hils:
             return
         candidate = None

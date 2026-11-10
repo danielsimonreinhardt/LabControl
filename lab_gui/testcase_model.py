@@ -671,13 +671,70 @@ def check_summary(step: TestStep) -> str:
     return f"{symbol}: {step.check_min:g}–{step.check_max:g} {unit}".rstrip()
 
 
-def save_steps(steps: list[TestStep], path: Path) -> None:
+def save_steps(steps: list[TestStep], path: Path, known_devices: dict | None = None) -> None:
     payload = {
         "format": "labor-testcase",
         "version": FILE_FORMAT_VERSION,
         "steps": [asdict(step) for step in steps],
+        "devices": device_map(steps, known_devices or {}),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# -- Geraete zwischen Rechnern zuordnen (Raspberry Pi und PC, 10.11.2026) ---
+#
+# Testablaeufe nennen Geraete per device_id. Die ist nur bei Geraeten mit
+# eindeutiger USB-Seriennummer auf jedem Rechner gleich (z.B. "psu:0001");
+# sonst haengt sie am Anschluss ("psu:COM6" am PC, "psu:usb-1-1.2:1.0" am Pi),
+# und CAN-IDs nennen den Adapter ("can:vector:..." vs. "can:socketcan:can0").
+# Deshalb steht in der Datei zusaetzlich der Name jedes verwendeten Geraets
+# ("devices"); beim Laden wird eine hier unbekannte ID dem bekannten Geraet
+# gleicher Art und gleichen Namens zugeordnet. Aeltere Programmversionen
+# lesen nur "steps" und ignorieren den Eintrag.
+
+
+def _used_device_ids(steps: list[TestStep]) -> set[str]:
+    return {i for step in steps for i in (step.device_id, step.cond_device_id) if i}
+
+
+def device_map(steps: list[TestStep], known_devices: dict) -> dict:
+    """{device_id: {"kind", "label"}} fuer alle in `steps` verwendeten Geraete,
+    soweit `known_devices` (device_id -> (kind, label)) sie kennt."""
+    result = {}
+    for device_id in sorted(_used_device_ids(steps)):
+        if device_id in known_devices:
+            kind, label = known_devices[device_id]
+            result[device_id] = {"kind": kind, "label": label}
+    return result
+
+
+def remap_devices(steps: list[TestStep], file_devices: dict, known_devices: dict) -> dict[str, str]:
+    """Ordnet in `steps` jede hier unbekannte device_id dem einzigen bekannten
+    Geraet gleicher Art und gleichen Namens zu (aendert `steps`). Kein oder mehr
+    als ein Treffer: ID bleibt (Zeile zeigt "nicht verbunden"). Liefert alt -> neu."""
+    mapping: dict[str, str] = {}
+    for old_id in _used_device_ids(steps):
+        entry = file_devices.get(old_id)
+        if old_id in known_devices or not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label", "")).strip()
+        if not label:
+            continue
+        matches = [device_id for device_id, (kind, known_label) in known_devices.items()
+                   if kind == entry.get("kind") and known_label.strip() == label]
+        if len(matches) == 1:
+            mapping[old_id] = matches[0]
+    for step in steps:
+        step.device_id = mapping.get(step.device_id, step.device_id)
+        step.cond_device_id = mapping.get(step.cond_device_id, step.cond_device_id)
+    return mapping
+
+
+def load_device_map(path: Path) -> dict:
+    """Der "devices"-Eintrag einer Testablauf- oder Baustein-Datei ({} bei aelteren Dateien)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    devices = data.get("devices") if isinstance(data, dict) else None
+    return devices if isinstance(devices, dict) else {}
 
 
 def _steps_from_items(items: list[dict]) -> list[TestStep]:
@@ -710,7 +767,7 @@ def load_steps(path: Path) -> list[TestStep]:
     return _steps_from_items(items)
 
 
-def save_block(steps: list[TestStep], name: str, path: Path) -> None:
+def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict | None = None) -> None:
     """Speichert einen (typischerweise per SaveBlockDialog ausgewaehlten)
     Ausschnitt von Schritten als benannten, wiederverwendbaren Baustein --
     eigenes Dateiformat statt save_steps(), da ein Baustein zusaetzlich einen
@@ -721,6 +778,7 @@ def save_block(steps: list[TestStep], name: str, path: Path) -> None:
         "version": BLOCK_FILE_FORMAT_VERSION,
         "name": name,
         "steps": [asdict(step) for step in steps],
+        "devices": device_map(steps, known_devices or {}),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 

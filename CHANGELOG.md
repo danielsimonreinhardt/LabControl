@@ -44,6 +44,37 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Raspberry Pi, Phase 1 abgeschlossen: Testabläufe zwischen PC und Pi austauschbar, stabile IDs, Datenordner, Linux-Prüflauf (0.28.0, Nutzer, 10.11.2026).**
+  - **Testabläufe und Bausteine nennen ihre Geräte zusätzlich mit Art und Namen** (`"devices"` in der Datei). Lädt man die Datei
+    auf einem Rechner, der eine ID nicht kennt, ordnet LabControl sie dem einzigen bekannten Gerät gleicher Art und gleichen
+    Namens zu (Aktions- und Bedingungs-Gerät). Beispiel: `psu:COM6` am PC wird am Pi zu `psu:usb-1-1.2:1.0`,
+    `battsim:vector:59177:1` zu `battsim:socketcan:can0`, wenn die Geräte auf beiden Rechnern gleich heißen. Die Statuszeile
+    meldet „Geräte über ihren Namen zugeordnet: …“, das Log jede Zuordnung. Kein oder mehr als ein Treffer: ID bleibt, die
+    Zeile zeigt wie bisher „nicht verbunden“. Ältere Dateien ohne den Eintrag laden unverändert; ältere Programmversionen
+    ignorieren ihn (Format-Version unverändert). Voraussetzung: Geräte auf PC und Pi gleich benennen (Entscheidung PI-1).
+  - **Stabile Ersatz-IDs unter Linux:** Geräte ohne eindeutige USB-Seriennummer (16-V-Netzteil, Funktionsgenerator) bekamen
+    die ID aus dem Portnamen. Unter Linux wechselt `/dev/ttyUSBn` mit der Steckreihenfolge; dort kommt die ID jetzt aus dem
+    USB-Pfad (`psu:usb-1-1.2:1.0`), stabil, solange das Gerät an derselben Buchse bleibt. Windows unverändert (`psu:COM6`).
+  - **Datenordner:** `LABCONTROL_DATA_DIR` legt ihn auf jeder Plattform fest (z. B. USB-SSD am Pi). Unter Linux aus dem Repo
+    gestartet liegt er sonst in `$XDG_DATA_HOME/labcontrol` (Standard `~/.local/share/labcontrol`), nicht im Repo, damit
+    `git pull` ihn nie berührt. Lässt er sich nicht anlegen, nimmt LabControl ohne Abbruch den alten Ort. Windows unverändert.
+  - **Netzwerk-Freigabe unter Linux:** Der Port ließ sich nach dem Stoppen der Freigabe oder einem schnellen Neustart nicht
+    sofort wieder belegen, sobald vorher Anfragen beantwortet worden waren („Address already in use“, bis ~60 s). Ursache:
+    `SO_REUSEADDR` war wegen der Windows-Falle überall aus; unter Linux überbrückt es nur TIME_WAIT und ist jetzt an. In WSL
+    nachgestellt (drei Anfragen, Stopp, erneutes Binden: ohne Option Fehler, mit Option sofort bindbar). Windows unverändert.
+  - **Beenden:** Die Timer des Device-Workers werden jetzt vor dem Ende seines Threads in diesem Thread angehalten. Unter
+    Linux meldete Qt sonst beim Prozessende „Timers cannot be stopped from another thread“ (harmlos, aber Lärm im Log).
+  - **Schrift:** App-Symbol und Oszilloskop-Grafik nennen nach „Segoe UI“ Ersatzschriften (DejaVu Sans auf dem Pi,
+    `lab_gui/fonts.py`), der Testablauf-Report ebenso.
+  - **CI:** neuer Workflow `.github/workflows/linux-checks.yml` (Ubuntu, x86) lässt alle `tools/check_*.py` laufen. Er läuft
+    erst nach dem nächsten Push (Push erst mit lauffähigem Stand am Pi, Nutzer).
+  - **Geprüft:** alle 20 `tools/check_*.py` grün unter Windows UND auf echtem Linux (WSL, Ubuntu 26.04, Python 3.14, PySide6
+    6.12; alle Abhängigkeiten installierbar). Neu `tools/check_device_portability.py` (Zuordnung, Grenzfälle, Bausteine,
+    Laden/Speichern im Testablauf-Reiter, Datenordner) und Erweiterungen in `tools/check_platform_linux.py` (microHIL-
+    Schnittstellennummer aus Linux-Portdaten, Ersatz-ID). Dazu ein Start der echten App unter Linux (offscreen,
+    Simulation): läuft, ~250 MB Speicher nach 12 s, SIGTERM beendet sie mit Freigabe des Netzteils, Exit-Code 0.
+    **Nicht geprüft:** Raspberry Pi (arm64), echte Geräte unter Linux, SocketCAN-Adapter, Touch-Display. Die microHIL-
+    Erkennung unter Linux ist nur gegen nachgebaute Portdaten geprüft.
 - **Raspberry Pi, Phase 1 (Teil 1): Start unter Linux möglich, Beenden per Signal wie Fenster schließen, SocketCAN (0.27.0, Nutzer, 10.11.2026).**
   Erster Schritt der Portierung auf einen Raspberry Pi mit 1024×600-Touch-Display (Plan und Entscheidungen PI-1 bis PI-11 im
   Plan-Artefakt vom 10.11.2026). Unter Windows ändert sich am Verhalten nichts.

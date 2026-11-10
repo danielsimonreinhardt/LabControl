@@ -23,7 +23,12 @@ wuerden:
 2. allow_reuse_address. Pythons HTTPServer setzt es auf 1. Unter Windows
    erlaubt SO_REUSEADDR damit einem FREMDEN Prozess, den bereits gebundenen
    Port zu uebernehmen (anders als unter Unix, wo es nur TIME_WAIT
-   ueberbrueckt). Deshalb hier explizit False.
+   ueberbrueckt). Deshalb unter Windows explizit False. Unter Linux
+   (Raspberry Pi) bleibt es an: ohne SO_REUSEADDR scheitert dort jedes
+   erneute Binden nach dem Stoppen der Freigabe oder einem schnellen
+   Neustart der App, sobald vorher Anfragen beantwortet wurden, bis
+   TIME_WAIT abgelaufen ist (bis ~60 s, "Address already in use" -- in WSL
+   nachgestellt: drei Anfragen, Stopp, erneutes Binden; 10.11.2026).
 """
 from __future__ import annotations
 
@@ -115,7 +120,7 @@ def _access_logger(enabled: bool) -> logging.Logger | None:
 
 class _ShareHTTPServer(ThreadingHTTPServer):
     daemon_threads = True        # kein Verbindungsthread haelt das Beenden auf
-    allow_reuse_address = False  # siehe Modul-Docstring, Falle 2
+    allow_reuse_address = sys.platform != "win32"  # siehe Modul-Docstring, Falle 2
     request_queue_size = 16
 
     def __init__(self, address, handler, state, app_info, access_log, executor=None, scopes=None):

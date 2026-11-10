@@ -7,6 +7,7 @@ run_requested/stop_requested angesteuert wird.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,11 +76,15 @@ from testcase_model import (
     is_arb_action,
     kind_label,
     load_block,
+    load_device_map,
     load_steps,
+    remap_devices,
     save_block,
     save_steps,
     validate_structure,
 )
+
+logger = logging.getLogger(__name__)
 
 # Spaltenindizes der Tabelle (siehe BASE_COLUMNS) -- als benannte Konstanten,
 # damit ein spaeteres Einfuegen/Umsortieren von Spalten nicht wieder alle
@@ -662,6 +667,17 @@ class TestcaseTab(QWidget):
             self._apply_row_style(row)
 
     # -- Statusanzeige ----------------------------------------------------------
+
+    def _report_remapped(self, mapping: dict[str, str], file_devices: dict) -> None:
+        """Meldet Geraete, die beim Laden ueber ihren Namen zugeordnet wurden
+        (testcase_model.remap_devices, z.B. Datei vom PC auf dem Pi geladen)."""
+        if not mapping:
+            return
+        for old_id, new_id in sorted(mapping.items()):
+            logger.info("Testablauf: Geraet %s ueber den Namen '%s' zugeordnet -> %s",
+                        old_id, file_devices[old_id].get("label", ""), new_id)
+        names = ", ".join(sorted({str(file_devices[old_id].get("label", "")) for old_id in mapping}))
+        self._set_status("Geräte über ihren Namen zugeordnet: {names}", names=names)
 
     def _set_status(self, key: str, kind: str = "info", **kwargs) -> None:
         self._status_key = key
@@ -1988,7 +2004,7 @@ class TestcaseTab(QWidget):
         if path.suffix != ".json":
             path = path.with_suffix(".json")
         try:
-            save_steps(self.steps(), path)
+            save_steps(self.steps(), path, self._known_devices)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
             return
@@ -2003,10 +2019,12 @@ class TestcaseTab(QWidget):
             return
         try:
             steps = load_steps(Path(path_str))
+            file_devices = load_device_map(Path(path_str))
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return
         self._current_path = Path(path_str)
+        self._report_remapped(remap_devices(steps, file_devices, self._known_devices), file_devices)
 
         self._table.setRowCount(0)
         self._clear_block_groups()
@@ -2046,7 +2064,7 @@ class TestcaseTab(QWidget):
         if path.suffix != ".json":
             path = path.with_suffix(".json")
         try:
-            save_block(block_steps, name, path)
+            save_block(block_steps, name, path, self._known_devices)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
 
@@ -2059,11 +2077,13 @@ class TestcaseTab(QWidget):
             return
         try:
             name, block_steps = load_block(Path(path_str))
+            file_devices = load_device_map(Path(path_str))
         except (OSError, ValueError, TypeError, KeyError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return
         if not block_steps:
             return
+        self._report_remapped(remap_devices(block_steps, file_devices, self._known_devices), file_devices)
 
         index = self._insert_at_selection()
         for offset, step in enumerate(block_steps):

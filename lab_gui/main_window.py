@@ -1468,6 +1468,9 @@ class MainWindow(QMainWindow):
         QMetaObject.invokeMethod(
             self._worker, "shutdown_can_nodes", Qt.ConnectionType.BlockingQueuedConnection,
         )
+        QMetaObject.invokeMethod(
+            self._worker, "stop_timers", Qt.ConnectionType.BlockingQueuedConnection,
+        )
         self._thread.quit()
         self._thread.wait(2000)
         super().closeEvent(event)

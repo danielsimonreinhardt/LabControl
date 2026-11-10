@@ -19,6 +19,8 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 
+from fonts import UI_FONT_FAMILIES
+
 # Identisch zu tools/generate_splash.py (dort erklaert: fest verdrahtet statt
 # aus theme.py importiert, da dieses Symbol schon vor ThemeManager existiert).
 BG = QColor("#14171c")
@@ -49,6 +51,7 @@ def build_pixmap(size: int) -> QPixmap:
     painter.fillRect(0, size - bar_height, size, bar_height, ACCENT)
 
     font = QFont("Segoe UI", -1, QFont.Weight.Bold)
+    font.setFamilies(UI_FONT_FAMILIES)
     font.setPixelSize(round(size * 0.62))
     painter.setFont(font)
     painter.setPen(TEXT)

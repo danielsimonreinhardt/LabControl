@@ -96,6 +96,32 @@ def main() -> int:
         check("SocketCAN ohne Bitrate an python-can", "bitrate" not in seen and seen.get("channel") == "can0", str(seen))
         check("Bitrate bleibt als Konfigurationswert", bus.bitrate == 500_000)
 
+    print("microHIL: Schnittstellennummer aus Linux-Portdaten")
+    from types import SimpleNamespace
+    import microhil.driver as hil
+    # So meldet pyserial (list_ports_linux) die beiden CDC-Funktionen: location = USB-Pfad:Konfig.Interface
+    if0 = SimpleNamespace(device="/dev/ttyACM0", location="1-1.3:1.0",
+                          hwid="USB VID:PID=0483:5740 SER=2065386A5631 LOCATION=1-1.3:1.0")
+    if2 = SimpleNamespace(device="/dev/ttyACM1", location="1-1.3:1.2",
+                          hwid="USB VID:PID=0483:5740 SER=2065386A5631 LOCATION=1-1.3:1.2")
+    check("Interface 0 erkannt", hil._interface_number(if0) == 0, str(hil._interface_number(if0)))
+    check("Interface 2 erkannt", hil._interface_number(if2) == 2, str(hil._interface_number(if2)))
+
+    print("Ersatz-ID ohne Seriennummer")
+    sys.path.insert(0, str(ROOT / "lab_gui"))
+    import device_worker as dw
+    port = SimpleNamespace(device="/dev/ttyUSB0", location="1-1.2:1.0", serial_number=None)
+    saved_platform = sys.platform
+    try:
+        sys.platform = "linux"
+        linux_id = dw._resolve_device_ids("psu", [port])
+        sys.platform = "win32"
+        win_id = dw._resolve_device_ids("psu", [SimpleNamespace(device="COM6", location="1-1.2:x.0", serial_number=None)])
+    finally:
+        sys.platform = saved_platform
+    check("Linux: USB-Pfad statt /dev/ttyUSB0", list(linux_id) == ["psu:usb-1-1.2:1.0"], str(list(linux_id)))
+    check("Windows: weiterhin COM-Name", list(win_id) == ["psu:COM6"], str(list(win_id)))
+
     print("Gegenprobe Windows")
     canwin, exc = reload_as("win32", "can_bus.driver")
     check("Windows: INTERFACE_LIST unveraendert", canwin is not None and canwin.INTERFACE_LIST == ["vector", "pcan", "slcan"],

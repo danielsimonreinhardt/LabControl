@@ -861,6 +861,9 @@ def section_server() -> None:
 
     # Belegter Port
     blocker = socket.socket()
+    if sys.platform != "win32":
+        # Linux: der eben freigegebene Port steht in TIME_WAIT; ohne SO_REUSEADDR scheitert schon dieses bind
+        blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     blocker.bind(("127.0.0.1", _free_port() if False else port))
     blocker.listen(1)
     events.clear()
@@ -950,7 +953,8 @@ def section_server() -> None:
     check("Server: Ausnahme live ausgeschaltet -> 403", post_local(local_cfg["port"]) == 403)
     local_server.stop()
 
-    # allow_reuse_address = False darf einen sofortigen Neustart nicht verhindern
+    # Sofortiger Neustart muss gehen: Windows ohne SO_REUSEADDR, Linux mit (sonst TIME_WAIT,
+    # siehe share_server.py Falle 2)
     time.sleep(0.2)
     again = ShareServer(state)
     again.apply(dict(cfg3, port=port2))
@@ -1549,7 +1553,8 @@ def section_app() -> None:
         check("Hauptschalter im Protokoll", "Fernsteuerung freigegeben fuer 60 min" in joined)
 
         # -- MCP-Server (echter stdio-Kindprozess) ----------------------------------------------------------
-        mcp_python = ROOT / "labcontrol_mcp" / ".venv" / "Scripts" / "python.exe"
+        mcp_venv = ROOT / "labcontrol_mcp" / ".venv"
+        mcp_python = mcp_venv / "Scripts" / "python.exe" if sys.platform == "win32" else mcp_venv / "bin" / "python"
         if not mcp_python.exists():
             print("  ...  MCP-Stufe uebersprungen: labcontrol_mcp/.venv fehlt "
                   "(python -m venv labcontrol_mcp/.venv && pip install -r labcontrol_mcp/requirements.txt)")
