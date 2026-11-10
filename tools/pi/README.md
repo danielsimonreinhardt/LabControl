@@ -39,8 +39,10 @@ flowchart LR
 - Updates vom PC: `powershell -File tools\pi\deploy_pi.ps1`
 - Zustand und Protokoll am Pi: `systemctl --user status labcontrol`, `journalctl --user -u labcontrol`
 - Daten (Einstellungen, Log, Erfassungen): `~/.local/share/labcontrol`, abweichend über `LABCONTROL_DATA_DIR`
-- Fensterzustand: `LABCONTROL_WINDOW=maximized|fullscreen` im Dienst (heute `maximized`;
-  Vollbild kommt mit dem Touch-Profil, damit man es in der App auch wieder verlassen kann)
+- Fensterzustand: `LABCONTROL_WINDOW=maximized|fullscreen` im Dienst, seit 0.32.1 `fullscreen` (Kiosk);
+  verlassen und wieder einschalten über den Vollbild-Knopf in der Touch-Leiste
+- Ausschalten: Knopf mit Ein/Aus-Symbol in der Touch-Leiste (Herunterfahren oder Neu starten, mit Rückfrage);
+  LabControl gibt vorher die Netzteile frei
 - CAN: PCAN-USB erscheint als `can0`, eine udev-Regel aus `setup_pi.sh` fährt ihn beim Einstecken mit
   500 kbit/s hoch. In LabControl: Schnittstelle `socketcan`, Kanal `can0` (Einstellungen → CAN).
   Andere Bitrate: Regel `/etc/udev/rules.d/80-labcontrol-can.rules` anpassen.

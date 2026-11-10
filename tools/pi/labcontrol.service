@@ -16,7 +16,8 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=%h/LabControl
 Environment=QT_QPA_PLATFORM=wayland
-Environment=LABCONTROL_WINDOW=maximized
+# Kiosk: Vollbild ohne Fensterrahmen und Taskleiste (verlassen ueber den Knopf in der Touch-Leiste)
+Environment=LABCONTROL_WINDOW=fullscreen
 # Qt meldet auf labwc bei jedem Fokuswechsel eine harmlose Texteingabe-Warnung
 Environment="QT_LOGGING_RULES=qt.qpa.wayland.textinput=false"
 ExecStart=%h/labcontrol-venv/bin/python %h/LabControl/lab_gui/main.py

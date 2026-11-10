@@ -25,7 +25,7 @@ DATA = Path(tempfile.mkdtemp(prefix="lc-touch-check-"))
 os.environ["LABCONTROL_DATA_DIR"] = str(DATA)
 (DATA / "settings.json").write_text(json.dumps({"simulation_mode": True}), encoding="utf-8")
 
-from PySide6.QtCore import QSize  # noqa: E402
+from PySide6.QtCore import QSize, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 FAILURES: list[str] = []
@@ -92,6 +92,33 @@ def main() -> int:
           and w._nav._buttons[id(w.timeline_tab)][0].isChecked())
     w._detach_dashboard()
     check("Abdocken gesperrt", w._dashboard_window is None and w.dashboard.parent() is w._overview_page)
+
+    print("Vollbild und Ausschalten")
+    w._toggle_fullscreen()
+    app.processEvents()
+    check("Vollbild-Knopf: an, Symbol folgt", w.isFullScreen() and w._top_bar._fullscreen)
+    w._toggle_fullscreen()
+    app.processEvents()
+    check("Vollbild-Knopf: wieder aus", not w.isFullScreen() and not w._top_bar._fullscreen)
+    import system_power
+    check("Ein/Aus-Knopf nur mit logind (hier nicht)", system_power.available() == (not w._top_bar._power_button.isHidden()))
+    calls: list[str] = []
+    real_off, real_reboot = system_power.power_off, system_power.reboot
+    system_power.power_off = lambda: calls.append("aus") or True
+    system_power.reboot = lambda: calls.append("neu") or True
+
+    def answer(text: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        box = next(b for b in app.topLevelWidgets() if isinstance(b, QMessageBox) and b.isVisible())
+        next(b for b in box.buttons() if b.text() == text).click()
+
+    try:
+        for text, expected in (("Abbrechen", []), ("Neu starten", ["neu"]), ("Herunterfahren", ["neu", "aus"])):
+            QTimer.singleShot(200, lambda t=text: answer(t))
+            w._on_power_requested()
+            check(f"Rueckfrage: {text}", calls == expected, str(calls))
+    finally:
+        system_power.power_off, system_power.reboot = real_off, real_reboot
 
     print("Touch aus")
     w.settings_tab._touch_checkbox.setChecked(False)

@@ -5,7 +5,7 @@ import logging
 import os
 
 import qtawesome as qta
-from PySide6.QtCore import QByteArray, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 import app_logging
 import data_store
+import system_power
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
@@ -1011,6 +1012,8 @@ class MainWindow(QMainWindow):
         self._nav.selected.connect(self.tabs.setCurrentWidget)
         self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))
         self._top_bar.fullscreen_requested.connect(self._toggle_fullscreen)
+        self._top_bar.power_requested.connect(self._on_power_requested)
+        self._top_bar.set_power_available(system_power.available())
         chosen = self._settings.touch_mode
         on = suggest_touch(self.screen()) if chosen is None else chosen
         self.settings_tab.set_touch_mode(on, automatic=chosen is None and on)
@@ -1072,7 +1075,36 @@ class MainWindow(QMainWindow):
             self.showMaximized()
         else:
             self.showFullScreen()
-        self._top_bar.set_fullscreen(self.isFullScreen())
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._top_bar.set_fullscreen(self.isFullScreen())
+        super().changeEvent(event)
+
+    def _on_power_requested(self) -> None:
+        """Knopf in der Touch-Leiste: Rechner herunterfahren oder neu starten (system_power.py).
+        Mit Rueckfrage -- ein Fehltipp soll nicht den Pi ausschalten."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(tr("Ausschalten"))
+        box.setText(tr("Rechner herunterfahren oder neu starten?"))
+        box.setInformativeText(tr(
+            "LabControl gibt vorher die Netzteile zur Handbedienung frei (1 V / 0 A, Ausgang EIN) und schaltet "
+            "Last, Funktionsgenerator und microHIL-Ausgänge aus."))
+        off = box.addButton(tr("Herunterfahren"), QMessageBox.ButtonRole.AcceptRole)
+        restart = box.addButton(tr("Neu starten"), QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton(tr("Abbrechen"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is off:
+            ok = system_power.power_off()
+        elif clicked is restart:
+            ok = system_power.reboot()
+        else:
+            return
+        if not ok:
+            QMessageBox.warning(self, tr("Ausschalten"), tr("Das System hat das Ausschalten abgelehnt (siehe Log)."))
 
     def _wire_notifications(self) -> None:
         # Desktop-Benachrichtigung bei Lauf-Ende/Fehler (FEATURES.md Punkt 8),

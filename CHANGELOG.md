@@ -7,6 +7,15 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Raspberry Pi: Kiosk-Vollbild und Knopf zum Ausschalten (0.32.1, Nutzerwunsch 10.11.2026).**
+  - Der Dienst startet LabControl im Vollbild (`LABCONTROL_WINDOW=fullscreen` in `tools/pi/labcontrol.service`):
+    ohne Fensterrahmen und Taskleiste. Der Vollbild-Knopf in der Touch-Leiste verlässt es und schaltet es wieder ein;
+    sein Symbol folgt dem tatsächlichen Fensterzustand.
+  - Neuer Ein/Aus-Knopf in der Touch-Leiste (nur unter Linux, wenn logind das Ausschalten ohne Passwort erlaubt):
+    Rückfrage „Herunterfahren / Neu starten / Abbrechen“ (Abbrechen ist vorgewählt), dann über logind (`system_power.py`).
+    Der Weg ist derselbe wie aus dem Desktop-Menü: LabControl gibt vorher die Netzteile frei (0.30.2).
+  - **Mock-verifiziert** (`check_touch_ui.py`: Vollbild an/aus mit Symbol, Knopf nur mit logind, alle drei Antworten der
+    Rückfrage; `check_pi_setup.py` erwartet Vollbild) unter Windows; am Pi siehe unten.
 - **Touch-Profil, Schritt 1: Gerüst für kleine Touch-Displays (0.32.0, Pi-Plan Phase 4, PI-5 a, 10.11.2026).**
   Neue Einstellung „Touch-Bedienung“ (Allgemein), neues Modul `lab_gui/touch_ui.py`. Gleiche Widgets wie am PC, nur
   anders angeordnet und größer:

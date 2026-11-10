@@ -181,6 +181,7 @@ class TopBar(QWidget):
     """Leiste oben: Geraetezustand (wischbar) | Fernsteuerung | Vollbild | ALLE AUS."""
 
     fullscreen_requested = Signal()
+    power_requested = Signal()   # Pi herunterfahren / neu starten (MainWindow fragt nach)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -202,8 +203,14 @@ class TopBar(QWidget):
         self._fullscreen_button.setIconSize(QSize(26, 26))
         self._fullscreen_button.setMinimumSize(48, 44)
         self._fullscreen_button.clicked.connect(self.fullscreen_requested)
+        self._power_button = QToolButton()
+        self._power_button.setIconSize(QSize(26, 26))
+        self._power_button.setMinimumSize(48, 44)
+        self._power_button.clicked.connect(self.power_requested)
+        self._power_button.hide()
         self._trailing: list[QWidget] = []
         self.set_fullscreen(False)
+        ThemeManager.instance().changed.connect(lambda _pal: self._recolor())
 
     def adopt(self, status: QWidget, trailing: list[QWidget]) -> None:
         """Statusanzeige in den wischbaren Bereich, die uebrigen rechts davon (ALLE AUS zuletzt)."""
@@ -212,6 +219,7 @@ class TopBar(QWidget):
         for widget in trailing[:-1]:
             self._layout.addWidget(widget)
         self._layout.addWidget(self._fullscreen_button)
+        self._layout.addWidget(self._power_button)
         if trailing:
             self._layout.addWidget(trailing[-1])
 
@@ -220,9 +228,19 @@ class TopBar(QWidget):
         for widget in self._trailing:
             self._layout.removeWidget(widget)
         self._layout.removeWidget(self._fullscreen_button)
+        self._layout.removeWidget(self._power_button)
         self._trailing = []
         return self._status_area.takeWidget()
 
+    def set_power_available(self, on: bool) -> None:
+        self._power_button.setVisible(on)
+
     def set_fullscreen(self, on: bool) -> None:
+        self._fullscreen = on
+        self._recolor()
+
+    def _recolor(self) -> None:
         pal = current_palette()
-        self._fullscreen_button.setIcon(qta.icon("mdi.fullscreen-exit" if on else "mdi.fullscreen", color=pal.text))
+        self._fullscreen_button.setIcon(qta.icon("mdi.fullscreen-exit" if self._fullscreen else "mdi.fullscreen",
+                                                 color=pal.text))
+        self._power_button.setIcon(qta.icon("mdi.power", color=pal.text))

@@ -380,7 +380,10 @@ time-window-limited ring buffer of the live charts.
   (1024 × 600). Larger text and controls, the tabs as large buttons on the
   left, the overview (dashboard) as its own tab instead of a fixed strip,
   and a bar at the top with the device status (swipeable) and **ALL OFF**.
-  The button next to it toggles full screen. As long as the checkbox has
+  The button next to it toggles full screen; on the Raspberry Pi LabControl
+  starts in full screen. On Linux there is also a power button: after a
+  confirmation it shuts the computer down or restarts it, LabControl
+  releases the power supplies first. As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.

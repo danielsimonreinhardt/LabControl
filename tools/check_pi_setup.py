@@ -87,7 +87,7 @@ def check_service() -> None:
     check("SIGTERM zuerst nur an LabControl (KillMode=mixed)", unit.get("KillMode") == ["mixed"])
     env = " ".join(unit.get("Environment", []))
     check("Wayland und Fensterzustand gesetzt",
-          "QT_QPA_PLATFORM=wayland" in env and "LABCONTROL_WINDOW=maximized" in env, env)
+          "QT_QPA_PLATFORM=wayland" in env and "LABCONTROL_WINDOW=fullscreen" in env, env)
     check("Neustart-Bremse", unit.get("StartLimitBurst") == ["5"])
 
     desktop = configparser.ConfigParser(interpolation=None)

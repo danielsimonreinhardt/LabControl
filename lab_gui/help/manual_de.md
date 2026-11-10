@@ -400,7 +400,10 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Schaltflächen links, die Übersicht (Dashboard) als eigener Reiter statt
   eines festen Streifens, und oben eine Leiste mit dem Gerätezustand (zum
   Wischen) und **ALLE AUS**. Der Knopf daneben schaltet Vollbild ein und
-  aus. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  aus; am Raspberry Pi startet LabControl im Vollbild. Unter Linux gibt es
+  dort zusätzlich einen Ein/Aus-Knopf: Er fährt den Rechner nach einer
+  Rückfrage herunter oder startet ihn neu, LabControl gibt vorher die
+  Netzteile frei. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.
