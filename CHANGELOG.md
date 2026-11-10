@@ -23,7 +23,9 @@ Semantic Versioning (`lab_gui/version.py`).
   - **Mock-verifiziert** (`tools/check_serial_unplug.py`: alle vier Treiber mit SerialException, OSError und unter Linux
     termios.error; Worker trennt nur das kaputte Gerät, CAN läuft weiter) unter Windows und am Pi. **Am Gerät:** Batterie-
     Simulator (BattSimFW 0.5.7) am Pi über PCAN-USB verbunden, Status, Stapelspannung und 48-V-Versorgung in der Kachel,
-    nichts geschaltet. Das Abziehen selbst ist mit dem Netzteil noch einmal nachzuprüfen.
+    nichts geschaltet; nach einem Neustart des Pi kommt `can0` über die udev-Regel mit 500 kbit/s hoch und LabControl
+    findet den Batterie-Simulator von selbst wieder. Gegenprobe am Pi: der alte HCS-Treiber (0.31.0) lässt `termios.error`
+    durch. Das Abziehen selbst ist mit dem Netzteil noch einmal am Gerät nachzuprüfen.
 - **Alle Betriebsdaten aufs Netzlaufwerk (0.31.0, Entscheidungen PI-12 b und PI-13 a, 10.11.2026).**
   Nutzerwunsch: Alles, was LabControl im Betrieb erzeugt, soll aufs Netzlaufwerk, damit man es später auswerten kann. Das
   Feld „Log-Ordner (Netzlaufwerk)“ aus 0.29.0 heißt jetzt **„Netzlaufwerk (Log und Daten)“** (Einstellung `network_dir`,
