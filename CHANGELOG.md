@@ -21,7 +21,9 @@ Semantic Versioning (`lab_gui/version.py`).
   - Bleibt offen: Abmelden vom Desktop ohne Herunterfahren beendet LabControl weiterhin ohne Freigabe (am Pi mit
     automatischer Anmeldung kein üblicher Weg).
   - **Mock-verifiziert** (`tools/check_shutdown_inhibit.py`: Ablauf mit nachgebildetem logind, Abbruch, nur einmal schließen,
-    Windows; am Pi zusätzlich die echte Sperre in `systemd-inhibit --list`). **Am Pi ausprobiert:** siehe unten.
+    Windows; am Pi zusätzlich die echte Sperre in `systemd-inhibit --list`). **Am Pi ausprobiert** (Simulation, ohne Geräte):
+    Neustart per `systemctl reboot` -- Log „System wird heruntergefahren“, Netzteil freigegeben, Ende mit Code 0, nach dem
+    Neustart startet der Dienst von selbst und hält die Sperre wieder. **Nicht ausprobiert:** mit echtem Netzteil (Phase 3).
 - **Raspberry Pi: Einrichtung, Autostart als Dienst, Update vom PC (0.30.0, Pi-Plan Phase 2, 10.11.2026).**
   Neuer Ordner `tools/pi` (Überblick in `tools/pi/README.md`):
   - `setup_pi.sh` richtet den Pi ein: Python-Umgebung nur mit den Qt-Basismodulen (`PySide6-Essentials`, spart gut 300 MB),
