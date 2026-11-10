@@ -7,6 +7,27 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil: Durchsicht auf Stimmigkeit (0.33.1, Nutzerhinweis „Elemente nicht gleich hoch“, 10.11.2026).**
+  Gemessen am Pi (1024 × 600, Pi-Schriften): Knöpfe waren 40/42/60 px hoch, Eingabefelder 32–40, Zahlenfelder 40–47;
+  Beschriftungen standen oben statt mittig neben den Feldern; das Fenster verlangte mindestens 1054 × 715 px, also mehr
+  als der Bildschirm (im Vollbild wurde der Inhalt unter seine Mindestgröße gedrückt).
+  - Neu `TouchSizer` (`touch_ui.py`): Im Touch-Profil bekommen alle Knöpfe, Eingabefelder, Auswahllisten und
+    Zahlenfelder einheitlich 44 px Höhe, reine Symbol-Knöpfe 44 × 44, Formular-Beschriftungen dieselbe Mindesthöhe
+    (stehen mittig). Ausgenommen: Tabellenzellen, Dashboard (reine Anzeige), Tastenfeld, Navigation, Leiste, Presets.
+    Angewendet beim Anzeigen jedes Widgets (einen Durchlauf später, wenn es an seinem Platz hängt), beim Ausschalten
+    wird alles zurückgesetzt. Rechenlast am Pi im Leerlauf unverändert (0 %).
+  - Übersicht im Touch-Profil scrollbar (volle Kachelhöhe trieb das Fenster auf 715 px).
+  - Steuerung im Touch-Profil: Kacheln in natürlicher Höhe statt gleich hoher Rasterzellen (große Leerflächen in Last,
+    Oszilloskop, Funktionsgenerator), Zellbreite nach Mindestbreite -- dadurch zwei Spalten auf 1024 px; breite Kacheln
+    verlangen nicht mehr Spalten, als da sind.
+  - Presets im Touch-Profil: statt zweier 24 × 22-px-Eck-Knöpfe ein „⋯“-Knopf in voller Höhe mit Menü
+    Speichern/Umbenennen; Hinweistext ausgeblendet, damit die Reihe auf 1024 px passt.
+  - Allgemein: Netzteil-Warnung OVP/OCP belegt ohne Text keine Leerzeile mehr; ✓ der Last wie alle anderen (dünn).
+    Abdock-Knopf des Dashboards im Touch-Profil ausgeblendet.
+  - Ergebnis: Fenster mindestens 1014 × 492 px. **Mock-verifiziert** (`check_touch_ui.py` um Größen, Presets,
+    Dashboard und Rückweg erweitert; alle 27 Prüfungen grün), am Pi hell und dunkel angesehen.
+  - Bekannt, für die nächsten Schritte: Dashboard scrollt weiter waagerecht (HIL-Kachel angeschnitten, Schritt 4.5);
+    Testablauf-Editor unverändert (Schritt 4.3); Kompakt-Knopf des Dashboards noch klein.
 - **Touch-Profil, Schritt 2: Zahlen- und Hex-Tastenfeld, große −/+ Tasten (0.33.0, Pi-Plan Phase 4, PI-6 a, 10.11.2026).**
   - Neu `lab_gui/touch_keypad.py`: Im Touch-Profil öffnet ein Tipp auf den Wert eines Zahlenfelds (nicht auf −/+) ein
     Tastenfeld statt Textcursor und Bildschirmtastatur. Kopfzeile mit Bezeichnung (aus dem Formular), Bereich und Einheit;

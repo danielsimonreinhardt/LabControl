@@ -704,6 +704,10 @@ class DashboardWidget(QGroupBox):
             else tr("Dashboard in eigenem Fenster öffnen")
         )
 
+    def set_detach_available(self, available: bool) -> None:
+        """Touch-Profil: kein Abdocken (Dashboard ist dort ein eigener Reiter) -> Knopf ausblenden."""
+        self._detach_button.setVisible(available)
+
     def set_detached(self, detached: bool) -> None:
         """Nur Anzeige des Abdock-Knopfs -- das Umhaengen selbst macht MainWindow."""
         self._detached = detached

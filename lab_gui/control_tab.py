@@ -13,7 +13,9 @@ import bisect
 import time
 
 import qtawesome as qta
-from PySide6.QtCore import QEasingCurve, QEvent, QMimeData, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QEasingCurve, QEvent, QMimeData, QObject, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, Signal,
+)
 from PySide6.QtGui import QColor, QDrag, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -424,7 +427,7 @@ class LoadControlGroup(QGroupBox):
         self._setpoint_spin = SteppedDoubleSpinBox()
         self._setpoint_spin.setDecimals(3)
         self._setpoint_spin.setMaximumWidth(150)
-        self._apply_button = IconButton("mdi.check-bold", "")
+        self._apply_button = IconButton("mdi.check", "")   # wie alle anderen ✓-Knoepfe
         self._apply_button.clicked.connect(self._on_apply)
         self._setpoint_row = _row(self._setpoint_spin, self._apply_button)
         self._form.addRow(" ", self._setpoint_row)
@@ -817,6 +820,8 @@ class PsuControlGroup(QGroupBox):
                 )
             )
         self._limit_warning.setText(" ".join(messages))
+        # Leer ausgeblendet: belegte sonst eine Leerzeile ueber "Handbedienung" (Touch-Durchsicht 10.11.2026)
+        self._limit_warning.setVisible(bool(messages))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
@@ -2246,6 +2251,8 @@ class HilControlGroup(QGroupBox):
 PRESET_BUTTON_SIZE = QSize(132, 60)
 PRESET_SUB_BUTTON_SIZE = QSize(24, 22)
 PRESET_SUB_BUTTON_MARGIN = 3
+PRESET_TOUCH_SIZE = QSize(128, 60)      # Touch-Profil: Laden-Flaeche + "⋯"-Knopf
+PRESET_TOUCH_MORE_WIDTH = 40
 
 
 class _PresetSlotButton(QWidget):
@@ -2284,6 +2291,35 @@ class _PresetSlotButton(QWidget):
         )
         self._rename_button.clicked.connect(self.rename_clicked)
 
+        # Touch-Profil: statt der zwei kleinen Eck-Knoepfe (24 x 22 px, fuer Finger zu klein) ein
+        # "⋯"-Knopf rechts in voller Hoehe mit Menue Speichern/Umbenennen (set_touch).
+        self._more_button = IconButton("mdi.dots-vertical", "")
+        self._more_button.setParent(self)
+        menu = QMenu(self._more_button)
+        self._save_action = menu.addAction("", self.save_clicked)
+        self._rename_action = menu.addAction("", self.rename_clicked)
+        self._more_button.clicked.connect(
+            lambda: menu.exec(self._more_button.mapToGlobal(self._more_button.rect().bottomLeft())))
+        self._more_button.hide()
+        self._touch = False
+
+    def set_touch(self, on: bool) -> None:
+        if on == self._touch:
+            return
+        self._touch = on
+        if on:
+            width, height = PRESET_TOUCH_SIZE.width(), PRESET_TOUCH_SIZE.height()
+            self.setFixedSize(PRESET_TOUCH_SIZE)
+            self._main_button.setGeometry(0, 0, width - PRESET_TOUCH_MORE_WIDTH - 2, height)
+            self._more_button.setFixedSize(PRESET_TOUCH_MORE_WIDTH, height)
+            self._more_button.move(width - PRESET_TOUCH_MORE_WIDTH, 0)
+        else:
+            self.setFixedSize(PRESET_BUTTON_SIZE)
+            self._main_button.setGeometry(0, 0, PRESET_BUTTON_SIZE.width(), PRESET_BUTTON_SIZE.height())
+        self._save_button.setVisible(not on)
+        self._rename_button.setVisible(not on)
+        self._more_button.setVisible(on)
+
     def _make_sub_button(self, icon_name: str) -> IconButton:
         button = IconButton(icon_name, "")
         button.setParent(self)
@@ -2299,6 +2335,8 @@ class _PresetSlotButton(QWidget):
         self._main_button.setToolTip(load)
         self._save_button.setToolTip(save)
         self._rename_button.setToolTip(rename)
+        self._save_action.setText(save)
+        self._rename_action.setText(rename)
 
     def apply_style(self, pal: Palette) -> None:
         """Haupt-Button dezent hervorgehoben statt im neutralen Standard-
@@ -2327,6 +2365,7 @@ class _PresetSlotButton(QWidget):
                 border: 1px solid {pal.border};
                 border-radius: 8px;
                 font-weight: bold;
+                padding: 2px 4px;
             }}
             QPushButton:hover {{
                 border: 2px solid {pal.accent};
@@ -2369,6 +2408,7 @@ class PresetBar(QWidget):
         layout = QHBoxLayout(self._frame)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(10)
+        self._slot_layout = layout
 
         heading = QVBoxLayout()
         heading.setSpacing(2)
@@ -2419,6 +2459,12 @@ class PresetBar(QWidget):
         self._heading_icon.setPixmap(qta.icon("mdi.bookmark-multiple-outline", color=pal.text).pixmap(18, 18))
         for button in self._slot_buttons:
             button.apply_style(pal)
+        # Touch-Profil (ThemeManager.set_touch meldet sich ebenfalls ueber changed)
+        touch = ThemeManager.instance().touch
+        for button in self._slot_buttons:
+            button.set_touch(touch)
+        self._hint_label.setVisible(not touch)   # spart Breite: 1024-px-Bildschirm
+        self._slot_layout.setSpacing(6 if touch else 10)
 
     def _refresh_names(self, *_args) -> None:
         self._heading_label.setText(tr("Presets"))
@@ -2513,6 +2559,11 @@ class ControlTab(QWidget):
         self._cell_width = 0
         self._cell_height = 0
         self._max_cols = 1
+        # Touch-Profil: Kacheln in natuerlicher Hoehe statt gleich hoher Rasterzellen (am schmalen
+        # Bildschirm standen sonst grosse Leerflaechen in kleinen Kacheln); beim Umschalten die
+        # Ratsche zuruecksetzen, damit die Zellen zu den neuen Bedienelement-Groessen passen.
+        self._touch_layout = False
+        ThemeManager.instance().changed.connect(lambda _pal: QTimer.singleShot(0, self._check_touch_layout))
 
         # Drag & Drop (Kachel-Reihenfolge im Raster) -- dieselbe Technik wie
         # in dashboard.py (DashboardWidget), nur mit eigenem MIME-Typ
@@ -2653,6 +2704,15 @@ class ControlTab(QWidget):
         unknown_existing = [d for d in self._tile_order if d not in known]
         self._tile_order = known + unknown_existing
 
+    def _check_touch_layout(self) -> None:
+        touch = ThemeManager.instance().touch
+        if touch == self._touch_layout:
+            return
+        self._touch_layout = touch
+        self._cell_width = 0
+        self._cell_height = 0
+        self._relayout_grid()
+
     def _relayout_grid(self) -> None:
         """Legt alle aktuell VERBUNDENEN Sektionen in ein Raster mit fester
         Basiszellgroesse (siehe TILE_SPANS/TILE_SIZE_BY_KIND). Getrennte
@@ -2683,7 +2743,9 @@ class ControlTab(QWidget):
         # z.B. eine "Big"-Kachel (2x2) im Normalfall die deutlich groessere
         # HilControlGroup bequem fasst, ohne dass 2x Zellgroesse kleiner als
         # deren natuerliche sizeHint() ausfaellt.
-        width_sizes = [(self._sections[d].sizeHint().width(), spans[d][0]) for d in ids]
+        # Touch-Profil: Mindestbreite statt Wunschbreite, damit am 1024-px-Bildschirm zwei Spalten passen
+        width_sizes = [((self._sections[d].minimumSizeHint() if self._touch_layout else self._sections[d].sizeHint()).width(),
+                        spans[d][0]) for d in ids]
         height_sizes = [(self._sections[d].sizeHint().height(), spans[d][1]) for d in ids]
         self._cell_width = cell_size_ratchet(self._cell_width, width_sizes)
         self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
@@ -2698,8 +2760,12 @@ class ControlTab(QWidget):
         for device_id, (row, col) in positions.items():
             section = self._sections[device_id]
             col_span, row_span = spans[device_id]
+            if self._touch_layout:
+                col_span = min(col_span, self._max_cols)   # breite Kachel nicht breiter als die Spalten
             min_width = col_span * self._cell_width + (col_span - 1) * self._grid_spacing
             min_height = row_span * self._cell_height + (row_span - 1) * self._grid_spacing
+            if self._touch_layout:
+                min_height = 0   # natuerliche Hoehe, siehe _check_touch_layout
             section.setMinimumSize(min_width, min_height)
             self._grid.addWidget(
                 section, row, col, row_span, col_span,
@@ -2711,7 +2777,7 @@ class ControlTab(QWidget):
 
     def _size_grid_lines(self, rows: int, cols: int) -> None:
         for row in range(max(rows, self._sized_rows)):
-            self._grid.setRowMinimumHeight(row, self._cell_height if row < rows else 0)
+            self._grid.setRowMinimumHeight(row, self._cell_height if row < rows and not self._touch_layout else 0)
         for col in range(max(cols, self._sized_cols)):
             self._grid.setColumnMinimumWidth(col, self._cell_width if col < cols else 0)
         self._sized_rows, self._sized_cols = rows, cols

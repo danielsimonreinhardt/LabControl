@@ -19,14 +19,24 @@ from pathlib import Path
 from typing import Callable
 
 import qtawesome as qta
-from PySide6.QtCore import QSize, Qt, Signal
+import shiboken6
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
     QScrollArea,
     QScroller,
     QSizePolicy,
+    QTabBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -65,28 +75,157 @@ def suggest_touch(screen) -> bool:
     return size.width() <= TOUCH_SCREEN_MAX[0] and size.height() <= TOUCH_SCREEN_MAX[1]
 
 
+TOUCH_H = 44            # einheitliche Hoehe aller Knoepfe und Eingabefelder (TouchSizer)
+_ORIGINAL_SIZE = "_touch_original_size"
+# Eigene feste Groessen: Tastenfeld, Navigation/Leiste, Preset-Kachel (eigene Touch-Fassung);
+# das Dashboard ist reine Anzeige -- gestreckte Zeilen zerrissen dort die Kacheln.
+_SIZER_EXCLUDED = {"KeypadDialog", "NavBar", "TopBar", "_PresetSlotButton", "DashboardWidget"}
+
+
+class TouchSizer(QObject):
+    """Einheitliche Groessen im Touch-Profil: jedes Bedienelement wird beim Anzeigen (QEvent.Polish)
+    auf TOUCH_H px Hoehe gebracht, reine Symbol-Knoepfe auf TOUCH_H x TOUCH_H, Formular-
+    Beschriftungen bekommen dieselbe Mindesthoehe (stehen damit mittig neben dem Feld).
+
+    Ueber das Stylesheet allein geht das nicht sauber: einzelne Zeilen haben eigene Stylesheets
+    mit anderem Innenabstand, und QSS-min-height bezieht sich auf den Inhalt. Ausgenommen sind
+    Tabellenzellen (Testablauf-Editor, CAN-Tabelle) und die Widgets in _SIZER_EXCLUDED.
+    Ausschalten stellt die urspruenglichen Mindest-/Hoechstmasse wieder her."""
+
+    def __init__(self, app) -> None:
+        super().__init__(app)
+        self._app = app
+        self._on = False
+        # Erst im naechsten Durchlauf der Ereignisschleife anpassen: Widgets werden oft schon
+        # poliert, bevor sie in ihr endgueltiges Elternteil (z. B. das Dashboard) gehaengt sind.
+        self._pending: list[QWidget] = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(0)
+        self._flush_timer.timeout.connect(self._flush)
+
+    @property
+    def active(self) -> bool:
+        return self._on
+
+    def set_active(self, on: bool) -> None:
+        if on == self._on:
+            return
+        self._on = on
+        if on:
+            self._app.installEventFilter(self)
+            for widget in self._app.allWidgets():
+                self.apply(widget)
+        else:
+            self._app.removeEventFilter(self)
+            for widget in self._app.allWidgets():
+                self._restore(widget)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.Polish and isinstance(obj, QWidget):
+            self._pending.append(obj)
+            if not self._flush_timer.isActive():
+                self._flush_timer.start()
+        return False
+
+    def _flush(self) -> None:
+        pending, self._pending = self._pending, []
+        for widget in pending:
+            if shiboken6.isValid(widget):
+                self.apply(widget)
+
+    @staticmethod
+    def _excluded(widget: QWidget) -> bool:
+        parent = widget.parentWidget()
+        if isinstance(widget, QLineEdit) and isinstance(parent, (QAbstractSpinBox, QComboBox)):
+            return True   # Textfeld im Inneren eines Zahlenfelds/einer Auswahlliste
+        node = widget
+        for _ in range(12):
+            if node is None:
+                return False
+            if isinstance(node, (QAbstractItemView, QTabBar)) or type(node).__name__ in _SIZER_EXCLUDED:
+                return True
+            node = node.parentWidget()
+        return False
+
+    def apply(self, widget: QWidget) -> None:
+        if not self._on or self._excluded(widget):
+            return
+        name = type(widget).__name__
+        if isinstance(widget, (QLineEdit, QComboBox, QAbstractSpinBox)):
+            self._fix(widget, height=TOUCH_H)
+        elif name == "_SegmentedToggle":          # gezeichneter AUS|EIN-Schalter (microHIL)
+            self._fix(widget, width=88, height=TOUCH_H)
+        elif name == "_DigitalOutToggle":         # LED-Knopf OUT1-8 (microHIL)
+            self._fix(widget, width=TOUCH_H, height=TOUCH_H + 8)
+        elif isinstance(widget, (QPushButton, QToolButton)):
+            icon_only = not widget.text() and not widget.icon().isNull()
+            self._fix(widget, width=TOUCH_H if icon_only else None, height=TOUCH_H)
+        elif isinstance(widget, QLabel) and _is_form_label(widget):
+            self._remember(widget)
+            widget.setMinimumHeight(TOUCH_H)
+
+    def _fix(self, widget: QWidget, height: int, width: int | None = None) -> None:
+        self._remember(widget)
+        widget.setFixedHeight(height)
+        if width is not None:
+            widget.setFixedWidth(width)
+
+    @staticmethod
+    def _remember(widget: QWidget) -> None:
+        if getattr(widget, _ORIGINAL_SIZE, None) is None:
+            setattr(widget, _ORIGINAL_SIZE, (widget.minimumSize(), widget.maximumSize()))
+
+    @staticmethod
+    def _restore(widget: QWidget) -> None:
+        original = getattr(widget, _ORIGINAL_SIZE, None)
+        if original is not None:
+            widget.setMinimumSize(original[0])
+            widget.setMaximumSize(original[1])
+            setattr(widget, _ORIGINAL_SIZE, None)
+
+
+def _is_form_label(label: QLabel) -> bool:
+    """Beschriftung einer Formularzeile -- auch wenn das QFormLayout in ein anderes Layout geschachtelt ist."""
+    parent = label.parentWidget()
+    if parent is None:
+        return False
+    for layout in parent.findChildren(QFormLayout) + ([parent.layout()] if isinstance(parent.layout(), QFormLayout) else []):
+        _row, role = layout.getWidgetPosition(label)
+        if role == QFormLayout.ItemRole.LabelRole:
+            return True
+    return False
+
+
+_SIZER: TouchSizer | None = None
+
+
+def sizer() -> TouchSizer:
+    global _SIZER
+    if _SIZER is None:
+        _SIZER = TouchSizer(QApplication.instance())
+    return _SIZER
+
+
 def touch_qss(pal: Palette) -> str:
     return f"""
     QPushButton, QToolButton {{
-        min-height: {TOUCH_MIN - 12}px;
         padding: 6px 14px;
     }}
     QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
-        min-height: {TOUCH_MIN - 8}px;
         padding: 3px 8px;
     }}
     /* Grosse −/+ Tasten links und rechts vom Wert statt kleiner Pfeile uebereinander (PI-6) */
     QGroupBox QAbstractSpinBox {{
         padding-left: {SPIN_KEY_WIDTH + 4}px;
         padding-right: {SPIN_KEY_WIDTH + 4}px;
-        min-height: {TOUCH_MIN - 4}px;
-        min-width: 160px;
-        max-width: 230px;
+        min-width: 150px;
+        max-width: 170px;
     }}
     QGroupBox QAbstractSpinBox::up-button, QGroupBox QAbstractSpinBox::down-button {{
         subcontrol-origin: border;
         width: {SPIN_KEY_WIDTH}px;
-        height: {TOUCH_MIN - 2}px;
+        height: {TOUCH_H - 2}px;
         border: none;
         background-color: {pal.surface_alt};
     }}

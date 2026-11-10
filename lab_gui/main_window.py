@@ -9,11 +9,13 @@ from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTi
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
@@ -48,6 +50,7 @@ from testcase_tab import TestcaseTab
 from theme import PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
 from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch
+from touch_ui import sizer as touch_sizer
 from version import __version__
 
 logger = logging.getLogger(__name__)
@@ -128,10 +131,15 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardWidget()
         layout.addWidget(self.dashboard)
         # Touch-Profil: das Dashboard (feste Hoehe) oben auf einer eigenen Reiterseite "Uebersicht"
-        self._overview_page = QWidget()
-        self._overview_layout = QVBoxLayout(self._overview_page)
+        # Scrollbar, damit die volle Kachelhoehe (zwei Reihen) das Fenster nicht ueber 600 px treibt.
+        self._overview_page = QScrollArea()
+        self._overview_page.setWidgetResizable(True)
+        self._overview_page.setFrameShape(QFrame.Shape.NoFrame)
+        overview_holder = QWidget()
+        self._overview_layout = QVBoxLayout(overview_holder)
         self._overview_layout.setContentsMargins(0, 0, 0, 0)
         self._overview_layout.addStretch(1)
+        self._overview_page.setWidget(overview_holder)
         # Fuer das Abdocken (siehe _detach_dashboard): das Dashboard wird aus
         # diesem Layout genommen und spaeter an derselben Stelle wieder eingesetzt.
         self._central_layout = layout
@@ -1029,6 +1037,7 @@ class MainWindow(QMainWindow):
             self._dashboard_window.close()   # -> _dock_dashboard, danach Reiter
         self._touch = on
         ThemeManager.instance().set_touch(on)
+        touch_sizer().set_active(on)
         app = QApplication.instance()
         if on:
             self._base_font = app.font()
@@ -1065,6 +1074,7 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(0)
         for widget, was_visible in visible.items():
             widget.setVisible(was_visible)
+        self.dashboard.set_detach_available(not on)
         self.dashboard.show()
         self._nav.set_current(self.tabs.currentWidget())
         self._style_all_off_button()

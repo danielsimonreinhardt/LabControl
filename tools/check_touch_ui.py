@@ -76,7 +76,7 @@ def main() -> int:
     check("gespeichert", json.loads((DATA / "settings.json").read_text(encoding="utf-8")).get("touch_mode") is True)
     check("Navigation links sichtbar, Reiterleiste verborgen", w._nav.isVisible() and not w.tabs.tabBar().isVisible())
     check("Uebersicht ist eigener Reiter und gewaehlt", w.tabs.count() == 5 and w.tabs.currentWidget() is w._overview_page
-          and w.dashboard.parent() is w._overview_page)
+          and w._overview_page.isAncestorOf(w.dashboard))
     check("Leiste oben mit ALLE AUS, Statusleiste verborgen", w._top_bar.isVisible() and not w.statusBar().isVisible()
           and w._all_off_button.isVisible() and w._top_bar.isAncestorOf(w._all_off_button))
     check("Geraetezustand in der Leiste oben", w._top_bar.isAncestorOf(w._status_container) and w._status_container.isVisible())
@@ -91,7 +91,31 @@ def main() -> int:
     check("Navigation wechselt den Reiter", w.tabs.currentWidget() is w.timeline_tab
           and w._nav._buttons[id(w.timeline_tab)][0].isChecked())
     w._detach_dashboard()
-    check("Abdocken gesperrt", w._dashboard_window is None and w.dashboard.parent() is w._overview_page)
+    check("Abdocken gesperrt", w._dashboard_window is None and w._overview_page.isAncestorOf(w.dashboard))
+
+    print("Einheitliche Groessen (Durchsicht 10.11.2026)")
+    w.tabs.setCurrentWidget(w.control_tab)
+    for _ in range(5):
+        app.processEvents()
+    psu = w.control_tab._sections.get("psu:SIM")
+    check("Simulations-Netzteil vorhanden", psu is not None)
+    if psu is not None:
+        label = psu._form.labelForField(psu._voltage_row)
+        check("Zahlenfeld und ✓ 44 px hoch, ✓ quadratisch", psu._voltage_spin.height() == 44
+              and psu._voltage_button.height() == 44 and psu._voltage_button.width() == 44,
+              f"{psu._voltage_spin.height()} / {psu._voltage_button.size().toTuple()}")
+        check("Beschriftung so hoch wie das Feld (mittig)", label.minimumHeight() == 44)
+        check("Ausgang EIN/AUS und Handbedienung 44 px", psu._output_on_button.height() == 44
+              and psu._manual_button.height() == 44)
+    from control_tab import _PresetSlotButton
+    slots = w.control_tab.findChildren(_PresetSlotButton)
+    check("Presets: '⋯'-Knopf statt kleiner Eck-Knoepfe", slots and all(s._more_button.isVisible()
+          and not s._save_button.isVisible() for s in slots))
+    from PySide6.QtWidgets import QLabel
+    dash_labels = [lb for lb in w.dashboard.findChildren(QLabel) if lb.text().startswith("Spannung")]
+    check("Dashboard-Zeilen nicht gestreckt", dash_labels and all(lb.minimumHeight() == 0 for lb in dash_labels))
+    hint = w.minimumSizeHint()
+    check("Fenster passt auf 1024 x 600", hint.width() <= 1024 and hint.height() <= 600, f"{hint.width()} x {hint.height()}")
 
     print("Vollbild und Ausschalten")
     w._toggle_fullscreen()
@@ -130,6 +154,13 @@ def main() -> int:
           and not w._nav.isVisible() and w.dashboard.isVisible())
     check("Schrift wie vorher", abs(app.font().pointSizeF() - base_font) < 0.01)
     check("Stylesheet ohne Touch-Regeln", not ThemeManager.instance().touch and "touchNav" not in app.styleSheet())
+    for _ in range(5):
+        app.processEvents()
+    if psu is not None:
+        check("Groessen zurueck (Feld nicht mehr fest 44, Beschriftung ohne Mindesthoehe)",
+              psu._voltage_spin.maximumHeight() > 44 and psu._form.labelForField(psu._voltage_row).minimumHeight() == 0,
+              f"{psu._voltage_spin.maximumHeight()}")
+    check("Presets wieder mit Eck-Knoepfen", all(not s._more_button.isVisible() for s in slots))
     w._closing = True
     w.close()
     app.processEvents()
