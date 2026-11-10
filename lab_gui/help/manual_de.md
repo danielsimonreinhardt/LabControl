@@ -407,7 +407,12 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   und rechts; ein Tipp auf den Wert öffnet ein Zahlenfeld mit Bereich und
   Einheit („Setzen“ übernimmt und sendet wie der ✓-Knopf, ein Wert außerhalb
   des Bereichs lässt sich nicht setzen). Für die CAN-ID und die Nutzdaten
-  gibt es dasselbe Feld mit den Tasten A–F. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  gibt es dasselbe Feld mit den Tasten A–F. Der Reiter „Testablauf“ zeigt
+  statt des Editors eine Ausführen-Ansicht: links die gespeicherten Abläufe
+  (vom Netzlaufwerk, Ordner `testcases/`, sonst lokal), rechts die Schritte,
+  Fortschritt, Status und große Knöpfe Start und Stop. Bearbeitet und
+  gespeichert wird am PC; ausgeführt wird genauso wie im Editor (gleiche
+  Prüfungen, ein Schrittfehler wird mit Stop quittiert). Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.

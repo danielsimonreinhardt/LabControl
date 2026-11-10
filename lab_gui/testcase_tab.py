@@ -46,6 +46,7 @@ from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager
+from touch_run_view import TouchRunView
 from theme import current as current_palette
 from testcase_model import (
     ACTION_VALUE_RANGE,
@@ -376,7 +377,15 @@ class TestcaseTab(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
+        # Seite 0: Editor (bisher der ganze Reiter); Seite 1: Ausfuehren-Ansicht fuers
+        # Touch-Profil (touch_run_view.py, PI-7 a), umgeschaltet in _check_touch.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_stack = QStackedWidget()
+        outer_layout.addWidget(self._page_stack)
+        self._editor_page = QWidget()
+        self._page_stack.addWidget(self._editor_page)
+        layout = QVBoxLayout(self._editor_page)
 
         # Zuletzt geladene/gespeicherte Testablauf-Datei, fuer den Testablauf-
         # Namen im Nachlauf-Report (siehe run_report.py) -- ohne Datei
@@ -556,6 +565,16 @@ class TestcaseTab(QWidget):
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
+        self._run_view = TouchRunView()
+        self._page_stack.addWidget(self._run_view)
+        self._run_view.file_selected.connect(self._on_run_view_file)
+        self._run_view.refresh_requested.connect(self._refresh_run_view_files)
+        self._run_view.start_requested.connect(
+            lambda: self.run_requested.emit() if self._run_button.isEnabled() else None)
+        self._run_view.stop_requested.connect(self._on_stop_clicked)
+        self._touch = False
+        ThemeManager.instance().changed.connect(lambda _pal: self._check_touch())
+
         self._add_row_clicked()
 
         Translator.instance().language_changed.connect(self._retranslate)
@@ -686,6 +705,8 @@ class TestcaseTab(QWidget):
         self._status_kind = kind
         self._apply_status_style()
         self._status_label.setText(tr(key, **kwargs))
+        if hasattr(self, "_run_view"):
+            self._run_view.set_status(self._status_label.text(), kind)
 
     def _apply_status_style(self) -> None:
         pal = current_palette()
@@ -2017,13 +2038,17 @@ class TestcaseTab(QWidget):
         )
         if not path_str:
             return
+        self._load_path(Path(path_str))
+
+    def _load_path(self, path: Path) -> bool:
+        """Laedt einen Ablauf in den Editor (auch fuer die Ausfuehren-Ansicht im Touch-Profil)."""
         try:
-            steps = load_steps(Path(path_str))
-            file_devices = load_device_map(Path(path_str))
+            steps = load_steps(path)
+            file_devices = load_device_map(path)
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
-            return
-        self._current_path = Path(path_str)
+            return False
+        self._current_path = path
         self._report_remapped(remap_devices(steps, file_devices, self._known_devices), file_devices)
 
         self._table.setRowCount(0)
@@ -2033,6 +2058,69 @@ class TestcaseTab(QWidget):
         if not steps:
             self._add_row_clicked()
         self._revalidate_structure()
+        self._sync_run_view_test()
+        return True
+
+    # -- Ausfuehren-Ansicht (Touch-Profil, touch_run_view.py) ---------------------
+
+    def _check_touch(self) -> None:
+        touch = ThemeManager.instance().touch
+        if touch == self._touch:
+            return
+        self._touch = touch
+        self._page_stack.setCurrentWidget(self._run_view if touch else self._editor_page)
+        if touch:
+            self._refresh_run_view_files()
+            self._sync_run_view_test()
+
+    def _refresh_run_view_files(self) -> None:
+        folder = data_store.target_dir("testcases")
+        try:
+            files = sorted(folder.glob("*.json"), key=lambda p: p.stem.lower())
+        except OSError:
+            files = []
+        self._run_view.set_files(folder, files, self._current_path)
+
+    def _on_run_view_file(self, path: Path) -> None:
+        if self._is_running:
+            return
+        self._load_path(path)
+
+    def _sync_run_view_test(self) -> None:
+        if not hasattr(self, "_run_view"):
+            return
+        if self._current_path is None:
+            self._run_view.set_test(None, [])
+        else:
+            self._run_view.set_test(self._current_path.stem, [self._describe_step(s) for s in self.steps()])
+        self._sync_run_view_buttons()
+
+    def _sync_run_view_buttons(self) -> None:
+        if hasattr(self, "_run_view"):
+            self._run_view.set_running(self._is_running, self._run_button.isEnabled() and self._current_path is not None)
+
+    def _describe_step(self, step: TestStep) -> str:
+        """Eine Zeile je Schritt fuer die Ausfuehren-Ansicht."""
+        if step.step_type in CONTROL_STEP_LABELS and step.step_type not in ("wait", "set_var", "inc_var"):
+            text = tr(CONTROL_STEP_LABELS[step.step_type])
+            if step.step_type == "loop":
+                text += f" ({step.loop_count}×)"
+            return text
+        if step.step_type == "wait":
+            return tr("Warten ({duration:g} s)", duration=step.duration)
+        if step.step_type in ("set_var", "inc_var"):
+            return f"{step.var_name} {'=' if step.step_type == 'set_var' else '+='} {step.value:g}"
+        if step.step_type == "end":
+            return tr("Ende")
+        device = self._device_display(step.device_kind, step.device_id)
+        text = f"{device} – {action_label(step.device_kind, step.action)}"
+        if step.action == "CAN_SEND":
+            text += f" (0x{step.can_id:X}: {step.can_data or '–'})"
+        elif not is_arb_action(step.action) and step.value:
+            text += f" ({step.value:g})"
+        if step.duration and step.step_type == STEP_TYPE_ACTION:
+            text += " · " + tr("{duration:g} s", duration=step.duration)
+        return text
 
     # -- Wiederverwendbare Bausteine ------------------------------------------
     #
@@ -2206,6 +2294,7 @@ class TestcaseTab(QWidget):
 
     def _update_run_enabled(self) -> None:
         self._run_button.setEnabled(not self._is_running and self._structure_ok)
+        self._sync_run_view_buttons()
 
     # -- Ausfuehrung -----------------------------------------------------------
 
@@ -2232,6 +2321,7 @@ class TestcaseTab(QWidget):
         self._iteration_text = ""
         self._report_available = False
         self.set_running(True)
+        self._run_view.set_progress(-1)
         self._set_status("Läuft…")
 
     def on_iteration_changed(self, _row: int, iteration: int, total: int) -> None:
@@ -2246,6 +2336,7 @@ class TestcaseTab(QWidget):
     def on_step_started(self, index: int, step: TestStep) -> None:
         self._reveal_row(index)
         self._start_blink(index)
+        self._run_view.set_progress(index)
         total = self._table.rowCount()
         if step.step_type in ("set_var", "inc_var"):
             op = "=" if step.step_type == "set_var" else "+="

@@ -387,7 +387,12 @@ time-window-limited ring buffer of the live charts.
   −/+ keys on the left and right; tapping the value opens a keypad showing
   range and unit ("Set" applies and sends like the ✓ button, a value outside
   the range cannot be set). The CAN ID and payload get the same keypad with
-  the keys A–F. As long as the checkbox has
+  the keys A–F. The "Test sequence" tab shows a run view instead of the
+  editor: the saved sequences on the left (from the network drive, folder
+  `testcases/`, otherwise local), the steps, progress, status and large Start
+  and Stop buttons on the right. Editing and saving is done on the PC; runs
+  work exactly as in the editor (same checks, a step error is acknowledged
+  with Stop). As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.

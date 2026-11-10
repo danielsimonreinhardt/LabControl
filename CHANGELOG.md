@@ -7,6 +7,18 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 3: Testabläufe am Pi nur ausführen (0.34.0, Pi-Plan Phase 4, PI-7 a, 10.11.2026).**
+  - Neu `lab_gui/touch_run_view.py`: Im Touch-Profil zeigt der Reiter „Testablauf“ statt des Editors (7 Spalten,
+    viele Dialoge) eine Ausführen-Ansicht. Links die gespeicherten Abläufe aus dem gemeinsamen Ordner (Netzlaufwerk
+    `testcases/`, sonst lokal; mit Knopf zum Neueinlesen, leer mit Hinweis), rechts Name, Schritte als lesbare Zeilen
+    („Netzteil (automatisch) – Spannung setzen (12) · 1 s“, „Schleife (3×)“), Fortschritt „4 / 7“, der aktuelle Schritt
+    markiert und mitgescrollt, Status groß (Fehler rot, bestanden grün), Start und Stop als große Knöpfe.
+  - Antippen lädt den Ablauf über denselben Weg wie „Laden…“ im Editor (`TestcaseTab._load_path`, inkl. Geräte-Zuordnung
+    über den Namen); gestartet wird über `run_requested` wie mit dem Start-Knopf, Stop quittiert auch einen
+    Schrittfehler. Während eines Laufs sind Liste und Start gesperrt. Ohne Touch-Profil bleibt der Editor wie bisher.
+  - **Mock-verifiziert** (`tools/check_touch_run.py`: Umschalten, Liste, Laden, Start, Fortschritt, Fehler mit
+    Quittung, Rückweg; alle 28 Prüfungen grün), am Pi offscreen hell und dunkel mit einem simulierten Lauf angesehen.
+    Nicht enthalten: Bericht öffnen (am Pi gibt es keinen Browser).
 - **Touch-Profil: Durchsicht auf Stimmigkeit (0.33.1, Nutzerhinweis „Elemente nicht gleich hoch“, 10.11.2026).**
   Gemessen am Pi (1024 × 600, Pi-Schriften): Knöpfe waren 40/42/60 px hoch, Eingabefelder 32–40, Zahlenfelder 40–47;
   Beschriftungen standen oben statt mittig neben den Feldern; das Fenster verlangte mindestens 1054 × 715 px, also mehr
