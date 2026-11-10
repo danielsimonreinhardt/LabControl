@@ -401,15 +401,32 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   erstmaligen Aktivieren bekommt jedes bereits bekannte Gerät automatisch
   eine eigene Farbe zugewiesen.
 - **Sprache**: wechselt die Oberflächensprache sofort, ohne Neustart.
-- **Log-Ordner (Netzlaufwerk)**: Ist ein Ordner eingetragen (z. B.
-  `\\nas\labor\logs` am PC oder `/mnt/labor/logs` am Raspberry Pi),
-  schreibt LabControl sein Protokoll dorthin, je Rechner eine eigene Datei
-  `labdash-<Rechnername>.log`. Ist der Ordner nicht erreichbar, schreibt es
-  lokal in `labdash.log` weiter, versucht es jede Minute erneut und
-  vermerkt beide Wechsel im Protokoll. Darunter steht, wohin gerade
-  geschrieben wird. Am Raspberry Pi gilt ein Ordner auf der SD-Karte nicht
-  als Netzlaufwerk (auch kein leerer, nicht eingehängter Mountpoint). Die
-  Umgebungsvariable `LABCONTROL_LOG_DIR` hat Vorrang vor diesem Feld.
+- **Netzlaufwerk (Log und Daten)**: Ist ein Ordner eingetragen (z. B.
+  `\\nas\labor` am PC oder `/mnt/labor` am Raspberry Pi), legt LabControl
+  dort alles ab, was im Betrieb entsteht, damit man es später auswerten kann:
+
+  | Ort auf dem Netzlaufwerk | Inhalt |
+  |---|---|
+  | `<Rechnername>/labdash.log`, `share_access.log` | Protokoll und Zugriffsprotokoll |
+  | `<Rechnername>/captures/` | Oszilloskop-Erfassungen (CSV) |
+  | `<Rechnername>/reports/` | Ablauf-Berichte (HTML, PDF) |
+  | `<Rechnername>/recordings/` | Verlaufs-Aufzeichnungen (CSV, MF4) |
+  | `testcases/`, `blocks/` | Testabläufe und Bausteine, gemeinsam für alle Rechner |
+
+  Erfassungen und Berichte entstehen zuerst lokal und werden etwa eine
+  Minute später verschoben; ein hängendes Netzlaufwerk hält die Bedienung
+  so nie auf. Ist das Netzlaufwerk nicht erreichbar, bleibt alles lokal
+  und wird nachgeschoben, sobald es wieder da ist (auch ältere Dateien aus
+  der Zeit vor der Einstellung). Lokal bleiben dabei höchstens 200 MB
+  liegen, darüber werden die ältesten noch nicht verschobenen Dateien
+  gelöscht (steht im Protokoll). Das Protokoll schreibt lokal in
+  `labdash.log` weiter und versucht es jede Minute erneut. Die
+  Speichern-Dialoge und die Ordner für Testabläufe und Bausteine zeigen aufs
+  Netzlaufwerk, wenn es erreichbar ist. Unter dem Feld steht, wohin gerade
+  geschrieben wird und wie viele Dateien warten. Am Raspberry Pi gilt ein
+  Ordner auf der SD-Karte nicht als Netzlaufwerk (auch kein leerer, nicht
+  eingehängter Mountpoint). Die Umgebungsvariable `LABCONTROL_NETWORK_DIR`
+  hat Vorrang vor diesem Feld. Ohne Eintrag bleibt alles wie bisher lokal.
 - **Nicht verbundene Geräte löschen**: vergisst nur die Geräte, die gerade
   nicht verbunden sind (ausgegraute Kacheln), samt Namen,
   Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigaben. Verbundene
@@ -481,8 +498,8 @@ Labornetz gedacht: Der Port darf **niemals** per Portfreigabe oder UPnP
 aus dem Internet erreichbar gemacht werden.
 
 **Zugriffe protokollieren** schreibt jede Anfrage in eine eigene Datei
-`share_access.log` neben dem Programm, bei eingestelltem Log-Ordner dort als
-`share_access-<Rechnername>.log`. Bewusst getrennt von `labdash.log`,
+`share_access.log` neben dem Programm, bei eingestelltem Netzlaufwerk dort
+unter `<Rechnername>/share_access.log`. Bewusst getrennt von `labdash.log`,
 damit häufiges Abfragen die eigentliche Protokolldatei nicht überschreibt.
 Standardmäßig aus.
 

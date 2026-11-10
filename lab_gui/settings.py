@@ -331,16 +331,16 @@ class Settings(QObject):
         self.language_changed.emit(language)
 
     @property
-    def log_dir(self) -> str:
-        """Log-Ordner auf einem Netzlaufwerk (leer = nur lokal, siehe app_logging).
-        Kein Signal: die Einstellungen-Seite setzt das Ziel direkt in app_logging."""
-        return str(self._data.get("log_dir", ""))
+    def network_dir(self) -> str:
+        """Netzlaufwerk fuer Log und Betriebsdaten (leer = nur lokal, siehe app_logging und
+        data_store). Kein Signal: das Hauptfenster stellt beide direkt um."""
+        return str(self._data.get("network_dir", ""))
 
-    def set_log_dir(self, path: str) -> None:
+    def set_network_dir(self, path: str) -> None:
         path = path.strip()
-        if path == self.log_dir:
+        if path == self.network_dir:
             return
-        self._data["log_dir"] = path
+        self._data["network_dir"] = path
         self._save()
 
     @property

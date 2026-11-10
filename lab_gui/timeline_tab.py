@@ -73,6 +73,7 @@ from PySide6.QtWidgets import (
 from field_catalog import KIND_FIELDS
 from i18n import Translator, tr
 from icons import IconButton
+import data_store
 from paths import app_dir
 from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, no_own_background
@@ -1149,9 +1150,9 @@ class TimelineTab(QWidget):
         self.clear_requested.emit()
 
     def _on_export_csv_clicked(self) -> None:
-        RECORDING_DEFAULT_DIR.mkdir(exist_ok=True)
+        # Netzlaufwerk (<rechner>/recordings), sonst lokal RECORDING_DEFAULT_DIR -- siehe data_store
         path_str, _ = QFileDialog.getSaveFileName(
-            self, tr("Als CSV exportieren"), str(RECORDING_DEFAULT_DIR), tr("CSV-Datei (*.csv)")
+            self, tr("Als CSV exportieren"), str(data_store.target_dir("recordings")), tr("CSV-Datei (*.csv)")
         )
         if not path_str:
             return
@@ -1161,9 +1162,8 @@ class TimelineTab(QWidget):
         self.export_csv_to.emit(path)
 
     def _on_export_mf4_clicked(self) -> None:
-        RECORDING_DEFAULT_DIR.mkdir(exist_ok=True)
         path_str, _ = QFileDialog.getSaveFileName(
-            self, tr("Als MF4 exportieren"), str(RECORDING_DEFAULT_DIR), tr("MF4-Datei (*.mf4)")
+            self, tr("Als MF4 exportieren"), str(data_store.target_dir("recordings")), tr("MF4-Datei (*.mf4)")
         )
         if not path_str:
             return

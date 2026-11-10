@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 import app_logging
+import data_store
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
@@ -29,7 +30,6 @@ from device_worker import (
 )
 from i18n import Translator, tr
 from live_state import LiveState
-from paths import app_dir
 from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
@@ -170,8 +170,10 @@ class MainWindow(QMainWindow):
         self._share_bridge = RemoteBridge(self)
         # Oszilloskop-Erfassungen ueber Netzwerk/MCP (scope_api, Phase 2). Eigener
         # Thread fuer die DLL-Aufrufe; Erfassungen landen zusaetzlich als CSV in
-        # captures/ neben der App (Entscheidung E3).
-        self._scope_service = ScopeService(app_dir() / "captures", self)
+        # captures/ neben der App (Entscheidung E3). Mit Netzlaufwerk schiebt data_store sie
+        # dorthin; der CSV-Pfad der Erfassung zieht dann mit.
+        self._scope_service = ScopeService(data_store.store().local_dir("captures"), self)
+        data_store.store().on_moved(self._scope_service.relocate_csv)
         self._scope_service.connection_changed.connect(self._on_scope_connection_changed)
         # device_id -> capture_id der letzten Erfassung (Knopf "Kurve" der Kachel)
         self._last_scope_capture: dict[str, str] = {}
@@ -617,14 +619,15 @@ class MainWindow(QMainWindow):
         self.settings_tab.language_selected.connect(self._settings.set_language)
         self._settings.language_changed.connect(Translator.instance().set_language)
 
-        # Log-Ordner (Netzlaufwerk): Ziel sofort umstellen, Status alle 2 s nachfuehren
-        # (Wechsel auf lokal und zurueck passieren im Log-Thread, ohne Signal).
-        self.settings_tab.set_log_dir(self._settings.log_dir, os.environ.get(app_logging.LOG_DIR_ENV, ""))
-        self.settings_tab.log_dir_changed.connect(self._on_log_dir_changed)
+        # Netzlaufwerk fuer Log und Betriebsdaten: Ziel sofort umstellen, Status alle 2 s
+        # nachfuehren (Wechsel auf lokal und zurueck passieren in eigenen Threads, ohne Signal).
+        self.settings_tab.set_network_dir(self._settings.network_dir,
+                                          os.environ.get(app_logging.NETWORK_DIR_ENV, ""))
+        self.settings_tab.network_dir_changed.connect(self._on_network_dir_changed)
         self._log_status_timer = QTimer(self)
-        self._log_status_timer.timeout.connect(lambda: self.settings_tab.set_log_status(app_logging.status()))
+        self._log_status_timer.timeout.connect(self._update_storage_status)
         self._log_status_timer.start(2000)
-        self.settings_tab.set_log_status(app_logging.status())
+        self._update_storage_status()
 
         self.settings_tab.set_notifications_enabled(self._settings.notifications_enabled)
         self.settings_tab.notifications_toggled.connect(self._settings.set_notifications_enabled)
@@ -645,10 +648,15 @@ class MainWindow(QMainWindow):
         self.settings_tab.scpi_scopes_changed.connect(self._settings.set_scpi_scopes)
         self._settings.scpi_scopes_changed.connect(self._worker.set_scpi_scopes)
 
-    def _on_log_dir_changed(self, path: str) -> None:
-        self._settings.set_log_dir(path)
-        logger.info("Log-Ordner (Netzlaufwerk) eingestellt: %s", path or "keiner, nur lokal")
-        app_logging.set_network_dir(self._settings.log_dir)
+    def _on_network_dir_changed(self, path: str) -> None:
+        self._settings.set_network_dir(path)
+        logger.info("Netzlaufwerk (Log und Daten) eingestellt: %s", path or "keines, nur lokal")
+        app_logging.set_network_dir(self._settings.network_dir)
+        data_store.store().set_network_dir(app_logging.effective_network_dir(self._settings.network_dir))
+
+    def _update_storage_status(self) -> None:
+        self.settings_tab.set_log_status(app_logging.status())
+        self.settings_tab.set_data_status(data_store.store().status())
 
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.

@@ -6,7 +6,7 @@
 - haengendes Netzlaufwerk: Aufrufer blockiert nicht, volle Warteschlange verwirft und meldet das,
   shutdown() kehrt nach der Frist zurueck
 - Zugriffsprotokoll der Freigabe: eigene Datei, ohne Zugriffe keine Datei
-- LABCONTROL_LOG_DIR gewinnt; Einstellungen-Reiter zeigt Ziel und meldet Aenderungen
+- LABCONTROL_NETWORK_DIR gewinnt; Einstellungen-Reiter zeigt Ziel und meldet Aenderungen
 
 Unter Linux dient /dev/shm (tmpfs, eigenes Dateisystem) als "Netzlaufwerk". Aufruf:  python tools/check_app_logging.py
 """
@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "lab_gui"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 DATA = pathlib.Path(tempfile.mkdtemp(prefix="lc-data-"))
 os.environ["LABCONTROL_DATA_DIR"] = str(DATA)   # vor dem Import von paths/app_logging
-os.environ.pop("LABCONTROL_LOG_DIR", None)
+os.environ.pop("LABCONTROL_NETWORK_DIR", None)
 
 import app_logging as al  # noqa: E402
 
@@ -129,20 +129,20 @@ def check_pipeline() -> None:
     log = logging.getLogger("check")
     log.info("ueber die Warteschlange")
     deadline = time.monotonic() + 5
-    main_file = net / f"labdash-{host}.log"
+    main_file = net / host / "labdash.log"
     while time.monotonic() < deadline and "ueber die Warteschlange" not in read(main_file):
         time.sleep(0.05)
-    check("Haupt-Log je Rechner im Netzlaufwerk", "ueber die Warteschlange" in read(main_file))
+    check("Haupt-Log im Rechner-Unterordner des Netzlaufwerks", "ueber die Warteschlange" in read(main_file))
     check("Status: Netzlaufwerk", al.status()["target"] == "network", str(al.status()))
     check("ohne Zugriffe keine Zugriffsprotokoll-Datei",
-          not (net / f"share_access-{host}.log").exists() and not (DATA / "share_access.log").exists())
+          not (net / host / "share_access.log").exists() and not (DATA / "share_access.log").exists())
     access = logging.getLogger("check.access")
     access.propagate = False
     access.addHandler(al.access_log_handler())
     access.info("127.0.0.1 GET /api/v1/status")
     time.sleep(0.5)
     check("Zugriffsprotokoll eigene Datei im Netzlaufwerk",
-          "GET /api/v1/status" in read(net / f"share_access-{host}.log")
+          "GET /api/v1/status" in read(net / host / "share_access.log")
           and "GET /api/v1/status" not in read(main_file))
 
     # Haenger: jeder Schreibvorgang dauert 0,5 s
@@ -176,27 +176,27 @@ def check_pipeline() -> None:
 
 def check_env_and_tab() -> None:
     print("Umgebungsvariable und Einstellungen-Reiter")
-    os.environ[al.LOG_DIR_ENV] = "/mnt/labor/logs"
-    check("LABCONTROL_LOG_DIR gewinnt gegen die Einstellung", al.effective_log_dir("//nas/x") == "/mnt/labor/logs")
-    del os.environ[al.LOG_DIR_ENV]
-    check("ohne Variable gilt die Einstellung", al.effective_log_dir("//nas/x") == "//nas/x")
+    os.environ[al.NETWORK_DIR_ENV] = "/mnt/labor/logs"
+    check("LABCONTROL_NETWORK_DIR gewinnt gegen die Einstellung", al.effective_network_dir("//nas/x") == "/mnt/labor/logs")
+    del os.environ[al.NETWORK_DIR_ENV]
+    check("ohne Variable gilt die Einstellung", al.effective_network_dir("//nas/x") == "//nas/x")
 
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     from settings_tab import SettingsTab
     tab = SettingsTab()
     seen = []
-    tab.log_dir_changed.connect(seen.append)
-    tab.set_log_dir("//nas/labor/logs")
-    tab._log_dir_edit.setText("  /mnt/labor/logs ")
-    tab._log_dir_edit.editingFinished.emit()
+    tab.network_dir_changed.connect(seen.append)
+    tab.set_network_dir("//nas/labor/logs")
+    tab._network_dir_edit.setText("  /mnt/labor/logs ")
+    tab._network_dir_edit.editingFinished.emit()
     check("Feld meldet den Ordner (ohne Leerzeichen)", seen == ["/mnt/labor/logs"], str(seen))
     tab.set_log_status({"target": "local", "path": "/home/pi/.local/share/labcontrol/labdash.log",
                         "reason": "Ordner nicht erreichbar"})
     text = tab._log_status_label.text()
     check("Status zeigt Ausweichen mit Grund", "nicht nutzbar (Ordner nicht erreichbar)" in text and "labdash.log" in text, text)
-    tab.set_log_dir("", env_override="/mnt/x")
-    check("Variable gesetzt: Feld gesperrt", not tab._log_dir_edit.isEnabled() and tab._log_dir_edit.text() == "/mnt/x")
+    tab.set_network_dir("", env_override="/mnt/x")
+    check("Variable gesetzt: Feld gesperrt", not tab._network_dir_edit.isEnabled() and tab._network_dir_edit.text() == "/mnt/x")
     app.processEvents()
 
 

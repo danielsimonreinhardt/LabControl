@@ -7,6 +7,32 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Alle Betriebsdaten aufs Netzlaufwerk (0.31.0, Entscheidungen PI-12 b und PI-13 a, 10.11.2026).**
+  Nutzerwunsch: Alles, was LabControl im Betrieb erzeugt, soll aufs Netzlaufwerk, damit man es später auswerten kann. Das
+  Feld „Log-Ordner (Netzlaufwerk)“ aus 0.29.0 heißt jetzt **„Netzlaufwerk (Log und Daten)“** (Einstellung `network_dir`,
+  Umgebungsvariable `LABCONTROL_NETWORK_DIR` statt `LABCONTROL_LOG_DIR`; 0.29.0 war nie veröffentlicht).
+
+  | Ort auf dem Netzlaufwerk | Inhalt |
+  |---|---|
+  | `<rechner>/labdash.log`, `share_access.log` | Log und Zugriffsprotokoll (bisher `labdash-<rechner>.log` direkt im Ordner) |
+  | `<rechner>/captures/`, `reports/`, `recordings/` | Oszilloskop-Erfassungen, Ablauf-Berichte, Verlaufs-Aufzeichnungen |
+  | `testcases/`, `blocks/` | Testabläufe und Bausteine, gemeinsam für Pi und PC |
+
+  - Neu `lab_gui/data_store.py`: Erfassungen und Berichte entstehen weiter zuerst lokal. Ein eigener Thread schiebt fertige
+    Dateien (älter als 30 s) jede Minute aufs Netzlaufwerk und löscht sie danach lokal -- ein hängendes Netzlaufwerk hält
+    Oberfläche und Geräte nie auf. Kopiert wird über eine `.part`-Datei mit Größenvergleich; gleichnamige Dateien bekommen
+    „-1“. Auch ältere lokale Dateien aus der Zeit vor der Einstellung werden verschoben.
+  - Nicht erreichbar (PI-13 a): Dateien bleiben lokal und werden nachgeschoben. Lokal bleiben höchstens 200 MB, darüber
+    werden die ältesten noch nicht verschobenen Dateien gelöscht (steht im Log). Die Grenze gilt nur mit eingestelltem
+    Netzlaufwerk oder wenn der Datenordner auf einer SD-Karte liegt; am PC ohne Netzlaufwerk ändert sich nichts.
+  - Speichern-Dialoge (PDF-Bericht, CSV/MF4-Aufzeichnung) und die Ordner für Testabläufe/Bausteine zeigen aufs
+    Netzlaufwerk, wenn es bei der letzten Prüfung erreichbar war, sonst lokal (PI-12 b).
+  - Der CSV-Pfad einer Erfassung (Netzwerk-Freigabe/MCP `csv_path`) zieht nach dem Verschieben mit.
+  - Einstellungen: unter dem Feld eine zweite Zeile, wohin die Daten gehen und wie viele Dateien lokal warten.
+  - **Mock-verifiziert** (`tools/check_data_store.py`: Verschieben, frische und `.part`-Dateien, Namensgleichheit,
+    nicht erreichbar mit Grenze und Nachschieben, Kopierfehler, Thread, CSV-Pfad, Anzeige; `check_app_logging.py` an die
+    neuen Pfade angepasst) unter Windows, am Pi siehe unten. **Nicht geprüft:** echtes SMB/NFS-Netzlaufwerk (steht noch
+    nicht fest).
 - **Raspberry Pi: Netzteile auch beim Neustart aus dem Desktop freigeben (0.30.2, 10.11.2026).**
   Beim ersten Neustart des Pi mit laufendem Dienst fehlte im Log das Beenden. Nachgestellt mit einem eigenen kopflosen labwc:
   Endet der Wayland-Compositor vor LabControl, beendet Qt den Prozess sofort („The Wayland connection broke“, Exit-Code 255),

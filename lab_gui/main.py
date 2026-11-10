@@ -17,6 +17,7 @@ import os
 from PySide6.QtWidgets import QApplication, QWidget
 
 import app_logging
+import data_store
 from app_icon import icon as app_icon
 from app_logging import setup_logging
 from i18n import Translator
@@ -60,9 +61,10 @@ def show_window(window: QWidget, mode: str | None = None) -> str:
 
 
 def main() -> None:
-    # Einstellungen vor dem Logging: der Log-Ordner (Netzlaufwerk) steht darin.
+    # Einstellungen vor dem Logging: das Netzlaufwerk steht darin.
     settings = Settings()
-    setup_logging(settings.log_dir)
+    setup_logging(settings.network_dir)
+    data_store.setup(app_logging.effective_network_dir(settings.network_dir))
     logger.info("LAB CONTROL v%s startet", __version__)
     app = QApplication(sys.argv)
     app.setDesktopFileName(DESKTOP_FILE_NAME)
@@ -82,6 +84,7 @@ def main() -> None:
         pyi_splash.close()
     exit_code = app.exec()
     logger.info("LAB CONTROL beendet (exit_code=%d)", exit_code)
+    data_store.store().stop()   # laufendes Nachschieben beenden (Daemon, haelt nicht auf)
     app_logging.shutdown()   # restliche Meldungen schreiben; ein haengendes Netzlaufwerk haelt nicht auf
     sys.exit(exit_code)
 

@@ -383,15 +383,31 @@ time-window-limited ring buffer of the live charts.
   gets its own color.
 - **Language**: switches the interface language immediately, without
   restarting.
-- **Log folder (network drive)**: if a folder is entered (e.g.
-  `\\nas\labor\logs` on the PC or `/mnt/labor/logs` on the Raspberry
-  Pi), LabControl writes its log there, one file per computer
-  `labdash-<computer name>.log`. If the folder cannot be reached, it keeps
-  logging locally to `labdash.log`, retries every minute and records both
-  switches in the log. The line below shows where it is currently writing.
-  On the Raspberry Pi a folder on the SD card does not count as a network
-  drive (nor does an empty, unmounted mount point). The environment
-  variable `LABCONTROL_LOG_DIR` takes precedence over this field.
+- **Network drive (log and data)**: if a folder is entered (e.g.
+  `\\nas\labor` on the PC or `/mnt/labor` on the Raspberry Pi), LabControl
+  stores everything it produces during operation there, for later analysis:
+
+  | Location on the network drive | Content |
+  |---|---|
+  | `<computer name>/labdash.log`, `share_access.log` | Log and access log |
+  | `<computer name>/captures/` | Oscilloscope captures (CSV) |
+  | `<computer name>/reports/` | Run reports (HTML, PDF) |
+  | `<computer name>/recordings/` | Timeline recordings (CSV, MF4) |
+  | `testcases/`, `blocks/` | Test sequences and blocks, shared by all computers |
+
+  Captures and reports are first written locally and moved about a minute
+  later, so a hanging network drive never blocks operation. If the drive
+  cannot be reached, everything stays local and is moved over once it is
+  back (including older files from before the setting). At most 200 MB stay
+  local; beyond that the oldest files not yet moved are deleted (noted in
+  the log). The log keeps writing locally to `labdash.log` and retries every
+  minute. Save dialogs and the folders for test sequences and blocks point
+  to the network drive when it is reachable. The lines below the field show
+  where data currently goes and how many files are waiting. On the
+  Raspberry Pi a folder on the SD card does not count as a network drive
+  (nor does an empty, unmounted mount point). The environment variable
+  `LABCONTROL_NETWORK_DIR` takes precedence over this field. Without an
+  entry everything stays local as before.
 - **Delete disconnected devices**: forgets only the devices that are
   currently not connected (greyed-out tiles), including names, safety
   limits, panel colors and network sharing. Connected devices stay
@@ -458,8 +474,8 @@ for a trusted home or lab network: the port must **never** be made
 reachable from the internet via port forwarding or UPnP.
 
 **Log requests** writes every request to a separate file
-`share_access.log` next to the program, or `share_access-<computer name>.log`
-in the log folder if one is set. Deliberately separate from
+`share_access.log` next to the program, or `<computer name>/share_access.log`
+on the network drive if one is set. Deliberately separate from
 `labdash.log`, so that frequent polling does not overwrite the main log.
 Off by default.
 

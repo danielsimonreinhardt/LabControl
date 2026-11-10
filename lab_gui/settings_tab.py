@@ -760,7 +760,7 @@ class SettingsTab(QWidget):
     simulation_mode_toggled = Signal(bool)
     dark_mode_toggled = Signal(bool)
     language_selected = Signal(str)
-    log_dir_changed = Signal(str)   # Log-Ordner auf dem Netzlaufwerk, leer = nur lokal
+    network_dir_changed = Signal(str)   # Netzlaufwerk fuer Log und Betriebsdaten, leer = nur lokal
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
@@ -863,24 +863,29 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
-        # -- Log-Ordner (Netzlaufwerk, siehe app_logging) ----------------------
+        # -- Netzlaufwerk fuer Log und Betriebsdaten (app_logging, data_store) --
         log_row = QHBoxLayout()
-        self._log_dir_label = QLabel()
-        log_row.addWidget(self._log_dir_label)
-        self._log_dir_edit = QLineEdit()
-        self._log_dir_edit.setMinimumWidth(320)
+        self._network_dir_label = QLabel()
+        log_row.addWidget(self._network_dir_label)
+        self._network_dir_edit = QLineEdit()
+        self._network_dir_edit.setMinimumWidth(320)
         # editingFinished (Enter/Fokusverlust) statt textChanged: sonst wuerde jeder
         # Tastendruck ein neues Ziel pruefen lassen.
-        self._log_dir_edit.editingFinished.connect(
-            lambda: self.log_dir_changed.emit(self._log_dir_edit.text().strip())
+        self._network_dir_edit.editingFinished.connect(
+            lambda: self.network_dir_changed.emit(self._network_dir_edit.text().strip())
         )
-        log_row.addWidget(self._log_dir_edit, 1)
+        log_row.addWidget(self._network_dir_edit, 1)
         layout.addLayout(log_row)
         self._log_status_label = QLabel()
         self._log_status_label.setWordWrap(True)
         self._log_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self._log_status_label)
+        self._data_status_label = QLabel()
+        self._data_status_label.setWordWrap(True)
+        self._data_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._data_status_label)
         self._log_status: dict = {}
+        self._data_status: dict = {}
 
         layout.addWidget(_separator())
 
@@ -1245,15 +1250,17 @@ class SettingsTab(QWidget):
         self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
         self._panel_colors_checkbox.setText(tr("Individuelle Panel-Hintergrundfarben (Dashboard/Control)"))
         self._language_label.setText(tr("Sprache:"))
-        self._log_dir_label.setText(tr("Log-Ordner (Netzlaufwerk):"))
-        self._log_dir_edit.setPlaceholderText(tr("leer = nur lokal, z. B. \\\\nas\\labor\\logs oder /mnt/labor/logs"))
-        self._log_dir_edit.setToolTip(
+        self._network_dir_label.setText(tr("Netzlaufwerk (Log und Daten):"))
+        self._network_dir_edit.setPlaceholderText(tr("leer = nur lokal, z. B. \\\\nas\\labor oder /mnt/labor"))
+        self._network_dir_edit.setToolTip(
             tr(
-                "LabControl schreibt sein Log bevorzugt in diesen Ordner (je Rechner eine eigene Datei). "
-                "Ist er nicht erreichbar, schreibt es lokal weiter und versucht es jede Minute erneut."
+                "LabControl legt Log, Oszilloskop-Erfassungen, Berichte und Aufzeichnungen in einem Unterordner "
+                "je Rechner ab, Testabläufe und Bausteine gemeinsam. Ist das Netzlaufwerk nicht erreichbar, "
+                "bleibt alles lokal und wird später nachgeschoben."
             )
         )
         self._render_log_status()
+        self._render_data_status()
         self._help_button.setText(tr("Hilfe"))
         self._help_button.setToolTip(tr("Öffnet das Benutzerhandbuch"))
         self._remove_offline_button.setText(tr("Nicht verbundene Geräte löschen"))
@@ -1340,13 +1347,41 @@ class SettingsTab(QWidget):
         self._language_combo.setCurrentIndex(index)
         self._language_combo.blockSignals(False)
 
-    def set_log_dir(self, path: str, env_override: str = "") -> None:
-        """Feld fuellen. Ist LABCONTROL_LOG_DIR gesetzt, gilt die Variable: Feld gesperrt."""
-        self._log_dir_edit.blockSignals(True)
-        self._log_dir_edit.setText(env_override or path)
-        self._log_dir_edit.blockSignals(False)
-        self._log_dir_edit.setEnabled(not env_override)
+    def set_network_dir(self, path: str, env_override: str = "") -> None:
+        """Feld fuellen. Ist LABCONTROL_NETWORK_DIR gesetzt, gilt die Variable: Feld gesperrt."""
+        self._network_dir_edit.blockSignals(True)
+        self._network_dir_edit.setText(env_override or path)
+        self._network_dir_edit.blockSignals(False)
+        self._network_dir_edit.setEnabled(not env_override)
         self._log_env_override = env_override
+
+    def set_data_status(self, status: dict) -> None:
+        """Zustand der Datenablage (data_store.DataStore.status())."""
+        status = {k: v for k, v in status.items() if k != "last_sync"}
+        if status == self._data_status:
+            return
+        self._data_status = status
+        self._render_data_status()
+
+    def _render_data_status(self) -> None:
+        status = self._data_status
+        if not status or status.get("target") == "off":
+            self._data_status_label.setText("")
+            return
+        pal = current_palette()
+        files, size = status.get("pending_files", 0), status.get("pending_bytes", 0)
+        waiting = tr("{files} Datei(en), {mb} MB warten lokal", files=files, mb=f"{size / 1_048_576:.1f}") if files else ""
+        if status.get("target") == "network":
+            text = tr("Daten gehen ins Netzlaufwerk: {path}", path=status.get("path", ""))
+            text += f" ({waiting})" if waiting else ""
+            color = pal.success
+        else:
+            text = tr("Netzlaufwerk nicht nutzbar ({reason}), Daten bleiben lokal und werden nachgeschoben",
+                      reason=status.get("reason") or tr("wird geprüft"))
+            text += f": {waiting}" if waiting else ""
+            color = pal.danger if status.get("reason") else pal.text_muted
+        self._data_status_label.setText(text)
+        self._data_status_label.setStyleSheet(f"color: {color};")
 
     def set_log_status(self, status: dict) -> None:
         """Wohin das Log gerade schreibt (app_logging.status())."""
@@ -1372,7 +1407,7 @@ class SettingsTab(QWidget):
             text = tr("Log schreibt lokal: {path}", path=status.get("path", ""))
             color = pal.text_muted
         if getattr(self, "_log_env_override", ""):
-            text += " " + tr("(festgelegt über LABCONTROL_LOG_DIR)")
+            text += " " + tr("(festgelegt über LABCONTROL_NETWORK_DIR)")
         self._log_status_label.setText(text)
         self._log_status_label.setStyleSheet(f"color: {color};")
 

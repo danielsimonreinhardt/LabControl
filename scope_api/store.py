@@ -58,6 +58,16 @@ class CaptureStore:
                              "noch vorhanden sein.", capacity=self._capacity)
         return capture
 
+    def relocate(self, old_path: str, new_path: str) -> int:
+        """CSV wurde verschoben (z. B. aufs Netzlaufwerk): Pfad der Erfassungen nachziehen."""
+        changed = 0
+        with self._lock:
+            for capture in self._captures.values():
+                if capture.csv_path == old_path:
+                    capture.csv_path = new_path
+                    changed += 1
+        return changed
+
     def ids(self) -> list[str]:
         with self._lock:
             return list(self._captures)

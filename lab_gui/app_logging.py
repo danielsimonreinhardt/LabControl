@@ -8,10 +8,11 @@ Uebernacht-Laufs im Nachhinein nicht mehr nachvollziehbar.
 Netzlaufwerk (Raspberry Pi, Nutzer 10.11.2026: "Log vorrangig auf ein
 Netzlaufwerk", um die SD-Karte zu schonen):
 
-- Ist ein Log-Ordner eingestellt (Einstellungen > Allgemein oder
-  LABCONTROL_LOG_DIR, die Variable gewinnt), schreibt LabControl dorthin,
-  je Rechner eine eigene Datei (labdash-<rechnername>.log), damit PC und Pi
-  denselben Ordner nutzen koennen.
+- Ist ein Netzlaufwerk eingestellt (Einstellungen > Allgemein oder
+  LABCONTROL_NETWORK_DIR, die Variable gewinnt), schreibt LabControl dorthin,
+  je Rechner in einen eigenen Unterordner (<netzlaufwerk>/<rechnername>/labdash.log,
+  seit 0.31.0; dort liegen auch die anderen Betriebsdaten, siehe data_store),
+  damit PC und Pi dasselbe Netzlaufwerk nutzen koennen.
 - Ist er nicht erreichbar, schreibt LabControl in die lokale labdash.log im
   Datenordner und versucht es jede Minute erneut. Beide Wechsel stehen im Log.
 - Unter Linux zaehlt ein Ordner auf der SD-Karte nicht als Ziel: weder auf
@@ -38,7 +39,7 @@ from pathlib import Path
 from paths import app_dir
 
 LOG_PATH = app_dir() / "labdash.log"
-LOG_DIR_ENV = "LABCONTROL_LOG_DIR"
+NETWORK_DIR_ENV = "LABCONTROL_NETWORK_DIR"
 LOCAL_MAX_BYTES = 1_000_000
 LOCAL_BACKUPS = 3
 NETWORK_MAX_BYTES = 5_000_000
@@ -113,12 +114,13 @@ class _FailoverWriter:
     Wird nur im Log-Thread benutzt."""
 
     def __init__(self, local_path: Path, network_name: str, fmt: str,
-                 local_max_bytes: int, local_backups: int, eager: bool) -> None:
+                 local_max_bytes: int, local_backups: int, eager: bool, subdir: str = "") -> None:
         # eager: Ziel sofort pruefen (Haupt-Log, Status in den Einstellungen). Sonst erst beim
         # ersten Datensatz -- das Zugriffsprotokoll soll ohne Zugriffe keine Datei anlegen.
         self._eager = eager
         self._local_path = local_path
         self._network_name = network_name
+        self._subdir = subdir          # je Rechner ein Unterordner im Netzlaufwerk
         self._formatter = logging.Formatter(fmt)
         self._local_max_bytes = local_max_bytes
         self._local_backups = local_backups
@@ -145,8 +147,10 @@ class _FailoverWriter:
         self._next_try = time.monotonic() + RETRY_INTERVAL_S
         problem = network_dir_problem(self._network_dir)
         if not problem:
-            path = self._network_dir / self._network_name
+            folder = self._network_dir / self._subdir if self._subdir else self._network_dir
+            path = folder / self._network_name
             try:
+                folder.mkdir(exist_ok=True)
                 handler = _RaisingRotatingHandler(path, maxBytes=NETWORK_MAX_BYTES,
                                                   backupCount=NETWORK_BACKUPS, encoding="utf-8")
             except OSError as exc:
@@ -255,10 +259,10 @@ class _LogPipeline:
         self._lock = threading.Lock()
         host = host_name()
         self._writers = {
-            MAIN: _FailoverWriter(LOG_PATH, f"labdash-{host}.log", _FORMATS[MAIN],
-                                  LOCAL_MAX_BYTES, LOCAL_BACKUPS, eager=True),
-            ACCESS: _FailoverWriter(app_dir() / "share_access.log", f"share_access-{host}.log",
-                                    _FORMATS[ACCESS], 200_000, 1, eager=False),
+            MAIN: _FailoverWriter(LOG_PATH, "labdash.log", _FORMATS[MAIN],
+                                  LOCAL_MAX_BYTES, LOCAL_BACKUPS, eager=True, subdir=host),
+            ACCESS: _FailoverWriter(app_dir() / "share_access.log", "share_access.log",
+                                    _FORMATS[ACCESS], 200_000, 1, eager=False, subdir=host),
         }
         self._thread = threading.Thread(target=self._run, name="labcontrol-log", daemon=True)
         self._thread.start()
@@ -308,9 +312,9 @@ class _LogPipeline:
 _pipeline: _LogPipeline | None = None
 
 
-def effective_log_dir(configured: str) -> str:
-    """LABCONTROL_LOG_DIR gewinnt gegen die Einstellung."""
-    return os.environ.get(LOG_DIR_ENV) or (configured or "")
+def effective_network_dir(configured: str) -> str:
+    """LABCONTROL_NETWORK_DIR gewinnt gegen die Einstellung."""
+    return os.environ.get(NETWORK_DIR_ENV) or (configured or "")
 
 
 def setup_logging(network_dir: str = "") -> None:
@@ -327,7 +331,7 @@ def set_network_dir(configured: str) -> None:
     """Log-Ziel aendern (leer = nur lokal). Kehrt sofort zurueck; geprueft wird im Log-Thread."""
     if _pipeline is None:
         return
-    directory = effective_log_dir(configured)
+    directory = effective_network_dir(configured)
     _pipeline.set_network_dir(Path(directory).expanduser() if directory else None)
 
 

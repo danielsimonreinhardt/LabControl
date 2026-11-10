@@ -41,6 +41,7 @@ from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
+import data_store
 from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
@@ -1994,9 +1995,9 @@ class TestcaseTab(QWidget):
     # -- Speichern/Laden -----------------------------------------------------
 
     def _save_to_file(self) -> None:
-        DEFAULT_DIR.mkdir(exist_ok=True)
+        # Gemeinsamer Ordner auf dem Netzlaufwerk (PI-12 b), sonst lokal DEFAULT_DIR
         path_str, _ = QFileDialog.getSaveFileName(
-            self, tr("Testablauf speichern"), str(DEFAULT_DIR), tr("Testablauf (*.json)")
+            self, tr("Testablauf speichern"), str(data_store.target_dir("testcases")), tr("Testablauf (*.json)")
         )
         if not path_str:
             return
@@ -2011,9 +2012,8 @@ class TestcaseTab(QWidget):
         self._current_path = path
 
     def _load_from_file(self) -> None:
-        DEFAULT_DIR.mkdir(exist_ok=True)
         path_str, _ = QFileDialog.getOpenFileName(
-            self, tr("Testablauf laden"), str(DEFAULT_DIR), tr("Testablauf (*.json)")
+            self, tr("Testablauf laden"), str(data_store.target_dir("testcases")), tr("Testablauf (*.json)")
         )
         if not path_str:
             return
@@ -2053,8 +2053,7 @@ class TestcaseTab(QWidget):
         name = dialog.block_name()
         block_steps = dialog.selected_steps()
 
-        BLOCKS_DIR.mkdir(exist_ok=True)
-        default_path = BLOCKS_DIR / f"{_sanitize_filename(name)}.json"
+        default_path = data_store.target_dir("blocks") / f"{_sanitize_filename(name)}.json"
         path_str, _ = QFileDialog.getSaveFileName(
             self, tr("Baustein speichern"), str(default_path), tr("Baustein (*.json)")
         )
@@ -2069,9 +2068,8 @@ class TestcaseTab(QWidget):
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
 
     def _insert_block_from_file(self) -> None:
-        BLOCKS_DIR.mkdir(exist_ok=True)
         path_str, _ = QFileDialog.getOpenFileName(
-            self, tr("Baustein einfügen"), str(BLOCKS_DIR), tr("Baustein (*.json)")
+            self, tr("Baustein einfügen"), str(data_store.target_dir("blocks")), tr("Baustein (*.json)")
         )
         if not path_str:
             return
@@ -2103,11 +2101,8 @@ class TestcaseTab(QWidget):
         return self._current_path.stem if self._current_path else tr("Unbenannt")
 
     def _pick_pdf_path(self) -> None:
-        from run_report import REPORTS_DIR  # lokal: vermeidet Modul-Ladezeit-Kopplung beim Tab-Import
-
-        REPORTS_DIR.mkdir(exist_ok=True)
         path_str, _ = QFileDialog.getSaveFileName(
-            self, tr("Report als PDF exportieren"), str(REPORTS_DIR), tr("PDF (*.pdf)")
+            self, tr("Report als PDF exportieren"), str(data_store.target_dir("reports")), tr("PDF (*.pdf)")
         )
         if not path_str:
             return

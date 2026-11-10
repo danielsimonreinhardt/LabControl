@@ -207,6 +207,10 @@ class ScopeService(QObject):
         report["disconnect_in_s"] = IDLE_CLOSE_S
         return report
 
+    def relocate_csv(self, old_path, new_path) -> None:
+        """Rueckmeldung der Datenablage (data_store): CSV liegt jetzt auf dem Netzlaufwerk."""
+        self._store.relocate(str(old_path), str(new_path))
+
     def capture_device(self, capture_id: str) -> str:
         """Zu welchem Oszilloskop gehört die Erfassung? (für die Freigabeprüfung)"""
         self._store.get(capture_id)  # wirft unknown_capture, wenn verdrängt
