@@ -10,8 +10,9 @@ Semantic Versioning (`lab_gui/version.py`).
 - **Raspberry Pi: Einrichtung, Autostart als Dienst, Update vom PC (0.30.0, Pi-Plan Phase 2, 10.11.2026).**
   Neuer Ordner `tools/pi` (Überblick in `tools/pi/README.md`):
   - `setup_pi.sh` richtet den Pi ein: Python-Umgebung nur mit den Qt-Basismodulen (`PySide6-Essentials`, spart gut 300 MB),
-    Benutzerdienst und Autostart, Systemprotokoll auf 50 MB begrenzt, Auslagerung nur im Arbeitsspeicher (zram, keine Datei auf
-    der SD-Karte), Gerätegruppen `dialout`/`plugdev`.
+    Benutzerdienst und Autostart, Auslagerung nur im Arbeitsspeicher (zram, keine Datei auf der SD-Karte),
+    Gerätegruppen `dialout`/`plugdev`. Das Systemprotokoll hält Raspberry Pi OS schon nur im Arbeitsspeicher; das Skript
+    prüft das nur (0.30.1: die zunächst eingebaute 50-MB-Grenze für ein Protokoll auf der Karte war damit überflüssig).
   - `labcontrol.service`: LabControl startet mit dem Desktop. Beim Herunterfahren oder `systemctl --user stop` kommt SIGTERM
     und LabControl gibt wie beim Schließen des Fensters die Netzteile frei (bis 20 s). Nach einem Absturz startet der Dienst
     nach 5 s neu (höchstens 5-mal in 10 min); Schließen des Fensters beendet ihn ohne Neustart.
@@ -24,7 +25,9 @@ Semantic Versioning (`lab_gui/version.py`).
     Touch-Profil, damit man es in der App wieder verlassen kann.
   - **Mock-verifiziert** (`tools/check_pi_setup.py`: Fensterzustände, Dienst passt zu `setup_pi.sh`, Neustart-Regeln,
     Autostart, Skript-Syntax) unter Windows und am Pi. **Am Pi ausprobiert** (Raspberry Pi 5, 2 GB, Pi OS 13, Simulation, ohne
-    Geräte): siehe Ergebnis unten bzw. im Plan-Artefakt.
+    Geräte): Dienst startet maximiert (245 MB, etwa 7 % eines Kerns), nach SIGKILL nach 5 s neu gestartet, `systemctl --user stop`
+    gibt das simulierte Netzteil frei und endet in 0,4 s mit Code 0. **Nicht ausprobiert:** echtes Herunterfahren mit
+    angeschlossenem Netzteil (Phase 3) und der Start nach einem Neustart des Pi.
 - **CAN-Kachel (Control-Reiter): Delta-Ansicht, eine Zeile je ID (0.24.0, Nutzerwunsch).**
   Über der Tabelle der CAN-Kachel schaltet der Haken „Delta-Ansicht (eine Zeile je ID)“ vom Verlauf (neueste Frames oben, wie
   bisher, Standard) auf eine Tabelle mit **einer Zeile je ID**: **ID**, **Δt** (Zeit seit dem vorigen Frame derselben ID, unter

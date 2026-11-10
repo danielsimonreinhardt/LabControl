@@ -26,13 +26,11 @@ install -Dm644 "$HERE/labcontrol-autostart.desktop" "$HOME/.config/autostart/lab
 systemctl --user daemon-reload
 
 echo "== SD-Karte schonen"
-# Systemprotokoll bleibt ueber Neustarts erhalten (Absturzanalyse), aber begrenzt
-sudo install -Dm644 /dev/stdin /etc/systemd/journald.conf.d/50-labcontrol.conf <<'EOF'
-# LabControl-Pi: Systemprotokoll begrenzen (tools/pi/setup_pi.sh)
-[Journal]
-SystemMaxUse=50M
-EOF
-sudo systemctl restart systemd-journald
+# Systemprotokoll: Raspberry Pi OS haelt es schon nur im Arbeitsspeicher
+# (/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf) -- nur pruefen.
+# Das LabControl-Log (labdash.log) ist davon unabhaengig und bleibt erhalten.
+grep -qs '^Storage=volatile' /usr/lib/systemd/journald.conf.d/*.conf /etc/systemd/journald.conf.d/*.conf \
+  || echo "WARNUNG: Systemprotokoll wird auf die SD-Karte geschrieben (journald Storage pruefen)"
 # Auslagern nur komprimiert im Arbeitsspeicher, keine Datei auf der Karte (wirkt nach Neustart)
 sudo install -Dm644 /dev/stdin /etc/rpi/swap.conf.d/50-labcontrol.conf <<'EOF'
 # LabControl-Pi: keine Auslagerungsdatei auf der SD-Karte (tools/pi/setup_pi.sh)
