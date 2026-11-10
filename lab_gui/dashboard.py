@@ -704,6 +704,13 @@ class DashboardWidget(QGroupBox):
             else tr("Dashboard in eigenem Fenster öffnen")
         )
 
+    def set_drag_allowed(self, allowed: bool) -> None:
+        """Touch-Profil: Kacheln nur im Modus "Anordnen" verschiebbar (MainWindow)."""
+        self._drag_allowed = allowed
+
+    def scroll_area(self):
+        return self._scroll_area
+
     def set_detach_available(self, available: bool) -> None:
         """Touch-Profil: kein Abdocken (Dashboard ist dort ein eigener Reiter) -> Knopf ausblenden."""
         self._detach_button.setVisible(available)
@@ -764,7 +771,9 @@ class DashboardWidget(QGroupBox):
         Klick, wichtig auf dem touchbedienten Kiosk-Display)."""
         event_type = event.type()
         if event_type == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT:
+            # Touch-Profil: verschieben nur im Modus "Anordnen", sonst ist Ziehen Wischen (set_drag_allowed)
+            if (event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT
+                    and getattr(self, "_drag_allowed", True)):
                 self._drag_device_id = self._device_id_for_panel(panel)
                 self._drag_start_pos = event.position()
             return

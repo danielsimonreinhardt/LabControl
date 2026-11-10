@@ -25,7 +25,7 @@ DATA = Path(tempfile.mkdtemp(prefix="lc-touch-check-"))
 os.environ["LABCONTROL_DATA_DIR"] = str(DATA)
 (DATA / "settings.json").write_text(json.dumps({"simulation_mode": True}), encoding="utf-8")
 
-from PySide6.QtCore import QSize, QTimer  # noqa: E402
+from PySide6.QtCore import QSize, Qt, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 FAILURES: list[str] = []
@@ -117,6 +117,47 @@ def main() -> int:
     hint = w.minimumSizeHint()
     check("Fenster passt auf 1024 x 600", hint.width() <= 1024 and hint.height() <= 600, f"{hint.width()} x {hint.height()}")
 
+    print("Wischen, Anordnen, Beschriftungen (Schritt 4.4)")
+    import touch_ui
+    swipe = lambda area: bool(getattr(area.viewport(), touch_ui.SWIPE_ATTR, False))  # noqa: E731
+    ct_area, dash_area = w.control_tab.scroll_area(), w.dashboard.scroll_area()
+    check("Wischen in Steuerung, Dashboard, Uebersicht", swipe(ct_area) and swipe(dash_area) and swipe(w._overview_page))
+    check("Kacheln ziehen gesperrt", not w.control_tab._drag_allowed and not w.dashboard._drag_allowed)
+    w._top_bar._arrange_button.setChecked(True)
+    app.processEvents()
+    check("Anordnen: Ziehen erlaubt, kein Wischen dort", w.control_tab._drag_allowed and w.dashboard._drag_allowed
+          and not swipe(ct_area) and not swipe(dash_area))
+    check("Anordnen-Knopf heisst 'Fertig'", w._top_bar._arrange_button.text() == "Fertig")
+    w._top_bar._arrange_button.setChecked(False)
+    app.processEvents()
+    check("Anordnen beendet: wieder Wischen", swipe(ct_area) and not w.control_tab._drag_allowed)
+    w.tabs.setCurrentWidget(w.timeline_tab)
+    for _ in range(5):
+        app.processEvents()
+    pause = w.timeline_tab._pause_button
+    check("Symbol-Knoepfe mit Text (Pause, Diagramm)", pause.text() == "Pause"
+          and w.timeline_tab._add_chart_button.text() == "Diagramm" and pause.width() > 44,
+          f"{pause.text()!r} {pause.width()}")
+    pause.setChecked(True)
+    check("Text folgt dem Zustand (Weiter)", pause.text() == "Weiter")
+    pause.setChecked(False)
+    can = w.control_tab._sections.get("can:mock:SIM")
+    check("CAN: Senden/Leeren beschriftet", can is not None and can._send_button.text() == "Senden"
+          and can._clear_button.text() == "Leeren")
+    if psu is not None:
+        from PySide6.QtTest import QTest
+        w.tabs.setCurrentWidget(w.control_tab)
+        w.control_tab.scroll_area().ensureWidgetVisible(psu._manual_button)
+        for _ in range(5):
+            app.processEvents()
+        clicks: list[int] = []
+        psu._output_off_button.clicked.connect(lambda: clicks.append(1))
+        QTest.mouseClick(psu._output_off_button, Qt.MouseButton.LeftButton)
+        for _ in range(20):
+            app.processEvents()
+            QTest.qWait(15)
+        check("Klick in wischbarer Flaeche kommt an", clicks == [1], str(clicks))
+
     print("Vollbild und Ausschalten")
     w._toggle_fullscreen()
     app.processEvents()
@@ -161,6 +202,8 @@ def main() -> int:
               psu._voltage_spin.maximumHeight() > 44 and psu._form.labelForField(psu._voltage_row).minimumHeight() == 0,
               f"{psu._voltage_spin.maximumHeight()}")
     check("Presets wieder mit Eck-Knoepfen", all(not s._more_button.isVisible() for s in slots))
+    check("ohne Touch: kein Wischen, Ziehen erlaubt", not swipe(ct_area) and w.control_tab._drag_allowed)
+    check("ohne Touch: Symbol-Knoepfe wieder ohne Text", pause.text() == "" and (can is None or can._send_button.text() == ""))
     w._closing = True
     w.close()
     app.processEvents()

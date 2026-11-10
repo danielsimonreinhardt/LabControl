@@ -75,6 +75,7 @@ from i18n import Translator, tr
 from icons import IconButton
 import data_store
 from paths import app_dir
+from touch_ui import touch_label
 from step_spinbox import SteppedDoubleSpinBox
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
@@ -488,6 +489,9 @@ class _ChartRow(QGroupBox):
         self._remove_button.clicked.connect(self.remove_clicked)
         header.addWidget(self._remove_button)
         outer.addLayout(header)
+        touch_label(self._add_button, lambda: tr("Signal"))
+        touch_label(self._yaxis_button, lambda: tr("Y-Achse"))
+        touch_label(self._remove_button, lambda: tr("Entfernen"))
 
         self._legend_widget = no_own_background(QWidget())
         self._legend_layout = QHBoxLayout(self._legend_widget)
@@ -699,6 +703,12 @@ class TimelineTab(QWidget):
         self._add_chart_button = IconButton("mdi.plus", "")
         self._add_chart_button.clicked.connect(self._on_add_chart_clicked)
         controls.addWidget(self._add_chart_button)
+        # Touch-Profil: kurze Texte statt Tooltips (touch_ui.touch_label)
+        touch_label(self._pause_button, lambda: tr("Weiter") if self._pause_button.isChecked() else tr("Pause"))
+        touch_label(self._view_clear_button, lambda: tr("Leeren"))
+        touch_label(self._add_chart_button, lambda: tr("Diagramm"))
+        touch_label(self._recording_toggle_button, lambda: tr("Aufnahme"))
+        touch_label(self._recording_clear_button, lambda: tr("Verwerfen"))
 
         controls.addStretch()
         outer.addLayout(controls)

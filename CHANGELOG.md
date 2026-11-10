@@ -7,6 +7,18 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 4: Wischen, Modus „Anordnen“, Beschriftungen statt Tooltips (0.35.0, Pi-Plan Phase 4, 10.11.2026).**
+  - Wischen (kinetisches Scrollen) in allen Scroll-Flächen, Listen und Tabellen im Touch-Profil -- über den
+    `TouchSizer`, also auch in später erscheinenden Kacheln; ohne Touch-Profil wieder aus. Ein normaler Tipp auf einen
+    Knopf in einer wischbaren Fläche kommt weiter an (geprüft).
+  - Kacheln in Übersicht und Steuerung verschiebt man im Touch-Profil nur noch im Modus **Anordnen** (Knopf in der Leiste
+    oben, wird zu „Fertig“): sonst ist Ziehen über den Kacheltitel Wischen. Am PC unverändert.
+  - Symbol-Knöpfe, die sich bisher nur per Tooltip erklärten (gibt es am Touch nicht), tragen im Touch-Profil einen
+    kurzen Text (`touch_ui.touch_label`): Verlauf „Pause/Weiter“, „Leeren“, „Diagramm“, „Signal“, „Y-Achse“,
+    „Entfernen“, „Aufnahme“, „Verwerfen“; CAN „Senden“, „Je ID“, „Leeren“. Der Text folgt Zustand und Sprache.
+  - **Mock-verifiziert** (`check_touch_ui.py`: Wischen an/aus, Anordnen mit Rückweg, Beschriftungen mit Zustand und
+    Rückweg, Klick in wischbarer Fläche; alle 28 Prüfungen grün), am Pi angesehen. Das Wischgefühl mit dem Finger
+    steht aus (offscreen nicht prüfbar).
 - **Touch-Profil, Schritt 3: Testabläufe am Pi nur ausführen (0.34.0, Pi-Plan Phase 4, PI-7 a, 10.11.2026).**
   - Neu `lab_gui/touch_run_view.py`: Im Touch-Profil zeigt der Reiter „Testablauf“ statt des Editors (7 Spalten,
     viele Dialoge) eine Ausführen-Ansicht. Links die gespeicherten Abläufe aus dem gemeinsamen Ordner (Netzlaufwerk

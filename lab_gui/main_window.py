@@ -262,6 +262,7 @@ class MainWindow(QMainWindow):
         if self.tabs.indexOf(self._overview_page) >= 0:
             self.tabs.setTabText(self.tabs.indexOf(self._overview_page), tr("Übersicht"))
         self._nav.retranslate()
+        self._top_bar.retranslate()
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._safety_ack_button.setText(tr("Quittieren"))
@@ -1021,6 +1022,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))
         self._top_bar.fullscreen_requested.connect(self._toggle_fullscreen)
         self._top_bar.power_requested.connect(self._on_power_requested)
+        self._top_bar.arrange_toggled.connect(self._on_arrange_toggled)
         self._top_bar.set_power_available(system_power.available())
         chosen = self._settings.touch_mode
         on = suggest_touch(self.screen()) if chosen is None else chosen
@@ -1075,10 +1077,21 @@ class MainWindow(QMainWindow):
         for widget, was_visible in visible.items():
             widget.setVisible(was_visible)
         self.dashboard.set_detach_available(not on)
+        # Touch: Ziehen ist Wischen; Kacheln verschieben nur im Modus "Anordnen" (_on_arrange_toggled)
+        self.dashboard.set_drag_allowed(not on)
+        self.control_tab.set_drag_allowed(not on)
         self.dashboard.show()
         self._nav.set_current(self.tabs.currentWidget())
         self._style_all_off_button()
         logger.info("Touch-Bedienung %s", "an" if on else "aus")
+
+    def _on_arrange_toggled(self, on: bool) -> None:
+        """Modus "Anordnen" (Touch-Leiste): Kacheln in Uebersicht und Steuerung ziehen statt wischen."""
+        allowed = on or not self._touch
+        self.dashboard.set_drag_allowed(allowed)
+        self.control_tab.set_drag_allowed(allowed)
+        touch_sizer().set_swipe_blocked(
+            [self.control_tab.scroll_area(), self.dashboard.scroll_area(), self._overview_page], on)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

@@ -392,7 +392,10 @@ time-window-limited ring buffer of the live charts.
   `testcases/`, otherwise local), the steps, progress, status and large Start
   and Stop buttons on the right. Editing and saving is done on the PC; runs
   work exactly as in the editor (same checks, a step error is acknowledged
-  with Stop). As long as the checkbox has
+  with Stop). Lists, tables and pages can be swiped with a finger; tiles are
+  moved only in **Arrange** mode (button in the top bar, "Done" ends it).
+  Buttons that only show an icon with a tooltip on the PC (timeline, CAN)
+  carry a short text in touch mode. As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.

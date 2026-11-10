@@ -23,7 +23,9 @@ import shiboken6
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
+    QAbstractScrollArea,
     QAbstractSpinBox,
     QApplication,
     QComboBox,
@@ -77,6 +79,16 @@ def suggest_touch(screen) -> bool:
 
 TOUCH_H = 44            # einheitliche Hoehe aller Knoepfe und Eingabefelder (TouchSizer)
 _ORIGINAL_SIZE = "_touch_original_size"
+TOUCH_LABEL = "_touch_label"
+SWIPE_ATTR = "_touch_swipe"            # am Viewport: Wischen eingeschaltet
+
+
+def touch_label(button, text_fn: Callable[[], str]) -> None:
+    """Symbol-Knopf bekommt im Touch-Profil einen kurzen Text (Tooltips gibt es am Touch nicht).
+    text_fn wird bei jedem Anzeigen, Sprachwechsel und -- bei umschaltbaren Knoepfen -- Umschalten gefragt."""
+    setattr(button, TOUCH_LABEL, text_fn)
+    if button.isCheckable():
+        button.toggled.connect(lambda _checked=False: sizer().relabel(button))
 # Eigene feste Groessen: Tastenfeld, Navigation/Leiste, Preset-Kachel (eigene Touch-Fassung);
 # das Dashboard ist reine Anzeige -- gestreckte Zeilen zerrissen dort die Kacheln.
 _SIZER_EXCLUDED = {"KeypadDialog", "NavBar", "TopBar", "_PresetSlotButton", "DashboardWidget"}
@@ -103,6 +115,9 @@ class TouchSizer(QObject):
         self._flush_timer.setSingleShot(True)
         self._flush_timer.setInterval(0)
         self._flush_timer.timeout.connect(self._flush)
+        self._swipe_blocked: set[int] = set()
+        from i18n import Translator   # lokal: i18n braucht eine laufende QApplication nicht, aber kurz halten
+        Translator.instance().language_changed.connect(lambda *_: self._relabel_all())
 
     @property
     def active(self) -> bool:
@@ -120,6 +135,8 @@ class TouchSizer(QObject):
             self._app.removeEventFilter(self)
             for widget in self._app.allWidgets():
                 self._restore(widget)
+                if isinstance(widget, QAbstractScrollArea):
+                    self._update_swipe(widget)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
         if event.type() == QEvent.Type.Polish and isinstance(obj, QWidget):
@@ -148,10 +165,54 @@ class TouchSizer(QObject):
             node = node.parentWidget()
         return False
 
+    # -- Wischen ----------------------------------------------------------------
+
+    def set_swipe_blocked(self, areas: list[QAbstractScrollArea], blocked: bool) -> None:
+        """Modus "Anordnen": in diesen Flaechen ist Ziehen wieder Verschieben statt Wischen."""
+        for area in areas:
+            if blocked:
+                self._swipe_blocked.add(id(area))
+            else:
+                self._swipe_blocked.discard(id(area))
+            self._update_swipe(area)
+
+    def _update_swipe(self, area: QAbstractScrollArea) -> None:
+        want = self._on and id(area) not in self._swipe_blocked
+        viewport = area.viewport()
+        # Zustand selbst merken: QScroller.grabbedGesture liefert in PySide6 keine verlaesslichen Werte
+        has = bool(getattr(viewport, SWIPE_ATTR, False))
+        if want and not has:
+            QScroller.grabGesture(viewport, QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+        elif not want and has:
+            QScroller.ungrabGesture(viewport)
+        setattr(viewport, SWIPE_ATTR, want)
+
+    def relabel(self, button: QAbstractButton) -> None:
+        text_fn = getattr(button, TOUCH_LABEL, None)
+        if self._on and text_fn is not None:
+            button.setText(text_fn())
+
+    def _relabel_all(self) -> None:
+        for widget in self._app.allWidgets():
+            if isinstance(widget, QAbstractButton):
+                self.relabel(widget)
+
     def apply(self, widget: QWidget) -> None:
-        if not self._on or self._excluded(widget):
+        if not self._on:
+            return
+        if isinstance(widget, QAbstractScrollArea) and "QComboBox" not in type(widget.window()).__name__:
+            self._update_swipe(widget)    # auch im Dashboard und in Tabellen
+        if self._excluded(widget):
             return
         name = type(widget).__name__
+        if isinstance(widget, (QPushButton, QToolButton)) and getattr(widget, TOUCH_LABEL, None) is not None:
+            # Symbol-Knopf mit kurzem Text (am Touch gibt es keinen Tooltip)
+            self._remember(widget)
+            widget.setText(getattr(widget, TOUCH_LABEL)())
+            widget.setMinimumWidth(0)
+            widget.setMaximumWidth(16777215)
+            widget.setFixedHeight(TOUCH_H)
+            return
         if isinstance(widget, (QLineEdit, QComboBox, QAbstractSpinBox)):
             self._fix(widget, height=TOUCH_H)
         elif name == "_SegmentedToggle":          # gezeichneter AUS|EIN-Schalter (microHIL)
@@ -180,6 +241,8 @@ class TouchSizer(QObject):
     def _restore(widget: QWidget) -> None:
         original = getattr(widget, _ORIGINAL_SIZE, None)
         if original is not None:
+            if getattr(widget, TOUCH_LABEL, None) is not None:
+                widget.setText("")
             widget.setMinimumSize(original[0])
             widget.setMaximumSize(original[1])
             setattr(widget, _ORIGINAL_SIZE, None)
@@ -307,8 +370,10 @@ def touch_qss(pal: Palette) -> str:
 
 
 def enable_swipe(area: QScrollArea) -> None:
-    """Wischen statt Scrollbalken (kinetisches Scrollen) fuer Finger und Maus."""
+    """Wischen statt Scrollbalken (kinetisches Scrollen) fuer Finger und Maus -- sofort, unabhaengig vom
+    TouchSizer (Flaechen, die es nur im Touch-Profil gibt)."""
     QScroller.grabGesture(area.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+    setattr(area.viewport(), SWIPE_ATTR, True)
 
 
 class NavBar(QWidget):
@@ -367,6 +432,7 @@ class TopBar(QWidget):
 
     fullscreen_requested = Signal()
     power_requested = Signal()   # Pi herunterfahren / neu starten (MainWindow fragt nach)
+    arrange_toggled = Signal(bool)   # Modus "Anordnen": Kacheln ziehen statt wischen
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -384,6 +450,13 @@ class TopBar(QWidget):
         self._status_area.setStyleSheet("background: transparent;")
         enable_swipe(self._status_area)
         self._layout.addWidget(self._status_area, 1)
+        self._arrange_button = QToolButton()
+        self._arrange_button.setCheckable(True)
+        self._arrange_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._arrange_button.setIconSize(QSize(22, 22))
+        self._arrange_button.setFixedHeight(TOUCH_H)
+        self._arrange_button.toggled.connect(self.arrange_toggled)
+        self._arrange_button.toggled.connect(lambda _on: (self._recolor(), self.retranslate()))
         self._fullscreen_button = QToolButton()
         self._fullscreen_button.setIconSize(QSize(26, 26))
         self._fullscreen_button.setMinimumSize(48, 44)
@@ -395,6 +468,7 @@ class TopBar(QWidget):
         self._power_button.hide()
         self._trailing: list[QWidget] = []
         self.set_fullscreen(False)
+        self.retranslate()
         ThemeManager.instance().changed.connect(lambda _pal: self._recolor())
 
     def adopt(self, status: QWidget, trailing: list[QWidget]) -> None:
@@ -403,6 +477,7 @@ class TopBar(QWidget):
         self._trailing = trailing
         for widget in trailing[:-1]:
             self._layout.addWidget(widget)
+        self._layout.addWidget(self._arrange_button)
         self._layout.addWidget(self._fullscreen_button)
         self._layout.addWidget(self._power_button)
         if trailing:
@@ -412,10 +487,17 @@ class TopBar(QWidget):
         """Gibt die Statusanzeige zurueck (die rechten Widgets nimmt der neue Besitzer selbst)."""
         for widget in self._trailing:
             self._layout.removeWidget(widget)
+        self._layout.removeWidget(self._arrange_button)
         self._layout.removeWidget(self._fullscreen_button)
         self._layout.removeWidget(self._power_button)
+        self._arrange_button.setChecked(False)   # Touch aus: Anordnen endet
         self._trailing = []
         return self._status_area.takeWidget()
+
+    def retranslate(self) -> None:
+        from i18n import tr
+        self._arrange_button.setText(tr("Fertig") if self._arrange_button.isChecked() else tr("Anordnen"))
+        self._arrange_button.setToolTip(tr("Kacheln in Übersicht und Steuerung verschieben"))
 
     def set_power_available(self, on: bool) -> None:
         self._power_button.setVisible(on)
@@ -429,3 +511,9 @@ class TopBar(QWidget):
         self._fullscreen_button.setIcon(qta.icon("mdi.fullscreen-exit" if self._fullscreen else "mdi.fullscreen",
                                                  color=pal.text))
         self._power_button.setIcon(qta.icon("mdi.power", color=pal.text))
+        arranging = self._arrange_button.isChecked()
+        self._arrange_button.setIcon(qta.icon("mdi.check" if arranging else "mdi.cursor-move",
+                                              color=pal.surface if arranging else pal.text))
+        self._arrange_button.setStyleSheet(
+            f"QToolButton {{ background-color: {pal.accent}; color: {pal.surface}; font-weight: bold; }}"
+            if arranging else "")

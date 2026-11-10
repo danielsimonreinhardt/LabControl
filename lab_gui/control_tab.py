@@ -69,6 +69,7 @@ from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import Palette, ThemeManager, form_control_qss
 from touch_keypad import attach_hex_keypad, set_apply_partner
+from touch_ui import touch_label
 from theme import current as current_palette
 from tile_grid import (
     CONTROL_TILE_DRAG_MIME_TYPE,
@@ -1619,6 +1620,10 @@ class CanControlGroup(QGroupBox):
         self._delta_button.toggled.connect(self._on_delta_toggled)
         self._clear_button = IconButton("mdi.delete-sweep-outline", "")
         self._clear_button.clicked.connect(self.clear_traffic)
+        # Touch-Profil: kurze Texte statt Tooltips
+        touch_label(self._send_button, lambda: tr("Senden"))
+        touch_label(self._delta_button, lambda: tr("Je ID"))
+        touch_label(self._clear_button, lambda: tr("Leeren"))
         view_row = QHBoxLayout()
         view_row.addWidget(self._delta_button)
         view_row.addWidget(self._clear_button)
@@ -2681,6 +2686,13 @@ class ControlTab(QWidget):
             section.set_panel_color(self._panel_colors.get(device_id) if enabled else None)
             section.set_colors_enabled(enabled)
 
+    def set_drag_allowed(self, allowed: bool) -> None:
+        """Touch-Profil: Kacheln nur im Modus "Anordnen" verschiebbar (MainWindow)."""
+        self._drag_allowed = allowed
+
+    def scroll_area(self) -> QScrollArea:
+        return self._scroll_area
+
     def set_tile_order(self, order: list[str]) -> None:
         """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
         Settings.control_tile_order) -- von MainWindow einmalig beim Start
@@ -2861,7 +2873,9 @@ class ControlTab(QWidget):
         Klick, wichtig auf dem touchbedienten Kiosk-Display)."""
         event_type = event.type()
         if event_type == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT:
+            # Touch-Profil: verschieben nur im Modus "Anordnen", sonst ist Ziehen Wischen (set_arrange_mode)
+            if (event.button() == Qt.MouseButton.LeftButton and event.position().y() <= PANEL_DRAG_HANDLE_HEIGHT
+                    and getattr(self, "_drag_allowed", True)):
                 self._drag_device_id = self._device_id_for_section(section)
                 self._drag_start_pos = event.position()
             return
