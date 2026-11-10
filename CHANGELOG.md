@@ -44,6 +44,42 @@ Semantic Versioning (`lab_gui/version.py`).
   - Zusätzlich: Wert 4 und die Grenze 0..7 der Statusfelder in der DBC kommen aus BattSimFW (Review E-2).
 
 ### Geändert
+- **Log bevorzugt auf ein Netzlaufwerk, weniger Schreibvorgänge (0.29.0, Nutzer, 10.11.2026).**
+  Vor dem ersten Lauf auf dem Raspberry Pi geprüft, was LabControl auf die SD-Karte schreibt. Nutzerwunsch: das Log soll
+  künftig vorrangig auf ein Netzlaufwerk schreiben.
+  - **Bestandsaufnahme (Windows-Log 30.10.–10.11.2026):** etwa 2 700 Log-Zeilen bzw. 300 KB pro Tag, davon rund 80 % eine
+    einzige Zeile alle 33 s („CH340-Port COM18 ist kein Funktionsgenerator“, die Board-Konsole) und weitere 474×
+    „Funktionsgenerator-Port … konnte nicht geöffnet werden“. Sonst schreibt LabControl nur bei Bedienung: `settings.json`,
+    `device_labels.json`, `timeline_layout.json`, `presets.json` je Änderung (wenige KB), Exporte (Aufnahmen, Berichte) auf
+    Knopfdruck, je Oszilloskop-Erfassung eine CSV (~100 KB, werden nie gelöscht: 43 Dateien / 4,6 MB in sechs Wochen).
+    Zusammen deutlich unter 1 MB pro Tag, für eine SD-Karte unkritisch. Die vielen kleinen Einzelschreibvorgänge des Logs
+    sind der einzige Dauerposten.
+  - **Wiederholte Meldungen gedrosselt:** „kein Funktionsgenerator“, „Port … konnte nicht geöffnet werden“ (Last,
+    Netzteil, Funktionsgenerator, microHIL) und „microHIL-Port nicht eindeutig“ stehen höchstens alle 10 min je Port im
+    Log statt bei jedem Verbindungsversuch.
+  - **Log-Ordner (Netzlaufwerk):** neues Feld in Einstellungen > Allgemein (oder Umgebungsvariable `LABCONTROL_LOG_DIR`,
+    die gewinnt). LabControl schreibt dann `labdash-<Rechnername>.log` (5 MB × 10) und das Zugriffsprotokoll der Freigabe
+    als `share_access-<Rechnername>.log` dorthin; PC und Pi können denselben Ordner nutzen. Ist der Ordner nicht nutzbar,
+    schreibt es lokal (wie bisher `labdash.log`, 1 MB × 3), versucht es jede Minute erneut und vermerkt beide Wechsel
+    (beim Zurückwechseln mit Hinweis, seit wann Meldungen lokal stehen). Unter dem Feld steht, wohin gerade geschrieben
+    wird. Die lokale Datei entsteht erst, wenn wirklich etwas lokal landet.
+  - **Unter Linux zählt nichts auf der SD-Karte als Netzlaufwerk:** weder ein Ordner auf dem Dateisystem von `/` (dort
+    landet auch ein nicht eingehängter Mountpoint) noch eine andere `mmcblk`-Partition wie `/boot/firmware`
+    (`/proc/self/mounts`).
+  - **Eigener Log-Thread:** Geschrieben wird nicht mehr im aufrufenden Thread. Ein hängendes Netzlaufwerk blockiert damit
+    weder Oberfläche noch Geräte-Worker (sicherheitsrelevant: „Alle aus“ und Grenzwert-Trips laufen dort). Die
+    Warteschlange fasst 10 000 Meldungen; läuft sie voll, wird verworfen und das im Log vermerkt. Beim Beenden wartet
+    LabControl höchstens 3 s auf den Log-Thread.
+  - **Geprüft:** neu `tools/check_app_logging.py` (Ziel, Ausweichen bei fehlendem Ordner und bei Schreibfehler, Rückkehr
+    mit Hinweis, SD-Karten-Erkennung mit nachgebauter `/proc/self/mounts`, Zugriffsprotokoll, Hänger: Aufrufer blockiert
+    nicht, Verwerfen wird gemeldet, Beenden mit Frist; Drosselung; Einstellungen-Reiter). Alle 21 `tools/check_*.py` grün
+    unter Windows und Linux (WSL). Echte App unter Linux: mit Log-Ordner auf eigenem Dateisystem (`/dev/shm`) nur dort
+    geschrieben, keine lokale Log-Datei; mit nicht eingehängtem Mountpoint lokal mit Hinweis, Mountpoint bleibt leer.
+    **Nicht geprüft:** echtes Netzlaufwerk (SMB/NFS), Abbruch der Verbindung im Betrieb, Raspberry Pi.
+  - `tools/check_psu_output.py` (Abfragerate 3,5–6,5 Hz) war in WSL zweimal knapp darunter (3,3 Hz), beide Male unter
+    Last; danach je 6 von 6 Läufen grün, auch mit dem Stand vor dieser Änderung. Auf dem Pi in Phase 2 beobachten.
+  - Noch offen: Oszilloskop-CSV-Dateien wachsen ohne Grenze; Betriebssystem-Seite am Pi (journald, Swap, noatime)
+    gehört zu Phase 2.
 - **Raspberry Pi, Phase 1 abgeschlossen: Testabläufe zwischen PC und Pi austauschbar, stabile IDs, Datenordner, Linux-Prüflauf (0.28.0, Nutzer, 10.11.2026).**
   - **Testabläufe und Bausteine nennen ihre Geräte zusätzlich mit Art und Namen** (`"devices"` in der Datei). Lädt man die Datei
     auf einem Rechner, der eine ID nicht kennt, ordnet LabControl sie dem einzigen bekannten Gerät gleicher Art und gleichen

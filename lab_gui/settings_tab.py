@@ -760,6 +760,7 @@ class SettingsTab(QWidget):
     simulation_mode_toggled = Signal(bool)
     dark_mode_toggled = Signal(bool)
     language_selected = Signal(str)
+    log_dir_changed = Signal(str)   # Log-Ordner auf dem Netzlaufwerk, leer = nur lokal
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
@@ -859,6 +860,27 @@ class SettingsTab(QWidget):
         language_row.addWidget(self._language_combo)
         language_row.addStretch()
         layout.addLayout(language_row)
+
+        layout.addWidget(_separator())
+
+        # -- Log-Ordner (Netzlaufwerk, siehe app_logging) ----------------------
+        log_row = QHBoxLayout()
+        self._log_dir_label = QLabel()
+        log_row.addWidget(self._log_dir_label)
+        self._log_dir_edit = QLineEdit()
+        self._log_dir_edit.setMinimumWidth(320)
+        # editingFinished (Enter/Fokusverlust) statt textChanged: sonst wuerde jeder
+        # Tastendruck ein neues Ziel pruefen lassen.
+        self._log_dir_edit.editingFinished.connect(
+            lambda: self.log_dir_changed.emit(self._log_dir_edit.text().strip())
+        )
+        log_row.addWidget(self._log_dir_edit, 1)
+        layout.addLayout(log_row)
+        self._log_status_label = QLabel()
+        self._log_status_label.setWordWrap(True)
+        self._log_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._log_status_label)
+        self._log_status: dict = {}
 
         layout.addWidget(_separator())
 
@@ -1223,6 +1245,15 @@ class SettingsTab(QWidget):
         self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
         self._panel_colors_checkbox.setText(tr("Individuelle Panel-Hintergrundfarben (Dashboard/Control)"))
         self._language_label.setText(tr("Sprache:"))
+        self._log_dir_label.setText(tr("Log-Ordner (Netzlaufwerk):"))
+        self._log_dir_edit.setPlaceholderText(tr("leer = nur lokal, z. B. \\\\nas\\labor\\logs oder /mnt/labor/logs"))
+        self._log_dir_edit.setToolTip(
+            tr(
+                "LabControl schreibt sein Log bevorzugt in diesen Ordner (je Rechner eine eigene Datei). "
+                "Ist er nicht erreichbar, schreibt es lokal weiter und versucht es jede Minute erneut."
+            )
+        )
+        self._render_log_status()
         self._help_button.setText(tr("Hilfe"))
         self._help_button.setToolTip(tr("Öffnet das Benutzerhandbuch"))
         self._remove_offline_button.setText(tr("Nicht verbundene Geräte löschen"))
@@ -1308,6 +1339,42 @@ class SettingsTab(QWidget):
         self._language_combo.blockSignals(True)
         self._language_combo.setCurrentIndex(index)
         self._language_combo.blockSignals(False)
+
+    def set_log_dir(self, path: str, env_override: str = "") -> None:
+        """Feld fuellen. Ist LABCONTROL_LOG_DIR gesetzt, gilt die Variable: Feld gesperrt."""
+        self._log_dir_edit.blockSignals(True)
+        self._log_dir_edit.setText(env_override or path)
+        self._log_dir_edit.blockSignals(False)
+        self._log_dir_edit.setEnabled(not env_override)
+        self._log_env_override = env_override
+
+    def set_log_status(self, status: dict) -> None:
+        """Wohin das Log gerade schreibt (app_logging.status())."""
+        if status == self._log_status:
+            return
+        self._log_status = dict(status)
+        self._render_log_status()
+
+    def _render_log_status(self) -> None:
+        status = self._log_status
+        if not status:
+            self._log_status_label.setText("")
+            return
+        pal = current_palette()
+        if status.get("target") == "network":
+            text = tr("Log schreibt ins Netzlaufwerk: {path}", path=status.get("path", ""))
+            color = pal.success
+        elif status.get("reason"):
+            text = tr("Netzlaufwerk nicht nutzbar ({reason}), Log schreibt lokal: {path}",
+                      reason=status.get("reason", ""), path=status.get("path", ""))
+            color = pal.danger
+        else:
+            text = tr("Log schreibt lokal: {path}", path=status.get("path", ""))
+            color = pal.text_muted
+        if getattr(self, "_log_env_override", ""):
+            text += " " + tr("(festgelegt über LABCONTROL_LOG_DIR)")
+        self._log_status_label.setText(text)
+        self._log_status_label.setStyleSheet(f"color: {color};")
 
     # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) -------------------
 

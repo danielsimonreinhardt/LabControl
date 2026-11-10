@@ -42,6 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PySide6.QtCore import QObject, Signal
 
+import app_logging
 import share_api
 from paths import app_dir
 from version import __version__
@@ -106,6 +107,12 @@ def _access_logger(enabled: bool) -> logging.Logger | None:
     log.propagate = False   # nicht zusaetzlich in labdash.log
     log.setLevel(logging.INFO)
     if not log.handlers:
+        # Normalfall: ueber app_logging (eigener Thread, bevorzugt Netzlaufwerk, sonst
+        # lokal); der direkte Dateihandler nur, wenn setup_logging nicht lief (Pruefskripte).
+        queued = app_logging.access_log_handler()
+        if queued is not None:
+            log.addHandler(queued)
+            return log
         try:
             handler = logging.handlers.RotatingFileHandler(
                 ACCESS_LOG_PATH, maxBytes=ACCESS_LOG_MAX_BYTES,

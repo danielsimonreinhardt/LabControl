@@ -15,6 +15,7 @@ import logging
 
 from PySide6.QtWidgets import QApplication
 
+import app_logging
 from app_icon import icon as app_icon
 from app_logging import setup_logging
 from i18n import Translator
@@ -38,11 +39,12 @@ except ImportError:
 
 
 def main() -> None:
-    setup_logging()
+    # Einstellungen vor dem Logging: der Log-Ordner (Netzlaufwerk) steht darin.
+    settings = Settings()
+    setup_logging(settings.log_dir)
     logger.info("LAB CONTROL v%s startet", __version__)
     app = QApplication(sys.argv)
     app.setWindowIcon(app_icon())
-    settings = Settings()
     Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
     window = MainWindow(settings)
@@ -53,6 +55,7 @@ def main() -> None:
         pyi_splash.close()
     exit_code = app.exec()
     logger.info("LAB CONTROL beendet (exit_code=%d)", exit_code)
+    app_logging.shutdown()   # restliche Meldungen schreiben; ein haengendes Netzlaufwerk haelt nicht auf
     sys.exit(exit_code)
 
 

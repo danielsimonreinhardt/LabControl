@@ -383,6 +383,15 @@ time-window-limited ring buffer of the live charts.
   gets its own color.
 - **Language**: switches the interface language immediately, without
   restarting.
+- **Log folder (network drive)**: if a folder is entered (e.g.
+  `\\nas\labor\logs` on the PC or `/mnt/labor/logs` on the Raspberry
+  Pi), LabControl writes its log there, one file per computer
+  `labdash-<computer name>.log`. If the folder cannot be reached, it keeps
+  logging locally to `labdash.log`, retries every minute and records both
+  switches in the log. The line below shows where it is currently writing.
+  On the Raspberry Pi a folder on the SD card does not count as a network
+  drive (nor does an empty, unmounted mount point). The environment
+  variable `LABCONTROL_LOG_DIR` takes precedence over this field.
 - **Delete disconnected devices**: forgets only the devices that are
   currently not connected (greyed-out tiles), including names, safety
   limits, panel colors and network sharing. Connected devices stay
@@ -449,7 +458,8 @@ for a trusted home or lab network: the port must **never** be made
 reachable from the internet via port forwarding or UPnP.
 
 **Log requests** writes every request to a separate file
-`share_access.log` next to the program. Deliberately separate from
+`share_access.log` next to the program, or `share_access-<computer name>.log`
+in the log folder if one is set. Deliberately separate from
 `labdash.log`, so that frequent polling does not overwrite the main log.
 Off by default.
 

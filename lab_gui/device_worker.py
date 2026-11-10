@@ -84,6 +84,22 @@ from unit_mso1000hd.driver import (
 
 logger = logging.getLogger(__name__)
 
+# Meldungen, die sich bei jedem Verbindungsversuch wiederholen (fremder CH340-Port, von einer
+# anderen App gehaltener Port), hoechstens alle 10 min je Port. Vorher bestand das Log zu ~80 %
+# aus einer Zeile alle 33 s (gemessen 30.10.-10.11.2026); auf dem Raspberry Pi sind das
+# unnoetige Schreibvorgaenge (SD-Karte bzw. Netzlaufwerk).
+LOG_REPEAT_INTERVAL_S = 600.0
+_last_logged: dict[str, float] = {}
+
+
+def _log_repeating(key: str, level: int, msg: str, *args) -> None:
+    now = time.monotonic()
+    last = _last_logged.get(key)
+    if last is not None and now - last < LOG_REPEAT_INTERVAL_S:
+        return
+    _last_logged[key] = now
+    logger.log(level, msg, *args)
+
 # War 500ms (2Hz) -- sichtbar grob fuer die Verlaufs-Diagramme, deren
 # Repaint-Rate (siehe timeline_tab.REPAINT_INTERVAL_MS) inzwischen auf ~30Hz
 # angehoben wurde: schnelleres Neuzeichnen allein bringt nichts, wenn die
@@ -1070,7 +1086,7 @@ class DeviceWorker(QObject):
             # anderen Prozess/einer zweiten App-Instanz gehalten wird ("Zugriff
             # verweigert"). Naechster RECONNECT_INTERVAL_MS-Tick versucht es
             # einfach erneut, analog zum LoadError-Fall.
-            logger.warning("Last-Port %s konnte nicht geoeffnet werden", port)
+            _log_repeating(f"open/{port}", logging.WARNING, "Last-Port %s konnte nicht geoeffnet werden", port)
             if candidate is not None:
                 candidate.close()
             candidate = None
@@ -1117,7 +1133,7 @@ class DeviceWorker(QObject):
         except OSError:
             # Port wird von einem anderen Prozess gehalten -- naechster Tick
             # versucht es erneut (analog zu _load_connect_job).
-            logger.warning("Funktionsgenerator-Port %s konnte nicht geoeffnet werden", port)
+            _log_repeating(f"open/{port}", logging.WARNING, "Funktionsgenerator-Port %s konnte nicht geoeffnet werden", port)
             if candidate is not None:
                 candidate.close()
             candidate = None
@@ -1189,7 +1205,7 @@ class DeviceWorker(QObject):
             # analog zum Last-Fall und zum microHIL-Fall (siehe
             # _reconnect_hils). Naechster RECONNECT_INTERVAL_MS-Tick versucht
             # es einfach erneut.
-            logger.warning("Netzteil-Port %s konnte nicht geoeffnet werden", port)
+            _log_repeating(f"open/{port}", logging.WARNING, "Netzteil-Port %s konnte nicht geoeffnet werden", port)
             if candidate is not None:
                 candidate.close()
             candidate = None
@@ -1208,7 +1224,8 @@ class DeviceWorker(QObject):
         self._reconnect_pending.discard(f"{pending_kind}/{device_id}")
         if kind == "fg_rejected":
             self._fg_probe_after[port] = time.monotonic() + FG_REPROBE_INTERVAL_S
-            logger.info("CH340-Port %s ist kein Funktionsgenerator (Handshake fehlgeschlagen)", port)
+            _log_repeating(f"fg_rejected/{port}", logging.INFO,
+                           "CH340-Port %s ist kein Funktionsgenerator (Handshake fehlgeschlagen)", port)
             return
         if candidate is None:
             return
@@ -1335,7 +1352,7 @@ class DeviceWorker(QObject):
         try:
             port = MicroHIL.discover()
         except HilError as exc:
-            logger.warning("microHIL-Port nicht eindeutig bestimmbar: %s", exc)
+            _log_repeating("hil/ambiguous", logging.WARNING, "microHIL-Port nicht eindeutig bestimmbar: %s", exc)
             return
         if port is None:
             return
@@ -1365,7 +1382,7 @@ class DeviceWorker(QObject):
             # Last/Netzteil/CAN im selben Zyklus verhindern (an echter
             # Hardware reproduziert). Naechster RECONNECT_INTERVAL_MS-Tick
             # versucht es einfach erneut, analog zum HilError-Fall oben.
-            logger.warning("microHIL-Port %s konnte nicht geoeffnet werden", port)
+            _log_repeating(f"open/{port}", logging.WARNING, "microHIL-Port %s konnte nicht geoeffnet werden", port)
             if candidate is not None:
                 candidate.close()
             return

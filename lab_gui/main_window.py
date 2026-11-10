@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import app_logging
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
@@ -615,6 +617,15 @@ class MainWindow(QMainWindow):
         self.settings_tab.language_selected.connect(self._settings.set_language)
         self._settings.language_changed.connect(Translator.instance().set_language)
 
+        # Log-Ordner (Netzlaufwerk): Ziel sofort umstellen, Status alle 2 s nachfuehren
+        # (Wechsel auf lokal und zurueck passieren im Log-Thread, ohne Signal).
+        self.settings_tab.set_log_dir(self._settings.log_dir, os.environ.get(app_logging.LOG_DIR_ENV, ""))
+        self.settings_tab.log_dir_changed.connect(self._on_log_dir_changed)
+        self._log_status_timer = QTimer(self)
+        self._log_status_timer.timeout.connect(lambda: self.settings_tab.set_log_status(app_logging.status()))
+        self._log_status_timer.start(2000)
+        self.settings_tab.set_log_status(app_logging.status())
+
         self.settings_tab.set_notifications_enabled(self._settings.notifications_enabled)
         self.settings_tab.notifications_toggled.connect(self._settings.set_notifications_enabled)
 
@@ -633,6 +644,11 @@ class MainWindow(QMainWindow):
         self.settings_tab.set_scpi_scopes(self._settings.scpi_scopes)
         self.settings_tab.scpi_scopes_changed.connect(self._settings.set_scpi_scopes)
         self._settings.scpi_scopes_changed.connect(self._worker.set_scpi_scopes)
+
+    def _on_log_dir_changed(self, path: str) -> None:
+        self._settings.set_log_dir(path)
+        logger.info("Log-Ordner (Netzlaufwerk) eingestellt: %s", path or "keiner, nur lokal")
+        app_logging.set_network_dir(self._settings.log_dir)
 
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.

@@ -401,6 +401,15 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   erstmaligen Aktivieren bekommt jedes bereits bekannte Gerät automatisch
   eine eigene Farbe zugewiesen.
 - **Sprache**: wechselt die Oberflächensprache sofort, ohne Neustart.
+- **Log-Ordner (Netzlaufwerk)**: Ist ein Ordner eingetragen (z. B.
+  `\\nas\labor\logs` am PC oder `/mnt/labor/logs` am Raspberry Pi),
+  schreibt LabControl sein Protokoll dorthin, je Rechner eine eigene Datei
+  `labdash-<Rechnername>.log`. Ist der Ordner nicht erreichbar, schreibt es
+  lokal in `labdash.log` weiter, versucht es jede Minute erneut und
+  vermerkt beide Wechsel im Protokoll. Darunter steht, wohin gerade
+  geschrieben wird. Am Raspberry Pi gilt ein Ordner auf der SD-Karte nicht
+  als Netzlaufwerk (auch kein leerer, nicht eingehängter Mountpoint). Die
+  Umgebungsvariable `LABCONTROL_LOG_DIR` hat Vorrang vor diesem Feld.
 - **Nicht verbundene Geräte löschen**: vergisst nur die Geräte, die gerade
   nicht verbunden sind (ausgegraute Kacheln), samt Namen,
   Sicherheits-Grenzwerten, Panel-Farben und Netzwerk-Freigaben. Verbundene
@@ -472,7 +481,8 @@ Labornetz gedacht: Der Port darf **niemals** per Portfreigabe oder UPnP
 aus dem Internet erreichbar gemacht werden.
 
 **Zugriffe protokollieren** schreibt jede Anfrage in eine eigene Datei
-`share_access.log` neben dem Programm. Bewusst getrennt von `labdash.log`,
+`share_access.log` neben dem Programm, bei eingestelltem Log-Ordner dort als
+`share_access-<Rechnername>.log`. Bewusst getrennt von `labdash.log`,
 damit häufiges Abfragen die eigentliche Protokolldatei nicht überschreibt.
 Standardmäßig aus.
 
