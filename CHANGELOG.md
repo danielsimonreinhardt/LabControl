@@ -7,6 +7,21 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Raspberry Pi: Netzteile auch beim Neustart aus dem Desktop freigeben (0.30.2, 10.11.2026).**
+  Beim ersten Neustart des Pi mit laufendem Dienst fehlte im Log das Beenden. Nachgestellt mit einem eigenen kopflosen labwc:
+  Endet der Wayland-Compositor vor LabControl, beendet Qt den Prozess sofort („The Wayland connection broke“, Exit-Code 255),
+  ohne `closeEvent` -- die Netzteile wurden **nicht** freigegeben, im Log stand nichts. `QT_WAYLAND_RECONNECT=1` hilft nicht
+  (Absturz, Code 139).
+  - Neu `lab_gui/shutdown_inhibit.py`: Unter Linux hält LabControl eine Verzögerungs-Sperre von systemd-logind für
+    „shutdown“. Vor dem Herunterfahren meldet logind `PrepareForShutdown`, LabControl schließt auf demselben Weg wie beim
+    Schließen des Fensters (Freigabe der Netzteile), solange der Desktop noch läuft. Danach fährt logind fort.
+    Ohne logind (Windows, WSL ohne systemd) passiert nichts; SIGTERM bleibt als zweiter Weg.
+  - Signal und logind schließen zusammen nur einmal (`shutdown_signals.once`).
+  - `setup_pi.sh` gibt logind bis zu 15 s dafür (`InhibitDelayMaxSec`, Standard 5 s).
+  - Bleibt offen: Abmelden vom Desktop ohne Herunterfahren beendet LabControl weiterhin ohne Freigabe (am Pi mit
+    automatischer Anmeldung kein üblicher Weg).
+  - **Mock-verifiziert** (`tools/check_shutdown_inhibit.py`: Ablauf mit nachgebildetem logind, Abbruch, nur einmal schließen,
+    Windows; am Pi zusätzlich die echte Sperre in `systemd-inhibit --list`). **Am Pi ausprobiert:** siehe unten.
 - **Raspberry Pi: Einrichtung, Autostart als Dienst, Update vom PC (0.30.0, Pi-Plan Phase 2, 10.11.2026).**
   Neuer Ordner `tools/pi` (Überblick in `tools/pi/README.md`):
   - `setup_pi.sh` richtet den Pi ein: Python-Umgebung nur mit den Qt-Basismodulen (`PySide6-Essentials`, spart gut 300 MB),

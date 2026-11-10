@@ -20,6 +20,7 @@ import app_logging
 from app_icon import icon as app_icon
 from app_logging import setup_logging
 from i18n import Translator
+import shutdown_inhibit
 import shutdown_signals
 from main_window import MainWindow
 from settings import Settings
@@ -69,8 +70,11 @@ def main() -> None:
     Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
     window = MainWindow(settings)
-    # SIGTERM/Strg+C beenden wie das Schliessen des Fensters (Netzteile freigeben usw.)
-    shutdown_signals.install(window.close, app)   # app haelt den Weck-Timer
+    # SIGTERM/Strg+C und (Linux) das angekuendigte Herunterfahren beenden wie das Schliessen
+    # des Fensters (Netzteile freigeben usw.) -- nur einmal, egal was zuerst kommt.
+    close_once = shutdown_signals.once(window.close)
+    shutdown_signals.install(close_once, app)   # app haelt den Weck-Timer
+    shutdown_inhibit.install(close_once, app)   # vor dem Desktop-Ende, siehe Modul
     mode = show_window(window)
     if mode != "normal":
         logger.info("Fenster: %s (%s)", mode, WINDOW_ENV)

@@ -97,6 +97,8 @@ def check_service() -> None:
           "systemctl --user start labcontrol.service" in exec_line and "WAYLAND_DISPLAY" in exec_line, exec_line)
     check("setup_pi.sh installiert Dienst und Autostart",
           "labcontrol.service" in setup and "autostart/labcontrol.desktop" in setup)
+    check("logind wartet laenger als die Netzteil-Freigabe braucht (InhibitDelayMaxSec=15)",
+          "InhibitDelayMaxSec=15" in setup and stop >= 15)
 
 
 def check_scripts() -> None:

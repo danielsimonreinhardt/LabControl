@@ -22,6 +22,20 @@ WAKE_INTERVAL_MS = 250
 SIGNAL_NAMES = ("SIGTERM", "SIGINT", "SIGHUP")   # SIGHUP gibt es unter Windows nicht
 
 
+def once(close: Callable[[], object]) -> Callable[[], None]:
+    """`close` hoechstens einmal ausfuehren -- fuer mehrere Ausloeser (Signal, logind),
+    die beim Herunterfahren kurz nacheinander kommen koennen."""
+    done: list[bool] = []
+
+    def wrapper() -> None:
+        if done:
+            logger.info("Beenden laeuft bereits")
+            return
+        done.append(True)
+        close()
+    return wrapper
+
+
 def install(close: Callable[[], object], parent: QObject | None = None) -> QTimer:
     """Legt SIGTERM/SIGINT/SIGHUP auf `close` (z.B. MainWindow.close). Nur der
     erste Aufruf schliesst: ein zweites Signal waehrend des Abbaus wuerde sonst

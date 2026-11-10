@@ -40,6 +40,16 @@ EOF
 # noatime fuer / setzt Raspberry Pi OS bereits, /tmp ist tmpfs -- nur pruefen
 findmnt -no OPTIONS / | grep -q noatime || echo "WARNUNG: / ohne noatime eingehaengt (/etc/fstab pruefen)"
 
+echo "== Herunterfahren"
+# LabControl haelt eine logind-Sperre und gibt bei PrepareForShutdown die Netzteile frei, bevor der
+# Desktop endet (lab_gui/shutdown_inhibit.py). logind wartet darauf hoechstens InhibitDelayMaxSec
+# (Standard 5 s) -- mit mehreren seriellen Geraeten knapp. Wirkt nach dem naechsten Neustart.
+sudo install -Dm644 /dev/stdin /etc/systemd/logind.conf.d/50-labcontrol.conf <<'EOF'
+# LabControl-Pi: Zeit fuer die Netzteil-Freigabe beim Herunterfahren (tools/pi/setup_pi.sh)
+[Login]
+InhibitDelayMaxSec=15
+EOF
+
 echo "== Rechte fuer Geraete"
 for g in dialout plugdev; do
   id -nG | grep -qw "$g" || { sudo usermod -aG "$g" "$USER"; echo "zur Gruppe $g hinzugefuegt (wirkt nach Neuanmeldung)"; }
