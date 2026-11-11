@@ -7,6 +7,18 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Kiosk ohne Bootloader-Bild und ohne schwarze Lücke, Dialoge ohne Fensterleiste; Sicherheit als Chip (0.40.3,
+  Nutzerhinweise 11.11.2026).**
+  - Beim Kaltstart erschien erst der Pi-Bootloader-Bildschirm, dann das Logo, kurz Schwarz, dann wieder das Logo.
+    `kiosk_pi.sh` setzt `DISABLE_HDMI=1` im Bootloader-EEPROM (alte Konfiguration gesichert) und ersetzt die
+    Anmeldung über lightdm durch den Systemdienst `labcontrol-kiosk.service`: labwc direkt auf tty1, das Boot-Logo gibt
+    vorher die Grafik frei, bleibt aber stehen (`plymouth deactivate`), und endet erst mit `--retain-splash`, wenn
+    labwc den Logo-Hintergrund zeigt (lightdm hatte es ganz beendet). lightdm und die Text-Anmeldung auf tty1 sind
+    dafür abgeschaltet, `--undo` stellt beides wieder her.
+  - Dialoge ohne Fensterleiste: labwc zeichnet keine (`windowRule serverDecoration="no"` in `~/.config/labwc/rc.xml`),
+    Qt auch nicht (`QT_WAYLAND_DISABLE_WINDOWDECORATION=1` in der Dienst-Ergänzung `kiosk.conf`).
+  - Touch-Leiste: „Sicherheit“ als Chip mit Schild-Symbol (aus/aktiv/ausgelöst) statt Text, wie die Geräte-Chips;
+    am PC unverändert. `check_touch_ui` prüft beides.
 - **Kiosk: Mauszeiger ausgeblendet (0.40.2, Nutzerwunsch 11.11.2026).** `kiosk_pi.sh` legt ein unsichtbares
   Zeiger-Theme an (`~/.icons/labcontrol-invisible`, ein transparentes 1×1-Bild für alle Zeigernamen der installierten
   Themes) und setzt `XCURSOR_THEME` für labwc (`~/.config/labwc/environment`) und den Dienst (systemd-Ergänzung

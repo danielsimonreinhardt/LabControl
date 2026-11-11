@@ -53,7 +53,7 @@ from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
 from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
-from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch
+from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch, touch_icon_path
 from touch_ui import sizer as touch_sizer
 from version import __version__
 
@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
                      "scpiscope": "Scope", "fg": "FG", "battsim": "BS"}
 STATUS_CHIP_HEIGHT = 28
+SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
 
 
 class MainWindow(QMainWindow):
@@ -421,10 +422,25 @@ class MainWindow(QMainWindow):
         pal = ThemeManager.instance().palette
         texts = {"off": tr("AUS"), "armed": tr("AKTIV"), "tripped": tr("AUSGELÖST")}
         colors = {"off": pal.text_muted, "armed": pal.success, "tripped": pal.danger}
-        self._safety_status_label.setText(f"{tr('Sicherheit:')} {texts.get(state, state)}")
-        self._safety_status_label.setStyleSheet(
-            f"color: {colors.get(state, pal.text)}; font-weight: bold;"
-        )
+        color = colors.get(state, pal.text)
+        label = self._safety_status_label
+        if self._touch:
+            # Touch-Profil: Chip wie die Geraete, Schild-Symbol statt "Sicherheit:" (Nutzerwunsch 11.11.2026)
+            icon = SAFETY_ICONS.get(state, "mdi.shield-outline")
+            label.setText(f'<img src="{touch_icon_path(icon, color, 18)}" width="18" height="18"'
+                          f' style="vertical-align: middle"> {texts.get(state, state)}')
+            label.setToolTip(f"{tr('Sicherheit:')} {texts.get(state, state)}")
+            label.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color};"
+                                f" border-radius: 13px; padding: 1px 9px; background: transparent;")
+            label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            label.setFixedHeight(STATUS_CHIP_HEIGHT)
+            return
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        label.setMinimumHeight(0)
+        label.setMaximumHeight(16777215)
+        label.setToolTip("")
+        label.setText(f"{tr('Sicherheit:')} {texts.get(state, state)}")
+        label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def _style_safety_banner(self) -> None:
         pal = ThemeManager.instance().palette
@@ -1107,6 +1123,7 @@ class MainWindow(QMainWindow):
         self._style_all_off_button()
         for device_id in self._status_labels:   # Chips (Touch) bzw. "Name: Zustand" (PC)
             self._render_status_label(device_id)
+        self._render_safety_status(self._safety.current_state())
         logger.info("Touch-Bedienung %s", "an" if on else "aus")
 
     def _repolish_top_down(self) -> None:
@@ -1649,8 +1666,8 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(tr("Gerätezustand"))
         layout = QVBoxLayout(dialog)
         layout.setSpacing(8)
-        safety = QLabel(self._safety_status_label.text())
-        safety.setStyleSheet(self._safety_status_label.styleSheet())
+        safety = QLabel(self._safety_status_label.toolTip() or self._safety_status_label.text())
+        safety.setStyleSheet("font-weight: bold;")
         layout.addWidget(safety)
         for device_id in self._status_labels:
             symbol, state, color = self._status_state(device_id)

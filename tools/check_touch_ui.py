@@ -343,6 +343,10 @@ def main() -> int:
     chips = {d: lb.text() for d, lb in w._status_labels.items()}
     check("UX-1: Status oben als Chips mit Symbol und Kurzname",
           chips.get("psu:SIM", "").startswith("✓ NT") and all(len(t) <= 14 for t in chips.values()), str(chips))
+    safety = w._safety_status_label
+    check("Sicherheit als Chip mit Schild-Symbol statt Text 'Sicherheit:'",
+          "<img" in safety.text() and "Sicherheit" not in safety.text() and "border: 1px solid" in safety.styleSheet()
+          and safety.height() <= 30, safety.text()[:80])
     chip_sizes = [lb.sizeHint().width() for lb in w._status_labels.values()]
     check("UX-1: Chips in natuerlicher Groesse (fuellen die Leiste nicht)",
           all(lb.height() <= 30 for lb in w._status_labels.values()) and max(chip_sizes) < 130,
@@ -432,6 +436,8 @@ def main() -> int:
     if psu is not None:
         check("ohne Touch: Zahlenfeld nimmt wieder Texteingabe an (Tippen am PC)",
               wants_keyboard(psu._voltage_spin) and wants_keyboard(psu._voltage_spin.lineEdit()))
+    check("ohne Touch: Sicherheit wieder als Text", w._safety_status_label.text().startswith("Sicherheit:"),
+          w._safety_status_label.text())
     check("ohne Touch: gespeicherte Ansicht (normal) und Umschalter zurueck, Rahmen zurueck",
           not w.dashboard._compact and not w.dashboard._view_toggle_button.isHidden() and w.dashboard.styleSheet() == "")
     check("ohne Touch: Dashboard wieder zweizeilig mit Titel", not w.dashboard._multi_row

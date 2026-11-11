@@ -62,6 +62,20 @@ SCROLLBAR_W = 6         # Touch: Scrollleiste nur als Positionsanzeige (Wischen 
 _KEY_ICON_CACHE: dict[tuple[str, str], str] = {}
 
 
+_ICON_PATH_CACHE: dict[tuple[str, str, int], str] = {}
+
+
+def touch_icon_path(name: str, color: str, size: int) -> str:
+    """qtawesome-Symbol als PNG-Datei fuer Rich-Text (<img src>) in QLabel, z. B. den Sicherheits-Chip."""
+    key = (name, color, size)
+    if key not in _ICON_PATH_CACHE:
+        safe = name.replace(".", "_") + "_" + color.lstrip("#") + f"_{size}"
+        path = Path(tempfile.gettempdir()) / f"labcontrol_icon_{safe}.png"
+        qta.icon(name, color=color).pixmap(QSize(size * 2, size * 2)).save(str(path), "PNG")
+        _ICON_PATH_CACHE[key] = path.as_posix()
+    return _ICON_PATH_CACHE[key]
+
+
 def _key_icon_path(name: str, pal: Palette) -> str:
     """−/+ als PNG fuer QSS-url() (wie theme._spin_arrow_icon_path)."""
     key = (pal.name, name)
