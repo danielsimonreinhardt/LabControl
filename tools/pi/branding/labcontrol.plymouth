@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=labcontrol
+Description=LabControl Boot-Logo
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/labcontrol
+ScriptFile=/usr/share/plymouth/themes/labcontrol/labcontrol.script

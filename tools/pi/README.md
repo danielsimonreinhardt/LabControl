@@ -21,6 +21,8 @@ flowchart LR
 | `update_pi.sh` | am Pi: neuen Stand holen, bei Bedarf Pakete, Dienst neu starten |
 | `deploy_pi.ps1` | am PC: Stand per SSH zum Pi schieben und `update_pi.sh` aufrufen |
 | `slim_sd.sh` | nur für 8-GB-Karten: Browser, Compiler, fremde Firmware usw. entfernen (PI-14) |
+| `kiosk_pi.sh` | Kiosk: beim Booten nur das LabControl-Logo, kein Desktop/keine Leiste, dann die App im Vollbild; `--undo` nimmt alles zurück |
+| `branding/` | Logo und Boot-Bild (`make_branding.py` am PC erzeugt `splash.png`, `logo*.svg`), Plymouth-Theme `labcontrol` |
 
 ## Erstinstallation
 
@@ -33,6 +35,8 @@ flowchart LR
    ssh -i %USERPROFILE%\.ssh\labpi_ed25519 labcontrol@<pi> "bash ~/LabControl/tools/pi/setup_pi.sh"
    ```
 3. Bei 8-GB-Karte: `bash ~/LabControl/tools/pi/slim_sd.sh`, dann neu starten.
+4. Kiosk (Boot-Logo statt Desktop): `bash ~/LabControl/tools/pi/kiosk_pi.sh`, dann `sudo reboot`.
+   Desktop für Wartung zurück: `bash ~/LabControl/tools/pi/kiosk_pi.sh --undo`, neu starten.
 
 ## Betrieb
 

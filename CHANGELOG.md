@@ -6,7 +6,17 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
-### Geändert
+### Hinzugefügt
+- **Raspberry Pi: Kiosk mit LabControl-Logo (0.40.0, Nutzerwunsch 11.11.2026).** Beim Booten nur das Logo, kein
+  Desktop, danach LabControl im Vollbild.
+  - Neues Logo (`tools/pi/branding/make_branding.py` → `logo.svg`, `logo-mark.svg`, `splash.png`): Messbildschirm mit
+    Sprungantwort (gedämpftes Überschwingen -- Messen und Regeln), darunter zwei Polklemmen; Schriftzug „Lab“ hell,
+    „Control“ in Himmelblau, Farben aus Slate Ops Dark, damit Boot, Hintergrund und App ineinander übergehen.
+  - `tools/pi/kiosk_pi.sh`: Plymouth-Theme `labcontrol` statt Himbeere (auch beim Herunterfahren), Kernel ohne
+    Himbeeren/Cursor/Meldungen, Firmware ohne Regenbogen, labwc-Sitzung ohne Desktop und Leiste mit dem Logo als
+    Hintergrund (swaybg); Bildschirmtastatur, Ein/Aus-Taste und der LabControl-Autostart bleiben. Originale werden
+    gesichert, `--undo` nimmt alles zurück.
+
 - **GUI-Review nach ui-ux-pro-max umgesetzt (0.39.0, Nutzerentscheidung 11.11.2026).** Durchsicht der Touch-Oberfläche
   am Pi (8 Befunde, Review-Artefakt mit Auswahl je Punkt). Umgesetzt wie entschieden:
   - UX-1 a: Im Touch-Profil zeigt die Leiste oben je Gerät einen Chip mit Symbol und Kurzname (✓ verbunden, ✕ getrennt,

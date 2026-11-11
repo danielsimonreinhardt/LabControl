@@ -1,0 +1,35 @@
+// Plymouth-Theme "labcontrol": Logo mittig auf Slate-Ops-Hintergrund, beim Booten und beim Herunterfahren.
+// Abgeleitet von /usr/share/plymouth/themes/pix/pix.script (Raspberry Pi OS); Bild aus make_branding.py.
+
+Window.SetBackgroundTopColor(0.059, 0.090, 0.165);      // #0f172a, wie das Bild
+Window.SetBackgroundBottomColor(0.059, 0.090, 0.165);
+
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+theme_image = Image("splash.png");
+image_width = theme_image.GetWidth();
+image_height = theme_image.GetHeight();
+
+scale_x = image_width / screen_width;
+scale_y = image_height / screen_height;
+if (scale_x > scale_y) scale = scale_x; else scale = scale_y;
+if (scale < 1) scale = 1;
+
+resized_image = theme_image.Scale(image_width / scale, image_height / scale);
+image_x = (screen_width - resized_image.GetWidth()) / 2;
+image_y = (screen_height - resized_image.GetHeight()) / 2;
+
+sprite = Sprite(resized_image);
+sprite.SetPosition(image_x, image_y, -100);
+
+// Meldungen (z. B. Dateisystempruefung) klein am unteren Rand, wie im Original
+message_sprite = Sprite();
+message_sprite.SetPosition(screen_width * 0.1, screen_height * 0.92, 10000);
+
+fun message_callback (text) {
+	my_image = Image.Text(text, 0.58, 0.64, 0.72);
+	message_sprite.SetImage(my_image);
+}
+
+Plymouth.SetUpdateStatusFunction(message_callback);
