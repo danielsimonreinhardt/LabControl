@@ -37,6 +37,10 @@ flowchart LR
 3. Bei 8-GB-Karte: `bash ~/LabControl/tools/pi/slim_sd.sh`, dann neu starten.
 4. Kiosk (Boot-Logo statt Desktop): `bash ~/LabControl/tools/pi/kiosk_pi.sh`, dann `sudo reboot`.
    Desktop für Wartung zurück: `bash ~/LabControl/tools/pi/kiosk_pi.sh --undo`, neu starten.
+   Bekannt: bei der Übergabe vom Boot-Logo an labwc ist der Bildschirm etwa 0,1 s schwarz (kurzes Flackern).
+   wlroots setzt beim Start immer erst einen leeren Puffer, swaybg kann sein Bild erst danach liefern;
+   gemessen 11.11.2026 mit `drm.debug=0x14`, `labwc -d` und `WAYLAND_DEBUG=1` (kein Moduswechsel, 1024×600
+   bleibt). Ohne Änderung an labwc/wlroots nicht vermeidbar.
 
 ## Betrieb
 

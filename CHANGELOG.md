@@ -27,6 +27,11 @@ Semantic Versioning (`lab_gui/version.py`).
   `DISABLE_HDMI=1` aktiv, Kiosk-Dienst und LabControl laufen. Dialoge ohne Fensterleiste vom Nutzer am Display bestätigt.
 
 ### Behoben
+- **Kiosk: verbleibendes kurzes Flackern untersucht (Nutzerhinweis 11.11.2026, nur Doku).** Am Pi mit
+  Kernel-DRM-Protokoll, `labwc -d` und `WAYLAND_DEBUG=1` gemessen: kein Moduswechsel (nur einer beim Kernelstart,
+  1024×600 bleibt); labwc zeigt beim Start einen leeren Puffer (7,32 s), swaybg liefert das Logo bei 7,41 s --
+  rund 0,1 s Schwarz. wlroots kann das vorhandene Bild nicht übernehmen, ohne Eingriff in labwc/wlroots nicht
+  vermeidbar; vom Nutzer als akzeptabel eingestuft. In `tools/pi/README.md` vermerkt. Diagnose am Pi wieder entfernt.
 - **Kiosk: schwarze Lücke beim Booten blieb (0.40.4, Nutzerhinweis 11.11.2026).** Der Kiosk-Dienst setzte mit
   `TTYReset`/`TTYVHangup` tty1 zurück, auf dem das Boot-Logo liegt -- tty1 fiel in den Textmodus, die leere Konsole
   übermalte das Logo knapp zwei Sekunden lang, bis labwc stand (Journal: 5,7 s bis 7,6 s). Beides entfernt;
