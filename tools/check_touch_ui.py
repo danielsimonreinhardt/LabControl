@@ -336,6 +336,10 @@ def main() -> int:
     chips = {d: lb.text() for d, lb in w._status_labels.items()}
     check("UX-1: Status oben als Chips mit Symbol und Kurzname",
           chips.get("psu:SIM", "").startswith("✓ NT") and all(len(t) <= 14 for t in chips.values()), str(chips))
+    chip_sizes = [lb.sizeHint().width() for lb in w._status_labels.values()]
+    check("UX-1: Chips in natuerlicher Groesse (fuellen die Leiste nicht)",
+          all(lb.height() <= 30 for lb in w._status_labels.values()) and max(chip_sizes) < 130,
+          f"Hoehen {[lb.height() for lb in w._status_labels.values()]}, Breiten {chip_sizes}")
     opened_details: list[str] = []
 
     def close_details() -> None:

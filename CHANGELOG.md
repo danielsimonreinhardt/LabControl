@@ -60,6 +60,11 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Nachbesserung GUI-Review am echten Display (0.39.1, 11.11.2026).** Die Status-Chips füllten die ganze Leiste
+  (jetzt natürliche Größe, 28 px hoch, linksbündig); auf schmalen Kacheln der Kompaktansicht lag „getrennt“ über dem
+  Kacheltitel (jetzt nur das Symbol, wenn neben dem Titel kein Platz ist); im leeren Testablauf verteilten sich
+  Überschrift und Hinweis über die ganze Höhe (jetzt oben zusammen, Start/Stop unten). `check_touch_ui` prüft die
+  Chip-Größe. **Mock-verifiziert**, am Pi-Display per Bildschirmfoto angesehen.
 - **Prüfungen fassten echte Geräte an (0.38.2, 11.11.2026).** Nach dem Aufspielen von 0.38.1 meldete der Dienst am Pi
   „Last getrennt: Konnte Zahl nicht aus Antwort lesen: 'CC'“ und „multiple access on port?“ -- genau während der
   Prüfläufe am Pi, ebenso bei jedem Aufspielen vorher (09:14, 09:32, 09:43). Ursache: Der Simulationsmodus fügt nur

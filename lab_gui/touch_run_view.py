@@ -115,6 +115,9 @@ class TouchRunView(QWidget):
         self._steps.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         enable_swipe(self._steps)
         right.addWidget(self._steps, 1)
+        # Platzhalter ohne gewaehlten Ablauf: haelt Titel und Hinweis oben zusammen, Start/Stop unten
+        self._filler = QWidget()
+        right.addWidget(self._filler, 1)
         self._progress = QProgressBar()
         self._progress.setTextVisible(True)
         self._progress.setFormat("%v / %m")
@@ -177,6 +180,7 @@ class TouchRunView(QWidget):
         # Ohne gewaehlten Ablauf keine leeren Rahmen fuer Schritte/Fortschritt/Status (GUI-Review UX-7)
         for widget in (self._steps, self._progress, self._status_label):
             widget.setVisible(bool(name))
+        self._filler.setVisible(not name)
 
     def set_running(self, running: bool, can_start: bool) -> None:
         self._start_button.setEnabled(can_start and not running)

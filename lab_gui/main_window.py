@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
                      "scpiscope": "Scope", "fg": "FG", "battsim": "BS"}
+STATUS_CHIP_HEIGHT = 28
 
 
 class MainWindow(QMainWindow):
@@ -179,6 +181,7 @@ class MainWindow(QMainWindow):
         self._status_container = no_own_background(QWidget())
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
+        self._status_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._safety_status_label = QLabel()
         self._status_layout.addWidget(self._safety_status_label)
         self.statusBar().addPermanentWidget(self._status_container)
@@ -1625,8 +1628,14 @@ class MainWindow(QMainWindow):
             status_label.setToolTip(f"{label}: {state}")
             status_label.setStyleSheet(
                 f"color: {chip_color}; font-weight: bold; border: 1px solid {chip_color};"
-                f" border-radius: 11px; padding: 2px 9px; background: transparent;")
+                f" border-radius: 13px; padding: 1px 9px; background: transparent;")
+            # Natuerliche Groesse statt die ganze Leiste zu fuellen (am Pi-Display gesehen)
+            status_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            status_label.setFixedHeight(STATUS_CHIP_HEIGHT)
             return
+        status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        status_label.setMinimumHeight(0)
+        status_label.setMaximumHeight(16777215)
         status_label.setToolTip("")
         status_label.setText(f"{label}: {state}")
         pal = ThemeManager.instance().palette

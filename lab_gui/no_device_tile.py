@@ -60,11 +60,25 @@ class OfflineBadge(QWidget):
         self._text.setStyleSheet(f"color: {palette.text_muted}; background: transparent; font-weight: 600;")
         self.adjustSize()
 
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        self.place()   # Breite oder Titel koennen sich geaendert haben, solange es verborgen war
+
     def place(self) -> None:
         parent = self.parentWidget()
-        if parent is not None:
-            self.move(parent.width() - self.width() - OFFLINE_BADGE_MARGIN, OFFLINE_BADGE_MARGIN)
-            self.raise_()
+        if parent is None:
+            return
+        # Schmale Kachel (Kompaktansicht): nur das Symbol, sonst laege "getrennt" ueber dem Kacheltitel
+        # (am Pi-Display gesehen). Titel beginnt etwa 10 px vom Rand, dazu Abstand und Rand.
+        title = parent.title() if isinstance(parent, QGroupBox) else ""
+        title_end = 10 + parent.fontMetrics().horizontalAdvance(title) + 16 if title else 0
+        self._text.setVisible(True)
+        self.adjustSize()
+        if parent.width() - title_end - OFFLINE_BADGE_MARGIN < self.width():
+            self._text.setVisible(False)
+            self.adjustSize()
+        self.move(parent.width() - self.width() - OFFLINE_BADGE_MARGIN, OFFLINE_BADGE_MARGIN)
+        self.raise_()
 
 
 class NoDeviceTile(QGroupBox):
