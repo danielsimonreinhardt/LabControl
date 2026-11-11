@@ -784,6 +784,13 @@ class DashboardWidget(QGroupBox):
         if (self._compact, self._large) == before:
             self._relayout_panels(reset_width=True)
 
+    @staticmethod
+    def _set_horizontal_policy(panel: QWidget, policy: QSizePolicy.Policy) -> None:
+        current = panel.sizePolicy()
+        if current.horizontalPolicy() != policy:
+            current.setHorizontalPolicy(policy)
+            panel.setSizePolicy(current)
+
     def _avail_width(self) -> int:
         margins = self._panel_layout.contentsMargins()
         return self._viewport.width() - margins.left() - margins.right()
@@ -791,6 +798,8 @@ class DashboardWidget(QGroupBox):
     def _max_cols(self) -> int:
         """Rasterspalten, die in die sichtbare Breite passen (nur im Touch-Profil, set_multi_row)."""
         unit = (COMPACT_COLUMN_UNIT if self._compact else self._panel_width) + GRID_SPACING
+        if self._compact:   # Spalten tragen ihren Abstand selbst (siehe Kompakt-Zweig in _relayout_panels)
+            return max(1, self._avail_width() // unit)
         return max(1, (self._avail_width() + GRID_SPACING) // max(unit, 1))
 
     def _multi_row_heights(self, order: list[str]) -> tuple[int, dict[str, int]]:
@@ -1271,8 +1280,19 @@ class DashboardWidget(QGroupBox):
                 for device_id in order:
                     panel = self._panels[device_id]
                     width = compact_span_width(self._compact_col_spans[device_id])
-                    if panel.minimumWidth() != width or panel.maximumWidth() != width:
-                        panel.setFixedWidth(width)
+                    if self._multi_row:
+                        # Touch, mehrzeilig: Kacheln melden dem Raster ihre Breite nicht (Ignored, Mindestbreite
+                        # 0) -- sonst verteilte QGridLayout die Breiten ueberlappender Spannen ungenau, Spalten
+                        # wurden breiter als 8 px und Kacheln ragten rechts ueber die Seite (am Pi gesehen).
+                        # Jede Spalte bleibt so bei ihrer Mindestbreite, jede Kachel bekommt genau ihre Spannen.
+                        self._set_horizontal_policy(panel, QSizePolicy.Policy.Ignored)
+                        if panel.minimumWidth() != 0 or panel.maximumWidth() != width:
+                            panel.setMinimumWidth(0)
+                            panel.setMaximumWidth(width)
+                    else:
+                        self._set_horizontal_policy(panel, QSizePolicy.Policy.Preferred)
+                        if panel.minimumWidth() != width or panel.maximumWidth() != width:
+                            panel.setFixedWidth(width)
             else:
                 max_width = max(panel.sizeHint().width() for panel in self._panels.values())
                 self._panel_width = max(self._panel_width, max_width)
@@ -1282,6 +1302,7 @@ class DashboardWidget(QGroupBox):
                     cols = self._max_cols()
                     width = max(width, (self._avail_width() - (cols - 1) * GRID_SPACING) // cols)
                 for panel in self._panels.values():
+                    self._set_horizontal_policy(panel, QSizePolicy.Policy.Preferred)
                     if panel.minimumWidth() != width or panel.maximumWidth() != width:
                         panel.setFixedWidth(width)
 
@@ -1321,10 +1342,13 @@ class DashboardWidget(QGroupBox):
                     (col + compact_spans[d][0] for d, (row, col) in compact_positions.items()),
                     default=0,
                 )
+                # Touch, mehrzeilig: Spaltenabstand in die Spalte eingerechnet (20 statt 8 px, Raster ohne
+                # waagerechten Abstand) -- QGridLayout laesst den Abstand bei Spalten ohne beginnende Kachel
+                # weg, Spannen wurden dann zu schmal, sobald die Kacheln ihre Breite nicht mehr festlegen.
+                unit = COMPACT_COLUMN_UNIT + GRID_SPACING if self._multi_row else COMPACT_COLUMN_UNIT
+                self._panel_layout.setHorizontalSpacing(0 if self._multi_row else GRID_SPACING)
                 for column in range(max(used_columns, self._compact_column_count)):
-                    self._panel_layout.setColumnMinimumWidth(
-                        column, COMPACT_COLUMN_UNIT if column < used_columns else 0
-                    )
+                    self._panel_layout.setColumnMinimumWidth(column, unit if column < used_columns else 0)
                 self._compact_column_count = used_columns
                 for device_id, (row, col) in compact_positions.items():
                     panel = self._panels[device_id]
@@ -1341,6 +1365,7 @@ class DashboardWidget(QGroupBox):
                 for column in range(self._compact_column_count):
                     self._panel_layout.setColumnMinimumWidth(column, 0)
                 self._compact_column_count = 0
+                self._panel_layout.setHorizontalSpacing(GRID_SPACING)   # siehe Kompakt/Touch oben
                 # Hoehen-Ratsche (analog zur Breiten-Ratsche oben): stellt
                 # sicher, dass die Basis-Zellhoehe im Normalfall auch die
                 # deutlich groessere microHIL-Kachel (doppelte Hoehe) bequem

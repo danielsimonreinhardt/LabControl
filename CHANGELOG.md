@@ -60,6 +60,13 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Touch-Übersicht: microHIL-Kachel rechts abgeschnitten (0.39.3, 11.11.2026).** Mit den Pi-Schriften verteilte
+  QGridLayout die Breiten überlappender Kachel-Spannen ungenau (einzelne Rasterspalten bis 32 statt 8 px), die
+  microHIL-Kachel ragte über die Seite. Im mehrzeiligen Touch-Raster legen die Kacheln ihre Breite jetzt nicht mehr
+  selbst fest; jede Rasterspalte trägt ihren Abstand mit (20 px, Raster ohne waagerechten Abstand -- QGridLayout lässt
+  den Abstand bei Spalten ohne beginnende Kachel weg), jede Kachel bekommt genau ihre Spanne abzüglich 12 px Luft. Am
+  Pi nachgemessen: alle Kacheln mindestens so breit wie ihr Inhalt, rechter Rand höchstens 856 von 866 px.
+  **Mock-verifiziert**, am Pi offscreen gemessen und per Bildschirmfoto angesehen.
 - **Touch-Übersicht: immer kompakt, kein Rahmen im Rahmen (0.39.2, Nutzerwunsch 11.11.2026).** Am Pi sah die
   Übersicht aus wie Rahmen im Rahmen (Dashboard-Gruppe mit eigener Fläche um die Kacheln), und der Umschalter
   Normal/Kompakt war dort überflüssig.
