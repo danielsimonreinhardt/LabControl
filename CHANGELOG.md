@@ -31,7 +31,14 @@ Semantic Versioning (`lab_gui/version.py`).
   - **Mock-verifiziert:** neue Prüfung `tools/check_partner_link.py` (47 Punkte: Client gegen echten ShareServer mit
     Stub-Executor, Hauptfenster mit Partner, Bedienen, Wertebereich, Hauptschalter, ALLE AUS in alle Richtungen ohne
     Ping-Pong, Verbindungsverlust und Wiederkehr, falscher Token, Verbund aus); `check_touch_ui` zählt nur sichtbare
-    Reiter. Handbuch de/en ergänzt.
+    Reiter. Handbuch de/en ergänzt. Unter Windows und Linux (WSL) grün.
+  - **Über das Netz geprüft (11.11.2026, ohne echte Geräte):** Pi mit 0.45.0 vorübergehend in Simulation, PC als
+    Testaufbau ohne App (ShareServer mit Stub auf Port 8421). Pi liefert Rechnername, Version, Kacheln und Werte;
+    Bedienen ohne Hauptschalter am Pi abgewiesen (`remote_control_inactive`); ALLE AUS vom PC mit Verbund-Kennung am
+    Pi ausgeführt, ohne Rückweg; ALLE AUS am Pi (wie per MCP) ausgeführt und an den PC geschickt. **Kam am PC nicht
+    an:** Die Windows-Firewall lässt eingehende Verbindungen zum Python-Testaufbau nicht durch; der Pi meldet das als
+    Fehler im Log. Für den echten Verbund braucht LabControl am PC eine Firewall-Freigabe für Port 8420 im privaten
+    Netz. Pi-Einstellungen danach zurückgesetzt. Offen: Bedienen mit eingeschaltetem Hauptschalter an echten Geräten.
 - **Testablauf am PC: Hinweis „Noch kein Testablauf“ statt leerer Tabelle (0.44.0, Entscheidung PI-22 a,
   11.11.2026).** Über der Tabelle stehen der Ordner der Abläufe (gemeinsamer Ordner auf dem Netzlaufwerk oder lokal)
   und die Knöpfe „Ablauf öffnen …“ und „Neuen Ablauf beginnen“ (Cursor in die erste Zeile). Der Hinweis verschwindet
