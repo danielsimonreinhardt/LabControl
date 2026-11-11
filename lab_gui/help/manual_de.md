@@ -421,7 +421,10 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   scrollen. Der Batterie-Simulator zeigt seine Zellen als 2 × 7-Raster
   (1–7 links, 8–14 rechts); ein Tipp auf einen Zellsollwert öffnet das
   Zahlenfeld, ausgeschaltete Zellen stehen grau. Im Verlauf wählt man das
-  Zeitfenster über Tasten (30 s … 30 min). Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  Zeitfenster über Tasten (30 s … 30 min), Signale für ein Diagramm aus
+  einer Liste zum Wischen. Dialoge sind nie größer als der Bildschirm,
+  Datei-Dialoge nutzen ihn ganz, die Kurve einer Erfassung hat einen Knopf
+  „Schließen“. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.

@@ -24,6 +24,20 @@ Semantic Versioning (`lab_gui/version.py`).
   - Ausgeschaltete Zellen: Zusatz „(aus)“ entfällt im Touch-Profil weiter (grau).
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 6: Dialoge passen auf 1024 × 600 (0.37.0, Pi-Plan Phase 4, 11.11.2026).** Am Pi gemessen:
+  Benutzerhandbuch 820 × 720, Kurve der letzten Erfassung 1000 × 560 + Rand, „Signal“ im Verlauf als Menü mit 31+
+  Einträgen (rund 1360 px bei 44 px je Zeile, nicht wischbar); Datei-Dialog 654 × 433 mit 19-px-Zeilen.
+  - `touch_ui.fit_to_screen`: Im Touch-Profil wird jeder Dialog beim Anzeigen auf den Bildschirm begrenzt (Höhe abzüglich
+    Titelleiste); Datei-Dialoge (am Pi der Qt-eigene) bekommen den ganzen Bildschirm und fingergroße Zeilen.
+  - Verlauf: „Signal“ öffnet im Touch-Profil eine Liste zum Wischen, nach Gerät gegliedert; ein Tipp wählt.
+  - Kurve der letzten Erfassung: im Touch-Profil 960 × 440 mit Knopf „Schließen“ (im Vollbild gibt es keine
+    Fensterleiste).
+  - Zahlenfelder in Dialogen (Y-Achse) bekommen wie in den Kacheln große −/+ Tasten.
+  - Auch am PC: Qt-eigene Texte waren nie übersetzt (Standardknöpfe „Cancel“, „Close“ in Qt-Dialogen, am Pi der ganze
+    Datei-Dialog). `Translator` lädt jetzt `qtbase_<sprache>` passend zur App-Sprache, auch beim Umschalten.
+  - **Mock-verifiziert** (`check_touch_ui.py`: Handbuch, Datei-Dialog und Signal-Liste passen, Liste wischbar, Tipp wählt,
+    Y-Achse mit −/+, Qt-Texte deutsch und beim Sprachwechsel englisch; alle 28 Prüfungen grün), am Pi offscreen per
+    Bildschirmfoto angesehen. Nicht geprüft: Bildschirmtastatur beim Umbenennen (braucht den Finger am Display).
 - **Touch-Profil, Schritt 5: Übersicht mehrzeilig, Batterie-Simulator 2 × 7, Zeitfenster-Tasten (0.36.0, Pi-Plan
   Phase 4, 11.11.2026).**
   - Übersicht: Im Touch-Profil packt das Dashboard die Kacheln nach der verfügbaren Breite (Spaltenzahl aus der Breite,

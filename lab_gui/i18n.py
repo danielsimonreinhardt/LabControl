@@ -67,11 +67,35 @@ class Translator(QObject):
         return self._language
 
     def set_language(self, language: str) -> None:
-        if language == self._language or language not in AVAILABLE_LANGUAGES:
+        if language not in AVAILABLE_LANGUAGES:
+            return
+        # Auch bei unveraenderter Sprache (Start mit "de"): erst hier gibt es die QApplication
+        self._install_qt_translations(language)
+        if language == self._language:
             return
         self._language = language
         self._load(language)
         self.language_changed.emit(language)
+
+    def _install_qt_translations(self, language: str) -> None:
+        """Qt-eigene Texte (Standardknoepfe "Abbrechen", QFileDialog, QInputDialog, Kontextmenue der
+        Eingabefelder) in der App-Sprache. Bisher nie geladen -> am PC wie am Pi "Cancel" in Qt-Dialogen;
+        im Touch-Profil am Pi auffaellig, weil es dort keine nativen (lokalisierten) Datei-Dialoge gibt."""
+        from PySide6.QtCore import QCoreApplication, QLibraryInfo, QTranslator
+
+        app = QCoreApplication.instance()
+        if app is None:
+            return
+        old = getattr(self, "_qt_translator", None)
+        if old is not None:
+            app.removeTranslator(old)
+            self._qt_translator = None
+        if language == "en":   # Qt-Texte sind englisch
+            return
+        translator = QTranslator(self)
+        if translator.load(f"qtbase_{language}", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+            app.installTranslator(translator)
+            self._qt_translator = translator
 
     def tr(self, text: str, **kwargs: object) -> str:
         translated = self._strings.get(text, text)

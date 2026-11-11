@@ -59,6 +59,8 @@ def main() -> int:
 
     print("Start ohne Touch (nie gewaehlt, offscreen)")
     settings = Settings()
+    from i18n import Translator
+    Translator.instance().set_language(settings.language)   # wie main.py (laedt auch die Qt-Uebersetzung)
     w = MainWindow(settings)
     w.resize(1024, 600)
     w.show()
@@ -208,6 +210,60 @@ def main() -> int:
     tl._window_buttons.button(3).click()
     check("Taste setzt das Zeitfenster (5 min)", tl._window_combo.currentIndex() == 3 and tl._window_s == 300.0,
           f"{tl._window_combo.currentIndex()} {tl._window_s}")
+
+    print("Dialoge passen auf 1024 x 600 (Schritt 4.6)")
+    from help_dialog import HelpDialog
+    from PySide6.QtWidgets import QDialogButtonBox
+    from timeline_tab import _SignalPickerDialog, _YAxisDialog
+    help_dialog = HelpDialog(w)
+    help_dialog.show()
+    app.processEvents()
+    check("Benutzerhandbuch passt (war 820 x 720)", help_dialog.width() <= 1024
+          and help_dialog.height() <= 600 - touch_ui.DIALOG_DECORATION_H, str(help_dialog.size().toTuple()))
+    close_text = help_dialog.findChild(QDialogButtonBox).buttons()[0].text().replace("&", "")
+    check("Qt-Standardknoepfe deutsch (Qt-Uebersetzung geladen)", close_text == "Schließen", close_text)
+    help_dialog.close()
+
+    def cancel_text() -> str:
+        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        return box.buttons()[0].text().replace("&", "")
+    Translator.instance().set_language("en")
+    english = cancel_text()
+    Translator.instance().set_language("de")
+    check("Sprachwechsel nimmt Qt-Texte mit (en: Cancel, de: Abbrechen)",
+          english == "Cancel" and cancel_text() == "Abbrechen", f"{english} / {cancel_text()}")
+    yaxis =_YAxisDialog("auto", (0.0, 10.0), (0.0, 1.0), True, w)
+    yaxis.show()
+    for _ in range(3):
+        app.processEvents()
+    check("Y-Achse: Zahlenfelder mit -/+ Tasten (breit, 44 px)", yaxis._left_min.width() >= 150
+          and yaxis._left_min.height() == 44, str(yaxis._left_min.size().toTuple()))
+    yaxis.close()
+    signals = tl._available_signals()
+    picker = _SignalPickerDialog(signals, w)
+    picker.show()
+    for _ in range(3):
+        app.processEvents()
+    lst = picker._list
+    headers = [lst.item(i) for i in range(lst.count()) if lst.item(i).data(Qt.ItemDataRole.UserRole) is None]
+    check("Signal-Auswahl: Liste statt Menue, nach Geraet gegliedert, passt",
+          len(signals) > 20 and headers and picker.height() <= 600 - touch_ui.DIALOG_DECORATION_H,
+          f"{len(signals)} Signale, {len(headers)} Geraete, Hoehe {picker.height()}")
+    check("Signal-Auswahl: wischbar", bool(getattr(lst.viewport(), touch_ui.SWIPE_ATTR, False)))
+    first = next(lst.item(i) for i in range(lst.count()) if lst.item(i).data(Qt.ItemDataRole.UserRole) is not None)
+    lst.itemClicked.emit(headers[0])
+    check("Geraete-Zeile waehlt nichts", picker.isVisible() and picker.selected is None)
+    lst.itemClicked.emit(first)
+    check("Tipp waehlt das Signal und schliesst", picker.selected is first.data(Qt.ItemDataRole.UserRole)
+          and not picker.isVisible())
+
+    from PySide6.QtWidgets import QFileDialog
+    file_dialog = QFileDialog(w, "Als CSV exportieren…")
+    file_dialog.show()
+    app.processEvents()
+    check("Datei-Dialog nutzt den Bildschirm, passt", file_dialog.height() == 600 - touch_ui.DIALOG_DECORATION_H
+          and file_dialog.width() <= 1024, str(file_dialog.size().toTuple()))
+    file_dialog.close()
 
     print("Vollbild und Ausschalten")
     w._toggle_fullscreen()

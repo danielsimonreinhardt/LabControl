@@ -399,7 +399,10 @@ time-window-limited ring buffer of the live charts.
   and grows downwards instead of scrolling sideways. The battery simulator
   shows its cells as a 2 × 7 grid (1–7 left, 8–14 right); tapping a cell
   setpoint opens the keypad, cells that are off are shown in grey. In the
-  timeline the time window is chosen with buttons (30 s … 30 min). As long as the checkbox has
+  timeline the time window is chosen with buttons (30 s … 30 min) and
+  signals for a chart from a list you can swipe. Dialogs are never larger
+  than the screen, file dialogs use all of it, and the plot of a capture
+  has a "Close" button. As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.

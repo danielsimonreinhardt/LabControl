@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -143,6 +145,8 @@ class TouchSizer(QObject):
             self._pending.append(obj)
             if not self._flush_timer.isActive():
                 self._flush_timer.start()
+        elif event.type() == QEvent.Type.Show and isinstance(obj, QDialog) and obj.isWindow():
+            fit_to_screen(obj)
         return False
 
     def _flush(self) -> None:
@@ -248,6 +252,27 @@ class TouchSizer(QObject):
             setattr(widget, _ORIGINAL_SIZE, None)
 
 
+DIALOG_DECORATION_H = 40   # Titelleiste des Dialogs (Wayland: vom Programm gezeichnet), nicht in geometry()
+
+
+def fit_to_screen(dialog: QWidget) -> None:
+    """Touch-Profil (Pi-Plan 4.6): Dialog nie groesser als der Bildschirm. Gilt fuer jeden Dialog
+    (TouchSizer, beim Anzeigen) -- das Benutzerhandbuch kam mit 820 x 720 auf 1024 x 600."""
+    screen = dialog.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    avail = screen.availableGeometry()
+    if QGuiApplication.platformName() == "offscreen":   # Tests/CI: virtuell 800 x 800, Ziel ist das Display
+        avail.setSize(QSize(min(avail.width(), TOUCH_SCREEN_MAX[0]), min(avail.height(), TOUCH_SCREEN_MAX[1])))
+    max_w, max_h = avail.width(), avail.height() - DIALOG_DECORATION_H
+    if isinstance(dialog, QFileDialog):   # Qt-eigener Datei-Dialog (Pi): ganzer Bildschirm statt 654 x 433
+        dialog.resize(max_w, max_h)
+        return
+    size = dialog.size()
+    if size.width() > max_w or size.height() > max_h:
+        dialog.resize(min(size.width(), max_w), min(size.height(), max_h))
+
+
 def _is_form_label(label: QLabel) -> bool:
     """Beschriftung einer Formularzeile -- auch wenn das QFormLayout in ein anderes Layout geschachtelt ist."""
     parent = label.parentWidget()
@@ -270,6 +295,11 @@ def sizer() -> TouchSizer:
     return _SIZER
 
 
+def _spin(sub: str = "") -> str:
+    """Zahlenfelder mit grossen −/+ Tasten: in Kacheln (QGroupBox) und Dialogen (Y-Achse ...)."""
+    return ", ".join(f"{scope} QAbstractSpinBox{sub}" for scope in ("QGroupBox", "QDialog"))
+
+
 def touch_qss(pal: Palette) -> str:
     return f"""
     QPushButton, QToolButton {{
@@ -279,37 +309,37 @@ def touch_qss(pal: Palette) -> str:
         padding: 3px 8px;
     }}
     /* Grosse −/+ Tasten links und rechts vom Wert statt kleiner Pfeile uebereinander (PI-6) */
-    QGroupBox QAbstractSpinBox {{
+    {_spin()} {{
         padding-left: {SPIN_KEY_WIDTH + 4}px;
         padding-right: {SPIN_KEY_WIDTH + 4}px;
         min-width: 150px;
         max-width: 170px;
     }}
-    QGroupBox QAbstractSpinBox::up-button, QGroupBox QAbstractSpinBox::down-button {{
+    {_spin('::up-button')}, {_spin('::down-button')} {{
         subcontrol-origin: border;
         width: {SPIN_KEY_WIDTH}px;
         height: {TOUCH_H - 2}px;
         border: none;
         background-color: {pal.surface_alt};
     }}
-    QGroupBox QAbstractSpinBox::up-button {{
+    {_spin('::up-button')} {{
         subcontrol-position: center right;
         border-left: 1px solid {pal.border};
         border-top-right-radius: 4px;
         border-bottom-right-radius: 4px;
     }}
-    QGroupBox QAbstractSpinBox::down-button {{
+    {_spin('::down-button')} {{
         subcontrol-position: center left;
         border-right: 1px solid {pal.border};
         border-top-left-radius: 4px;
         border-bottom-left-radius: 4px;
     }}
-    QGroupBox QAbstractSpinBox::up-arrow {{
+    {_spin('::up-arrow')} {{
         image: url({_key_icon_path("plus", pal)});
         width: 22px;
         height: 22px;
     }}
-    QGroupBox QAbstractSpinBox::down-arrow {{
+    {_spin('::down-arrow')} {{
         image: url({_key_icon_path("minus", pal)});
         width: 22px;
         height: 22px;
@@ -334,6 +364,10 @@ def touch_qss(pal: Palette) -> str:
     }}
     QComboBox QAbstractItemView::item {{
         min-height: {TOUCH_MIN}px;
+    }}
+    /* Datei-Dialog (am Pi der Qt-eigene): Zeilen fingergross statt ~19 px */
+    QFileDialog QAbstractItemView::item {{
+        padding: 9px 4px;
     }}
     QMenu::item {{
         padding: 10px 28px;

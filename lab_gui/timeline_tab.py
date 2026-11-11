@@ -49,7 +49,7 @@ from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -63,6 +63,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -450,6 +452,46 @@ class _YAxisDialog(QDialog):
         return self._right_min.value(), self._right_max.value()
 
 
+class _SignalPickerDialog(QDialog):
+    """Touch-Profil: Signal fuer ein Diagramm aus einer wischbaren Liste waehlen, nach Geraet
+    gegliedert (Geraetename als Zwischenzeile). Ein Tipp waehlt und schliesst."""
+
+    def __init__(self, available: list[SignalSeries], parent=None) -> None:
+        super().__init__(parent)
+        self.selected: SignalSeries | None = None
+        self.setWindowTitle(tr("Signal hinzufügen"))
+        layout = QVBoxLayout(self)
+        self._list = QListWidget()
+        self._list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        header_font = self._list.font()
+        header_font.setBold(True)
+        last_device = None
+        for series in available:
+            if series.device_id != last_device:
+                last_device = series.device_id
+                header = QListWidgetItem(series.device_label)
+                header.setFlags(Qt.ItemFlag.NoItemFlags)
+                header.setFont(header_font)
+                self._list.addItem(header)
+            name = series.label.split(" – ", 1)[-1]
+            item = QListWidgetItem(f"{name} ({series.unit})" if series.unit else name)
+            item.setData(Qt.ItemDataRole.UserRole, series)
+            item.setSizeHint(QSize(0, 44))
+            self._list.addItem(item)
+        self._list.itemClicked.connect(self._on_clicked)
+        layout.addWidget(self._list)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(560, 560)   # fit_to_screen (touch_ui) kuerzt auf den Bildschirm
+
+    def _on_clicked(self, item: QListWidgetItem) -> None:
+        series = item.data(Qt.ItemDataRole.UserRole)
+        if series is not None:
+            self.selected = series
+            self.accept()
+
+
 class _ChartRow(QGroupBox):
     """Ein Diagramm: Header mit Titel + "Signal hinzufuegen"-Menue + Entfernen-Button,
     darunter die Chips der zugeordneten Signale und das eigentliche Diagramm."""
@@ -539,6 +581,13 @@ class _ChartRow(QGroupBox):
 
     def _open_add_menu(self) -> None:
         available = self._get_available_signals()
+        if available and ThemeManager.instance().touch:
+            # Touch-Profil (4.6): Liste zum Wischen statt Menue -- mit microHIL sind es 30+ Signale,
+            # ein Menue zu 44 px je Zeile waere ueber 1300 px hoch und laesst sich nicht wischen.
+            picker = _SignalPickerDialog(available, self)
+            if picker.exec() == QDialog.DialogCode.Accepted and picker.selected is not None:
+                self.add_signal_requested.emit(picker.selected)
+            return
         menu = QMenu(self)
         if not available:
             action = menu.addAction(tr("Keine weiteren Signale verfügbar"))

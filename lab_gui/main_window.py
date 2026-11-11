@@ -1603,8 +1603,10 @@ class MainWindow(QMainWindow):
         from scope_api.base import ScopeError
 
         capture_id = self._last_scope_capture.get(device_id, "")
+        # Touch-Profil (4.6): Bild passend zum 1024 x 600-Display statt 1000 x 560 + Rand + Knopf
+        width, height = (960, 440) if self._touch else (1000, 560)
         try:
-            png = self._scope_service.plot(capture_id, None, None, None, 1000, 560)
+            png = self._scope_service.plot(capture_id, None, None, None, width, height)
         except ScopeError as exc:
             QMessageBox.information(self, tr("Kurve"), exc.message)
             return
@@ -1616,6 +1618,11 @@ class MainWindow(QMainWindow):
         image = QLabel()
         image.setPixmap(pixmap)
         layout.addWidget(image)
+        if self._touch:   # im Vollbild am Pi gibt es keine Fensterleiste zum Schliessen
+            from PySide6.QtWidgets import QDialogButtonBox
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.show()
 
