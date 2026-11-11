@@ -396,7 +396,8 @@ time-window-limited ring buffer of the live charts.
   moved only in **Arrange** mode (button in the top bar, "Done" ends it).
   Buttons that only show an icon with a tooltip on the PC (timeline, CAN)
   carry a short text in touch mode. The overview wraps at the screen width
-  and grows downwards instead of scrolling sideways. The battery simulator
+  and grows downwards instead of scrolling sideways; there it is always compact
+  (slightly larger, no toggle). The battery simulator
   shows its cells as a 2 × 7 grid (1–7 left, 8–14 right); tapping a cell
   setpoint opens the keypad, cells that are off are shown in grey. In the
   timeline the time window is chosen with buttons (30 s … 30 min) and

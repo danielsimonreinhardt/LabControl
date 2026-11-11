@@ -244,7 +244,13 @@ def main() -> int:
     hil = dash._panels.get("hil:SIM")
     check("HIL-Kachel ganz zu sehen (Inhalt passt)", hil is not None and hil.height() >= hil.sizeHint().height(),
           f"{hil.height() if hil else '-'} / {hil.sizeHint().height() if hil else '-'}")
-    check("Ansicht-Umschalter in Fingergroesse", dash._view_toggle_button.height() == 44)
+    # Nutzerwunsch 11.11.2026: im Touch-Profil immer kompakt (etwas groesser), kein Umschalter, kein Rahmen im Rahmen
+    psu_tile = dash._panels.get("psu:SIM")
+    check("Uebersicht im Touch-Profil immer kompakt, ohne Umschalter",
+          dash._compact and dash._view_toggle_button.isHidden() and not dash._user_compact)
+    check("Kompaktkacheln groesser (Werte 20 px)", psu_tile is not None and psu_tile._large
+          and "20px" in next(iter(psu_tile._compact_values.values())).styleSheet())
+    check("kein Rahmen um die Kacheln (Rahmen im Rahmen)", "border: none" in dash.styleSheet())
     from control_tab import BattSimControlGroup
     bs = next(iter(w.control_tab.findChildren(BattSimControlGroup)), None)
     check("Batterie-Simulator vorhanden", bs is not None)
@@ -425,6 +431,8 @@ def main() -> int:
     if psu is not None:
         check("ohne Touch: Zahlenfeld nimmt wieder Texteingabe an (Tippen am PC)",
               wants_keyboard(psu._voltage_spin) and wants_keyboard(psu._voltage_spin.lineEdit()))
+    check("ohne Touch: gespeicherte Ansicht (normal) und Umschalter zurueck, Rahmen zurueck",
+          not w.dashboard._compact and not w.dashboard._view_toggle_button.isHidden() and w.dashboard.styleSheet() == "")
     check("ohne Touch: Dashboard wieder zweizeilig mit Titel", not w.dashboard._multi_row
           and w.dashboard.title() == "Dashboard"
           and len({p.geometry().top() for p in w.dashboard._panels.values() if p.isVisible()}) <= 2)

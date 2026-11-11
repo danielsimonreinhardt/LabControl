@@ -60,6 +60,18 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Touch-Übersicht: immer kompakt, kein Rahmen im Rahmen (0.39.2, Nutzerwunsch 11.11.2026).** Am Pi sah die
+  Übersicht aus wie Rahmen im Rahmen (Dashboard-Gruppe mit eigener Fläche um die Kacheln), und der Umschalter
+  Normal/Kompakt war dort überflüssig.
+  - Im Touch-Profil ist die Übersicht immer kompakt, ohne Umschalter und ohne eigenen Rahmen/eigene Fläche; die
+    gespeicherte Wahl gilt am PC unverändert weiter (`DashboardWidget._user_compact` / `_apply_view`).
+  - Kompaktkacheln im Touch-Profil etwas größer: Werte 20 statt 16 px, Symbole 22 statt 18 px, mehr Innenabstand
+    (`_DevicePanel.set_large`). Damit nichts über den Rand ragt: höchstens vier Werte je Zeile (Batterie-Simulator
+    zweizeilig, 894 → 572 px), microHIL-Bereiche untereinander (980 → 354 px), hohe Kacheln spannen wie in der
+    Normalansicht so viele Zeilen, wie sie brauchen. Nach dem Umschalten wird einmal verzögert neu gemessen (Qt lieferte
+    kurz noch die alte Breite, die Breiten-Ratsche hielt sie fest).
+  - **Mock-verifiziert** (`check_touch_ui`: kompakt ohne Umschalter, Werte 20 px, kein Rahmen, keine Kachel über dem
+    Rand, Rückweg zur gespeicherten Ansicht; Dashboard-Prüfungen grün), am Pi per Bildschirmfoto angesehen.
 - **Nachbesserung GUI-Review am echten Display (0.39.1, 11.11.2026).** Die Status-Chips füllten die ganze Leiste
   (jetzt natürliche Größe, 28 px hoch, linksbündig); auf schmalen Kacheln der Kompaktansicht lag „getrennt“ über dem
   Kacheltitel (jetzt nur das Symbol, wenn neben dem Titel kein Platz ist); im leeren Testablauf verteilten sich

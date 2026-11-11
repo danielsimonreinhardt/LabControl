@@ -418,7 +418,8 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Knöpfe, die am PC nur ein Symbol mit Tooltip zeigen (Verlauf, CAN), tragen
   im Touch-Profil einen kurzen Text. Die Übersicht bricht an der
   Bildschirmbreite um und wird nach unten länger, statt waagerecht zu
-  scrollen. Der Batterie-Simulator zeigt seine Zellen als 2 × 7-Raster
+  scrollen; sie ist dort immer kompakt (etwas größer, ohne Umschalter).
+  Der Batterie-Simulator zeigt seine Zellen als 2 × 7-Raster
   (1–7 links, 8–14 rechts); ein Tipp auf einen Zellsollwert öffnet das
   Zahlenfeld, ausgeschaltete Zellen stehen grau. Im Verlauf wählt man das
   Zeitfenster über Tasten (30 s … 30 min), Signale für ein Diagramm aus

@@ -59,7 +59,7 @@ from __future__ import annotations
 import functools
 
 import qtawesome as qta
-from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QBoxLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from i18n import Translator, tr
 from microhil.driver import AIN_COUNT, AOUT_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
@@ -564,6 +564,9 @@ class MicroHilPanel(QGroupBox):
         compact_layout = QHBoxLayout(self._compact_widget)
         compact_layout.setContentsMargins(0, 0, 0, 0)
         compact_layout.setSpacing(14)
+        self._compact_layout = compact_layout
+        self._compact_dividers: list[QWidget] = []
+        self._large = False
 
         # Digital IO: einzige Gruppe, die zweizeilig bleibt (IN + OUT
         # uebereinander) -- bestimmt damit die Hoehe der gesamten Zeile.
@@ -577,7 +580,8 @@ class MicroHilPanel(QGroupBox):
         digital_col_layout.addWidget(self._compact_out_array)
         compact_layout.addWidget(self._compact_group(SECTION_TITLES[0], digital_col))
 
-        compact_layout.addWidget(self._new_divider(vertical=True))
+        self._compact_dividers.append(self._new_divider(vertical=True))
+        compact_layout.addWidget(self._compact_dividers[-1])
 
         # Analog IO: AIN+AOUT in einem 3x2-Raster statt einer Zeile mit 6
         # Eintraegen -- spart Breite, ohne die Zeilenhoehe zu erhoehen (die
@@ -592,7 +596,8 @@ class MicroHilPanel(QGroupBox):
         )
         compact_layout.addWidget(self._compact_group(SECTION_TITLES[1], self._compact_analog_grid))
 
-        compact_layout.addWidget(self._new_divider(vertical=True))
+        self._compact_dividers.append(self._new_divider(vertical=True))
+        compact_layout.addWidget(self._compact_dividers[-1])
 
         # Relais + 12V-OUT: zu einer Gruppe zusammengefasst UND als
         # 3x2-Raster statt einer Zeile (Absprache) -- aus demselben
@@ -740,6 +745,17 @@ class MicroHilPanel(QGroupBox):
         self._compact = compact
         self._normal_widget.setVisible(not compact)
         self._compact_widget.setVisible(compact)
+
+    def set_large(self, large: bool) -> None:
+        """Touch-Profil (Uebersicht immer kompakt): Bereiche untereinander statt nebeneinander -- in einer
+        Zeile war die Kachel mit 14-px-Schrift 980 px breit und passte nicht auf die Seite (0.39.2)."""
+        if large == self._large:
+            return
+        self._large = large
+        self._compact_layout.setDirection(QBoxLayout.Direction.TopToBottom if large else QBoxLayout.Direction.LeftToRight)
+        self._compact_layout.setSpacing(8 if large else 14)
+        for divider in self._compact_dividers:
+            divider.setVisible(not large)
 
     # -- Werte -----------------------------------------------------------------
     # Aktualisieren immer BEIDE Widget-Saetze (Normal- und Kompaktansicht)

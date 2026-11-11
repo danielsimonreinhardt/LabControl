@@ -61,6 +61,10 @@ from tile_grid import (
 VALUE_STYLE = "font-size: 20px; font-weight: bold;"
 COMPACT_VALUE_STYLE = "font-size: 16px; font-weight: bold;"
 COMPACT_ICON_SIZE = 18
+# Touch-Profil: Uebersicht immer kompakt, dafuer etwas groesser (_DevicePanel.set_large, Nutzerwunsch 11.11.2026)
+COMPACT_VALUE_STYLE_LARGE = "font-size: 20px; font-weight: bold;"
+COMPACT_ICON_SIZE_LARGE = 22
+COMPACT_LARGE_PER_ROW = 4   # Touch: hoechstens so viele Werte je Zeile (Batterie-Simulator hat sieben)
 KIND_ICON_SIZE = 26
 # Qt-Konstante QWIDGETSIZE_MAX (in PySide6 nicht exportiert) -- hebt das
 # setFixedWidth der Normalansicht im Kompaktmodus wieder auf.
@@ -262,9 +266,13 @@ class _DevicePanel(QGroupBox):
         # Rahmentitel (siehe oben), braucht hier also keine eigene Zeile mehr.
         # Der Name der Messgroesse bleibt als Tooltip auf Icon und Wert
         # erreichbar.
+        # Seit 0.39.2 ein Raster statt einer HBox: am PC eine Zeile wie bisher, im Touch-Profil (set_large)
+        # hoechstens COMPACT_LARGE_PER_ROW Werte je Zeile -- der Batterie-Simulator war mit sieben Werten
+        # in einer Zeile breiter als die Seite.
         self._compact_widget = no_own_background(QWidget())
-        compact = QHBoxLayout(self._compact_widget)
+        compact = QGridLayout(self._compact_widget)
         compact.setContentsMargins(0, 0, 0, 0)
+        compact.setVerticalSpacing(4)
         self._compact_icons: dict[str, QLabel] = {}
         self._compact_values: dict[str, QLabel] = {}
         for field_key in field_keys:
@@ -274,14 +282,13 @@ class _DevicePanel(QGroupBox):
             value_label.setStyleSheet(COMPACT_VALUE_STYLE)
             self._compact_icons[field_key] = icon_label
             self._compact_values[field_key] = value_label
-            compact.addWidget(icon_label)
-            compact.addWidget(value_label)
-            compact.addSpacing(10)
-        # Haelt den Inhalt links gepackt, wenn das Panel (per Breiten-Ratsche,
-        # siehe DashboardWidget._relayout_panels) breiter ist als sein Inhalt.
-        compact.addStretch()
         outer.addWidget(self._compact_widget)
         self._compact_widget.hide()
+        self._compact_layout = compact
+        self._compact_columns = 0
+        self._large = False
+        self._compact_mode = False
+        self._arrange_compact()
         self._apply_compact_icons(current_palette())
 
         # "Verbindung getrennt"-Kennzeichnung: eigenes Kind-Widget mit absoluter Position in der
@@ -374,12 +381,45 @@ class _DevicePanel(QGroupBox):
         self._apply_style(current_palette())
 
     def _apply_compact_icons(self, palette: Palette) -> None:
+        size = COMPACT_ICON_SIZE_LARGE if self._large else COMPACT_ICON_SIZE
         for field_key, icon_label in self._compact_icons.items():
-            icon_label.setPixmap(
-                qta.icon(FIELD_ICONS[field_key], color=palette.text).pixmap(
-                    COMPACT_ICON_SIZE, COMPACT_ICON_SIZE
-                )
-            )
+            icon_label.setPixmap(qta.icon(FIELD_ICONS[field_key], color=palette.text).pixmap(size, size))
+
+    def _arrange_compact(self) -> None:
+        """Symbol + Wert je Messgroesse ins Kompaktraster; am PC alle in einer Zeile, im Touch-Profil
+        hoechstens COMPACT_LARGE_PER_ROW je Zeile. Rechts eine dehnbare Spalte haelt den Inhalt links."""
+        grid = self._compact_layout
+        keys = list(self._compact_icons)
+        per_row = min(len(keys), COMPACT_LARGE_PER_ROW) if self._large else len(keys)
+        per_row = max(per_row, 1)
+        for column in range(self._compact_columns):
+            grid.setColumnStretch(column, 0)
+            grid.setColumnMinimumWidth(column, 0)
+        for key in keys:
+            grid.removeWidget(self._compact_icons[key])
+            grid.removeWidget(self._compact_values[key])
+        for i, key in enumerate(keys):
+            row, col = divmod(i, per_row)
+            grid.addWidget(self._compact_icons[key], row, 3 * col)
+            grid.addWidget(self._compact_values[key], row, 3 * col + 1)
+            grid.setColumnMinimumWidth(3 * col + 2, 10)   # Abstand bis zum naechsten Wert
+        self._compact_columns = 3 * per_row + 1
+        grid.setColumnStretch(3 * per_row, 1)
+
+    def set_large(self, large: bool) -> None:
+        """Touch-Profil: Kompaktansicht etwas groesser (Werte 20 statt 16 px, Symbole 22 statt 18 px) und
+        bei vielen Werten auf mehrere Zeilen verteilt."""
+        if large == self._large:
+            return
+        self._large = large
+        style = COMPACT_VALUE_STYLE_LARGE if large else COMPACT_VALUE_STYLE
+        for value_label in self._compact_values.values():
+            value_label.setStyleSheet(style)
+        self._compact_layout.setHorizontalSpacing(6 if large else 4)
+        self._arrange_compact()
+        self._apply_compact_icons(current_palette())
+        if self._compact_mode:
+            self.set_compact(True)   # Innenabstand nachziehen
 
     def _apply_kind_icon(self, palette: Palette) -> None:
         icon_name = KIND_ICON.get(self._kind)
@@ -390,10 +430,14 @@ class _DevicePanel(QGroupBox):
         )
 
     def set_compact(self, compact: bool) -> None:
+        self._compact_mode = compact
         self._normal_widget.setVisible(not compact)
         self._compact_widget.setVisible(compact)
         if compact:
-            self._outer.setContentsMargins(8, 2, 8, 4)
+            if self._large:
+                self._outer.setContentsMargins(12, 6, 12, 8)   # Touch: etwas mehr Luft
+            else:
+                self._outer.setContentsMargins(8, 2, 8, 4)
             # Feste Breite aufheben: die Kompaktzeile schmiegt sich an ihren
             # eigenen Inhalt an, statt die (fuer die Normalansicht gedachte)
             # angeglichene Breite zu behalten.
@@ -520,6 +564,8 @@ class DashboardWidget(QGroupBox):
         self._panel_colors: dict[str, str | None] = {}
         self._colors_enabled = False
         self._compact = False
+        self._user_compact = False   # Wahl am PC (set_compact); Touch ist immer kompakt
+        self._large = False          # Touch: Kompaktkacheln etwas groesser (_apply_view)
         self._detached = False
         # Aktuell angeglichene Panel-Breite (0 = noch keine gesetzt) -- als
         # Ratsche gefuehrt, siehe _relayout_panels. In der Kompaktansicht
@@ -648,6 +694,8 @@ class DashboardWidget(QGroupBox):
         kind = self._panel_kind.get(device_id, "")
         if self._compact:
             row_span = 2 if COMPACT_TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1
+            if self._multi_row:
+                row_span = self._row_spans.get(device_id, 1)   # siehe _multi_row_heights
             return (self._compact_col_spans.get(device_id, 1), row_span)
         if self._multi_row:
             return (1, self._row_spans.get(device_id, 1))   # siehe _multi_row_heights
@@ -669,10 +717,12 @@ class DashboardWidget(QGroupBox):
         separat gesetzt, da QScrollArea::setStyleSheet nicht zuverlaessig auf
         das interne Viewport-Widget durchschlaegt.
         """
-        style = f"background-color: {palette.surface}; border: none;"
+        # Touch-Profil: Seitenhintergrund statt eigener Flaeche (kein Rahmen im Rahmen, set_multi_row)
+        ground = palette.bg if getattr(self, "_multi_row", False) else palette.surface   # init: noch nicht gesetzt
+        style = f"background-color: {ground}; border: none;"
         self._scroll_area.setStyleSheet(f"QScrollArea {{ {style} }}")
         self._scroll_area.viewport().setStyleSheet(style)
-        self._container.setStyleSheet(f"background-color: {palette.surface};")
+        self._container.setStyleSheet(f"background-color: {ground};")
 
     def _update_toggle_button(self) -> None:
         self._view_toggle_button.set_icon(
@@ -719,10 +769,20 @@ class DashboardWidget(QGroupBox):
         size = QSize(TOUCH_H, TOUCH_H) if on else QSize(28, 24)
         self._view_toggle_button.setFixedSize(size)
         self._detach_button.setFixedSize(size)
+        # Touch: immer kompakt -> kein Umschalter; kein eigener Rahmen und keine eigene Flaeche um die
+        # Kacheln (sah am Pi aus wie Rahmen im Rahmen, Nutzerhinweis 11.11.2026)
+        self._view_toggle_button.setVisible(not on)
+        self.setStyleSheet("DashboardWidget { border: none; background: transparent; margin-top: 0px;"
+                           " padding-top: 0px; }" if on else "")
+        self._style_scroll_area(current_palette())
         self._retranslate()
         self._cell_height = 0   # Zellhoehe wird je Profil anders bestimmt (_multi_row_heights)
         self._row_spans = {}
-        self._relayout_panels(reset_width=True)
+        self._compact_cell_height = 0
+        before = (self._compact, self._large)
+        self._apply_view()
+        if (self._compact, self._large) == before:
+            self._relayout_panels(reset_width=True)
 
     def _avail_width(self) -> int:
         margins = self._panel_layout.contentsMargins()
@@ -737,14 +797,19 @@ class DashboardWidget(QGroupBox):
         """Touch, Normalansicht: Zellhoehe nach den einfachen Kacheln (Ratsche), hohe Kacheln (HIL)
         spannen so viele Zeilen, wie sie brauchen -- sonst gibt die HIL-Kachel mit halber Hoehe
         allen anderen viel Leerraum (2 x 238 px statt ~160 px fuer drei Messwerte)."""
+        # Seit 0.39.2 auch fuer die Kompaktansicht (im Touch-Profil immer kompakt): dort zaehlen zusaetzlich
+        # die in der Kompaktansicht zweizeiligen Kacheln (Oszilloskope) als hoch.
+        tall = MULTI_ROW_TALL_KINDS | ({k for k, v in COMPACT_TILE_HEIGHT_BY_KIND.items() if v == "double"}
+                                       if self._compact else set())
+        current = self._compact_cell_height if self._compact else self._cell_height
         single = [(self._panels[d].sizeHint().height(), 1) for d in order
-                  if self._panel_kind.get(d, "") not in MULTI_ROW_TALL_KINDS]
-        cell = cell_size_ratchet(self._cell_height, single) if single else self._cell_height
+                  if self._panel_kind.get(d, "") not in tall]
+        cell = cell_size_ratchet(current, single) if single else current
         if cell <= 0:
             cell = max((self._panels[d].sizeHint().height() for d in order), default=1) // 2 or 1
         spans = {}
         for d in order:
-            if self._panel_kind.get(d, "") in MULTI_ROW_TALL_KINDS:
+            if self._panel_kind.get(d, "") in tall:
                 need = self._panels[d].sizeHint().height()
                 spans[d] = max(1, -(-(need + GRID_SPACING) // (cell + GRID_SPACING)))
         return cell, spans
@@ -776,13 +841,28 @@ class DashboardWidget(QGroupBox):
 
     @Slot(bool)
     def set_compact(self, compact: bool) -> None:
-        if compact == self._compact:
+        """Wahl des Nutzers (Einstellung, Umschalter am PC). Im Touch-Profil gilt immer die Kompaktansicht
+        (_apply_view); die Wahl bleibt gespeichert und gilt wieder ohne Touch-Profil."""
+        self._user_compact = compact
+        self._apply_view()
+
+    def _apply_view(self) -> None:
+        # Touch-Profil (Nutzerwunsch 11.11.2026): immer kompakt, ohne Umschalter, etwas groesser
+        compact = self._user_compact or self._multi_row
+        large = self._multi_row
+        if (compact, large) == (self._compact, self._large):
             return
-        self._compact = compact
+        self._compact, self._large = compact, large
         for panel in self._panels.values():
             panel.set_compact(compact)
+            if hasattr(panel, "set_large"):
+                panel.set_large(large)
         self._update_toggle_button()
+        self._compact_cell_height = 0
         self._relayout_panels(reset_width=True)
+        # Direkt nach dem Umschalten liefert Qt teils noch die alte Breite (microHIL einzeilig 980 px), und
+        # die Breiten-Ratsche haelt sie fest -- einmal verzoegert neu messen, wenn die Groessen stehen.
+        QTimer.singleShot(0, lambda: self._relayout_panels(reset_width=True))
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
         # Nur Python-Referenz vergleichen: viewport() beim Beenden (Objekt schon abgebaut) warf in
@@ -1128,6 +1208,8 @@ class DashboardWidget(QGroupBox):
             for device_id in order:
                 if self._panels[device_id].sizeHint().width() > self._compact_widths.get(device_id, 0):
                     return False
+            if self._multi_row:
+                return self._multi_row_heights(order) == (self._compact_cell_height, self._row_spans)
             height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
             return cell_size_ratchet(self._compact_cell_height, height_sizes) == self._compact_cell_height
         if max(panel.sizeHint().width() for panel in self._panels.values()) > self._panel_width:
@@ -1221,10 +1303,13 @@ class DashboardWidget(QGroupBox):
                 # deshalb IMMER beide Zeilen zusammen, statt allein in eine
                 # Zeile gezwaengt deren Hoehe fuer alle anderen zu verzerren
                 # (Bugmeldung: "Zeilenhoehe passt nicht").
+                if self._multi_row:   # Touch: hohe Kacheln spannen Zeilen nach Bedarf (_multi_row_heights)
+                    self._compact_cell_height, self._row_spans = self._multi_row_heights(order)
                 compact_spans = {d: self._tile_span(d) for d in order}
                 compact_positions = self._pack(order, compact_spans)
-                height_sizes = [(self._panels[d].sizeHint().height(), compact_spans[d][1]) for d in order]
-                self._compact_cell_height = cell_size_ratchet(self._compact_cell_height, height_sizes)
+                if not self._multi_row:
+                    height_sizes = [(self._panels[d].sizeHint().height(), compact_spans[d][1]) for d in order]
+                    self._compact_cell_height = cell_size_ratchet(self._compact_cell_height, height_sizes)
                 self._size_rows(self._used_rows(compact_positions, compact_spans), self._compact_cell_height)
                 # Alle Rasterspalten auf dieselbe Mindestbreite: nur dann
                 # sind die Zellgrenzen (cellRect, siehe _tile_rects) auch in
@@ -1341,6 +1426,8 @@ class DashboardWidget(QGroupBox):
                 panel = _DevicePanel(kind, device_id, label, field_keys)
             if self._compact:
                 panel.set_compact(True)
+            if self._large and hasattr(panel, "set_large"):
+                panel.set_large(True)
             panel.hide()
             panel.installEventFilter(self)
             self._panels[device_id] = panel
