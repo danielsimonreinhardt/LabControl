@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 168" width="640" height="168"><g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 168" width="640" height="168"><g transform="translate(0 22.0)">
   <rect x="3" y="3" width="162" height="118" rx="20" fill="#1b2336" stroke="#38bdf8" stroke-width="6"/>
   <path d="M28 41 H140 M28 62 H140 M28 83 H140" stroke="#38bdf8" stroke-opacity="0.16" stroke-width="2"/>
   <path d="M62 24 V100 M106 24 V100" stroke="#38bdf8" stroke-opacity="0.16" stroke-width="2"/>
@@ -6,9 +6,4 @@
            C111 51 115 51 120 47 C125 43 129 44 146 45"
         fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="146" cy="45" r="7" fill="#f8fafc"/>
-  <rect x="64" y="121" width="40" height="13" fill="#475569"/>
-  <circle cx="58" cy="150" r="13" fill="#ef4444"/>
-  <circle cx="58" cy="150" r="5" fill="#0f172a"/>
-  <circle cx="110" cy="150" r="13" fill="#334155" stroke="#475569" stroke-width="3"/>
-  <circle cx="110" cy="150" r="5" fill="#0f172a"/>
 </g><text x="196" y="104" font-family="Segoe UI" font-weight="300" font-size="68" fill="#f8fafc">Lab<tspan font-weight="600" fill="#38bdf8">Control</tspan></text></svg>

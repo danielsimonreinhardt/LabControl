@@ -1,7 +1,7 @@
 """Erzeugt das LabControl-Logo und die Boot-/Hintergrundbilder fuer den Raspberry Pi.
 
 Ausgabe (neben diesem Skript):
-  logo-mark.svg      Bildmarke (Messbildschirm mit Sprungantwort, zwei Polklemmen)
+  logo-mark.svg      Bildmarke (Messbildschirm mit Sprungantwort)
   logo.svg           Bildmarke + Schriftzug, quer
   splash.png         1024 x 600, Boot-Logo (Plymouth-Theme) und Desktop-Hintergrund am Pi
   logo-mark-512.png  Bildmarke einzeln (z. B. fuer ein spaeteres App-Symbol)
@@ -21,14 +21,11 @@ HERE = Path(__file__).resolve().parent
 
 BG = "#0f172a"          # Slate Ops Dark: bg
 SURFACE = "#1b2336"     # surface
-BORDER = "#475569"      # border
 ACCENT = "#38bdf8"      # accent (Himmelblau)
 TEXT = "#f8fafc"        # text
 MUTED = "#94a3b8"       # gedaempft
-POST_RED = "#ef4444"    # Polklemme +
-POST_BLACK = "#334155"  # Polklemme -
 
-# Bildmarke im Raster 0..168: Bildschirm 168 x 124, darunter zwei Polklemmen.
+# Bildmarke im Raster 168 x 124: Messbildschirm (Standfuss und Polklemmen am 11.11.2026 auf Wunsch entfernt).
 # Die Kurve ist eine Sprungantwort mit gedaempftem Ueberschwingen -- Messen und Regeln in einem Zeichen.
 MARK = f"""
   <rect x="3" y="3" width="162" height="118" rx="20" fill="{SURFACE}" stroke="{ACCENT}" stroke-width="6"/>
@@ -38,25 +35,24 @@ MARK = f"""
            C111 51 115 51 120 47 C125 43 129 44 146 45"
         fill="none" stroke="{ACCENT}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="146" cy="45" r="7" fill="{TEXT}"/>
-  <rect x="64" y="121" width="40" height="13" fill="{BORDER}"/>
-  <circle cx="58" cy="150" r="13" fill="{POST_RED}"/>
-  <circle cx="58" cy="150" r="5" fill="{BG}"/>
-  <circle cx="110" cy="150" r="13" fill="{POST_BLACK}" stroke="{BORDER}" stroke-width="3"/>
-  <circle cx="110" cy="150" r="5" fill="{BG}"/>
 """
+MARK_W, MARK_H = 168, 124   # Bildschirm samt Rahmenstrich
 
 # Eine Familie je Element (QtSvg nimmt keine Ausweichliste); gerendert wird unter Windows (Segoe UI).
 FONT = "Segoe UI"
 
 
 def mark_svg() -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 168" width="168" height="168">{MARK}</svg>'
+    """Quadratisch (App-Symbol), Bildschirm senkrecht mittig."""
+    dy = (MARK_W - MARK_H) / 2
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {MARK_W} {MARK_W}" width="{MARK_W}"'
+            f' height="{MARK_W}"><g transform="translate(0 {dy})">{MARK}</g></svg>')
 
 
 def logo_svg() -> str:
     """Bildmarke links, Schriftzug rechts (fuer Dokumente, Freigabe-Webseite)."""
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 168" width="640" height="168">'
-            f'<g>{MARK}</g>'
+            f'<g transform="translate(0 {(168 - MARK_H) / 2})">{MARK}</g>'
             f'<text x="196" y="104" font-family="{FONT}" font-weight="300" font-size="68" fill="{TEXT}">Lab'
             f'<tspan font-weight="600" fill="{ACCENT}">Control</tspan></text>'
             f'</svg>')
@@ -64,12 +60,12 @@ def logo_svg() -> str:
 
 def splash_svg(width: int = 1024, height: int = 600) -> str:
     """Vollbild fuer Boot und Hintergrund: Bildmarke mittig, Schriftzug darunter, dezente Zeile."""
-    mark_size = 176
-    mx = (width - mark_size) / 2
-    my = height * 0.5 - mark_size + 8
+    scale = 176 / MARK_W
+    mx = (width - MARK_W * scale) / 2
+    my = height * 0.5 - MARK_H * scale - 4   # Bildschirm endet knapp ueber der Mitte, Schriftzug darunter
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">'
             f'<rect width="{width}" height="{height}" fill="{BG}"/>'
-            f'<g transform="translate({mx} {my}) scale({mark_size / 168})">{MARK}</g>'
+            f'<g transform="translate({mx} {my}) scale({scale})">{MARK}</g>'
             f'<text x="{width / 2}" y="{height * 0.5 + 82}" text-anchor="middle" font-family="{FONT}"'
             f' font-weight="300" font-size="60" fill="{TEXT}">Lab<tspan font-weight="600" fill="{ACCENT}">Control</tspan></text>'
             f'<text x="{width / 2}" y="{height * 0.5 + 122}" text-anchor="middle" font-family="{FONT}"'
