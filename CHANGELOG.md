@@ -60,6 +60,11 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Touch-Profil: kein Rahmen um den Seiteninhalt (0.39.4, 11.11.2026).** Nach dem Entfernen des Dashboard-Rahmens
+  (0.39.2) lief am Pi noch die Linie des Haupt-Reiterwidgets um den ganzen Inhalt -- die Navigation links ersetzt dort
+  die Reiterleiste, die Linie wirkte mit den Kacheln darin weiter wie Rahmen im Rahmen. Im Touch-Profil ohne diese
+  Linie (`QTabWidget#mainTabs::pane`); Reiter in den Einstellungen behalten ihren Rahmen. **Mock-verifiziert**
+  (`check_touch_ui`), am Pi per Bildschirmfoto angesehen.
 - **Touch-Übersicht: microHIL-Kachel rechts abgeschnitten (0.39.3, 11.11.2026).** Mit den Pi-Schriften verteilte
   QGridLayout die Breiten überlappender Kachel-Spannen ungenau (einzelne Rasterspalten bis 32 statt 8 px), die
   microHIL-Kachel ragte über die Seite. Im mehrzeiligen Touch-Raster legen die Kacheln ihre Breite jetzt nicht mehr

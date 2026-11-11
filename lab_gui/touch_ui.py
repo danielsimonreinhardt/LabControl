@@ -412,6 +412,11 @@ def touch_qss(pal: Palette) -> str:
     QScrollBar::add-page, QScrollBar::sub-page {{
         background: transparent;
     }}
+    /* Haupt-Reiter: die Navigation ersetzt die Reiterleiste, der Rahmen um den Inhalt wirkte mit den
+       Kacheln darin wie Rahmen im Rahmen (Nutzerhinweis 11.11.2026) */
+    QTabWidget#mainTabs::pane {{
+        border: none;
+    }}
     QWidget#touchNav {{
         background-color: {pal.surface};
         border-right: 1px solid {pal.border};

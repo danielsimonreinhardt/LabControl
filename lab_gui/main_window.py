@@ -158,6 +158,7 @@ class MainWindow(QMainWindow):
         self._presets = PresetStore()
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("mainTabs")   # Touch-Profil: ohne Rahmen um den Inhalt (touch_ui.touch_qss)
         self.control_tab = ControlTab(self._presets)
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()

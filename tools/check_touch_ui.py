@@ -250,7 +250,8 @@ def main() -> int:
           dash._compact and dash._view_toggle_button.isHidden() and not dash._user_compact)
     check("Kompaktkacheln groesser (Werte 20 px)", psu_tile is not None and psu_tile._large
           and "20px" in next(iter(psu_tile._compact_values.values())).styleSheet())
-    check("kein Rahmen um die Kacheln (Rahmen im Rahmen)", "border: none" in dash.styleSheet())
+    check("kein Rahmen um die Kacheln (Rahmen im Rahmen)", "border: none" in dash.styleSheet()
+          and "QTabWidget#mainTabs::pane" in app.styleSheet() and w.tabs.objectName() == "mainTabs")
     from control_tab import BattSimControlGroup
     bs = next(iter(w.control_tab.findChildren(BattSimControlGroup)), None)
     check("Batterie-Simulator vorhanden", bs is not None)
