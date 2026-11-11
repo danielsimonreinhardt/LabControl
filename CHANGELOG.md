@@ -21,6 +21,9 @@ Semantic Versioning (`lab_gui/version.py`).
     über den Worker-Thread). **Mock-verifiziert** unter Windows und Linux (WSL); Pi siehe unten.
 
 ### Geändert
+- **Boot-Logo: Unterzeile „MESSEN · STEUERN · PRÜFEN“ statt „NETZTEILE · LASTEN · MESSEN“ (Nutzerwunsch
+  11.11.2026).** `make_branding.py` neu ausgeführt (`splash.png`), am Pi ins Plymouth-Theme übernommen und die
+  initramfs neu gebaut.
 - **Pi: Bootloader-Bild ausgeblendet (Entscheidung PI-16 a, 11.11.2026).** Mit `KIOSK_BOOTLOADER=1 kiosk_pi.sh`
   ausgeführt: Bootloader-EEPROM auf den Stand 30.10.2026 aktualisiert (vorher 11.05.2026), bisherige Einstellungen
   übernommen, dazu `DISABLE_HDMI=1`. **Hardware-verifiziert:** nach dem Neustart `rpi-eeprom-update` „up to date“,

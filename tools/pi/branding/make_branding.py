@@ -73,7 +73,7 @@ def splash_svg(width: int = 1024, height: int = 600) -> str:
             f'<text x="{width / 2}" y="{height * 0.5 + 82}" text-anchor="middle" font-family="{FONT}"'
             f' font-weight="300" font-size="60" fill="{TEXT}">Lab<tspan font-weight="600" fill="{ACCENT}">Control</tspan></text>'
             f'<text x="{width / 2}" y="{height * 0.5 + 122}" text-anchor="middle" font-family="{FONT}"'
-            f' font-weight="600" font-size="17" letter-spacing="3" fill="{MUTED}">NETZTEILE · LASTEN · MESSEN</text>'
+            f' font-weight="600" font-size="17" letter-spacing="3" fill="{MUTED}">MESSEN · STEUERN · PRÜFEN</text>'
             f'</svg>')
 
 
