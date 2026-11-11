@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -54,6 +57,10 @@ from touch_ui import sizer as touch_sizer
 from version import __version__
 
 logger = logging.getLogger(__name__)
+
+# Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
+STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
+                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS"}
 
 
 class MainWindow(QMainWindow):
@@ -175,9 +182,11 @@ class MainWindow(QMainWindow):
         self._safety_status_label = QLabel()
         self._status_layout.addWidget(self._safety_status_label)
         self.statusBar().addPermanentWidget(self._status_container)
+        self._status_container.installEventFilter(self)   # Touch: Tipp -> Liste (_show_status_details)
 
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
+        self._device_kinds: dict[str, str] = {}
         self._device_online: dict[str, bool] = {}
         # Netzteile in Handbedienung (siehe _on_psu_manual_state)
         self._manual_devices: set[str] = set()
@@ -1041,9 +1050,11 @@ class MainWindow(QMainWindow):
         if on and self._dashboard_window is not None:
             self._dashboard_window.close()   # -> _dock_dashboard, danach Reiter
         self._touch = on
-        ThemeManager.instance().set_touch(on)
-        touch_sizer().set_active(on)
         app = QApplication.instance()
+        # Schrift VOR dem Stylesheet: Regeln mit font-weight (Kacheltitel) frieren beim Polieren die
+        # damalige Schrift samt Groesse ein -- mit umgekehrter Reihenfolge blieben Verlauf und Testablauf
+        # bei 12 px statt 14 px wie die Steuerung (GUI-Review UX-6, 11.11.2026). set_touch() wendet das
+        # Stylesheet neu an und poliert damit alles mit der neuen Schrift.
         if on:
             self._base_font = app.font()
             font = QFont(self._base_font)
@@ -1051,6 +1062,9 @@ class MainWindow(QMainWindow):
             app.setFont(font)
         elif self._base_font is not None:
             app.setFont(self._base_font)
+        ThemeManager.instance().set_touch(on)
+        self._repolish_top_down()
+        touch_sizer().set_active(on)
         trailing = [self._remote_status_label, self._all_off_button]
         visible = {w: not w.isHidden() for w in [self._status_container, *trailing]}
         if on:
@@ -1087,7 +1101,24 @@ class MainWindow(QMainWindow):
         self.dashboard.show()
         self._nav.set_current(self.tabs.currentWidget())
         self._style_all_off_button()
+        for device_id in self._status_labels:   # Chips (Touch) bzw. "Name: Zustand" (PC)
+            self._render_status_label(device_id)
         logger.info("Touch-Bedienung %s", "an" if on else "aus")
+
+    def _repolish_top_down(self) -> None:
+        """Alle Widgets von oben nach unten neu polieren. Beim Neu-Anwenden des Stylesheets poliert Qt in
+        beliebiger Reihenfolge, und jedes Widget uebernimmt die Schrift seines Elternteils zu diesem
+        Zeitpunkt -- ein vor seinem Elternteil poliertes Kind behielt die alte Groesse (Verlauf 12 px
+        statt 14 px, GUI-Review UX-6). Nur beim Umschalten des Touch-Profils, einmalig."""
+        def depth(widget: QWidget) -> int:
+            n = 0
+            while (widget := widget.parentWidget()) is not None:
+                n += 1
+            return n
+        for widget in sorted(self.findChildren(QWidget), key=depth):
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
 
     def _on_arrange_toggled(self, on: bool) -> None:
         """Modus "Anordnen" (Touch-Leiste): Kacheln in Uebersicht und Steuerung ziehen statt wischen."""
@@ -1553,8 +1584,28 @@ class MainWindow(QMainWindow):
             self._status_labels[device_id] = status_label
             self._status_layout.addWidget(status_label)
             self._device_online.setdefault(device_id, False)
+        self._device_kinds[device_id] = kind
         self._device_labels[device_id] = label
         self._render_status_label(device_id)
+
+    def _status_state(self, device_id: str) -> tuple[str, str, str]:
+        """(Symbol, Zustandstext, Farbe) eines Geraets fuer Leiste und Liste."""
+        pal = ThemeManager.instance().palette
+        if device_id in self._manual_devices:
+            return "Ⓗ", tr("Handbedienung"), pal.warning
+        if self._device_online.get(device_id, False):
+            return "✓", tr("verbunden"), pal.success
+        return "✕", tr("getrennt"), pal.danger
+
+    def _short_name(self, device_id: str) -> str:
+        """Kurzname fuer den Status-Chip im Touch-Profil: Geraeteart + Nummer aus dem Namen ("Netzteil 2"
+        -> "NT2"); ohne Nummer am Ende der Name selbst, gekuerzt."""
+        label = self._device_labels.get(device_id, device_id)
+        number = re.search(r"(\d+)\s*$", label)
+        kind = self._device_kinds.get(device_id, "")
+        if number and kind in STATUS_KIND_SHORT:
+            return tr(STATUS_KIND_SHORT[kind]) + number.group(1)
+        return label if len(label) <= 10 else label[:9] + "…"
 
     def _on_label_changed_status(self, kind: str, device_id: str, label: str) -> None:
         self._device_labels[device_id] = label
@@ -1566,14 +1617,55 @@ class MainWindow(QMainWindow):
             return
         label = self._device_labels.get(device_id, device_id)
         online = self._device_online.get(device_id, False)
-        if device_id in self._manual_devices:
-            state = tr("Handbedienung")
-        else:
-            state = tr("verbunden") if online else tr("getrennt")
+        symbol, state, chip_color = self._status_state(device_id)
+        if self._touch:
+            # Touch-Profil: kurzer Chip mit Symbol statt "Name: Zustand" -- die volle Zeile passte ab vier
+            # Geraeten nicht mehr und war vor allem an der Farbe lesbar (GUI-Review UX-1). Tipp -> Liste.
+            status_label.setText(f"{symbol} {self._short_name(device_id)}")
+            status_label.setToolTip(f"{label}: {state}")
+            status_label.setStyleSheet(
+                f"color: {chip_color}; font-weight: bold; border: 1px solid {chip_color};"
+                f" border-radius: 11px; padding: 2px 9px; background: transparent;")
+            return
+        status_label.setToolTip("")
         status_label.setText(f"{label}: {state}")
         pal = ThemeManager.instance().palette
         color = pal.success if online else pal.danger
         status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+    def _show_status_details(self) -> None:
+        """Touch-Profil: Tipp auf die Leiste oben -> alle Geraete mit vollem Namen und Zustand."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Gerätezustand"))
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(8)
+        safety = QLabel(self._safety_status_label.text())
+        safety.setStyleSheet(self._safety_status_label.styleSheet())
+        layout.addWidget(safety)
+        for device_id in self._status_labels:
+            symbol, state, color = self._status_state(device_id)
+            row = QLabel(f"{symbol}  {self._device_labels.get(device_id, device_id)} – {state}")
+            row.setStyleSheet(f"color: {color}; font-weight: bold;")
+            layout.addWidget(row)
+        if not self._status_labels:
+            layout.addWidget(QLabel(tr("Kein Gerät verbunden")))
+        layout.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.setMinimumWidth(420)
+        dialog.exec()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        # Touch-Profil: Tipp auf die Statusanzeige oben oeffnet die Liste (_show_status_details). Das
+        # Druecken annehmen, sonst kommt das Loslassen nicht an; Wischen erledigt der QScroller davor.
+        if obj is self._status_container and self._touch:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                return True
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                QTimer.singleShot(0, self._show_status_details)
+                return True
+        return super().eventFilter(obj, event)
 
     def _on_theme_changed(self, _palette: Palette) -> None:
         for device_id in self._status_labels:

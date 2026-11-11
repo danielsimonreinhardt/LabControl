@@ -53,8 +53,13 @@ def main() -> int:
     ThemeManager.instance().set_touch(True)
     app.processEvents()
     check("mit Touch: Ausfuehren-Ansicht", tab._page_stack.currentWidget() is rv)
-    check("leerer Ordner: Hinweis", rv._files.count() == 0 and "Keine Testabläufe" in rv._folder_label.text(),
-          rv._folder_label.text())
+    # Leerer Zustand (GUI-Review UX-7): Hinweis mittig statt leerer Liste, keine leeren Schritt-Rahmen
+    check("leerer Ordner: Hinweis mittig mit Ordner und Neu einlesen",
+          rv._files.count() == 0 and not rv._empty_box.isHidden() and rv._files.isHidden()
+          and "testcases" in rv._empty_text.text().replace("​", "") and not rv._empty_refresh.isHidden(),
+          rv._empty_text.text())
+    check("ohne Ablauf keine leeren Rahmen (Schritte, Fortschritt, Status)",
+          rv._steps.isHidden() and rv._progress.isHidden() and rv._status_label.isHidden())
     check("ohne Ablauf kein Start", not rv._start_button.isEnabled())
 
     print("Liste und Laden")

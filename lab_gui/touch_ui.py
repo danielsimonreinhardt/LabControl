@@ -58,6 +58,7 @@ FONT_SCALE = 1.2
 
 
 SPIN_KEY_WIDTH = 40
+SCROLLBAR_W = 6         # Touch: Scrollleiste nur als Positionsanzeige (Wischen bedient), GUI-Review UX-8
 _KEY_ICON_CACHE: dict[tuple[str, str], str] = {}
 
 
@@ -378,17 +379,38 @@ def touch_qss(pal: Palette) -> str:
     QHeaderView::section {{
         padding: 8px;
     }}
+    /* Schmale Positionsanzeige statt 22-px-Leiste: bedient wird per Wischen (GUI-Review UX-8) */
     QScrollBar:vertical {{
-        width: 22px;
+        width: {SCROLLBAR_W}px;
+        background: transparent;
+        border: none;
+        margin: 2px 1px;
     }}
     QScrollBar:horizontal {{
-        height: 22px;
+        height: {SCROLLBAR_W}px;
+        background: transparent;
+        border: none;
+        margin: 1px 2px;
+    }}
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
+        background: {pal.border_strong};
+        border: none;
+        border-radius: {SCROLLBAR_W // 2}px;
     }}
     QScrollBar::handle:vertical {{
-        min-height: 48px;
+        min-height: 40px;
     }}
     QScrollBar::handle:horizontal {{
-        min-width: 48px;
+        min-width: 40px;
+    }}
+    QScrollBar::add-line, QScrollBar::sub-line {{
+        width: 0px;
+        height: 0px;
+        border: none;
+        background: transparent;
+    }}
+    QScrollBar::add-page, QScrollBar::sub-page {{
+        background: transparent;
     }}
     QWidget#touchNav {{
         background-color: {pal.surface};

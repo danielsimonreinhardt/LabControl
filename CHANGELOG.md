@@ -7,6 +7,31 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **GUI-Review nach ui-ux-pro-max umgesetzt (0.39.0, Nutzerentscheidung 11.11.2026).** Durchsicht der Touch-Oberfläche
+  am Pi (8 Befunde, Review-Artefakt mit Auswahl je Punkt). Umgesetzt wie entschieden:
+  - UX-1 a: Im Touch-Profil zeigt die Leiste oben je Gerät einen Chip mit Symbol und Kurzname (✓ verbunden, ✕ getrennt,
+    Ⓗ Handbedienung, z. B. „✓ NT1“) statt „Name: Zustand“ -- die Zeile war ab vier Geräten abgeschnitten und vor allem
+    an der Farbe lesbar. Ein Tipp auf die Leiste öffnet „Gerätezustand“ mit vollen Namen. Am PC unverändert.
+  - UX-2 a: Getrennte Geräte (Dashboard, microHIL, Oszilloskop, „Kein Gerät verbunden“) in Theme-Farben statt festem
+    `#9e9e9e`: zurückgenommene Fläche, gestrichelter Rahmen, oben rechts Symbol + „getrennt“
+    (`no_device_tile.OfflineBadge`, `offline_group_qss`). Im dunklen Theme war die graue Kachel das hellste Element.
+  - UX-3 a: EIN/AUS-Tasten (Netzteil, Last, Funktionsgenerator, Batterie-Simulator): aktives AUS neutral (dunklere
+    Fläche, kräftiger Rahmen, fett) statt rot; aktives EIN bleibt grün. Rot bleibt Gefahr (ALLE AUS, FAIL). Auch am PC.
+  - UX-6 a: Einheitliche Schrift im Touch-Profil. Verlauf und Testablauf hatten 12 px statt 14 px: Qt polierte beim
+    Umschalten in beliebiger Reihenfolge und fror bei Kindern die alte Schrift ein. Jetzt erst Schrift, dann
+    Stylesheet, danach einmal geordnet von oben nach unten neu poliert (`MainWindow._repolish_top_down`). Start/Stop
+    im Testablauf 18 px. Kacheltitel lassen sich in Qt per Stylesheet nicht getrennt vergrößern (geprüft) und bleiben
+    fett in Grundschrift. Folgen der größeren Schrift abgefangen, damit das Fenster weiter auf 1024 px passt:
+    Funktionsgenerator-Kanäle im Touch-Profil untereinander (974 → 494 px), Preset-Felder 116 statt 128 px,
+    Hinweistexte im Testablauf umbrechend, verborgener Editor zählt im Touch-Profil nicht zur Mindestgröße.
+  - UX-7 a: Testablauf ohne Abläufe: Hinweis mittig mit Symbol, Ordner und „Neu einlesen“; Schrittliste, Fortschritt und
+    Status erst mit gewähltem Ablauf; Start/Stop bleiben bis dahin gesperrt.
+  - UX-8 a: Scrollleisten im Touch-Profil 6 px als reine Positionsanzeige (bedient wird per Wischen).
+  - Nicht geändert (Entscheidung „so lassen“): UX-4 ALLE AUS im dunklen Theme, UX-5 Häkchen-Felder.
+  - **Mock-verifiziert** (`check_touch_ui` um UX-1/2/3/6/8 erweitert -- gegen den alten Stand rot außer UX-6, das nur unter
+    Windows auftrat und dort per Schriftmessung belegt ist; `check_touch_run` leerer Zustand; alle 29 Prüfungen grün in
+    WSL und unter Windows), am Pi per Bildschirmfoto angesehen.
+
 - **Neues Farb-Theme „Slate Ops“ (0.38.0, Nutzerwahl 11.11.2026).** Ersetzt Modern Light / Amber Industrial in
   beiden Modi (Slate Ops Light / Slate Ops Dark): Schiefergrau mit Himmelblau als Akzent (Vorschlag ui-ux-pro-max,
   Kategorie IoT-/Ops-Dashboard). Grün ist bewusst nicht Akzent, sondern bleibt „bestanden/EIN“. Umgesetzt über das

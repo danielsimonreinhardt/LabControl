@@ -424,7 +424,9 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Zeitfenster über Tasten (30 s … 30 min), Signale für ein Diagramm aus
   einer Liste zum Wischen. Dialoge sind nie größer als der Bildschirm,
   Datei-Dialoge nutzen ihn ganz, die Kurve einer Erfassung hat einen Knopf
-  „Schließen“. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  „Schließen“. Die Leiste oben zeigt je Gerät einen kurzen Chip (✓ verbunden,
+  ✕ getrennt, Ⓗ Handbedienung); ein Tipp darauf listet alle Geräte mit
+  vollem Namen. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.

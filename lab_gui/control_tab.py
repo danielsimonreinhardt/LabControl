@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
     QApplication,
+    QBoxLayout,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -221,7 +222,9 @@ def _detint_label(form: QFormLayout, field: QWidget | QHBoxLayout) -> None:
 def _style_toggle_buttons(
     on_button: QPushButton, off_button: QPushButton, state: bool | None, pal: Palette
 ) -> None:
-    """Hebt den Button des aktiven Zustands farbig hervor (gruen=ein, rot=aus).
+    """Hebt den Button des aktiven Zustands hervor: EIN gruen gefuellt, AUS neutral (dunklere
+    Flaeche, kraeftiger Rahmen, fett). Bis 0.38.2 war aktives AUS rot gefuellt -- Rot steht sonst fuer
+    Gefahr (ALLE AUS, FAIL), markierte hier aber den sicheren Zustand (GUI-Review UX-3, 11.11.2026).
 
     state=None (Zustand noch unbekannt, z.B. vor der ersten Hardware-Rueckfrage
     bei der Last) laesst beide Buttons im neutralen Standard-Look.
@@ -233,13 +236,15 @@ def _style_toggle_buttons(
     vorgesehen (siehe dessen Docstring in theme.py)."""
     # Zustandsupdates kommen mit 10 Hz je Geraet; setStyleSheet loest jedes Mal ein Neu-Polieren
     # des Widgets aus, auch wenn sich nichts geaendert hat -- deshalb nur bei Aenderung setzen.
-    style_key = (state, pal.check_pass, pal.danger, pal.on_status)
+    style_key = (state, pal.check_pass, pal.border, pal.border_strong, pal.text, pal.on_status)
     if getattr(on_button, "_toggle_style_key", None) == style_key:
         return
     on_button._toggle_style_key = style_key
-    active_style = "background-color: {color}; color: {text}; font-weight: bold;"
-    on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.on_status) if state is True else "")
-    off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.on_status) if state is False else "")
+    on_style = f"background-color: {pal.check_pass}; color: {pal.on_status}; font-weight: bold;"
+    off_style = (f"background-color: {pal.border}; color: {pal.text}; font-weight: bold;"
+                 f" border: 2px solid {pal.border_strong};")
+    on_button.setStyleSheet(on_style if state is True else "")
+    off_button.setStyleSheet(off_style if state is False else "")
 
 
 class _DigitalOutToggle(QPushButton):
@@ -1075,6 +1080,9 @@ class FgControlGroup(QGroupBox):
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
         channels_row = QHBoxLayout()
+        # Touch-Profil: Kanaele untereinander (_on_theme_changed) -- nebeneinander brauchten sie mit der
+        # einheitlichen 14-px-Schrift 974 px und passten nicht mehr auf das 1024-px-Display (UX-6)
+        self._channels_row = channels_row
         self._boxes = {n: _FgChannelBox(n) for n in (1, 2)}
         for n, box in self._boxes.items():
             channels_row.addWidget(box)
@@ -1142,6 +1150,9 @@ class FgControlGroup(QGroupBox):
         for box in self._boxes.values():
             box.apply_theme(palette)
         apply_panel_tint(self, self._color_key)
+        # Touch-Profil meldet sich ueber changed: Kanaele untereinander statt nebeneinander
+        self._channels_row.setDirection(QBoxLayout.Direction.TopToBottom if ThemeManager.instance().touch
+                                        else QBoxLayout.Direction.LeftToRight)
 
     def set_label(self, label: str) -> None:
         self.setTitle(label)
@@ -2335,7 +2346,9 @@ class HilControlGroup(QGroupBox):
 PRESET_BUTTON_SIZE = QSize(132, 60)
 PRESET_SUB_BUTTON_SIZE = QSize(24, 22)
 PRESET_SUB_BUTTON_MARGIN = 3
-PRESET_TOUCH_SIZE = QSize(128, 60)      # Touch-Profil: Laden-Flaeche + "⋯"-Knopf
+# Touch-Profil: Laden-Flaeche + "⋯"-Knopf. 116 statt 128 px seit der einheitlichen 14-px-Schrift
+# (GUI-Review UX-6): sonst bestimmte die Preset-Leiste mit 908 px die Fensterbreite (> 1024 px).
+PRESET_TOUCH_SIZE = QSize(116, 60)
 PRESET_TOUCH_MORE_WIDTH = 40
 
 

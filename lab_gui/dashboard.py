@@ -42,7 +42,7 @@ from i18n import Translator, tr
 from icons import IconButton
 from jds66xx.driver import waveform_name
 from microhil_panel import MicroHilPanel
-from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
+from no_device_tile import NoDeviceTile, OfflineBadge, offline_group_qss
 from picoscope2000.driver import launch_app as launch_picoscope_app
 from picoscope_panel import PicoscopePanel
 from theme import METRICS, Palette, ThemeManager, no_own_background
@@ -156,18 +156,9 @@ KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-
 KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip",
              "fg": "mdi.sine-wave", "battsim": "mdi.battery-charging-outline"}
 
-# "Verbindung getrennt"-Badge oben rechts im Panel, siehe
-# _DevicePanel.set_online -- Position wird per resizeEvent nachgefuehrt, da
-# die Panel-Breite sich nachtraeglich angleicht (siehe DashboardWidget.
-# _relayout_panels). Netzwerk-Trennsymbol statt eines Stecker-Icons -- passt
-# sowohl fuer die Last als auch fuers Netzteil (kein Bezug zu "Stecker"
-# speziell). mdi.lan-disconnect (zwei Geraete-Rechtecke + Verbindungslinie +
-# X) war bei der bisherigen Badge-Groesse zu detailreich, um noch erkennbar
-# zu sein (siehe Bugmeldung) -- close-network-outline (ein Geraete-Symbol
-# mit X, klare Silhouette) bleibt bei kleiner Groesse deutlich lesbar.
-OFFLINE_ICON_NAME = "mdi.close-network-outline"
-OFFLINE_ICON_SIZE = 22
-OFFLINE_ICON_MARGIN = 5
+# "Verbindung getrennt"-Kennzeichnung oben rechts im Panel: no_device_tile.OfflineBadge (Symbol
+# mdi.close-network-outline + "getrennt", Theme-Farben); Position per resizeEvent nachgefuehrt, da die
+# Panel-Breite sich nachtraeglich angleicht (siehe DashboardWidget._relayout_panels).
 
 # Icons fuer die Kompaktansicht: dort ersetzen sie die Text-Beschriftung der
 # Messgroessen komplett (der volle Name bleibt als Tooltip erreichbar).
@@ -293,27 +284,11 @@ class _DevicePanel(QGroupBox):
         self._compact_widget.hide()
         self._apply_compact_icons(current_palette())
 
-        # "Verbindung getrennt"-Badge: eigenes Kind-Widget mit absoluter
-        # Position (statt im Layout) statt eigener Zeile -- so sitzt es
-        # wirklich in der Panel-Ecke, unabhaengig von Normal-/Kompaktansicht.
-        # Feste Farbe (OFFLINE_TEXT) statt Theme-Farbe, da es nur auf dem
-        # ebenfalls fest grauen "getrennt"-Hintergrund erscheint (siehe
-        # set_online/_apply_style) und dort in beiden Themes gleich lesbar
-        # bleiben soll. no_own_background() ist hier PFLICHT, nicht nur
-        # Kosmetik: als direktes Kind-Widget DIESER QGroupBox (nicht ueber
-        # einen no_own_background()-Wrapper wie die uebrigen Labels, siehe
-        # oben) erbt es sonst die globale "QWidget{background-color:pal.bg}"-
-        # Regel aus theme.stylesheet() und malt ein opakes Quadrat in der
-        # Seitenhintergrundfarbe -- das Icon-Pixmap war dahinter komplett
-        # unsichtbar (in Amber Dark quasi ein schwarzes Quadrat, per
-        # Screenshot bestaetigt).
-        self._offline_icon = no_own_background(QLabel(self))
-        self._offline_icon.setFixedSize(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
-        self._offline_icon.setPixmap(
-            qta.icon(OFFLINE_ICON_NAME, color=OFFLINE_TEXT).pixmap(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
-        )
-        self._offline_icon.hide()
-        self._offline_icon.raise_()
+        # "Verbindung getrennt"-Kennzeichnung: eigenes Kind-Widget mit absoluter Position in der
+        # Panel-Ecke, unabhaengig von Normal-/Kompaktansicht. Seit 0.38.3 Symbol + "getrennt" in
+        # Theme-Farben (no_device_tile.OfflineBadge, GUI-Review UX-2); OfflineBadge setzt
+        # no_own_background() selbst (sonst malt es ein opakes Quadrat in Seitenfarbe).
+        self._offline_icon = OfflineBadge(self)
 
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -321,7 +296,6 @@ class _DevicePanel(QGroupBox):
 
     def _retranslate(self) -> None:
         self._kind_icon.setToolTip(tr(KIND_TITLE.get(self._kind, self._kind)))
-        self._offline_icon.setToolTip(tr("Verbindung getrennt"))
         for field_key in self._field_keys:
             self._form.labelForField(self._value_rows[field_key]).setText(_field_display(field_key) + ":")
             tooltip = _field_display(field_key)
@@ -333,9 +307,7 @@ class _DevicePanel(QGroupBox):
         self._position_offline_icon()
 
     def _position_offline_icon(self) -> None:
-        self._offline_icon.move(
-            self.width() - OFFLINE_ICON_SIZE - OFFLINE_ICON_MARGIN, OFFLINE_ICON_MARGIN
-        )
+        self._offline_icon.place()
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_compact_icons(palette)
@@ -364,9 +336,8 @@ class _DevicePanel(QGroupBox):
         lesbarer" Grauton (Subtitle-Labels etc.), daher hier wiederverwendet
         statt eines neuen Palettenwerts."""
         if not self._online:
-            # Fest grau -- siehe no_device_tile.py (dieselben Farben, gleicher
-            # "kein aktives Geraet"-Zustand) statt einer aus palette
-            # abgeleiteten oder der individuellen Panel-Farbe (_color_key
+            # Getrennt-Darstellung aus no_device_tile.py (dieselbe wie "kein
+            # aktives Geraet") statt der individuellen Panel-Farbe (_color_key
             # wird hier bewusst ignoriert, kommt beim naechsten Online-Gehen
             # ueber _apply_style wieder zum Zug). Der Rahmentitel (Geraete-
             # name) bekommt HIER bewusst KEINE eigene Farbregel -- er faellt
@@ -376,10 +347,8 @@ class _DevicePanel(QGroupBox):
             # die normalen Online-Panels ohne Probleme nutzen). Eine fest
             # verdrahtete Titel-Farbe (fruehere Fassung: OFFLINE_TEXT, dunkel)
             # war im Amber-Dark-Theme praktisch unlesbar (Screenshot-Bug).
-            self.setStyleSheet(
-                f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
-            )
+            # Seit 0.38.3 aus dem Theme (no_device_tile.offline_group_qss, GUI-Review UX-2)
+            self.setStyleSheet(offline_group_qss(palette))
             return
         border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:

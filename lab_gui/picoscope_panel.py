@@ -41,7 +41,7 @@ from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 
 from i18n import Translator, tr
 from icons import IconButton
-from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER
+from no_device_tile import offline_group_qss
 from theme import METRICS, Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
 
@@ -209,11 +209,7 @@ class PicoscopePanel(QGroupBox):
             f" background-color: {palette.accent_hover}; }}"
         )
         if not self._online:
-            self.setStyleSheet(
-                f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
-                f"{button_rule}"
-            )
+            self.setStyleSheet(offline_group_qss(palette) + button_rule)   # Theme-Farben (seit 0.38.3)
             return
         border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:

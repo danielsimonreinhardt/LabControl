@@ -63,16 +63,13 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabe
 
 from i18n import Translator, tr
 from microhil.driver import AIN_COUNT, AOUT_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
-from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT
+from no_device_tile import OfflineBadge, offline_group_qss
 from theme import METRICS, Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
 DOT_ICON_SIZE = 15
 DOT_ON = "mdi.circle"
 DOT_OFF = "mdi.circle-outline"
-OFFLINE_ICON_NAME = "mdi.close-network-outline"
-OFFLINE_ICON_SIZE = 22
-OFFLINE_ICON_MARGIN = 5
 # Trennt in _Pwr12Row optisch den Schaltzustand (Punkt+Nummer) von der
 # Stromangabe -- dieselbe Ikonografie wie dashboard.FIELD_ICONS["current"],
 # rein dekorativ (text_muted), kein eigener Zustand.
@@ -625,13 +622,7 @@ class MicroHilPanel(QGroupBox):
         # "Verbindung getrennt"-Badge -- gleiches Prinzip wie
         # dashboard._DevicePanel (siehe dortigen ausfuehrlichen Kommentar
         # zu no_own_background() als Pflicht, nicht nur Kosmetik).
-        self._offline_icon = no_own_background(QLabel(self))
-        self._offline_icon.setFixedSize(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
-        self._offline_icon.setPixmap(
-            qta.icon(OFFLINE_ICON_NAME, color=OFFLINE_TEXT).pixmap(OFFLINE_ICON_SIZE, OFFLINE_ICON_SIZE)
-        )
-        self._offline_icon.hide()
-        self._offline_icon.raise_()
+        self._offline_icon = OfflineBadge(self)   # Symbol + "getrennt", Theme-Farben (seit 0.38.3)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
@@ -681,11 +672,10 @@ class MicroHilPanel(QGroupBox):
         self._compact_relay_pwr12.retranslate_relays()
         self._pwr12_row.retranslate()
         self._compact_relay_pwr12.retranslate_pwr12()
-        self._offline_icon.setToolTip(tr("Verbindung getrennt"))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().resizeEvent(event)
-        self._offline_icon.move(self.width() - OFFLINE_ICON_SIZE - OFFLINE_ICON_MARGIN, OFFLINE_ICON_MARGIN)
+        self._offline_icon.place()
 
     def _on_theme_changed(self, palette: Palette) -> None:
         for title, _ in self._section_titles:
@@ -721,10 +711,7 @@ class MicroHilPanel(QGroupBox):
         # diese Methode wuerde das Aktivieren der Panel-Farben-Option
         # (Einstellungen-Tab) crashen, sobald ein microHIL-Panel existiert.
         if not self._online:
-            self.setStyleSheet(
-                f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
-            )
+            self.setStyleSheet(offline_group_qss(palette))   # Theme-Farben (seit 0.38.3, GUI-Review UX-2)
             return
         border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:

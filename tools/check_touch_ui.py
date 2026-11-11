@@ -141,7 +141,9 @@ def main() -> int:
     dash_labels = [lb for lb in w.dashboard.findChildren(QLabel) if lb.text().startswith("Spannung")]
     check("Dashboard-Zeilen nicht gestreckt", dash_labels and all(lb.minimumHeight() == 0 for lb in dash_labels))
     hint = w.minimumSizeHint()
-    check("Fenster passt auf 1024 x 600", hint.width() <= 1024 and hint.height() <= 600, f"{hint.width()} x {hint.height()}")
+    pages = {type(w.tabs.widget(i)).__name__: w.tabs.widget(i).minimumSizeHint().width() for i in range(w.tabs.count())}
+    check("Fenster passt auf 1024 x 600", hint.width() <= 1024 and hint.height() <= 600,
+          f"{hint.width()} x {hint.height()}, Seiten {pages}, Leiste {w._top_bar.minimumSizeHint().width()}")
 
     print("Wischen, Anordnen, Beschriftungen (Schritt 4.4)")
     import touch_ui
@@ -327,6 +329,48 @@ def main() -> int:
     check("Datei-Dialog nutzt den Bildschirm, passt", file_dialog.height() == 600 - touch_ui.DIALOG_DECORATION_H
           and file_dialog.width() <= 1024, str(file_dialog.size().toTuple()))
     file_dialog.close()
+
+    print("GUI-Review ui-ux-pro-max (UX-1, -2, -3, -6, -8)")
+    from PySide6.QtGui import QFontInfo
+    from PySide6.QtWidgets import QAbstractButton, QDialog
+    chips = {d: lb.text() for d, lb in w._status_labels.items()}
+    check("UX-1: Status oben als Chips mit Symbol und Kurzname",
+          chips.get("psu:SIM", "").startswith("✓ NT") and all(len(t) <= 14 for t in chips.values()), str(chips))
+    opened_details: list[str] = []
+
+    def close_details() -> None:
+        dlg = next((d for d in app.topLevelWidgets() if isinstance(d, QDialog) and d.isVisible()), None)
+        opened_details.append(dlg.windowTitle() if dlg else "")
+        if dlg is not None:
+            dlg.reject()
+    QTimer.singleShot(300, close_details)
+    from PySide6.QtTest import QTest
+    QTest.mouseClick(w._status_container, Qt.MouseButton.LeftButton)
+    for _ in range(40):
+        app.processEvents()
+        QTest.qWait(15)
+    check("UX-1: Tipp auf die Leiste oeffnet die volle Liste", opened_details == ["Gerätezustand"], str(opened_details))
+    from no_device_tile import NoDeviceTile
+    dash_panel = w.dashboard._panels.get("psu:SIM")
+    dash_panel.set_online(False)
+    app.processEvents()
+    check("UX-2: getrennte Kachel in Theme-Farben mit 'getrennt'", "#9e9e9e" not in dash_panel.styleSheet()
+          and "dashed" in dash_panel.styleSheet() and not dash_panel._offline_icon.isHidden()
+          and dash_panel._offline_icon._text.text() == "getrennt", dash_panel.styleSheet()[:80])
+    dash_panel.set_online(True)
+    pal = ThemeManager.instance().palette
+    if psu is not None:
+        check("UX-3: aktives AUS neutral (nicht rot), EIN gruen",
+              pal.danger not in psu._output_off_button.styleSheet() and "font-weight: bold" in psu._output_off_button.styleSheet(),
+              psu._output_off_button.styleSheet())
+    w.tabs.setCurrentWidget(w.timeline_tab)
+    for _ in range(5):
+        app.processEvents()
+    sizes = {QFontInfo(b.font()).pixelSize() for page in (w.timeline_tab, w.control_tab)
+             for b in page.findChildren(QAbstractButton) if b.text() and b.isVisible()}
+    check("UX-6: Knoepfe in Verlauf und Steuerung gleich gross", len(sizes) == 1, str(sizes))
+    bar = w.control_tab.scroll_area().verticalScrollBar()
+    check("UX-8: schmale Scrollleiste (Positionsanzeige)", bar.sizeHint().width() <= 10, str(bar.sizeHint().width()))
 
     print("Vollbild und Ausschalten")
     w._toggle_fullscreen()

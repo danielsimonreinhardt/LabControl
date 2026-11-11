@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QStyledItemDelegate,
@@ -2071,6 +2072,11 @@ class TestcaseTab(QWidget):
             return
         self._touch = touch
         self._page_stack.setCurrentWidget(self._run_view if touch else self._editor_page)
+        # Die verborgene Seite zaehlt sonst bei der Mindestgroesse mit (QStackedWidget nimmt die groesste):
+        # der Editor verlangte mit 14-px-Schrift 904 px -> Fenster breiter als 1024 px (GUI-Review UX-6)
+        hidden, shown = (self._editor_page, self._run_view) if touch else (self._run_view, self._editor_page)
+        hidden.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        shown.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         if touch:
             self._refresh_run_view_files()
             self._sync_run_view_test()

@@ -13,8 +13,10 @@ Stop quittiert auch einen Schrittfehler) -- gleiche Pruefungen, gleiche Sicherhe
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import qtawesome as qta
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -37,6 +39,7 @@ from theme import current as current_palette
 from touch_ui import enable_swipe
 
 ROW_HEIGHT = 52
+RUN_BUTTON_FONT_PX = 18   # Start/Stop zwei Stufen ueber der Grundschrift (14 px), GUI-Review UX-6
 
 
 class TouchRunView(QWidget):
@@ -66,6 +69,25 @@ class TouchRunView(QWidget):
         self._files.itemClicked.connect(self._on_file_clicked)
         enable_swipe(self._files)
         left.addWidget(self._files, 1)
+        # Leerer Zustand (GUI-Review UX-7): Hinweis mittig statt leerer Liste mit Kleingedrucktem darunter
+        self._empty_box = QWidget()
+        empty = QVBoxLayout(self._empty_box)
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setSpacing(10)
+        self._empty_icon = QLabel()
+        self._empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_title = QLabel()
+        self._empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_title.setWordWrap(True)
+        self._empty_text = QLabel()
+        self._empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_text.setWordWrap(True)
+        self._empty_refresh = IconButton("mdi.refresh", "", text=tr("Neu einlesen"))
+        self._empty_refresh.clicked.connect(self.refresh_requested)
+        for widget in (self._empty_icon, self._empty_title, self._empty_text):
+            empty.addWidget(widget)
+        empty.addWidget(self._empty_refresh, 0, Qt.AlignmentFlag.AlignCenter)
+        left.addWidget(self._empty_box, 1)
         self._folder_label = QLabel()
         self._folder_label.setWordWrap(True)
         left.addWidget(self._folder_label)
@@ -83,7 +105,9 @@ class TouchRunView(QWidget):
         self._name_label = QLabel()
         self._name_label.setStyleSheet("font-size: 20px; font-weight: bold;")
         right.addWidget(self._name_label)
+        self._name_label.setWordWrap(True)
         self._info_label = QLabel()
+        self._info_label.setWordWrap(True)   # sonst 656 px breit bei 14-px-Schrift (Fenster > 1024 px)
         right.addWidget(self._info_label)
         self._steps = QListWidget()
         self._steps.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -150,12 +174,16 @@ class TouchRunView(QWidget):
         self._progress.setValue(0)
         self._progress.setFormat("%v / %m" if name else "")
         self._current_step = -1
+        # Ohne gewaehlten Ablauf keine leeren Rahmen fuer Schritte/Fortschritt/Status (GUI-Review UX-7)
+        for widget in (self._steps, self._progress, self._status_label):
+            widget.setVisible(bool(name))
 
     def set_running(self, running: bool, can_start: bool) -> None:
         self._start_button.setEnabled(can_start and not running)
         self._stop_button.setEnabled(running)
         self._files.setEnabled(not running)
         self._refresh_button.setEnabled(not running)
+        self._empty_refresh.setEnabled(not running)
         self._restyle()
 
     def set_status(self, text: str, kind: str) -> None:
@@ -181,25 +209,37 @@ class TouchRunView(QWidget):
         self._refresh_button.setToolTip(tr("Liste neu einlesen"))
         self._start_button.setText(tr("Start"))
         self._stop_button.setText(tr("Stop"))
-        if self._files.count() == 0:
-            self._folder_label.setText(tr("Keine Testabläufe in {folder}. Abläufe am PC erstellen und dort speichern.",
-                                          folder=str(self._folder or "")))
-        else:
-            self._folder_label.setText(str(self._folder or ""))
+        empty = self._files.count() == 0
+        self._files.setVisible(not empty)
+        self._empty_box.setVisible(empty)
+        self._folder_label.setVisible(not empty)
+        self._empty_title.setText(tr("Noch keine Testabläufe"))
+        # Umbruchstellen hinter den Pfadtrennern: ein langer Pfad ohne Leerzeichen erzwaenge sonst seine
+        # volle Breite (Fenster wurde breiter als 1024 px)
+        breakable = re.sub(r"([\\/])", "\\1\u200b", str(self._folder or ""))
+        self._empty_text.setText(tr("Abläufe am PC erstellen und in diesem Ordner speichern:\n{folder}",
+                                    folder=breakable))
+        self._empty_refresh.setText(tr("Neu einlesen"))
+        self._folder_label.setText(str(self._folder or ""))
         self._restyle()
 
     def _restyle(self) -> None:
         pal = current_palette()
         self._folder_label.setStyleSheet(f"color: {pal.text_muted};")
         self._info_label.setStyleSheet(f"color: {pal.text_muted};")
+        self._empty_icon.setPixmap(qta.icon("mdi.playlist-remove", color=pal.text_muted).pixmap(48, 48))
+        self._empty_title.setStyleSheet("font-size: 17px; font-weight: bold;")
+        self._empty_text.setStyleSheet(f"color: {pal.text_muted};")
         color = {"error": pal.danger, "success": pal.success}.get(self._status_kind, pal.text)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 17px; font-weight: bold;")
         self._start_button.setStyleSheet(
-            f"QPushButton {{ background-color: {pal.accent}; color: {pal.on_accent}; font-weight: bold; }}"
+            f"QPushButton {{ background-color: {pal.accent}; color: {pal.on_accent}; font-weight: bold;"
+            f" font-size: {RUN_BUTTON_FONT_PX}px; }}"
             f"QPushButton:disabled {{ background-color: {pal.surface_alt}; color: {pal.text_muted}; }}")
         self._start_button.set_color_override(pal.on_accent if self._start_button.isEnabled() else None)
         self._stop_button.setStyleSheet(
-            f"QPushButton {{ background-color: {pal.danger}; color: {pal.on_status}; font-weight: bold; }}"
+            f"QPushButton {{ background-color: {pal.danger}; color: {pal.on_status}; font-weight: bold;"
+            f" font-size: {RUN_BUTTON_FONT_PX}px; }}"
             f"QPushButton:disabled {{ background-color: {pal.surface_alt}; color: {pal.text_muted}; }}")
         self._stop_button.set_color_override(pal.on_status if self._stop_button.isEnabled() else None)
         if 0 <= self._current_step < self._steps.count():

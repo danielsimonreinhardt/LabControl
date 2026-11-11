@@ -402,7 +402,9 @@ time-window-limited ring buffer of the live charts.
   timeline the time window is chosen with buttons (30 s … 30 min) and
   signals for a chart from a list you can swipe. Dialogs are never larger
   than the screen, file dialogs use all of it, and the plot of a capture
-  has a "Close" button. As long as the checkbox has
+  has a "Close" button. The bar at the top shows a short chip per device
+  (✓ connected, ✕ disconnected, Ⓗ manual control); tapping it lists all
+  devices with their full names. As long as the checkbox has
   never been set, LabControl turns the profile on by itself on screens up to
   1024 × 600. Detaching the dashboard is not available in touch mode.
 - **Desktop notification on run end/error**: see section 3.
