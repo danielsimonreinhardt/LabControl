@@ -383,6 +383,7 @@ class MainWindow(QMainWindow):
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
+        self.control_tab.operation_source.connect(self._worker.set_operation_source)   # PI-15: Preset im Log
         self._worker.all_off_finished.connect(self._on_all_off_finished)
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
         self._safety.tripped.connect(self._on_safety_tripped)

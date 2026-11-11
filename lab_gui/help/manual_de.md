@@ -584,6 +584,13 @@ Befehlsfolgen werden gedrosselt, damit ein Stau den Notaus nicht verzögern kann
 Jeder Steuerbefehl **und jede Abweisung** steht mit der Adresse des Aufrufers im
 Protokoll `labdash.log`.
 
+Auch jede Bedienung am Gerät selbst steht dort, eine Zeile je Bedienung an
+Netzteil, Last, Funktionsgenerator, microHIL und Batterie-Simulator: Gerät,
+Aktion, Wert, Kanal, Herkunft (`Kachel`, `Preset` oder `Testablauf`) und
+Ergebnis, z. B. `Netzteil psu:…: PSU_VOLT (wert=12.0, kanal=0) per Kachel -> ok`.
+Bei `FEHLER` steht der Grund in eckigen Klammern dahinter. Reine Leseaktionen
+eines Testablaufs (Eingänge, Zellspannungen) erscheinen nicht.
+
 Am Netzteil HCS-34xx schalten `PSU_OUT_ON`/`PSU_OUT_OFF` den Ausgang wirklich;
 Spannung und Strombegrenzung bleiben dabei unverändert. `PSU_CURR` setzt nur die
 Strombegrenzung und schaltet nichts. Der EIN/AUS-Schalter im Reiter „Steuerung“

@@ -84,6 +84,11 @@ from unit_mso1000hd.driver import (
 
 logger = logging.getLogger(__name__)
 
+# Bedienungen ins Log (PI-15): Bezeichnung je Geraeteart und Aktionen, die nur lesen (nicht protokolliert)
+OPERATION_LABELS = {"psu": "Netzteil", "load": "Last", "fg": "Funktionsgenerator", "hil": "microHIL",
+                    "battsim": "Batterie-Simulator"}
+READ_ACTIONS = {"HIL_IN_READ", "HIL_AIN_READ", "BS_CELL_READ", "BS_STACK_READ"}
+
 # Meldungen, die sich bei jedem Verbindungsversuch wiederholen (fremder CH340-Port, von einer
 # anderen App gehaltener Port), hoechstens alle 10 min je Port. Vorher bestand das Log zu ~80 %
 # aus einer Zeile alle 33 s (gemessen 30.10.-10.11.2026); auf dem Raspberry Pi sind das
@@ -545,6 +550,7 @@ class DeviceWorker(QObject):
         # PICOSCOPE_RECONNECT_INTERVAL_MS-Kommentar).
         self._test_running = False
         self._simulation_mode = simulation_mode
+        self._operation_source = "Kachel"   # Herkunft der Kachel-Bedienungen (set_operation_source, PI-15)
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
@@ -1965,27 +1971,33 @@ class DeviceWorker(QObject):
 
     @Slot(str, str)
     def set_load_function(self, device_id: str, mode: str) -> None:
-        self._guard_load(device_id, lambda load: load.set_function(mode))
+        self._operate("load", device_id, f"MODE_{mode}", 0.0, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_function(mode)))
 
     @Slot(str, float)
     def set_load_current(self, device_id: str, amps: float) -> None:
-        self._guard_load(device_id, lambda load: load.set_current(amps))
+        self._operate("load", device_id, "CURR", amps, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_current(amps)))
 
     @Slot(str, float)
     def set_load_voltage(self, device_id: str, volts: float) -> None:
-        self._guard_load(device_id, lambda load: load.set_voltage(volts))
+        self._operate("load", device_id, "VOLT", volts, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_voltage(volts)))
 
     @Slot(str, float)
     def set_load_resistance(self, device_id: str, ohms: float) -> None:
-        self._guard_load(device_id, lambda load: load.set_resistance(ohms))
+        self._operate("load", device_id, "RES", ohms, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_resistance(ohms)))
 
     @Slot(str, float)
     def set_load_power(self, device_id: str, watts: float) -> None:
-        self._guard_load(device_id, lambda load: load.set_power(watts))
+        self._operate("load", device_id, "POW", watts, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_power(watts)))
 
     @Slot(str, bool)
     def set_load_input(self, device_id: str, on: bool) -> None:
-        self._guard_load(device_id, lambda load: load.set_input(on))
+        self._operate("load", device_id, "OUT_ON" if on else "OUT_OFF", 0.0, 0,
+                      lambda: self._guard_load(device_id, lambda load: load.set_input(on)))
 
     @Slot(str, str, float)
     def set_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
@@ -2003,11 +2015,13 @@ class DeviceWorker(QObject):
 
     @Slot(str, float)
     def set_psu_voltage(self, device_id: str, volts: float) -> None:
-        self._guard_psu(device_id, lambda psu: psu.set_voltage(volts))
+        self._operate("psu", device_id, "PSU_VOLT", volts, 0,
+                      lambda: self._guard_psu(device_id, lambda psu: psu.set_voltage(volts)))
 
     @Slot(str, float)
     def set_psu_current(self, device_id: str, amps: float) -> None:
-        self._guard_psu(device_id, lambda psu: psu.set_current(amps))
+        self._operate("psu", device_id, "PSU_CURR", amps, 0,
+                      lambda: self._guard_psu(device_id, lambda psu: psu.set_current(amps)))
 
     @Slot(str, bool)
     def set_psu_manual(self, device_id: str, manual: bool) -> None:
@@ -2030,20 +2044,22 @@ class DeviceWorker(QObject):
                     self.psu_manual_state.emit(device_id, False)
                     return
                 self._psu_manual.add(device_id)
-                logger.info("Netzteil %s: Handbedienung (1 V / 0 A, Ausgang EIN)", device_id)
+                logger.info("Netzteil %s: Handbedienung (1 V / 0 A, Ausgang EIN) per %s", device_id,
+                            self._operation_source)
                 self._emit_psu_output(device_id, True)
             self.psu_manual_state.emit(device_id, True)
         else:
             if device_id in self._psu_manual:
                 self._psu_manual.discard(device_id)
-                logger.info("Netzteil %s: Kontrolle durch LabControl", device_id)
+                logger.info("Netzteil %s: Kontrolle durch LabControl per %s", device_id, self._operation_source)
                 self._psu_poll_count[device_id] = 0
                 self._adopt_psu_state(device_id)
             self.psu_manual_state.emit(device_id, device_id in self._psu_manual)
 
     @Slot(str, bool)
     def set_psu_output(self, device_id: str, on: bool) -> None:
-        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_output(on))
+        ok, _ = self._operate("psu", device_id, "PSU_OUT_ON" if on else "PSU_OUT_OFF", 0.0, 0,
+                              lambda: self._guard_psu(device_id, lambda psu: psu.set_output(on)))
         if ok:
             self._emit_psu_output(device_id, on)
         else:
@@ -2058,49 +2074,59 @@ class DeviceWorker(QObject):
 
     @Slot(str, float)
     def set_psu_ovp(self, device_id: str, volts: float) -> None:
-        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_ovp(volts))
+        ok, _ = self._operate("psu", device_id, "PSU_OVP", volts, 0,
+                              lambda: self._guard_psu(device_id, lambda psu: psu.set_ovp(volts)))
         if ok:
             self._emit_psu_limits(device_id)
 
     @Slot(str, float)
     def set_psu_ocp(self, device_id: str, amps: float) -> None:
-        ok, _ = self._guard_psu(device_id, lambda psu: psu.set_ocp(amps))
+        ok, _ = self._operate("psu", device_id, "PSU_OCP", amps, 0,
+                              lambda: self._guard_psu(device_id, lambda psu: psu.set_ocp(amps)))
         if ok:
             self._emit_psu_limits(device_id)
 
     @Slot(str, int)
     def recall_psu_memory(self, device_id: str, index: int) -> None:
-        self._guard_psu(device_id, lambda psu: psu.recall_memory(index))
+        self._operate("psu", device_id, "PSU_RECALL", 0.0, index,
+                      lambda: self._guard_psu(device_id, lambda psu: psu.recall_memory(index)))
 
     # -- Funktionsgenerator: Steuerbefehle (siehe control_tab.FgControlGroup) ------
 
     @Slot(str, int, bool)
     def set_fg_output(self, device_id: str, channel: int, on: bool) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_output(channel, on))
+        self._operate("fg", device_id, "FG_OUT_ON" if on else "FG_OUT_OFF", 0.0, channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on)))
 
     @Slot(str, int, int)
     def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code))
+        self._operate("fg", device_id, "FG_WAVE", float(code), channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code)))
 
     @Slot(str, int, float)
     def set_fg_frequency(self, device_id: str, channel: int, hertz: float) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz))
+        self._operate("fg", device_id, "FG_FREQ", hertz, channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz)))
 
     @Slot(str, int, float)
     def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts))
+        self._operate("fg", device_id, "FG_AMPL", volts, channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts)))
 
     @Slot(str, int, float)
     def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts))
+        self._operate("fg", device_id, "FG_OFFS", volts, channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts)))
 
     @Slot(str, int, float)
     def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent))
+        self._operate("fg", device_id, "FG_DUTY", percent, channel,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent)))
 
     @Slot(str, float)
     def set_fg_phase(self, device_id: str, degrees: float) -> None:
-        self._guard_fg(device_id, lambda fg: fg.set_phase(degrees))
+        self._operate("fg", device_id, "FG_PHASE", degrees, 0,
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees)))
 
     # -- CAN-Bus: Steuerbefehle -----------------------------------------------
     # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
@@ -2143,23 +2169,28 @@ class DeviceWorker(QObject):
 
     @Slot(str, int, bool)
     def set_hil_output(self, device_id: str, channel: int, on: bool) -> None:
-        self._guard_hil(device_id, lambda hil: hil.set_output(channel, on))
+        self._operate("hil", device_id, "HIL_OUT_ON" if on else "HIL_OUT_OFF", 0.0, channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_output(channel, on)))
 
     @Slot(str, int, int)
     def set_hil_analog_output(self, device_id: str, channel: int, millivolts: int) -> None:
-        self._guard_hil(device_id, lambda hil: hil.set_analog_output(channel, millivolts))
+        self._operate("hil", device_id, "HIL_AOUT", float(millivolts), channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_analog_output(channel, millivolts)))
 
     @Slot(str, int, bool)
     def set_hil_relay(self, device_id: str, channel: int, on: bool) -> None:
-        self._guard_hil(device_id, lambda hil: hil.set_relay(channel, on))
+        self._operate("hil", device_id, "HIL_RELAY_ON" if on else "HIL_RELAY_OFF", 0.0, channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_relay(channel, on)))
 
     @Slot(str, int, bool)
     def set_hil_pwr12(self, device_id: str, channel: int, on: bool) -> None:
-        self._guard_hil(device_id, lambda hil: hil.set_pwr12(channel, on))
+        self._operate("hil", device_id, "HIL_PWR12_ON" if on else "HIL_PWR12_OFF", 0.0, channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_pwr12(channel, on)))
 
     @Slot(str, int, int)
     def set_hil_pwm(self, device_id: str, channel: int, permille: int) -> None:
-        self._guard_hil(device_id, lambda hil: hil.set_pwm(channel, permille))
+        self._operate("hil", device_id, "HIL_PWM", float(permille), channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_pwm(channel, permille)))
 
     @Slot(str, int, int)
     def set_hil_current_limit(self, device_id: str, channel: int, milliamps: int) -> None:
@@ -2168,7 +2199,8 @@ class DeviceWorker(QObject):
         # HilError("ERR UNKNOWN") fehl; _guard_hil behandelt das wie jeden
         # anderen Verbindungsfehler (Verbindung wird geschlossen). Auf dem
         # simulierten Geraet (microhil.mock) funktioniert es bereits.
-        self._guard_hil(device_id, lambda hil: hil.set_current_limit(channel, milliamps))
+        self._operate("hil", device_id, "HIL_ILIM", float(milliamps), channel,
+                      lambda: self._guard_hil(device_id, lambda hil: hil.set_current_limit(channel, milliamps)))
 
     # -- Batterie-Simulator: Steuerung ----------------------------------------
 
@@ -2193,13 +2225,37 @@ class DeviceWorker(QObject):
         Fernsteuerung und Testablauf stehen ohnehin im Log; die Kachel bisher nicht, damit
         liess sich ein gesendeter Zustand nicht mehr einer Quelle zuordnen (07.11.2026)."""
         ok, message = self._guard_battsim(device_id, action)
-        self._log_battsim_write(device_id, action_name, value, channel, "Kachel", ok, message)
+        self._log_battsim_write(device_id, action_name, value, channel, self._operation_source, ok, message)
 
     @staticmethod
     def _log_battsim_write(device_id: str, action_name: str, value: float, channel: int, source: str,
                            ok: bool, message: str) -> None:
-        logger.info("Batterie-Simulator %s: %s (wert=%s, kanal=%s) per %s -> %s%s", device_id, action_name,
-                    value, channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        DeviceWorker._log_operation(BATTSIM_KIND, device_id, action_name, value, channel, source, ok, message)
+
+    # -- Bedienungen ins Log (Entscheidung PI-15, 10.11.2026) -------------------
+    # Jede Bedienung an Netzteil, Last, Funktionsgenerator, microHIL und Batterie-Simulator: Geraet, Aktion,
+    # Wert, Kanal, Herkunft (Kachel, Preset, Testablauf; Fernsteuerung/MCP hat ihre eigene Zeile in
+    # execute_remote_action) und Ergebnis ("ok" = Treiber hat den Befehl ohne Fehler ausgefuehrt, beim
+    # Netzteil mit Rueckleseprobe). Eine Zeile je Bedienung.
+
+    @Slot(str)
+    def set_operation_source(self, source: str) -> None:
+        """Herkunft der folgenden Kachel-Bedienungen ("Preset" waehrend ein Preset geladen wird, sonst
+        "Kachel"). Laeuft wie die Bedienungen selbst ueber die Warteschlange des Worker-Threads, die
+        Reihenfolge bleibt also erhalten (control_tab.ControlTab.operation_source)."""
+        self._operation_source = source or "Kachel"
+
+    def _operate(self, kind: str, device_id: str, action: str, value: float, channel: int,
+                 run: Callable[[], tuple[bool, str]]) -> tuple[bool, str]:
+        ok, message = run()
+        self._log_operation(kind, device_id, action, value, channel, self._operation_source, ok, message)
+        return ok, message
+
+    @staticmethod
+    def _log_operation(kind: str, device_id: str, action: str, value: float, channel: int, source: str,
+                       ok: bool, message: str) -> None:
+        logger.info("%s %s: %s (wert=%s, kanal=%s) per %s -> %s%s", OPERATION_LABELS.get(kind, kind), device_id,
+                    action, value, channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
 
     @Slot(str, bool)
     def set_battsim_remote(self, device_id: str, on: bool) -> None:
@@ -2252,8 +2308,8 @@ class DeviceWorker(QObject):
     @Slot(str, str, str, float, int)
     def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
-        if kind == "battsim" and action not in ("BS_CELL_READ", "BS_STACK_READ"):
-            self._log_battsim_write(device_id, action, value, channel, "Testablauf", ok, message)
+        if kind in OPERATION_LABELS and action not in READ_ACTIONS:   # PI-15: jede Bedienung ins Log
+            self._log_operation(kind, device_id, action, value, channel, "Testablauf", ok, message)
         self.action_completed.emit(ok, message, read_value)
 
     @Slot(int, str, str, str, float, int)

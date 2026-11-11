@@ -555,6 +555,14 @@ sequences are throttled so that a backlog cannot delay the emergency stop.
 Every control command **and every rejection** is written to `labdash.log` with
 the caller's address.
 
+Every operation on the devices themselves is logged there too, one line per
+operation on power supply, load, function generator, microHIL and battery
+simulator: device, action, value, channel, source (`Kachel` = tile, `Preset`
+or `Testablauf` = test sequence) and result, e.g.
+`Netzteil psu:…: PSU_VOLT (wert=12.0, kanal=0) per Kachel -> ok`. On `FEHLER`
+(error) the reason follows in square brackets. Pure read actions of a test
+sequence (inputs, cell voltages) are not logged.
+
 On the HCS-34xx power supply, `PSU_OUT_ON`/`PSU_OUT_OFF` really switch the
 output; voltage and current limit stay unchanged. `PSU_CURR` only sets the
 current limit and switches nothing. The ON/OFF switch on the

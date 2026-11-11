@@ -2580,6 +2580,8 @@ class ControlTab(QWidget):
     # kind ("load"/"psu"), device_id, neu erzeugte Sektion -- fuer die einmalige
     # Verkabelung ihrer Signale mit dem DeviceWorker durch MainWindow.
     section_created = Signal(str, str, QWidget)
+    # Herkunft der folgenden Bedienungen fuers Log ("Preset"/"Kachel", PI-15) -> DeviceWorker.set_operation_source
+    operation_source = Signal(str)
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
@@ -3313,10 +3315,16 @@ class ControlTab(QWidget):
         self._presets.save(slot, devices)
 
     def _on_preset_load(self, slot: int) -> None:
-        for device_id, state in self._presets.devices(slot).items():
-            section = self._sections.get(device_id)
-            if section is not None and section.isVisible():
-                section.apply_state(state)
+        # Herkunft "Preset" fuer die Bedienungen im Log (PI-15); die Bedienungen und diese Meldung laufen
+        # in derselben Reihenfolge ueber die Warteschlange des Worker-Threads.
+        self.operation_source.emit("Preset")
+        try:
+            for device_id, state in self._presets.devices(slot).items():
+                section = self._sections.get(device_id)
+                if section is not None and section.isVisible():
+                    section.apply_state(state)
+        finally:
+            self.operation_source.emit("Kachel")
 
     def _on_preset_rename(self, slot: int) -> None:
         name, ok = QInputDialog.getText(

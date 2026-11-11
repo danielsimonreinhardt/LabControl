@@ -6,6 +6,20 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Jede Bedienung steht im Log (0.41.0, Entscheidung PI-15 a, 10.11.2026).** Bisher protokollierte nur der
+  Batterie-Simulator seine Bedienungen; „Sollwert 12 V, Ausgang EIN“ an Netzteil, Last, Funktionsgenerator oder
+  microHIL ließ sich im `labdash.log` nicht nachvollziehen. Jetzt eine Zeile je Bedienung, im selben Format wie beim
+  Batterie-Simulator: `<Gerät> <id>: <Aktion> (wert=…, kanal=…) per Kachel|Preset|Testablauf -> ok|FEHLER [Grund]`.
+  - Kachel: alle Setter des DeviceWorkers (Sollwerte, Ausgänge, Modi, OVP/OCP, Speicherplatz, Relais, PWM,
+    Strombegrenzung) laufen über `_operate`, das nach dem Treiberaufruf die Zeile schreibt.
+  - Preset: die Steuerung meldet beim Laden „Preset“ an den Worker und danach wieder „Kachel“; das läuft über
+    dieselbe Warteschlange wie die Befehle, die Reihenfolge stimmt also.
+  - Testablauf: jede schreibende Aktion; Leseaktionen (`HIL_IN_READ`, `HIL_AIN_READ`, `BS_CELL_READ`,
+    `BS_STACK_READ`) nicht. Fernsteuerung/MCP behält ihre eigene Zeile mit Aufrufer.
+  - Neue Prüfung `tools/check_operation_log.py` (Kachel, Fehlerfall, Preset, Testablauf, Leseaktion, Reihenfolge
+    über den Worker-Thread). **Mock-verifiziert** unter Windows und Linux (WSL); Pi siehe unten.
+
 ### Geändert
 - **Pi: Bootloader-Bild ausgeblendet (Entscheidung PI-16 a, 11.11.2026).** Mit `KIOSK_BOOTLOADER=1 kiosk_pi.sh`
   ausgeführt: Bootloader-EEPROM auf den Stand 30.10.2026 aktualisiert (vorher 11.05.2026), bisherige Einstellungen
