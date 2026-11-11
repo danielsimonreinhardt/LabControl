@@ -22,6 +22,7 @@ import itertools
 import logging
 import queue
 import threading
+import time
 
 from PySide6.QtCore import QObject, Signal
 
@@ -30,6 +31,18 @@ from partner_client import PartnerClient, PartnerError, PartnerSnapshot, normali
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 1.0
+# Belegung (PI-26 a): Lebenszeichen jede Sekunde; der Besitzer schaltet nach 3 s ohne ab, der Leitstand
+# bricht nach 3 s ohne bestaetigtes Lebenszeichen ab -- beide Seiten mit derselben Frist.
+LEASE_RENEW_S = 1.0
+LEASE_TTL_S = 3.0
+
+
+def _quiet(call, *args) -> None:
+    """Aufruf ohne Fehlermeldung (Freigeben einer Belegung: klappt es nicht, laeuft sie beim Partner ab)."""
+    try:
+        call(*args)
+    except Exception:  # noqa: BLE001
+        pass
 
 # Fehlercodes der API in Worten (Statuszeile, Kachel). Unbekannte Codes erscheinen roh.
 ERROR_TEXTS = {
@@ -48,6 +61,8 @@ ERROR_TEXTS = {
     "busy": "dort beschäftigt",
     "device_error": "Gerät meldet Fehler",
     "all_off_incomplete": "ALLE AUS dort unvollständig",
+    "leased": "dort belegt",
+    "unknown_lease": "Belegung abgelaufen",
 }
 
 
@@ -60,10 +75,16 @@ class PartnerLink(QObject):
     snapshot_changed = Signal(object)
     # verbunden?, Grund als Text ("" wenn verbunden)
     connection_changed = Signal(bool, str)
-    # device_id, Aktion, ok, Meldung
-    action_finished = Signal(str, str, bool, str)
+    # Anfrage-Nr. (aus send_action), device_id, Aktion, ok, Meldung
+    action_finished = Signal(int, str, str, bool, str)
     # ok, Meldung
     all_off_finished = Signal(bool, str)
+    # Belegung (V2): ok, Meldung -- Antwort auf acquire_lease
+    lease_acquired = Signal(bool, str)
+    # Belegung verloren (Lebenszeichen nicht bestaetigt): Grund
+    lease_lost = Signal(str)
+    # intern: (Generation der Belegung, Belegungs-ID oder "", Fehlertext)
+    _lease_result = Signal(int, str, str)
 
     # intern: (Generation, Snapshot | None, Fehlercode, Meldung) aus dem Abfrage-Thread
     _polled = Signal(int, object, str, str)
@@ -82,7 +103,15 @@ class PartnerLink(QObject):
         self._snapshot: PartnerSnapshot | None = None
         self._connected = False
         self._reason = "aus"
+        self._request_ids = itertools.count(1)
+        # Belegung: ID (vom Befehls-Thread gelesen -- Zuweisung einer str ist atomar), Generation gegen
+        # verspaetete Antworten, Stopp-Ereignis des Lebenszeichen-Threads
+        self._lease_id = ""
+        self._lease_gen = 0
+        self._lease_gens = itertools.count(1)
+        self._lease_stop = threading.Event()
         self._polled.connect(self._on_polled)
+        self._lease_result.connect(self._on_lease_result)
 
     # -- Konfiguration -----------------------------------------------------------
 
@@ -117,6 +146,7 @@ class PartnerLink(QObject):
         self._shutdown_threads()
 
     def _shutdown_threads(self) -> None:
+        self.release_lease()
         self._stop.set()
         self._actions.put(None)   # Befehls-Thread aufwecken
         self._current_gen = 0
@@ -193,38 +223,130 @@ class PartnerLink(QObject):
             item = actions.get()
             if item is None or stop.is_set():
                 return
-            device_id, action, value, channel, label = item
+            request_id, device_id, action, value, channel, label = item
             details = ", ".join(part for part in (
                 f"wert={value:g}" if value is not None else "",
                 f"kanal={channel}" if channel is not None else "") if part)
             what = f"Verbund {label or device_id}: {action}" + (f" ({details})" if details else "")
             try:
-                payload = client.action(device_id, action, value, channel)
+                payload = client.action(device_id, action, value, channel, lease=self._lease_id)
             except PartnerError as exc:
                 message = error_text(exc.code)
+                if exc.code == "leased" and exc.payload.get("holder"):
+                    message += f" ({exc.payload.get('holder')})"
                 logger.warning("%s -> FEHLER %s", what, message)
-                self.action_finished.emit(device_id, action, False, message)
+                self.action_finished.emit(request_id, device_id, action, False, message)
                 continue
             except Exception as exc:
                 logger.exception("%s -> FEHLER", what)
-                self.action_finished.emit(device_id, action, False, str(exc))
+                self.action_finished.emit(request_id, device_id, action, False, str(exc))
                 continue
             if payload.get("ok") is None:
                 logger.warning("%s -> unbestätigt (Gerät hat nicht rechtzeitig geantwortet)", what)
-                self.action_finished.emit(device_id, action, False, "unbestätigt, Werte prüfen")
+                self.action_finished.emit(request_id, device_id, action, False, "unbestätigt, Werte prüfen")
             else:
                 logger.info("%s -> ok", what)
-                self.action_finished.emit(device_id, action, True, str(payload.get("message") or ""))
+                self.action_finished.emit(request_id, device_id, action, True, str(payload.get("message") or ""))
 
     # -- Bedienen ----------------------------------------------------------------
 
     def send_action(self, device_id: str, action: str, value: float | None = None,
-                    channel: int | None = None, label: str = "") -> bool:
-        """Reiht eine Bedienung ein. False, wenn der Verbund aus ist."""
+                    channel: int | None = None, label: str = "") -> int:
+        """Reiht eine Bedienung ein. Liefert die Anfrage-Nr. (in action_finished), 0 wenn der
+        Verbund aus ist."""
         if self._client is None:
+            return 0
+        request_id = next(self._request_ids)
+        self._actions.put((request_id, device_id, action, value, channel, label))
+        return request_id
+
+    # -- Belegung und Lebenszeichen (PI-25 a, PI-26 a) -----------------------------
+
+    def lease_active(self) -> bool:
+        return bool(self._lease_id)
+
+    def acquire_lease(self, devices: list[str], run: str) -> bool:
+        """Belegt die Geraete beim Partner (eigener Thread). Antwort ueber lease_acquired; danach
+        meldet sich diese Instanz alle LEASE_RENEW_S, bis release_lease(). False: Verbund aus."""
+        client = self._client
+        if client is None:
             return False
-        self._actions.put((device_id, action, value, channel, label))
+        self.release_lease()
+        generation = next(self._lease_gens)
+        self._lease_gen = generation
+
+        def run_acquire() -> None:
+            try:
+                lease = client.lease_acquire(devices, run, LEASE_TTL_S)
+            except PartnerError as exc:
+                detail = exc.payload.get("device") or ""
+                holder = exc.payload.get("holder") or ""
+                text = error_text(exc.code) + (f": {detail}" if detail else "") + (f" ({holder})" if holder else "")
+                self._lease_result.emit(generation, "", text)
+                return
+            except Exception as exc:
+                self._lease_result.emit(generation, "", str(exc))
+                return
+            self._lease_result.emit(generation, lease, "")
+
+        threading.Thread(target=run_acquire, name="PartnerLease", daemon=True).start()
         return True
+
+    def _on_lease_result(self, generation: int, lease: str, error: str) -> None:
+        client = self._client
+        if generation < 0:   # Lebenszeichen-Thread: Belegung verloren
+            if -generation == self._lease_gen and self._lease_id:
+                self._lease_id = ""
+                self._lease_gen = 0
+                logger.error("Verbund: Belegung bei %s verloren: %s", self.url, error)
+                self.lease_lost.emit(error)
+            return
+        if generation != self._lease_gen or client is None:
+            if lease and client is not None:   # verspaetet (inzwischen abgebrochen) -> gleich freigeben
+                threading.Thread(target=lambda: _quiet(client.lease_release, lease), daemon=True).start()
+            return
+        if not lease:
+            logger.warning("Verbund: Belegung bei %s abgelehnt: %s", client.base_url, error)
+            self.lease_acquired.emit(False, error)
+            return
+        self._lease_id = lease
+        self._lease_stop = threading.Event()
+        threading.Thread(target=self._heartbeat_loop, args=(client, lease, self._lease_stop, generation),
+                         name="PartnerHeartbeat", daemon=True).start()
+        logger.info("Verbund: Geräte bei %s belegt, Lebenszeichen alle %.0f s", client.base_url, LEASE_RENEW_S)
+        self.lease_acquired.emit(True, "")
+
+    def _heartbeat_loop(self, client: PartnerClient, lease: str, stop: threading.Event, generation: int) -> None:
+        last_ok = time.monotonic()
+        while not stop.wait(LEASE_RENEW_S):
+            try:
+                client.lease_renew(lease)
+                last_ok = time.monotonic()
+                continue
+            except PartnerError as exc:
+                if exc.code == "unknown_lease":
+                    self._lease_lost_from_thread(generation, "Belegung beim Partner abgelaufen")
+                    return
+                problem = error_text(exc.code)
+            except Exception as exc:   # nie den Thread verlieren
+                problem = str(exc)
+            if time.monotonic() - last_ok >= LEASE_TTL_S:
+                self._lease_lost_from_thread(
+                    generation, f"kein Lebenszeichen bestätigt seit {LEASE_TTL_S:.0f} s ({problem})")
+                return
+
+    def _lease_lost_from_thread(self, generation: int, reason: str) -> None:
+        self._lease_result.emit(-generation, "", reason)
+
+    def release_lease(self) -> None:
+        """Belegung aufheben (Ablauf zu Ende/gestoppt). Idempotent."""
+        lease, client = self._lease_id, self._client
+        self._lease_id = ""
+        self._lease_gen = 0
+        self._lease_stop.set()
+        if lease and client is not None:
+            logger.info("Verbund: Belegung bei %s freigegeben", client.base_url)
+            threading.Thread(target=lambda: _quiet(client.lease_release, lease), daemon=True).start()
 
     def all_off(self, reason: str) -> bool:
         """ALLE AUS am Partner (PI-27 a). Eigener Thread, damit es nie hinter Bedienungen wartet.

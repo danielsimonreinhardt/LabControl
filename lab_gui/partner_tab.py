@@ -141,6 +141,10 @@ class PartnerTile(QGroupBox):
             state, tone = tr("verbunden · bedienbar"), "success"
         if tile.get("stale"):
             state += " · " + tr("Werte veraltet")
+        leased = tile.get("leased_by")
+        if isinstance(leased, dict):
+            state += " · " + tr("belegt durch {holder} · {run}", holder=leased.get("holder", "?"),
+                                run=leased.get("run") or tr("Testablauf"))
         self._state.setText(state)
         set_tone(self._state, tone)
         self._render_fields(tile.get("fields") or [])
@@ -352,7 +356,7 @@ class PartnerTab(QWidget):
             self._relayout(force=True)
         self._render_header()
 
-    def _on_action_finished(self, device_id: str, action: str, ok: bool, message: str) -> None:
+    def _on_action_finished(self, _request_id: int, device_id: str, action: str, ok: bool, message: str) -> None:
         tile = self._tiles.get(device_id)
         if tile is not None:
             tile.show_result(action, ok, message)

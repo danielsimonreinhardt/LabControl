@@ -1,6 +1,7 @@
 """Hauptfenster: Dashboard (immer sichtbar, abdockbar in ein eigenes Fenster) + Reiter (Control/Testcase) + Statusleiste."""
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import re
@@ -28,7 +29,9 @@ from PySide6.QtWidgets import (
 
 import app_logging
 import data_store
+import remote_actions
 import system_power
+import verbund_ids
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
@@ -106,6 +109,8 @@ class MainWindow(QMainWindow):
     # demselben Grund wie _dispatch_test_action (Queued Connection in den
     # Worker-Thread).
     _request_all_off = Signal(str)  # reason
+    # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
+    _request_devices_off = Signal(list, str)
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
@@ -272,7 +277,8 @@ class MainWindow(QMainWindow):
         self._remote_status_label.hide()
         self.statusBar().addPermanentWidget(self._remote_status_label)
         self._all_off_button = QPushButton()
-        self._all_off_button.clicked.connect(lambda: self._safe_stop("manual all-off", propagate=True))
+        self._all_off_button.clicked.connect(
+            lambda: self._safe_stop("manual all-off", propagate=True, stop_run=True))
         self.statusBar().addPermanentWidget(self._all_off_button)
         self._style_all_off_button()
 
@@ -399,6 +405,7 @@ class MainWindow(QMainWindow):
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
+        self._request_devices_off.connect(self._worker.devices_off)
         self.control_tab.operation_source.connect(self._worker.set_operation_source)   # PI-15: Preset im Log
         self._worker.all_off_finished.connect(self._on_all_off_finished)
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
@@ -408,11 +415,15 @@ class MainWindow(QMainWindow):
         # im Status-Endpoint bemerkbar (siehe live_state._lock_state).
         self._safety.state_changed.connect(self._live_state.on_safety_state_changed)
 
-    def _safe_stop(self, reason: str, propagate: bool = False) -> None:
+    def _safe_stop(self, reason: str, propagate: bool = False, stop_run: bool = False) -> None:
         """propagate: auch am Verbund-Partner ALLE AUS (PI-27 a) -- fuer ALLE AUS per Knopf, MCP oder
-        Netzwerk, nicht fuer Stop/Fehler eines Testablaufs (der betrifft nur die eigenen Geraete)."""
+        Netzwerk, nicht fuer Stop/Fehler eines Testablaufs (der betrifft nur die eigenen Geraete).
+        stop_run: ein laufender Testablauf wird abgebrochen -- sonst schaltete sein naechster Schritt
+        die gerade abgeschalteten Ausgaenge wieder ein (seit 0.47.0, auch ohne Verbund)."""
         logger.warning("Safe-Stop ausgelöst: %s", reason)
         self._request_all_off.emit(reason)
+        if stop_run and self._test_runner.is_running():
+            self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"))
         if propagate:
             self._partner.all_off(reason)
 
@@ -423,7 +434,24 @@ class MainWindow(QMainWindow):
         self._settings.partner_config_changed.connect(self._on_partner_config)
         self._partner.connection_changed.connect(lambda *_: self._render_partner_chip())
         self._partner.snapshot_changed.connect(lambda *_: self._render_partner_chip())
+        self._partner.snapshot_changed.connect(self._on_partner_snapshot)
         self._partner.all_off_finished.connect(self._on_partner_all_off_finished)
+        # Leitstand (V2): Bedienungen eines Testablaufs, Belegung und deren Verlust
+        self._partner_host_name = ""
+        self._pending_partner_req = 0
+        self._pending_run_steps: list[TestStep] | None = None
+        self._partner.action_finished.connect(self._on_partner_action_finished)
+        self._partner.lease_acquired.connect(self._on_partner_lease_acquired)
+        self._partner.lease_lost.connect(self._on_partner_lease_lost)
+        for sig in (self._test_runner.run_finished, self._test_runner.run_stopped):
+            sig.connect(self._partner.release_lease)
+        self._test_runner.step_failed.connect(lambda *_args: self._partner.release_lease())
+        # Besitzer (V2): Belegungen durch den Partner anzeigen, abgelaufene abschalten
+        self._lease_view: dict[str, str] = {}
+        self._lease_timer = QTimer(self)
+        self._lease_timer.setInterval(250)
+        self._lease_timer.timeout.connect(self._check_leases)
+        self._lease_timer.start()
         self._on_partner_config(self._settings.partner_config)
 
     def _on_partner_config(self, config: dict) -> None:
@@ -432,7 +460,141 @@ class MainWindow(QMainWindow):
         visible = self._partner.enabled
         self.tabs.setTabVisible(self.tabs.indexOf(self.partner_tab), visible)
         self._partner_nav_button.setVisible(visible)
+        self.testcase_tab.set_verbund(app_logging.host_name(), self._partner_host_name, visible)
         self._render_partner_chip()
+
+    # -- Verbund V2: Leitstand (PI-24 a, PI-26 a) ------------------------------
+
+    def _on_partner_snapshot(self, snap) -> None:
+        """Partnergeraete fuer den Testablauf: in die Geraeteauswahl ("Pi · Netzteil 1") und ihre
+        Messwerte in Bedingungen, Pruefungen und Bericht."""
+        if snap is None or not snap.host:
+            return
+        if snap.host != self._partner_host_name:
+            self._partner_host_name = snap.host
+            self.testcase_tab.set_verbund(app_logging.host_name(), snap.host, self._partner.enabled)
+        name = self._partner.name()
+        for tile in snap.tiles:
+            kind, remote_id = tile.get("kind", ""), tile.get("id", "")
+            if not remote_id or kind not in remote_actions.CONTROL_KINDS:
+                continue
+            device_id = verbund_ids.qualify(snap.host, remote_id)
+            label = f"{name} · {tile.get('label') or remote_id}"
+            if not self.testcase_tab.knows_device(device_id, kind, label):
+                self.testcase_tab.on_device_known(kind, device_id, label)
+            if tile.get("stale") or not tile.get("online", True):
+                continue   # alte Werte nicht als frisch melden (Bedingung/Pruefung schlaegt dann fehl)
+            values = {f.get("key"): f.get("value") for f in tile.get("fields", []) if "value" in f}
+            voltage, current = values.get("voltage"), values.get("current")
+            if kind == "psu" and isinstance(voltage, (int, float)) and isinstance(current, (int, float)):
+                cc = any(f.get("key") == "mode" and f.get("text") == "CC" for f in tile.get("fields", []))
+                self._test_runner.on_psu_measurement(device_id, float(voltage), float(current), cc)
+                self._run_recorder.on_psu_measurement(device_id, float(voltage), float(current), cc)
+            elif kind == "load" and isinstance(voltage, (int, float)) and isinstance(current, (int, float)):
+                power = values.get("power")
+                power = float(power) if isinstance(power, (int, float)) else float(voltage) * float(current)
+                self._test_runner.on_load_measurement(device_id, float(voltage), float(current), power)
+                self._run_recorder.on_load_measurement(device_id, float(voltage), float(current), power)
+            elif kind == "hil":
+                ain = [values.get(f"ain{n}") for n in range(1, 5)]
+                if all(isinstance(v, (int, float)) for v in ain):
+                    self._test_runner.on_hil_analog_input(device_id, [float(v) for v in ain])
+                inputs = [values.get(f"in{n}") for n in range(1, 9)]
+                if all(isinstance(v, (int, float)) for v in inputs):
+                    self._test_runner.on_hil_digital_state(device_id, [bool(v) for v in inputs], [])
+
+    def _partner_steps(self, steps: list[TestStep]) -> tuple[list[TestStep], dict[str, str], str]:
+        """Schritte fuer den Lauf: eigener Rechnername aufgeloest. Liefert (Schritte, Partnergeraete mit
+        Aktionen {ID beim Partner: kind}, Fehlertext oder "")."""
+        own, partner = app_logging.host_name(), self._partner_host_name
+        local_ids = {d for ids in self._online_devices.values() for d in ids}
+        result: list[TestStep] = []
+        devices: dict[str, str] = {}
+        for step in steps:
+            step = dataclasses.replace(step)
+            step.device_id = verbund_ids.localize(step.device_id, own, partner, local_ids)
+            step.cond_device_id = verbund_ids.localize(step.cond_device_id, own, partner, local_ids)
+            result.append(step)
+            if not step.enabled or step.step_type != "action":
+                continue
+            remote = verbund_ids.partner_device(step.device_id, partner)
+            if remote is None:
+                continue
+            if step.action not in remote_actions.REMOTE_ACTIONS.get(step.device_kind, {}):
+                return result, {}, tr("Aktion {action} geht über den Verbund nicht ({device})",
+                                      action=step.action, device=step.device_id)
+            devices[remote] = step.device_kind
+        for step in result:
+            for device_id in (step.device_id, step.cond_device_id):
+                host, _rest = verbund_ids.split(device_id)
+                if host is not None and not verbund_ids.same_host(host, partner) and step.enabled:
+                    return result, {}, tr("Gerät {device} gehört zu keinem Rechner im Verbund", device=device_id)
+        return result, devices, ""
+
+    def _on_partner_lease_acquired(self, ok: bool, message: str) -> None:
+        steps, self._pending_run_steps = self._pending_run_steps, None
+        if steps is None:
+            if ok:
+                self._partner.release_lease()   # Lauf inzwischen verworfen
+            return
+        if not ok:
+            self._refuse_run(tr("Geräte beim {name} nicht belegt: {reason}", name=self._partner.name(),
+                                reason=tr(message)))
+            return
+        self._start_run(steps)
+
+    def _on_partner_lease_lost(self, reason: str) -> None:
+        if self._test_runner.is_running():
+            self._test_runner.abort(tr("Verbund: Verbindung zu {name} verloren ({reason}) – Ablauf abgebrochen",
+                                       name=self._partner.name(), reason=tr(reason)))
+
+    def _on_partner_action_finished(self, request_id: int, _device_id: str, _action: str,
+                                    ok: bool, message: str) -> None:
+        if not request_id or request_id != self._pending_partner_req:
+            return
+        self._pending_partner_req = 0
+        self._test_runner.on_action_completed(
+            ok, "" if ok else tr("{name}: {message}", name=self._partner.name(), message=tr(message)), 0.0)
+
+    def _send_partner_test_action(self, remote_id: str, device_id: str, kind: str, action: str,
+                                  value: float, channel: int) -> None:
+        definition = remote_actions.REMOTE_ACTIONS.get(kind, {}).get(action)
+        if definition is None:
+            self._test_runner.on_action_completed(
+                False, tr("Aktion {action} geht über den Verbund nicht ({device})", action=action, device=device_id),
+                0.0)
+            return
+        label = self.testcase_tab.device_label(device_id) or device_id
+        request_id = self._partner.send_action(
+            remote_id, action, value if definition.needs_value else None,
+            channel if definition.channels else None, label)
+        if not request_id:
+            self._test_runner.on_action_completed(False, tr("Verbund aus"), 0.0)
+            return
+        self._pending_partner_req = request_id
+
+    # -- Verbund V2: Besitzer (PI-25 a, PI-26 a) -------------------------------
+
+    def _check_leases(self) -> None:
+        """Alle 250 ms: Belegungen ohne Lebenszeichen abschalten, Kacheln sperren/freigeben."""
+        leases = self._live_state.leases
+        for lease in leases.pop_expired():
+            names = ", ".join(self._device_labels.get(d, d) for d in lease.devices)
+            logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden abgeschaltet: %s",
+                         lease.holder, lease.ttl_s, names)
+            self._request_devices_off.emit(list(lease.devices),
+                                           f"Verbund-Lebenszeichen fehlt ({lease.holder_name()})")
+            self.statusBar().showMessage(
+                tr("Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}",
+                   holder=lease.holder_name(), devices=names), 30000)
+        view = {device_id: tr("belegt durch {holder} · {run}", holder=lease.holder_name(),
+                              run=lease.run or tr("Testablauf"))
+                for device_id, lease in leases.snapshot().items()}
+        for device_id in set(self._lease_view) - set(view):
+            self.control_tab.set_lease(device_id, "")
+        for device_id, text in view.items():
+            self.control_tab.set_lease(device_id, text)
+        self._lease_view = view
 
     def _render_partner_chip(self) -> None:
         chip = self._partner_chip
@@ -1008,7 +1170,7 @@ class MainWindow(QMainWindow):
         # Derselbe Weg wie der ALLE-AUS-Knopf. Ohne die Pruefungen von oben --
         # der Notaus geht immer. Kommt es vom Verbund-Partner, nicht zurueckreichen (er hat es
         # selbst ausgeloest); von MCP oder einem anderen Client schon (PI-27 a).
-        self._safe_stop(f"remote all-off ({client})", propagate=not is_verbund_client(client))
+        self._safe_stop(f"remote all-off ({client})", propagate=not is_verbund_client(client), stop_run=True)
 
     def _on_share_control_toggled(self, active: bool) -> None:
         """Hauptschalter "Fernsteuerung aktiv" im Netzwerk-Reiter."""
@@ -1488,6 +1650,29 @@ class MainWindow(QMainWindow):
                 tr("Testlauf gesperrt: Sicherheitsabschaltung zuerst quittieren"), 5000
             )
             return
+        if self._test_runner.is_running() or self._pending_run_steps is not None:
+            return
+        # Verbund (PI-24 a): Partnergeraete erst belegen (PI-25 a), dann starten
+        steps, partner_devices, problem = self._partner_steps(steps)
+        if problem:
+            self._refuse_run(problem)
+            return
+        if partner_devices:
+            if not self._partner.is_connected():
+                self._refuse_run(tr("Verbund-Partner {name} nicht verbunden", name=self._partner.name()))
+                return
+            self._pending_run_steps = steps
+            self.testcase_tab.show_message(tr("Belege Geräte beim {name} …", name=self._partner.name()))
+            self._partner.acquire_lease(sorted(partner_devices), self.testcase_tab.current_testcase_name())
+            return
+        self._start_run(steps)
+
+    def _refuse_run(self, message: str) -> None:
+        logger.warning("Testlauf nicht gestartet: %s", message)
+        self.testcase_tab.show_message(tr("Nicht gestartet: {reason}", reason=message), "error")
+        self.statusBar().showMessage(tr("Nicht gestartet: {reason}", reason=message), 10000)
+
+    def _start_run(self, steps: list[TestStep]) -> None:
         self.testcase_tab.on_run_started()
         self._run_recorder.begin(steps, self.testcase_tab.current_testcase_name())
         step_device_ids = self._resolve_step_device_ids(steps)
@@ -1568,6 +1753,11 @@ class MainWindow(QMainWindow):
     def _on_test_execute_action(
         self, device_id: str, kind: str, action: str, value: float, channel: int
     ) -> None:
+        # Verbund (PI-24 a): Partnergeraet -> ueber die Freigabe des Partners, mit Belegung
+        remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
+        if remote_id is not None:
+            self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
+            return
         resolved_id, error = self._resolve_device_id(kind, device_id)
         if resolved_id is None:
             self._test_runner.on_action_completed(False, error, 0.0)

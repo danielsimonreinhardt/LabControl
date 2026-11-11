@@ -238,6 +238,14 @@ class TestRunner(QObject):
         self._vars = {}
         self.run_stopped.emit()
 
+    def abort(self, message: str) -> None:
+        """Bricht einen laufenden Ablauf mit Fehlermeldung ab (wie ein fehlgeschlagener Schritt):
+        ALLE AUS waehrend des Laufs, Verbindungsverlust zum Verbund-Partner (PI-26 a)."""
+        if self._running:
+            self._timer.stop()
+            self._arb_timer.stop()
+            self._fail_at(max(self._index, 0), message)
+
     # -- Messwert-Cache (fuer while/if-Bedingungen) ---------------------------
 
     @Slot(str, float, float, float)

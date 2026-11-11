@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from lease_table import LEASE_HEADER
+
 PEER_HEADER = "X-LabControl-Peer"
 DEFAULT_PORT = 8420
 TIMEOUT_S = 4.0
@@ -80,12 +82,14 @@ class PartnerClient:
         self._own_name = own_name
 
     def _request(self, method: str, path: str, body: dict | None = None,
-                 timeout: float = TIMEOUT_S) -> tuple[int, dict]:
+                 timeout: float = TIMEOUT_S, lease: str = "") -> tuple[int, dict]:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(self.base_url + path, data=data, method=method)
         if self._token:
             request.add_header("Authorization", f"Bearer {self._token}")
         request.add_header(PEER_HEADER, self._own_name)
+        if lease:
+            request.add_header(LEASE_HEADER, lease)
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
@@ -128,16 +132,34 @@ class PartnerClient:
         )
 
     def action(self, device_id: str, action: str, value: float | None = None,
-               channel: int | None = None) -> dict:
+               channel: int | None = None, lease: str = "") -> dict:
         """Eine Aktion am Partnergeraet. Liefert die Antwort ({"ok": True, ...} oder bei 202
-        {"ok": None, "status": "pending"}); Abweisungen als PartnerError."""
+        {"ok": None, "status": "pending"}); Abweisungen als PartnerError. `lease`: Belegungs-ID,
+        wenn das Geraet von dieser Instanz belegt ist (Pflicht fuer belegte Geraete)."""
         body: dict = {"action": action}
         if value is not None:
             body["value"] = value
         if channel is not None:
             body["channel"] = channel
-        _, payload = self._request("POST", f"/api/v1/tiles/{device_id}/actions", body, ACTION_TIMEOUT_S)
+        _, payload = self._request("POST", f"/api/v1/tiles/{device_id}/actions", body, ACTION_TIMEOUT_S,
+                                   lease=lease)
         return payload
+
+    # -- Belegung (PI-25 a, PI-26 a; Gegenstueck: share_api._lease_*) ------------------
+
+    def lease_acquire(self, devices: list[str], run: str, ttl_s: float) -> str:
+        """Belegt die Geraete beim Partner; liefert die Belegungs-ID."""
+        _, payload = self._request("POST", "/api/v1/leases", {"devices": devices, "run": run, "ttl_s": ttl_s})
+        lease = payload.get("lease")
+        if not isinstance(lease, str) or not lease:
+            raise PartnerError("bad_response", "keine Belegungs-ID")
+        return lease
+
+    def lease_renew(self, lease: str) -> None:
+        self._request("POST", f"/api/v1/leases/{lease}/renew", {}, timeout=2.0)
+
+    def lease_release(self, lease: str) -> None:
+        self._request("POST", f"/api/v1/leases/{lease}/release", {})
 
     def all_off(self) -> dict:
         _, payload = self._request("POST", "/api/v1/all-off", {}, ALL_OFF_TIMEOUT_S)

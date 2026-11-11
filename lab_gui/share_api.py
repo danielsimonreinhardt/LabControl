@@ -64,6 +64,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import remote_actions
 from field_catalog import field_info, field_order
+from lease_table import DEFAULT_TTL_S as DEFAULT_LEASE_TTL_S
+from lease_table import LEASE_HEADER, LeaseConflict
+from lease_table import MAX_DEVICES as MAX_LEASE_DEVICES
 from share_render import render_display, render_index, render_text
 
 from scope_api.base import ScopeError
@@ -288,6 +291,8 @@ def _tile_detail(device_id: str, entry: dict, snapshot: dict) -> dict:
         "actions": remote_actions.describe(tile["kind"], entry.get("ratings")) if tile["control"] else [],
         "control_available": _control_block_reason(snapshot, device_id) == "",
         "control_blocked": _control_block_reason(snapshot, device_id) if tile["control"] else "",
+        # Belegt durch einen Verbund-Leitstand (PI-25 a): {"holder", "run"}, sonst nicht vorhanden
+        **({"leased_by": snapshot["leases"][device_id]} if device_id in snapshot.get("leases", {}) else {}),
         "fields": fields,
     })
     return tile
@@ -462,7 +467,8 @@ def _result_response(result: RemoteResult, ok_payload: dict) -> Response:
     return _json(status, {"v": API_VERSION, "ok": False, "error": code, **extra}, headers)
 
 
-def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: str) -> Response:
+def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: str,
+                 leases=None, lease_header: str = "") -> Response:
     if executor is None:
         return _error(501, "not_implemented")
     entry = visible_tiles(snapshot).get(device_id)
@@ -483,6 +489,10 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
         return _error(409, "locked", lock=snapshot.get("lock", "free"))
     if reason == "device_offline":
         return _error(409, reason)
+    # Belegt (PI-25 a): nur der Leitstand mit seiner Belegungs-ID darf bedienen.
+    lease = leases.holder_of(device_id) if leases is not None else None
+    if lease is not None and not hmac.compare_digest(lease_header, lease.lease_id):
+        return _error(409, "leased", holder=lease.holder_name(), run=lease.run)
 
     kind = entry.get("kind", "")
     action = payload.get("action")
@@ -725,9 +735,18 @@ def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict,
 # -- Dispatch ---------------------------------------------------------------
 
 def _post_route(path: str) -> tuple[str, str] | None:
-    """Erkennt die schreibenden Routen: ("all_off", "") oder ("action", id)."""
+    """Erkennt die schreibenden Routen: ("all_off", ""), ("action", id), ("lease", ""),
+    ("lease_renew", lease_id) oder ("lease_release", lease_id)."""
     if path == f"{API_PREFIX}/all-off":
         return "all_off", ""
+    if path == f"{API_PREFIX}/leases":
+        return "lease", ""
+    lease_prefix = f"{API_PREFIX}/leases/"
+    if path.startswith(lease_prefix):
+        lease_id, _, verb = path[len(lease_prefix):].partition("/")
+        if lease_id and verb in ("renew", "release"):
+            return f"lease_{verb}", lease_id
+        return None
     prefix, suffix = f"{API_PREFIX}/tiles/", "/actions"
     if path.startswith(prefix) and path.endswith(suffix) and len(path) > len(prefix) + len(suffix):
         device_id = path[len(prefix):-len(suffix)]
@@ -740,7 +759,8 @@ _GET_ONLY_PATHS = ("/", "/display", f"{API_PREFIX}/status", f"{API_PREFIX}/tiles
                    f"{API_PREFIX}/values")
 
 
-def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor, client: str) -> Response:
+def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor, client: str,
+                   leases=None) -> Response:
     route = _post_route(path)
     if route is None:
         # Erst die Route, dann der Token: ein POST auf einen Lese-Pfad ist
@@ -758,7 +778,59 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
     kind, device_id = route
     if kind == "all_off":
         return _all_off(executor, client)
-    return _tile_action(snapshot, device_id, body, executor, client)
+    if kind.startswith("lease"):
+        if leases is None:
+            return _error(501, "not_implemented")
+        if kind == "lease":
+            return _lease_acquire(snapshot, body, leases, client)
+        return _lease_renew_release(kind, device_id, leases, client)
+    return _tile_action(snapshot, device_id, body, executor, client,
+                        leases=leases, lease_header=header_get(LEASE_HEADER) or "")
+
+
+# -- Belegung durch den Verbund-Partner (PI-25 a, PI-26 a; lease_table.py) ---------
+
+def _lease_acquire(snapshot: dict, body: bytes, leases, client: str) -> Response:
+    """POST /api/v1/leases {"devices": [...], "run": "...", "ttl_s": 3}: dieselben Huerden wie das
+    Bedienen (Freigabe Steuern, Hauptschalter, Sperre, online) fuer JEDES Geraet -- wer etwas belegt,
+    muss es auch bedienen duerfen."""
+    payload = _parse_body(body)
+    devices = payload.get("devices") if payload else None
+    if (not isinstance(devices, list) or not devices or len(devices) > MAX_LEASE_DEVICES
+            or not all(isinstance(d, str) and d for d in devices)):
+        return _error(400, "invalid_body", max_devices=MAX_LEASE_DEVICES)
+    run = payload.get("run") if isinstance(payload.get("run"), str) else ""
+    ttl = payload.get("ttl_s", DEFAULT_LEASE_TTL_S)
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not math.isfinite(ttl):
+        return _error(400, "invalid_value")
+    visible = visible_tiles(snapshot)
+    for device_id in devices:
+        if device_id not in visible:
+            return _error(404, "unknown_tile", device=device_id)
+        reason = _control_block_reason(snapshot, device_id)
+        if reason:
+            status = 409 if reason in ("locked", "device_offline") else 403
+            return _error(status, reason, device=device_id)
+    try:
+        lease = leases.acquire(devices, client, run, float(ttl))
+    except LeaseConflict as conflict:
+        return _error(409, "leased", device=conflict.device_id, holder=conflict.lease.holder_name(),
+                      run=conflict.lease.run)
+    logger.warning("Verbund: belegt durch %s (%s): %s", client, run or "-", ", ".join(lease.devices))
+    return _json(200, {"v": API_VERSION, "ok": True, "lease": lease.lease_id, "ttl_s": lease.ttl_s,
+                       "devices": list(lease.devices)})
+
+
+def _lease_renew_release(kind: str, lease_id: str, leases, client: str) -> Response:
+    if kind == "lease_renew":
+        lease = leases.renew(lease_id)
+        if lease is None:
+            return _error(404, "unknown_lease")
+        return _json(200, {"v": API_VERSION, "ok": True, "ttl_s": lease.ttl_s})
+    lease = leases.release(lease_id)
+    if lease is not None:
+        logger.warning("Verbund: Belegung durch %s freigegeben: %s", client, ", ".join(lease.devices))
+    return _json(200, {"v": API_VERSION, "ok": True, "released": lease is not None})
 
 
 def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
@@ -798,7 +870,8 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
             return _error(500, "internal_error")
 
     if method == "POST":
-        return _dispatch_post(path, header_get, snapshot, body, executor, client)
+        return _dispatch_post(path, header_get, snapshot, body, executor, client,
+                              leases=getattr(state, "leases", None))
 
     denied = check_auth(snapshot, header_get, query)
     if denied is not None:

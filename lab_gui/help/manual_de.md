@@ -663,6 +663,25 @@ oder das Netzwerk und eine Sicherheitsabschaltung schalten auch beim Partner
 alles ab. Stop oder Fehler eines Testablaufs betreffen nur den eigenen Rechner.
 Die Statuszeile zeigt den Verbund als Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“
 (getrennt). Beim Beenden der App wird am Partner nichts abgeschaltet.
+ALLE AUS bricht außerdem einen laufenden Testablauf ab, damit dessen nächster
+Schritt die Ausgänge nicht wieder einschaltet.
+
+**Gemeinsame Testabläufe.** Im Testablauf stehen die Geräte des Partners in der
+Geräteauswahl („Pi · Netzteil 1 (Netzteil)“) neben den eigenen; Bedingungen und
+Prüfungen können ihre Messwerte nutzen (Netzteil, Last, microHIL; etwa im
+Sekundentakt). Der Rechner, an dem der Ablauf gestartet wird, führt ihn aus
+(Leitstand). Beim Start **belegt** er die Partnergeräte, die der Ablauf bedient:
+Am Partner zeigen deren Kacheln „belegt durch <Rechner> · <Ablauf>“ und sind
+gesperrt (Handbedienung, ALLE AUS und Sicherheitsabschaltung bleiben), und
+Bedienungen von anderer Stelle weist er ab. Der Leitstand meldet sich jede
+Sekunde; **bleibt das 3 Sekunden aus** (Netz weg, Absturz), schaltet der Partner
+die belegten Geräte ab, und der Leitstand bricht den Ablauf ab. Nach dem Ende
+des Ablaufs ist die Belegung aufgehoben. Pi und PC deshalb per Kabel verbinden,
+nicht über WLAN. Über den Verbund gehen die Bedienungen aus der Partnerkachel
+(Sollwerte, Ausgänge, Kanäle), nicht aber Arbiträrsignale, Leseschritte und
+CAN-Botschaften – solche Abläufe starten mit einer Meldung gar nicht erst.
+Gespeichert wird mit Rechnernamen („@raspberrypi/psu:0001“), so meint dieselbe
+Datei an beiden Rechnern dieselben Geräte.
 
 ---
 

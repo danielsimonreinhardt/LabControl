@@ -7,6 +7,7 @@ run_requested/stop_requested angesteuert wird.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -46,7 +47,9 @@ from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
 from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
+import app_logging
 import data_store
+import verbund_ids
 from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
@@ -425,6 +428,8 @@ class TestcaseTab(QWidget):
         self._current_path: Path | None = None
         # Inhalt der Datei beim Laden/Speichern (SHA-256), fuer die Konfliktpruefung (PI-30 a)
         self._file_digest: str | None = None
+        # Verbund (set_verbund): eigener Rechnername, Partner, Verbund an
+        self._verbund: tuple[str, str, bool] = (app_logging.host_name(), "", False)
         self._report_available = False
 
         # device_id -> (kind, label) fuer alle in dieser Session bekannten Geraete;
@@ -800,6 +805,18 @@ class TestcaseTab(QWidget):
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         self._known_devices[device_id] = (kind, label)
         self._refresh_device_combos()
+
+    def knows_device(self, device_id: str, kind: str, label: str) -> bool:
+        """Ist das Geraet schon so bekannt? (MainWindow meldet Partnergeraete nur bei Aenderung.)"""
+        return self._known_devices.get(device_id) == (kind, label)
+
+    def device_label(self, device_id: str) -> str:
+        entry = self._known_devices.get(device_id)
+        return entry[1] if entry else ""
+
+    def show_message(self, text: str, kind: str = "info") -> None:
+        """Meldung in der Statuszeile des Reiters (kind: "info" | "success" | "error")."""
+        self._set_status(text, kind)
 
     def forget_device(self, device_id: str) -> None:
         """Entfernt ein Geraet aus der Geraete-Auswahl der Testablauf-Zeilen
@@ -2106,12 +2123,53 @@ class TestcaseTab(QWidget):
         if path is None:
             return
         try:
-            save_steps(self.steps(), path, self._known_devices)
+            file_steps, known = self._steps_for_file(self.steps())
+            save_steps(file_steps, path, known)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
             return
         self._current_path = path
         self._file_digest = _file_digest(path)
+
+    # -- Verbund Pi + PC (PI-24 a, verbund_ids.py) -----------------------------------
+
+    def set_verbund(self, own_host: str, partner_host: str, enabled: bool) -> None:
+        """Von MainWindow: eigener Rechnername, Rechnername des Partners ("" = unbekannt), Verbund an?"""
+        self._verbund = (own_host, partner_host, enabled)
+
+    def _steps_for_file(self, steps: list[TestStep]) -> tuple[list[TestStep], dict]:
+        """Mit aktivem Verbund bekommen auch eigene Geraete den eigenen Rechnernamen, damit die Datei
+        am anderen Rechner dasselbe meint. Liefert (Schritte, Geraetenamen) fuer die Datei."""
+        own, _partner, enabled = self._verbund
+        if not enabled or not own:
+            return steps, self._known_devices
+        known = dict(self._known_devices)
+        result = []
+        for step in steps:
+            step = dataclasses.replace(step)
+            for attr in ("device_id", "cond_device_id"):
+                old = getattr(step, attr)
+                new = verbund_ids.qualify_local(old, own)
+                if new != old and old in self._known_devices:
+                    known[new] = self._known_devices[old]
+                setattr(step, attr, new)
+            result.append(step)
+        return result, known
+
+    def _localize_from_file(self, steps: list[TestStep], file_devices: dict) -> dict:
+        """Rechnernamen aus der Datei aufloesen (aendert `steps`): eigener Rechner -> eigene ID,
+        Partner bleibt "@Partner/ID". Liefert die Geraetenamen der Datei mit denselben IDs."""
+        own, partner, _enabled = self._verbund
+        local_ids = {d for d in self._known_devices if not verbund_ids.is_qualified(d)}
+        mapping: dict[str, str] = {}
+        for step in steps:
+            for attr in ("device_id", "cond_device_id"):
+                old = getattr(step, attr)
+                new = verbund_ids.localize(old, own, partner, local_ids)
+                if new != old:
+                    mapping[old] = new
+                    setattr(step, attr, new)
+        return {mapping.get(device_id, device_id): entry for device_id, entry in file_devices.items()}
 
     # -- PI-30 a: Konfliktpruefung beim Speichern ----------------------------------
     # Pi und PC teilen sich den Ordner der Ablaeufe (PI-12 b). Wurde die geoeffnete Datei seither
@@ -2173,6 +2231,7 @@ class TestcaseTab(QWidget):
         self._current_path = path
         self._file_digest = _file_digest(path)
         self._dismiss_hint()
+        file_devices = self._localize_from_file(steps, file_devices)
         self._report_remapped(remap_devices(steps, file_devices, self._known_devices), file_devices)
 
         self._table.setRowCount(0)
@@ -2322,7 +2381,8 @@ class TestcaseTab(QWidget):
         if path.suffix != ".json":
             path = path.with_suffix(".json")
         try:
-            save_block(block_steps, name, path, self._known_devices)
+            file_steps, known = self._steps_for_file(block_steps)
+            save_block(file_steps, name, path, known)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
 
@@ -2340,6 +2400,7 @@ class TestcaseTab(QWidget):
             return
         if not block_steps:
             return
+        file_devices = self._localize_from_file(block_steps, file_devices)
         self._report_remapped(remap_devices(block_steps, file_devices, self._known_devices), file_devices)
 
         index = self._insert_at_selection()

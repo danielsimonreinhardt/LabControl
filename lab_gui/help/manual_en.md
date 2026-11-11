@@ -634,7 +634,26 @@ limits, manual control and the safety shutdown are always checked there.
 the network and a safety shutdown also switch everything off at the partner.
 Stopping a test sequence or a failed step only affects the own computer. The
 status bar shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
-(disconnected). Closing the app switches nothing off at the partner.
+(disconnected). Closing the app switches nothing off at the partner. ALL OFF
+also aborts a running test sequence, so that its next step does not switch the
+outputs back on.
+
+**Shared test sequences.** In the test sequence editor the partner's devices
+appear in the device selection ("Pi · Power supply 1 (PSU)") next to the own
+ones; conditions and checks can use their readings (PSU, load, microHIL; about
+once per second). The computer that starts the sequence runs it (control
+station). On start it **reserves** the partner devices the sequence operates:
+at the partner their tiles show "reserved by <computer> · <sequence>" and are
+locked (manual control, ALL OFF and the safety shutdown stay available), and
+operations from anywhere else are rejected. The control station reports every
+second; **if that stops for 3 seconds** (network gone, crash), the partner
+switches the reserved devices off and the control station aborts the sequence.
+After the sequence ends the reservation is lifted. Connect Pi and PC by cable,
+not via Wi-Fi. The link carries the operations of the partner tile (setpoints,
+outputs, channels), but not arbitrary waveforms, read steps or CAN messages –
+such sequences do not start and say why. Files are saved with computer names
+("@raspberrypi/psu:0001"), so the same file means the same devices on both
+computers.
 
 ---
 

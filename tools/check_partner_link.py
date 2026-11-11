@@ -31,6 +31,9 @@ os.environ.pop("LABCONTROL_NETWORK_DIR", None)
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # "⇄" auch in einer cp1252-Konsole
+
 FAILURES: list[str] = []
 TOKEN_B = "partner-token-B"
 

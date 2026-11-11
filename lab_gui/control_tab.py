@@ -68,7 +68,7 @@ from panel_color import PanelColorButton, apply_panel_tint
 from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
 from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from theme import METRICS, Palette, ThemeManager, form_control_qss
+from theme import METRICS, Palette, ThemeManager, form_control_qss, set_tone
 from touch_keypad import attach_hex_keypad, set_apply_partner
 from touch_ui import touch_label
 from theme import current as current_palette
@@ -2595,6 +2595,9 @@ class ControlTab(QWidget):
     def __init__(self, presets: PresetStore) -> None:
         super().__init__()
         self._presets = presets
+        # Belegung durch den Verbund-Leitstand (set_lease): Hinweis je Kachel und die dafuer gesperrten Widgets
+        self._lease_banners: dict[str, QLabel] = {}
+        self._lease_locked: dict[str, list[QWidget]] = {}
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -3314,6 +3317,54 @@ class ControlTab(QWidget):
         }
         self._presets.save(slot, devices)
 
+    # -- Belegung durch den Verbund-Leitstand (PI-25 a) ------------------------------
+
+    def set_lease(self, device_id: str, text: str) -> None:
+        """text: "belegt durch PC · Ablauf" sperrt die Kachel fuer die Bedienung vor Ort und zeigt den
+        Hinweis oben in der Kachel; "" hebt die Sperre auf. Der Schalter "Handbedienung" bleibt
+        bedienbar (ALLE AUS und Sicherheitsabschaltung sitzen ohnehin nicht in der Kachel)."""
+        section = self._sections.get(device_id)
+        if section is None:
+            return
+        banner = self._lease_banners.get(device_id)
+        if text:
+            if banner is None:
+                banner = QLabel()
+                banner.setWordWrap(True)
+                set_tone(banner, "warning", strong=True)
+                layout = section.layout()
+                if isinstance(layout, QBoxLayout):
+                    layout.insertWidget(0, banner)
+                self._lease_banners[device_id] = banner
+            banner.setText("⇄ " + text)
+            banner.show()
+            disabled = self._lease_locked.setdefault(device_id, [])
+            keep = getattr(section, "_manual_button", None)
+            # Wird regelmaessig erneut aufgerufen (MainWindow, 250 ms): Zustandsmeldungen eines Geraets
+            # koennen Knoepfe der Kachel wieder freischalten -- die Sperre zieht dann nach.
+            # findChildren nimmt in PySide6 nur EINE Klasse -- deshalb QWidget und hier filtern
+            for widget in section.findChildren(QWidget):
+                if not isinstance(widget, (QAbstractButton, QAbstractSpinBox, QComboBox, QLineEdit)):
+                    continue
+                if widget is keep or not widget.isEnabled():
+                    continue
+                widget.setEnabled(False)
+                if widget not in disabled:
+                    disabled.append(widget)
+            return
+        if banner is not None:
+            banner.hide()
+        for widget in self._lease_locked.pop(device_id, []):
+            try:
+                widget.setEnabled(True)
+            except RuntimeError:
+                pass   # Widget inzwischen geloescht
+
+    def lease_text(self, device_id: str) -> str:
+        """Fuer Pruefungen: angezeigter Belegungshinweis ("" = frei)."""
+        banner = self._lease_banners.get(device_id)
+        return banner.text() if banner is not None and not banner.isHidden() else ""
+
     def _on_preset_load(self, slot: int) -> None:
         # Herkunft "Preset" fuer die Bedienungen im Log (PI-15); die Bedienungen und diese Meldung laufen
         # in derselben Reihenfolge ueber die Warteschlange des Worker-Threads.
@@ -3321,6 +3372,8 @@ class ControlTab(QWidget):
         try:
             for device_id, state in self._presets.devices(slot).items():
                 section = self._sections.get(device_id)
+                if device_id in self._lease_locked:
+                    continue   # vom Verbund-Leitstand belegt (PI-25 a): auch kein Preset
                 if section is not None and section.isVisible():
                     section.apply_state(state)
         finally:

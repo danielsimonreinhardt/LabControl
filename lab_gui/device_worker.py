@@ -1841,6 +1841,31 @@ class DeviceWorker(QObject):
                 failures.append(device_id)
         self.all_off_finished.emit(";".join(failures))
 
+    @Slot(list, str)
+    def devices_off(self, device_ids: list, reason: str) -> None:
+        """Wie all_outputs_off, aber nur fuer die genannten Geraete -- fuer abgelaufene Belegungen des
+        Verbund-Partners (PI-26 a: Lebenszeichen fehlt -> die belegten Geraete in den sicheren Zustand).
+        Meldet wie all_outputs_off ueber all_off_finished (fehlgeschlagene Geraete)."""
+        logger.warning("Abschalten einzelner Geraete (reason=%s): %s", reason, ", ".join(device_ids))
+        failures: list[str] = []
+        kills = (
+            (self._loads, self._kill_load), (self._psus, lambda d, p: self._kill_psu(d, p, release=False)),
+            (self._hils, self._kill_hil), (self._fgs, self._kill_fg),
+            (self._battsims, lambda d, n: self._kill_battsim(d, n) or True),
+        )
+        for device_id in device_ids:
+            for devices, kill in kills:
+                device = devices.get(device_id)
+                if device is None:
+                    continue
+                try:
+                    if not kill(device_id, device):
+                        failures.append(device_id)
+                except Exception:  # noqa: BLE001 -- Abschalten darf nie haengenbleiben
+                    logger.exception("Abschalten: unerwarteter Fehler bei %s", device_id)
+                    failures.append(device_id)
+        self.all_off_finished.emit(";".join(failures))
+
     def _kill_battsim(self, device_id: str, node: BattSim) -> None:
         """Ausgang sperren (OUTPUT=1 -> REMOTE/STOP, alle Zellen gebrueckt).
         Die Fernsteuerung bleibt an und es wird weiter zyklisch gesendet --

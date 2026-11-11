@@ -7,6 +7,35 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Verbund Pi + PC, Stufe V2: gemeinsame Testabläufe mit Belegung und Lebenszeichen (0.47.0, Entscheidungen
+  PI-24 a, PI-25 a, PI-26 a, 11.11.2026).**
+  - Leitstand (PI-24 a): Partnergeräte stehen in der Geräteauswahl des Testablaufs („Pi · Netzteil 1“, ID
+    `@<Rechner>/<ID>`, `verbund_ids.py`); ihre Messwerte (Netzteil, Last, microHIL) kommen aus der Abfrage im
+    Sekundentakt in Bedingungen, Pass/Fail-Prüfungen und Bericht. Ein Schritt am Partnergerät geht über die Freigabe
+    des Partners und wartet auf dessen Bestätigung. Nicht über den Verbund: Arbiträrsignal, Leseschritte, CAN --
+    solche Abläufe starten mit Meldung nicht, ebenso ohne Verbindung zum Partner.
+  - Speichern mit aktivem Verbund schreibt auch eigene Geräte mit Rechnernamen; Laden löst den eigenen Rechnernamen
+    auf, ein unbekannter Rechner fällt auf ein gleichnamiges eigenes Gerät zurück (umgesteckt).
+  - Belegung (PI-25 a): Beim Start belegt der Leitstand die Partnergeräte, die der Ablauf bedient (`POST
+    /api/v1/leases`, `lease_table.py`; dieselben Hürden wie das Bedienen). Beim Besitzer: Kachel gesperrt mit Hinweis
+    „belegt durch <Rechner> · <Ablauf>“ (Handbedienung bleibt), kein Preset, Bedienungen anderer Aufrufer -> 409
+    `leased`; die Belegung steht als `leased_by` in der Kachel der Freigabe. Freigabe am Ende des Laufs.
+  - Lebenszeichen (PI-26 a): Leitstand verlängert jede Sekunde; ohne Verlängerung 3 s lang schaltet der Besitzer die
+    belegten Geräte ab (neuer Worker-Slot `devices_off`, wie ALLE AUS je Gerät) und meldet es; der Leitstand bricht
+    nach 3 s ohne bestätigtes Lebenszeichen den Lauf ab.
+  - Mock-verifiziert: neue Prüfung `tools/check_partner_v2.py` mit zwei Hauptfenstern (Besitzer „pi-sim“ +
+    Leitstand): Belegungstabelle, Editor/Speichern/Laden, Lauf mit Partner-Netzteil inkl. Prüfung auf dessen
+    Messwert, Kachel gesperrt (Sollwert/Ausgang aus, Handbedienung frei), fremde Bedienung 409, Freigabe nach dem
+    Ende, Ablehnung nicht unterstützter Aktionen, ALLE AUS bricht ab, Netz weg: Besitzer schaltet nach 3 s ab und
+    Leitstand bricht nach 3 s ab.
+
+### Geändert
+- **ALLE AUS bricht einen laufenden Testablauf ab (0.47.0).** Bisher schaltete der Knopf (und ALLE AUS über
+  MCP/Netzwerk) nur die Ausgänge ab, der Ablauf lief weiter, und sein nächster Schritt konnte sie wieder
+  einschalten. Jetzt endet der Lauf mit „ALLE AUS – Ablauf abgebrochen“. Gefunden beim Verbund V2: ALLE AUS vom
+  Partner muss einen gemeinsamen Ablauf beenden.
+
+### Hinzugefügt
 - **Testablauf speichern: Konfliktprüfung (0.46.0, Entscheidung PI-30 a, 11.11.2026).** Pi und PC teilen sich den
   Ordner der Abläufe (PI-12 b). Wurde die geöffnete Datei seit dem Laden/letzten Speichern anderswo geändert (Vergleich
   über den Inhalt, SHA-256 -- Änderungszeiten sind auf Netzlaufwerken zu ungenau), fragt „Speichern“ nach:

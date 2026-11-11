@@ -569,5 +569,19 @@
   "Überschreiben": "Overwrite",
   "Als Kopie speichern": "Save as copy",
   " (Kopie)": " (copy)",
-  " (Kopie {n})": " (copy {n})"
+  " (Kopie {n})": " (copy {n})",
+  "ALLE AUS – Ablauf abgebrochen": "ALL OFF – sequence aborted",
+  "Aktion {action} geht über den Verbund nicht ({device})": "Action {action} is not possible via the link ({device})",
+  "Gerät {device} gehört zu keinem Rechner im Verbund": "Device {device} belongs to no computer in the link",
+  "Geräte beim {name} nicht belegt: {reason}": "Devices at {name} not reserved: {reason}",
+  "Verbund: Verbindung zu {name} verloren ({reason}) – Ablauf abgebrochen": "Link: connection to {name} lost ({reason}) – sequence aborted",
+  "{name}: {message}": "{name}: {message}",
+  "Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}": "Link: no heartbeat from {holder} – switched off: {devices}",
+  "belegt durch {holder} · {run}": "reserved by {holder} · {run}",
+  "Verbund-Partner {name} nicht verbunden": "Link partner {name} not connected",
+  "Belege Geräte beim {name} …": "Reserving devices at {name} …",
+  "Nicht gestartet: {reason}": "Not started: {reason}",
+  "dort belegt": "reserved there",
+  "Belegung abgelaufen": "reservation expired",
+  "Belegung beim Partner abgelaufen": "reservation at the partner expired"
 }

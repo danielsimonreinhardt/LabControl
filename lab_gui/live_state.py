@@ -39,6 +39,7 @@ from PySide6.QtCore import QObject, Slot
 
 from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT
 from i18n import tr
+from lease_table import LeaseTable
 
 # Ab wann ein Wert als "steht" gilt. Bewusst identisch zu
 # safety.STALE_TIMEOUT_S (dort loest dieselbe Frist den Watchdog aus) --
@@ -113,6 +114,9 @@ class LiveState(QObject):
         # vorgerendert (siehe Modul-Docstring: kein tr() im Server-Thread).
         self._labels: dict[tuple[str, str], str] = {}
         self.refresh_labels()
+        # Belegungen durch den Verbund-Partner (Verbund V2, PI-25/26): eigene, thread-sichere Tabelle;
+        # share_api belegt/verlaengert/gibt frei, MainWindow raeumt Abgelaufenes ab.
+        self.leases = LeaseTable()
 
     # -- Interne Helfer (immer unter gehaltenem Lock aufzurufen) -------------
 
@@ -376,6 +380,9 @@ class LiveState(QObject):
             "test_running": test_running,
             "remote": {"active": remaining > 0.0, "remaining_s": round(remaining, 1)},
             "safety_limits": safety_limits,
+            # Belegungen durch den Verbund-Partner (PI-25 a), ohne die geheime Belegungs-ID
+            "leases": {device_id: {"holder": lease.holder_name(), "run": lease.run}
+                       for device_id, lease in self.leases.snapshot().items()},
         }
 
     def share_config(self) -> dict:
