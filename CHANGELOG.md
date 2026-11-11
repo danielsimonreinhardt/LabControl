@@ -163,6 +163,10 @@ Semantic Versioning (`lab_gui/version.py`).
     nichts geschaltet; nach einem Neustart des Pi kommt `can0` über die udev-Regel mit 500 kbit/s hoch und LabControl
     findet den Batterie-Simulator von selbst wieder. Gegenprobe am Pi: der alte HCS-Treiber (0.31.0) lässt `termios.error`
     durch. Das Abziehen selbst ist mit dem Netzteil noch einmal am Gerät nachzuprüfen.
+  - **Nachtrag 11.11.2026, hardware-verifiziert mit der Last** (KEL102 am Pi, `ttyACM0`, ID `load:48DC385B3435` aus der
+    Seriennummer, Stand 0.37.0): USB abgezogen -> sofort „getrennt“ (Lesefehler, nur dieses Gerät), wieder angesteckt ->
+    nach etwa 1 s erneut verbunden, CAN und Batterie-Simulator liefen dabei weiter. Sollwert per Zahlenfeld vom Nutzer am
+    Display gesetzt; Eingang nicht eingeschaltet.
 - **Alle Betriebsdaten aufs Netzlaufwerk (0.31.0, Entscheidungen PI-12 b und PI-13 a, 10.11.2026).**
   Nutzerwunsch: Alles, was LabControl im Betrieb erzeugt, soll aufs Netzlaufwerk, damit man es später auswerten kann. Das
   Feld „Log-Ordner (Netzlaufwerk)“ aus 0.29.0 heißt jetzt **„Netzlaufwerk (Log und Daten)“** (Einstellung `network_dir`,
