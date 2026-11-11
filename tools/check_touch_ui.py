@@ -31,6 +31,16 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 FAILURES: list[str] = []
 
 
+def wants_keyboard(widget) -> bool:
+    """Genau die Frage, mit der Qt der Bildschirmtastatur Bescheid gibt (QInputMethod.queryFocusObject schickt
+    dieses Ereignis an das Fokus-Objekt; am Pi gibt ein echter Tipp dem Feld vorher den Fokus). Direkt
+    gestellt, weil es offscreen kein aktives Fenster und damit kein Fokus-Objekt gibt."""
+    from PySide6.QtGui import QInputMethodQueryEvent
+    event = QInputMethodQueryEvent(Qt.InputMethodQuery.ImEnabled)
+    QApplication.sendEvent(widget, event)
+    return bool(event.value(Qt.InputMethodQuery.ImEnabled))
+
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'OK  ' if ok else 'FEHL'} {name}" + (f"  ({detail})" if detail and not ok else ""))
     if not ok:
@@ -186,16 +196,18 @@ def main() -> int:
             app.processEvents()
             QTest.qWait(15)
         check("Fingertipp auf ein Zahlenfeld in der Steuerung oeffnet das Tastenfeld", opened == [True], str(opened))
-        im = Qt.WidgetAttribute.WA_InputMethodEnabled
         can_data = can._data_edit if can is not None else None
         from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QLineEdit
         plain_edit = next((e for e in w.settings_tab.findChildren(QLineEdit) if not e.isReadOnly()
                            and not isinstance(e.parentWidget(), (QAbstractSpinBox, QComboBox))), None)
+
+        answers = {"Zahlenfeld": wants_keyboard(spin), "Zahlenfeld-Textfeld": wants_keyboard(spin.lineEdit()),
+                   "CAN-Nutzdaten": can_data is not None and wants_keyboard(can_data),
+                   "normales Textfeld": plain_edit is not None and wants_keyboard(plain_edit)}
+        spin.clearFocus()
         check("keine Bildschirmtastatur fuer Felder mit Tastenfeld (Zahlenfeld, CAN-Nutzdaten), normale Textfelder schon",
-              not spin.lineEdit().testAttribute(im) and can_data is not None and not can_data.testAttribute(im)
-              and plain_edit is not None and plain_edit.testAttribute(im),
-              f"Zahlenfeld {spin.lineEdit().testAttribute(im)}, CAN {can_data and can_data.testAttribute(im)}, "
-              f"Textfeld {plain_edit and plain_edit.testAttribute(im)}")
+              answers == {"Zahlenfeld": False, "Zahlenfeld-Textfeld": False, "CAN-Nutzdaten": False,
+                          "normales Textfeld": True}, str(answers))
 
     print("Uebersicht mehrzeilig, Batterie-Simulator 2 x 7, Zeitfenster-Tasten (Schritt 4.5)")
     w.tabs.setCurrentWidget(w._overview_page)
@@ -349,8 +361,8 @@ def main() -> int:
     check("ohne Touch: kein Wischen, Ziehen erlaubt", not swipe(ct_area) and w.control_tab._drag_allowed)
     check("ohne Touch: Symbol-Knoepfe wieder ohne Text", pause.text() == "" and (can is None or can._send_button.text() == ""))
     if psu is not None:
-        check("ohne Touch: Texteingabe wieder angemeldet (Tippen am PC)",
-              psu._voltage_spin.lineEdit().testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled))
+        check("ohne Touch: Zahlenfeld nimmt wieder Texteingabe an (Tippen am PC)",
+              wants_keyboard(psu._voltage_spin) and wants_keyboard(psu._voltage_spin.lineEdit()))
     check("ohne Touch: Dashboard wieder zweizeilig mit Titel", not w.dashboard._multi_row
           and w.dashboard.title() == "Dashboard"
           and len({p.geometry().top() for p in w.dashboard._panels.values() if p.isVisible()}) <= 2)

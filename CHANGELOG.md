@@ -7,6 +7,14 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **Touch: Bildschirmtastatur blitzte weiter auf (0.37.3, Nutzer am Pi-Display, 11.11.2026).** Der Weg aus 0.37.2
+  (`WA_InputMethodEnabled` aus) wirkt nicht: Qt fragt das Fokus-Objekt per `InputMethodQuery` nach `ImEnabled`, und
+  `QLineEdit` beantwortet das selbst mit Ja, solange es beschreibbar ist -- das Attribut liest Qt dabei gar nicht. Die
+  Prüfung las nur das Attribut und war deshalb grün. Jetzt beantworten die Felder mit eigenem Tastenfeld die Frage im
+  Touch-Profil selbst mit Nein (`touch_keypad.deny_keyboard` am inneren Textfeld und an den CAN-Nutzdaten,
+  `SteppedSpinBox.inputMethodQuery` am Zahlenfeld); der Attribut-Weg ist wieder entfernt. **Mock-verifiziert:**
+  `check_touch_ui` stellt jetzt genau diese Frage (Zahlenfeld, inneres Textfeld, CAN-Nutzdaten: Nein; normales Textfeld
+  und ohne Touch-Profil: Ja) -- mit 0.37.2 rot, jetzt grün; alle 28 Prüfungen grün. Bestätigung am Display steht aus.
 - **Touch: Bildschirmtastatur blitzte beim Öffnen des Zahlenfelds auf, Zahlenfeld mit Fensterleiste (0.37.2, Nutzer am
   Pi-Display, 11.11.2026).**
   - Ein echter Fingertipp gibt dem inneren Textfeld den Fokus, bevor der Tipp das Zahlenfeld öffnet; das Textfeld meldete

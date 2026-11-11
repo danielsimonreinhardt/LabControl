@@ -238,10 +238,24 @@ def open_for_spinbox(spin: QAbstractSpinBox) -> bool:
     return True
 
 
+def deny_keyboard(event) -> bool:
+    """Im Touch-Profil fuer Felder mit eigenem Tastenfeld: die Frage "Texteingabe?" (ImEnabled) mit Nein
+    beantworten. Ein echter Fingertipp gibt dem Feld den Fokus, bevor das Tastenfeld aufgeht; Qt fragt das
+    Fokus-Objekt dann, und QLineEdit sagt von sich aus Ja (unabhaengig von WA_InputMethodEnabled) -- die
+    Bildschirmtastatur blitzte auf (am Pi, 11.11.2026). True = Ereignis beantwortet."""
+    if (event.type() == QEvent.Type.InputMethodQuery and touch_active()
+            and event.queries() & Qt.InputMethodQuery.ImEnabled):
+        event.setValue(Qt.InputMethodQuery.ImEnabled, False)
+        return True
+    return False
+
+
 class _HexLineFilter(QObject):
     """Tipp auf ein Hex-Textfeld (CAN-Nutzdaten) oeffnet im Touch-Profil das Hex-Tastenfeld."""
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if deny_keyboard(event):
+            return True
         if (event.type() == QEvent.Type.MouseButtonPress and touch_active() and isinstance(obj, QLineEdit)
                 and obj.isEnabled() and not obj.isReadOnly()):
             QTimer.singleShot(0, lambda: _open_for_hex_line(obj))
@@ -266,5 +280,3 @@ def attach_hex_keypad(edit: QLineEdit) -> None:
     if _HEX_FILTER is None:
         _HEX_FILTER = _HexLineFilter()
     edit.installEventFilter(_HEX_FILTER)
-    from touch_ui import KEYPAD_EDIT   # lokal: touch_ui -> theme; hier nur die Markierung
-    setattr(edit, KEYPAD_EDIT, True)   # TouchSizer: keine Bildschirmtastatur fuer dieses Feld

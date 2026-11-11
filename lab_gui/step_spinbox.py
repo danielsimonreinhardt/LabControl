@@ -57,10 +57,24 @@ class _SteppedSpinMixin:
         self._edit.installEventFilter(self)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
-        if (obj is self._edit and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick)
-                and self._open_touch_keypad(event)):
-            return True
+        if obj is self._edit:
+            if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick) \
+                    and self._open_touch_keypad(event):
+                return True
+            if event.type() == QEvent.Type.InputMethodQuery:
+                from touch_keypad import deny_keyboard
+                if deny_keyboard(event):   # Touch: keine Bildschirmtastatur, Eingabe ueber das Tastenfeld
+                    return True
         return super().eventFilter(obj, event)
+
+    def inputMethodQuery(self, query):  # noqa: N802 (Qt override)
+        # Ist das Zahlenfeld selbst das Fokus-Objekt, fragt Qt hier (es reicht die Frage nur als
+        # Funktionsaufruf ans innere Textfeld weiter, an dessen Filter oben vorbei).
+        if query == Qt.InputMethodQuery.ImEnabled:
+            from touch_keypad import touch_active
+            if touch_active() and self.isEnabled() and not self.isReadOnly():
+                return False
+        return super().inputMethodQuery(query)
 
     def _sub_control_at(self, pos):
         opt = QStyleOptionSpinBox()
