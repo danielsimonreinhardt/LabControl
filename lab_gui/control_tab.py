@@ -1323,39 +1323,44 @@ class BattSimControlGroup(QGroupBox):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(2)
-        self._grid_headers = [QLabel() for _ in range(4)]
-        for col, header in enumerate(self._grid_headers):
-            grid.addWidget(header, 0, col + 1 if col else 0)
+        self._grid = grid
+        # Kopfzeile je Zellblock: am PC ein Block (14 Zeilen), im Touch-Profil zwei (2 x 7, siehe _place_cells)
+        self._grid_headers = [[QLabel() for _ in range(4)] for _ in range(2)]
+        self._cell_numbers: list[QLabel] = []
         self._cell_spins: list[SteppedDoubleSpinBox] = []
+        self._cell_buttons: list[IconButton] = []
         self._cell_checks: list[QCheckBox] = []
         self._cell_actuals: list[QLabel] = []
         for i in range(cell_count):
             n = i + 1
-            grid.addWidget(QLabel(f"{n}"), n, 0)
             spin = SteppedDoubleSpinBox(small_step=0.001, large_step=0.1)
             spin.setDecimals(4)
             spin.setSuffix(" V")
             spin.setMaximumWidth(130)
+            # Touch-Profil: ohne -/+ (Zahlenfeld per Tipp), sonst passen zwei Zellbloecke nicht nebeneinander
+            spin.setProperty("touchPlain", True)
             spin.valueChanged.connect(lambda _v, s=spin: self._mark_edited(s))
             button = IconButton("mdi.check", "")
             button.clicked.connect(lambda _=False, n=n, s=spin: self.set_cell_voltage.emit(self._device_id, n, s.value()))
             _EnterTriggersButton(spin, button)
+            set_apply_partner(spin, button)   # Touch: "Setzen" im Zahlenfeld sendet den Zellsollwert
             check = QCheckBox()
             check.clicked.connect(lambda on, n=n: self.set_cell_enabled.emit(self._device_id, n, bool(on)))
             actual = QLabel("--")
             actual.setMinimumWidth(90)
-            grid.addWidget(spin, n, 1)
-            grid.addWidget(button, n, 2)
-            grid.addWidget(check, n, 3)
-            grid.addWidget(actual, n, 4)
+            self._cell_numbers.append(QLabel(f"{n}"))
             self._cell_spins.append(spin)
+            self._cell_buttons.append(button)
             self._cell_checks.append(check)
             self._cell_actuals.append(actual)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(grid_host)
-        outer.addWidget(scroll, 1)
+        self._grid_scroll = QScrollArea()
+        self._grid_scroll.setWidgetResizable(True)
+        self._grid_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._grid_scroll.setWidget(grid_host)
+        outer.addWidget(self._grid_scroll, 1)
+        self._outer = outer
+        self._two_blocks: bool | None = None
+        self._place_cells(False)
 
         self.set_voltage_limit(voltage_limit)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -1381,9 +1386,59 @@ class BattSimControlGroup(QGroupBox):
         self._all_on_button.setText(tr("alle ein"))
         self._all_off_button.setText(tr("alle aus"))
         self._limit_button.setToolTip(tr("Grenzwert übernehmen (höhere Sollwerte werden abgelehnt)"))
-        for header, text in zip(self._grid_headers, (tr("Zelle"), tr("Sollwert"), tr("ein"), tr("Istwert"))):
-            header.setText(text)
+        for headers in self._grid_headers:
+            for header, text in zip(headers, (tr("Zelle"), tr("Sollwert"), tr("ein"), tr("Istwert"))):
+                header.setText(text)
         self._render_status(None)
+
+    def _place_cells(self, two_blocks: bool) -> None:
+        """Zellraster: am PC eine Spalte mit 14 Zeilen in einem Scrollbereich, im Touch-Profil zwei
+        Bloecke 1-7 | 8-14 nebeneinander ohne eigenen Scrollbereich -- 14 Zeilen zu 44 px passen nicht
+        auf 600 px, und ein Scrollbereich im wischbaren Steuerungsreiter faengt das Wischen ab."""
+        if two_blocks == self._two_blocks:
+            return
+        self._two_blocks = two_blocks
+        grid = self._grid
+        cells = list(zip(self._cell_numbers, self._cell_spins, self._cell_buttons,
+                         self._cell_checks, self._cell_actuals))
+        for widget in [*self._grid_headers[0], *self._grid_headers[1], *(w for cell in cells for w in cell)]:
+            grid.removeWidget(widget)
+        per_block = -(-len(cells) // 2) if two_blocks else len(cells)
+        blocks = 2 if two_blocks else 1
+        stride = 6   # 5 Spalten je Block + 1 Abstandsspalte
+        for block in range(2):
+            # Zelle | Sollwert (Feld; Spalte 2 ist der Haken) | ein | Istwert
+            for header, col in zip(self._grid_headers[block], (0, 1, 3, 4)):
+                header.setVisible(block < blocks)
+                if block < blocks:
+                    grid.addWidget(header, 0, block * stride + col)
+        for i, cell in enumerate(cells):
+            block, row = divmod(i, per_block)
+            for col, widget in enumerate(cell):
+                grid.addWidget(widget, row + 1, block * stride + col)
+        for column in range(2 * stride):
+            grid.setColumnMinimumWidth(column, 0)
+            grid.setColumnStretch(column, 0)
+        if two_blocks:
+            grid.setColumnMinimumWidth(stride - 1, 20)
+        grid.setHorizontalSpacing(6 if two_blocks else 8)
+        for actual in self._cell_actuals:
+            actual.setMinimumWidth(0 if two_blocks else 90)
+        self._render_cells()
+        for spin in self._cell_spins:
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons if two_blocks
+                                  else QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        # Touch: Raster direkt in die Kachel (natuerliche Hoehe), am PC zurueck in den Scrollbereich
+        host = self._grid_host
+        if two_blocks:
+            self._grid_scroll.takeWidget()
+            self._grid_scroll.hide()
+            self._outer.addWidget(host)
+            host.show()
+        elif self._grid_scroll.widget() is not host:
+            self._outer.removeWidget(host)
+            self._grid_scroll.setWidget(host)
+            self._grid_scroll.show()
 
     def _on_limit_clicked(self) -> None:
         self.set_voltage_limit(self._limit_spin.value())
@@ -1440,17 +1495,34 @@ class BattSimControlGroup(QGroupBox):
                 spin.setValue(float(cell["setpoint"]))
                 spin.blockSignals(False)
             check.setChecked(bool(cell["enable"]))
+        self._cells_state = list(state.get("cells", []))
+        self._render_cells()
+        self._render_status(state)
+
+    def _render_cells(self) -> None:
+        """Istwerte je Zelle. Im Touch-Profil (2 x 7, schmal) ohne "(aus)" -- ausgeschaltete Zellen
+        stehen dort grau -- und mit kurzem "(Fehler)" statt "(Sollwertfehler)"."""
+        compact = bool(self._two_blocks)
+        pal = current_palette()
+        for cell, actual in zip(getattr(self, "_cells_state", []), self._cell_actuals):
             volts = cell.get("voltage")
             text = "--" if volts is None else f"{volts:.3f} V"
+            off = False
             if cell.get("error"):
-                text += " " + tr("(Sollwertfehler)")
+                text += " " + (tr("(Fehler)") if compact else tr("(Sollwertfehler)"))
             elif cell.get("below_floor"):
                 text += " " + tr("(OL)")
             elif cell.get("enabled") is False:
-                text += " " + tr("(aus)")
+                off = True
+                if not compact:
+                    text += " " + tr("(aus)")
             actual.setText(text)
-            actual.setToolTip(tr("Open Load") if cell.get("below_floor") and not cell.get("error") else "")
-        self._render_status(state)
+            actual.setToolTip(tr("Open Load") if cell.get("below_floor") and not cell.get("error")
+                              else tr("Zelle aus") if off and compact else "")
+            muted = pal.text_muted if off and compact else ""
+            if actual.property("mutedColor") != muted:   # 10 Hz: Stylesheet nur bei Wechsel setzen
+                actual.setProperty("mutedColor", muted)
+                actual.setStyleSheet(f"color: {muted};" if muted else "")
 
     def _render_status(self, state: dict | None) -> None:
         if not state:
@@ -1483,6 +1555,8 @@ class BattSimControlGroup(QGroupBox):
         for row in (self._remote_row, self._output_row, self._all_row, self._limit_row, self._grid_host):
             row.setStyleSheet(_row_stylesheet(palette))
         apply_panel_tint(self, self._color_key)
+        self._place_cells(ThemeManager.instance().touch)   # Touch-Profil meldet sich ueber changed
+        self._render_cells()
 
     def set_label(self, label: str) -> None:
         self.setTitle(label)

@@ -462,6 +462,8 @@
   "ein": "on",
   "Istwert": "Measured",
   "(Sollwertfehler)": "(setpoint error)",
+  "(Fehler)": "(error)",
+  "Zelle aus": "Cell off",
   "(OL)": "(OL)",
   "Open Load": "Open load",
   "Grund: {name}": "Reason: {name}",

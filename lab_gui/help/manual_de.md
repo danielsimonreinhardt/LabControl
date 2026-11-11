@@ -416,7 +416,12 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   und Seiten lassen sich mit dem Finger wischen; Kacheln verschiebt man nur
   im Modus **Anordnen** (Knopf in der Leiste oben, „Fertig“ beendet ihn).
   Knöpfe, die am PC nur ein Symbol mit Tooltip zeigen (Verlauf, CAN), tragen
-  im Touch-Profil einen kurzen Text. Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
+  im Touch-Profil einen kurzen Text. Die Übersicht bricht an der
+  Bildschirmbreite um und wird nach unten länger, statt waagerecht zu
+  scrollen. Der Batterie-Simulator zeigt seine Zellen als 2 × 7-Raster
+  (1–7 links, 8–14 rechts); ein Tipp auf einen Zellsollwert öffnet das
+  Zahlenfeld, ausgeschaltete Zellen stehen grau. Im Verlauf wählt man das
+  Zeitfenster über Tasten (30 s … 30 min). Solange das Häkchen nie gesetzt wurde, schaltet LabControl das
   Profil auf Bildschirmen bis 1024 × 600 von selbst ein. Das Abdocken des
   Dashboards gibt es im Touch-Profil nicht.
 - **Desktop-Benachrichtigung bei Lauf-Ende/Fehler**: siehe Abschnitt 3.

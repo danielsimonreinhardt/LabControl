@@ -7,6 +7,24 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Touch-Profil, Schritt 5: Übersicht mehrzeilig, Batterie-Simulator 2 × 7, Zeitfenster-Tasten (0.36.0, Pi-Plan
+  Phase 4, 11.11.2026).**
+  - Übersicht: Im Touch-Profil packt das Dashboard die Kacheln nach der verfügbaren Breite (Spaltenzahl aus der Breite,
+    beliebig viele Zeilen nach unten, `DashboardWidget.set_multi_row`) statt in zwei Zeilen mit waagerechtem Scrollen
+    -- die HIL-Kachel war am 1024-px-Display rechts angeschnitten. Die Spalten teilen sich die volle Breite; die
+    Zellhöhe richtet sich nach den einfachen Kacheln, HIL und Batterie-Simulator spannen so viele Zeilen, wie sie
+    brauchen (vorher 238 px je Kachel wegen der halben HIL-Höhe, jetzt 157 px). Rahmentitel „Dashboard“ entfällt (die
+    Navigation nennt die Seite), der Ansicht-Umschalter steht als 44-px-Knopf unter den Kacheln. Ziehen im Modus
+    „Anordnen“ nutzt dasselbe Packen. Am PC unverändert.
+  - Batterie-Simulator (Steuerung): Zellen im Touch-Profil als 2 × 7-Raster (1–7 | 8–14) ohne eigenen Scrollbereich
+    (14 Zeilen zu 44 px passten nicht, und der innere Scrollbereich fing das Wischen ab). Zellsollwerte ohne −/+ (ein
+    Tipp öffnet das Zahlenfeld, „Setzen“ sendet den Sollwert), ausgeschaltete Zellen grau statt „(aus)“,
+    „(Fehler)“ statt „(Sollwertfehler)“.
+  - Verlauf: Zeitfenster im Touch-Profil als Tastenleiste 30 s … 30 min statt Auswahlliste (ein Tipp statt zwei).
+  - Nebenbei behoben (auch am PC): die Spaltenüberschrift „Sollwert“ der Batterie-Zellen stand über der ✓-Spalte
+    statt über dem Feld.
+  - **Mock-verifiziert** (`check_touch_ui.py`: kein Abschneiden, keine Überlappung, mehrzeilig, HIL ganz sichtbar,
+    2 × 7 mit Rückweg in eine Spalte, Zeitfenster-Tasten mit Rückweg; alle 28 Prüfungen grün).
 - **Touch-Profil, Schritt 4: Wischen, Modus „Anordnen“, Beschriftungen statt Tooltips (0.35.0, Pi-Plan Phase 4, 10.11.2026).**
   - Wischen (kinetisches Scrollen) in allen Scroll-Flächen, Listen und Tabellen im Touch-Profil -- über den
     `TouchSizer`, also auch in später erscheinenden Kacheln; ohne Touch-Profil wieder aus. Ein normaler Tipp auf einen

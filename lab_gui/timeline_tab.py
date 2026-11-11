@@ -52,6 +52,7 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -64,6 +65,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -690,6 +692,26 @@ class TimelineTab(QWidget):
         self._window_combo.setCurrentIndex(DEFAULT_WINDOW_INDEX)
         self._window_combo.currentIndexChanged.connect(self._on_window_changed)
         controls.addWidget(self._window_combo)
+        # Touch-Profil: Zeitfenster als Tasten statt Auswahlliste (ein Tipp statt zwei, Pi-Plan 4.5).
+        # Die Auswahlliste bleibt das Modell, die Tasten spiegeln und setzen nur ihren Index.
+        self._window_buttons_host = QWidget()
+        window_buttons = QHBoxLayout(self._window_buttons_host)
+        window_buttons.setContentsMargins(0, 0, 0, 0)
+        window_buttons.setSpacing(0)
+        self._window_buttons = QButtonGroup(self)
+        self._window_buttons.setExclusive(True)
+        for index, (text, _seconds) in enumerate(WINDOW_CHOICES):
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setProperty("segment", True)
+            self._window_buttons.addButton(button, index)
+            window_buttons.addWidget(button)
+        self._window_buttons.button(DEFAULT_WINDOW_INDEX).setChecked(True)
+        self._window_buttons.idClicked.connect(self._window_combo.setCurrentIndex)
+        self._window_combo.currentIndexChanged.connect(
+            lambda index: self._window_buttons.button(index).setChecked(True))
+        self._window_buttons_host.hide()
+        controls.addWidget(self._window_buttons_host)
 
         self._pause_button = IconButton("mdi.pause", "")
         self._pause_button.setCheckable(True)
@@ -733,6 +755,7 @@ class TimelineTab(QWidget):
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
+        self._apply_touch_controls()
 
     def _retranslate(self) -> None:
         self._recording_group.setTitle(tr("Aufzeichnung"))
@@ -1075,6 +1098,16 @@ class TimelineTab(QWidget):
         # beim Theme-Wechsel neu rendern statt auf das naechste Update zu warten.
         self._refresh_recording_status_text()
         self._refresh_recording_toggle_color()
+        self._apply_touch_controls()
+
+    def _apply_touch_controls(self) -> None:
+        """Touch-Profil (meldet sich ueber ThemeManager.changed): Tasten statt Auswahlliste, ohne
+        "Zeitfenster:" -- die Tasten "30 s" ... "30 min" erklaeren sich selbst, und die Zeile ist am
+        1024-px-Display knapp."""
+        touch = ThemeManager.instance().touch
+        self._window_buttons_host.setVisible(touch)
+        self._window_combo.setVisible(not touch)
+        self._window_label.setVisible(not touch)
 
     def on_recording_changed(self, active: bool) -> None:
         self._is_recording = active

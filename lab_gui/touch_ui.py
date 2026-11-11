@@ -314,6 +314,23 @@ def touch_qss(pal: Palette) -> str:
         width: 22px;
         height: 22px;
     }}
+    /* Tastenleiste mit einer gewaehlten Taste (Zeitfenster im Verlauf) */
+    QPushButton[segment="true"] {{
+        padding: 6px 10px;
+        border-radius: 0px;
+    }}
+    QPushButton[segment="true"]:checked {{
+        background-color: {pal.accent};
+        border-color: {pal.accent};
+        color: #ffffff;
+    }}
+    /* Felder ohne -/+ (Zellsollwerte des Batterie-Simulators, 2 x 7): Wert per Zahlenfeld */
+    QGroupBox QAbstractSpinBox[touchPlain="true"] {{
+        padding-left: 8px;
+        padding-right: 8px;
+        min-width: 90px;
+        max-width: 104px;
+    }}
     QCheckBox, QRadioButton {{
         spacing: 10px;
         min-height: {TOUCH_MIN - 8}px;

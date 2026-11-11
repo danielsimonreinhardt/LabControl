@@ -1077,6 +1077,7 @@ class MainWindow(QMainWindow):
         for widget, was_visible in visible.items():
             widget.setVisible(was_visible)
         self.dashboard.set_detach_available(not on)
+        self.dashboard.set_multi_row(on)   # Uebersicht: Kacheln umbrechen statt waagerecht scrollen
         # Touch: Ziehen ist Wischen; Kacheln verschieben nur im Modus "Anordnen" (_on_arrange_toggled)
         self.dashboard.set_drag_allowed(not on)
         self.control_tab.set_drag_allowed(not on)

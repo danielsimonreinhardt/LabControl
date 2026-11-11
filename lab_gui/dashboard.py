@@ -47,11 +47,13 @@ from picoscope2000.driver import launch_app as launch_picoscope_app
 from picoscope_panel import PicoscopePanel
 from theme import Palette, ThemeManager, no_own_background
 from theme import current as current_palette
+from touch_ui import TOUCH_H
 from tile_grid import (
     PANEL_DRAG_HANDLE_HEIGHT,
     PANEL_DRAG_MIME_TYPE,
     cell_size_ratchet,
     make_drag_pixmap,
+    pack_tiles,
     pack_tiles_by_row,
     rect_distance,
 )
@@ -78,6 +80,9 @@ GRID_SPACING = 12
 # doppelte Hoehe, alles andere (auch "picoscope" -- laut picoscope_panel.py
 # nur Statuszeile + Button, also kurz) bleibt einfach.
 TILE_HEIGHT_BY_KIND: dict[str, str] = {"hil": "double"}
+# Touch-Profil (mehrzeilige Uebersicht, DashboardWidget._multi_row_heights): diese Kacheln
+# bestimmen die Zellhoehe nicht mit, sondern spannen so viele Zeilen, wie sie brauchen.
+MULTI_ROW_TALL_KINDS = {"hil", "battsim"}
 
 # Dieselbe Klassifizierung wie TILE_HEIGHT_BY_KIND, aber fuer die
 # KOMPAKTANSICHT eigens ermittelt -- deckt sich NICHT mit der Normalansicht,
@@ -518,6 +523,7 @@ class DashboardWidget(QGroupBox):
         corner.addStretch()
         corner_buttons = QHBoxLayout()
         corner_buttons.setSpacing(2)
+        corner_buttons.addStretch()   # Touch: Zeile unter den Kacheln, Knoepfe rechts (set_multi_row)
         self._detach_button = IconButton("mdi.open-in-new", "")
         self._detach_button.setFixedSize(QSize(28, 24))
         self._detach_button.clicked.connect(self.detach_toggle_requested)
@@ -529,6 +535,7 @@ class DashboardWidget(QGroupBox):
         corner.addLayout(corner_buttons)
         body.addLayout(corner)
         outer.addLayout(body)
+        self._outer_layout, self._body_layout, self._corner_layout = outer, body, corner
 
         self._panels: dict[str, _DevicePanel] = {}
         # kind je device_id -- fuer die Kachelhoehe (siehe TILE_HEIGHT_BY_KIND/
@@ -557,7 +564,12 @@ class DashboardWidget(QGroupBox):
         # (kompakt?, Reihenfolge) der letzten vollstaendigen Anordnung -- damit ein
         # LayoutRequest ohne echte Aenderung nichts neu berechnet
         # (siehe _layout_is_current).
-        self._laid_out: tuple[bool, tuple[str, ...]] | None = None
+        self._laid_out: tuple[bool, tuple[str, ...], int] | None = None
+        # Touch-Profil (set_multi_row): Spaltenzahl aus der Breite, beliebig viele Zeilen nach unten
+        # statt zwei Zeilen und waagerechtem Scrollen (HIL-Kachel war am 1024-px-Display angeschnitten).
+        self._multi_row = False
+        self._row_count = 0
+        self._row_spans: dict[str, int] = {}
         # Sicherheitsnetz: Wuchs eine Kachel, ohne dass danach ein LayoutRequest kam (die
         # Reihenfolge der Ereignisse beim Start entscheidet das), bliebe die Anordnung sonst
         # veraltet -- frueher heilte das die LayoutRequest-Dauerschleife zufaellig. Billig, weil
@@ -667,10 +679,13 @@ class DashboardWidget(QGroupBox):
         if self._compact:
             row_span = 2 if COMPACT_TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1
             return (self._compact_col_spans.get(device_id, 1), row_span)
+        if self._multi_row:
+            return (1, self._row_spans.get(device_id, 1))   # siehe _multi_row_heights
         return (1, 2 if TILE_HEIGHT_BY_KIND.get(kind) == "double" else 1)
 
     def _retranslate(self) -> None:
-        self.setTitle(tr("Dashboard"))
+        # Touch: die Navigation nennt die Seite schon ("Übersicht") -> Rahmentitel spart eine Zeile
+        self.setTitle("" if self._multi_row else tr("Dashboard"))
         self._update_toggle_button()
         self._update_detach_button()
 
@@ -711,6 +726,75 @@ class DashboardWidget(QGroupBox):
     def scroll_area(self):
         return self._scroll_area
 
+    def set_multi_row(self, on: bool) -> None:
+        """Touch-Profil (Reiter "Übersicht"): Kacheln brechen an der verfuegbaren Breite um und
+        wachsen nach unten (die Seite scrollt senkrecht), statt in zwei Zeilen waagerecht zu
+        scrollen. Der Ansicht-Umschalter bekommt Fingergroesse."""
+        if on == self._multi_row:
+            return
+        self._multi_row = on
+        self._scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff if on else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        if on:
+            self._scroll_area.viewport().installEventFilter(self)
+        else:
+            self._scroll_area.viewport().removeEventFilter(self)
+        # Touch: Knopfspalte rechts kostet Kachelbreite -> als Zeile unter die Kacheln
+        if on:
+            self._body_layout.removeItem(self._corner_layout)
+            self._outer_layout.addLayout(self._corner_layout)
+        else:
+            self._outer_layout.removeItem(self._corner_layout)
+            self._body_layout.addLayout(self._corner_layout)
+        size = QSize(TOUCH_H, TOUCH_H) if on else QSize(28, 24)
+        self._view_toggle_button.setFixedSize(size)
+        self._detach_button.setFixedSize(size)
+        self._retranslate()
+        self._cell_height = 0   # Zellhoehe wird je Profil anders bestimmt (_multi_row_heights)
+        self._row_spans = {}
+        self._relayout_panels(reset_width=True)
+
+    def _avail_width(self) -> int:
+        margins = self._panel_layout.contentsMargins()
+        return self._scroll_area.viewport().width() - margins.left() - margins.right()
+
+    def _max_cols(self) -> int:
+        """Rasterspalten, die in die sichtbare Breite passen (nur im Touch-Profil, set_multi_row)."""
+        unit = (COMPACT_COLUMN_UNIT if self._compact else self._panel_width) + GRID_SPACING
+        return max(1, (self._avail_width() + GRID_SPACING) // max(unit, 1))
+
+    def _multi_row_heights(self, order: list[str]) -> tuple[int, dict[str, int]]:
+        """Touch, Normalansicht: Zellhoehe nach den einfachen Kacheln (Ratsche), hohe Kacheln (HIL)
+        spannen so viele Zeilen, wie sie brauchen -- sonst gibt die HIL-Kachel mit halber Hoehe
+        allen anderen viel Leerraum (2 x 238 px statt ~160 px fuer drei Messwerte)."""
+        single = [(self._panels[d].sizeHint().height(), 1) for d in order
+                  if self._panel_kind.get(d, "") not in MULTI_ROW_TALL_KINDS]
+        cell = cell_size_ratchet(self._cell_height, single) if single else self._cell_height
+        if cell <= 0:
+            cell = max((self._panels[d].sizeHint().height() for d in order), default=1) // 2 or 1
+        spans = {}
+        for d in order:
+            if self._panel_kind.get(d, "") in MULTI_ROW_TALL_KINDS:
+                need = self._panels[d].sizeHint().height()
+                spans[d] = max(1, -(-(need + GRID_SPACING) // (cell + GRID_SPACING)))
+        return cell, spans
+
+    def _pack(self, order: list[str], spans: dict[str, tuple[int, int]]) -> dict[str, tuple[int, int]]:
+        """Gemeinsames Packen fuer Anordnung und Ziehen (_relayout_panels/_tile_rects)."""
+        if self._multi_row:
+            return pack_tiles(order, spans, self._max_cols())
+        return pack_tiles_by_row(order, spans, max_rows=2)
+
+    def _used_rows(self, positions: dict[str, tuple[int, int]], spans: dict[str, tuple[int, int]]) -> int:
+        """Belegte Zeilen; ohne Touch immer zwei (volle Doppelhoehe, siehe _relayout_panels)."""
+        used = max((row + spans[d][1] for d, (row, _col) in positions.items()), default=1)
+        return used if self._multi_row else 2
+
+    def _size_rows(self, rows: int, height: int) -> None:
+        for row in range(max(rows, self._row_count)):
+            self._panel_layout.setRowMinimumHeight(row, height if row < rows else 0)
+        self._row_count = rows
+
     def set_detach_available(self, available: bool) -> None:
         """Touch-Profil: kein Abdocken (Dashboard ist dort ein eigener Reiter) -> Knopf ausblenden."""
         self._detach_button.setVisible(available)
@@ -731,6 +815,12 @@ class DashboardWidget(QGroupBox):
         self._relayout_panels(reset_width=True)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if obj is self._scroll_area.viewport():
+            # Touch-Profil: andere Breite -> Spaltenzahl und Kachelbreite neu (set_multi_row)
+            if event.type() == QEvent.Type.Resize and self._multi_row and self._laid_out is not None \
+                    and self._laid_out[2] != self._avail_width():
+                QTimer.singleShot(0, lambda: self._relayout_panels(only_if_changed=True))
+            return False
         if obj is self._container:
             event_type = event.type()
             if event_type == QEvent.Type.LayoutRequest:
@@ -876,7 +966,7 @@ class DashboardWidget(QGroupBox):
         Normalansicht immer beide Zeilen zugleich belegt und nie nur der
         oberen oder unteren zugewiesen werden kann."""
         spans = {device_id: self._tile_span(device_id) for device_id in order}
-        positions = pack_tiles_by_row(order, spans, max_rows=2)
+        positions = self._pack(order, spans)
         rects: dict[str, QRect] = {}
         for device_id, (row, col) in positions.items():
             col_span, row_span = spans[device_id]
@@ -1060,7 +1150,7 @@ class DashboardWidget(QGroupBox):
         Kompaktansicht ~11 ms je Aufruf, rund 60-90 % der GUI-Last. Die Ratschen sorgen dafuer,
         dass sich die Breite nach unten ohnehin nicht aendert -- hier wird nur noch geprueft,
         ob sie wachsen muessten."""
-        if self._laid_out != (self._compact, tuple(order)):
+        if self._laid_out != (self._compact, tuple(order), self._avail_width() if self._multi_row else 0):
             return False
         if self._compact:
             for device_id in order:
@@ -1070,6 +1160,8 @@ class DashboardWidget(QGroupBox):
             return cell_size_ratchet(self._compact_cell_height, height_sizes) == self._compact_cell_height
         if max(panel.sizeHint().width() for panel in self._panels.values()) > self._panel_width:
             return False
+        if self._multi_row:
+            return self._multi_row_heights(order) == (self._cell_height, self._row_spans)
         height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
         return cell_size_ratchet(self._cell_height, height_sizes) == self._cell_height
 
@@ -1107,7 +1199,6 @@ class DashboardWidget(QGroupBox):
             order = self._current_order()
             if only_if_changed and not reset_width and self._layout_is_current(order):
                 return
-            self._laid_out = (self._compact, tuple(order))
             if self._compact:
                 # Kompaktansicht: jede Kachel behaelt ihre eigene, an den
                 # Inhalt geschmiegte Breite (Ratsche je Geraet, siehe Punkt 2
@@ -1131,9 +1222,14 @@ class DashboardWidget(QGroupBox):
             else:
                 max_width = max(panel.sizeHint().width() for panel in self._panels.values())
                 self._panel_width = max(self._panel_width, max_width)
+                width = self._panel_width
+                if self._multi_row:
+                    # Touch: Spalten teilen sich die ganze Breite (kein leerer Rand rechts)
+                    cols = self._max_cols()
+                    width = max(width, (self._avail_width() - (cols - 1) * GRID_SPACING) // cols)
                 for panel in self._panels.values():
-                    if panel.minimumWidth() != self._panel_width or panel.maximumWidth() != self._panel_width:
-                        panel.setFixedWidth(self._panel_width)
+                    if panel.minimumWidth() != width or panel.maximumWidth() != width:
+                        panel.setFixedWidth(width)
 
             for panel in self._panels.values():
                 self._panel_layout.removeWidget(panel)
@@ -1154,11 +1250,10 @@ class DashboardWidget(QGroupBox):
                 # Zeile gezwaengt deren Hoehe fuer alle anderen zu verzerren
                 # (Bugmeldung: "Zeilenhoehe passt nicht").
                 compact_spans = {d: self._tile_span(d) for d in order}
-                compact_positions = pack_tiles_by_row(order, compact_spans, max_rows=2)
+                compact_positions = self._pack(order, compact_spans)
                 height_sizes = [(self._panels[d].sizeHint().height(), compact_spans[d][1]) for d in order]
                 self._compact_cell_height = cell_size_ratchet(self._compact_cell_height, height_sizes)
-                self._panel_layout.setRowMinimumHeight(0, self._compact_cell_height)
-                self._panel_layout.setRowMinimumHeight(1, self._compact_cell_height)
+                self._size_rows(self._used_rows(compact_positions, compact_spans), self._compact_cell_height)
                 # Alle Rasterspalten auf dieselbe Mindestbreite: nur dann
                 # sind die Zellgrenzen (cellRect, siehe _tile_rects) auch in
                 # Spalten definiert, die gerade von keiner Kachel BEGONNEN
@@ -1193,18 +1288,20 @@ class DashboardWidget(QGroupBox):
                 # sicher, dass die Basis-Zellhoehe im Normalfall auch die
                 # deutlich groessere microHIL-Kachel (doppelte Hoehe) bequem
                 # fasst.
-                height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
-                self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
+                if self._multi_row:
+                    self._cell_height, self._row_spans = self._multi_row_heights(order)
+                else:
+                    height_sizes = [(self._panels[d].sizeHint().height(), self._tile_span(d)[1]) for d in order]
+                    self._cell_height = cell_size_ratchet(self._cell_height, height_sizes)
                 # Erzwingt die volle Doppelzeilen-Hoehe auch dann, wenn
                 # aktuell gar keine doppelt hohe Kachel verbunden ist (siehe
                 # FEATURES.md Punkt 5: "doppelte Hoehe als maximale
                 # Ausdehnung") -- sonst wuerde die ScrollArea unten kleiner
                 # ausfallen und beim naechsten Verbinden einer microHIL
                 # sichtbar in der Hoehe springen.
-                self._panel_layout.setRowMinimumHeight(0, self._cell_height)
-                self._panel_layout.setRowMinimumHeight(1, self._cell_height)
                 spans = {d: self._tile_span(d) for d in order}
-                positions = pack_tiles_by_row(order, spans, max_rows=2)
+                positions = self._pack(order, spans)
+                self._size_rows(self._used_rows(positions, spans), self._cell_height)
                 for device_id, (row, col) in positions.items():
                     panel = self._panels[device_id]
                     row_span = spans[device_id][1]
@@ -1220,6 +1317,7 @@ class DashboardWidget(QGroupBox):
             # Layout-Geometrie sonst erst beim naechsten verarbeiteten
             # Event fest).
             self._panel_layout.activate()
+            self._laid_out = (self._compact, tuple(order), self._avail_width() if self._multi_row else 0)
 
         # Hoehe: etwas Rand fuer eine ggf. sichtbare horizontale Scrollleiste
         # einrechnen. sizeHint() spiegelt in der Normalansicht wegen der

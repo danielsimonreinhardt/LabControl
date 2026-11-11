@@ -158,6 +158,53 @@ def main() -> int:
             QTest.qWait(15)
         check("Klick in wischbarer Flaeche kommt an", clicks == [1], str(clicks))
 
+    print("Uebersicht mehrzeilig, Batterie-Simulator 2 x 7, Zeitfenster-Tasten (Schritt 4.5)")
+    w.tabs.setCurrentWidget(w._overview_page)
+    for _ in range(10):
+        app.processEvents()
+    dash = w.dashboard
+    rects = {d: p.geometry() for d, p in dash._panels.items() if p.isVisible()}
+    viewport_w = dash.scroll_area().viewport().width()
+    check("Uebersicht: keine Kachel rechts abgeschnitten (kein waagerechtes Scrollen)",
+          rects and all(r.right() < viewport_w for r in rects.values())
+          and dash.scroll_area().horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+          f"Viewport {viewport_w}, rechts max {max((r.right() for r in rects.values()), default=0)}")
+    ids = list(rects)
+    overlap = [(a, b) for i, a in enumerate(ids) for b in ids[i + 1:] if rects[a].intersects(rects[b])]
+    check("Uebersicht: Kacheln ueberlappen nicht", not overlap, str(overlap))
+    check("Uebersicht: mehr als zwei Zeilen", len({r.top() for r in rects.values()}) > 2,
+          str(sorted({r.top() for r in rects.values()})))
+    hil = dash._panels.get("hil:SIM")
+    check("HIL-Kachel ganz zu sehen (Inhalt passt)", hil is not None and hil.height() >= hil.sizeHint().height(),
+          f"{hil.height() if hil else '-'} / {hil.sizeHint().height() if hil else '-'}")
+    check("Ansicht-Umschalter in Fingergroesse", dash._view_toggle_button.height() == 44)
+    from control_tab import BattSimControlGroup
+    bs = next(iter(w.control_tab.findChildren(BattSimControlGroup)), None)
+    check("Batterie-Simulator vorhanden", bs is not None)
+    if bs is not None:
+        from PySide6.QtWidgets import QAbstractSpinBox
+        pos1 = bs._grid.getItemPosition(bs._grid.indexOf(bs._cell_spins[0]))
+        pos8 = bs._grid.getItemPosition(bs._grid.indexOf(bs._cell_spins[7]))
+        check("Zellen 2 x 7: Zelle 8 rechts neben Zelle 1", pos8[0] == pos1[0] and pos8[1] > pos1[1], f"{pos1} {pos8}")
+        check("Zellraster ohne eigenen Scrollbereich", bs._grid_scroll.isHidden() and bs._grid_host.parent() is bs)
+        check("Zellsollwerte ohne -/+ (Zahlenfeld per Tipp)",
+              bs._cell_spins[0].buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons)
+        w.tabs.setCurrentWidget(w.control_tab)
+        for _ in range(5):
+            app.processEvents()
+        check("Batterie-Kachel: Raster passt in die Kachel", bs._grid_host.width() >= bs._grid_host.sizeHint().width(),
+              f"{bs._grid_host.width()} / {bs._grid_host.sizeHint().width()}")
+        bs.set_state({"remote": True, "output_on": False, "voltage_limit": 4.3,
+                      "cells": [{"setpoint": 3.7, "enable": False, "voltage": 0.0, "enabled": False}] * 14})
+        check("ausgeschaltete Zelle: kurz und grau statt '(aus)'", bs._cell_actuals[0].text() == "0.000 V"
+              and bs._cell_actuals[0].property("mutedColor"), bs._cell_actuals[0].text())
+    tl = w.timeline_tab
+    check("Zeitfenster als Tasten, Auswahlliste verborgen",
+          not tl._window_buttons_host.isHidden() and tl._window_combo.isHidden())
+    tl._window_buttons.button(3).click()
+    check("Taste setzt das Zeitfenster (5 min)", tl._window_combo.currentIndex() == 3 and tl._window_s == 300.0,
+          f"{tl._window_combo.currentIndex()} {tl._window_s}")
+
     print("Vollbild und Ausschalten")
     w._toggle_fullscreen()
     app.processEvents()
@@ -204,6 +251,16 @@ def main() -> int:
     check("Presets wieder mit Eck-Knoepfen", all(not s._more_button.isVisible() for s in slots))
     check("ohne Touch: kein Wischen, Ziehen erlaubt", not swipe(ct_area) and w.control_tab._drag_allowed)
     check("ohne Touch: Symbol-Knoepfe wieder ohne Text", pause.text() == "" and (can is None or can._send_button.text() == ""))
+    check("ohne Touch: Dashboard wieder zweizeilig mit Titel", not w.dashboard._multi_row
+          and w.dashboard.title() == "Dashboard"
+          and len({p.geometry().top() for p in w.dashboard._panels.values() if p.isVisible()}) <= 2)
+    if bs is not None:
+        check("ohne Touch: Zellen wieder in einer Spalte im Scrollbereich, mit '(aus)'",
+              bs._grid_scroll.widget() is bs._grid_host and not bs._grid_scroll.isHidden()
+              and bs._grid.getItemPosition(bs._grid.indexOf(bs._cell_spins[7]))[1] == pos1[1]
+              and bs._cell_actuals[0].text().endswith("(aus)"), bs._cell_actuals[0].text())
+    check("ohne Touch: Zeitfenster-Auswahlliste zurueck, Wahl erhalten",
+          tl._window_buttons_host.isHidden() and not tl._window_combo.isHidden() and tl._window_combo.currentIndex() == 3)
     w._closing = True
     w.close()
     app.processEvents()
