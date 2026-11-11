@@ -7,6 +7,17 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **Touch: Bildschirmtastatur blitzte beim Öffnen des Zahlenfelds auf, Zahlenfeld mit Fensterleiste (0.37.2, Nutzer am
+  Pi-Display, 11.11.2026).**
+  - Ein echter Fingertipp gibt dem inneren Textfeld den Fokus, bevor der Tipp das Zahlenfeld öffnet; das Textfeld meldete
+    dem System eine Texteingabe, und die Bildschirmtastatur erschien kurz. Im Touch-Profil melden Felder mit eigenem
+    Tastenfeld (Zahlenfelder, CAN-Nutzdaten) jetzt keine Texteingabe mehr an (`WA_InputMethodEnabled`, über den
+    `TouchSizer`, ohne Touch-Profil zurück); normale Textfelder behalten die Bildschirmtastatur. Nach dem Schließen
+    bleibt kein Textcursor im Feld.
+  - Das Zahlenfeld hat keine Fensterleiste mehr (Titel steht im Feld, „Abbruch“ schließt), dafür einen Rahmen.
+  - **Mock-verifiziert** (`check_touch_ui`: Texteingabe ab- und wieder angemeldet, normales Textfeld unberührt;
+    `check_touch_keypad`: ohne Fensterleiste; alle 28 Prüfungen grün). Das Aufblitzen selbst ist offscreen nicht
+    nachstellbar (dort gibt ein simulierter Tipp keinen Fokus) -- Bestätigung am Display steht aus.
 - **Touch: Tipp auf ein Zahlenfeld öffnete das Tastenfeld nicht (0.37.1, Nutzer am Pi-Display, 11.11.2026).** Seit 0.33.0
   wertete `SteppedSpinBox.mousePressEvent` den Tipp aus -- ein Finger auf dem WERT trifft aber das innere Textfeld des
   Zahlenfelds, dort kam nie etwas an (stattdessen Textcursor). Die Prüfung klickte direkt aufs Zahlenfeld und sah das

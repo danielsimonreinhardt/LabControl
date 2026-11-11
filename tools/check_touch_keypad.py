@@ -47,6 +47,8 @@ def main() -> int:
     print("Eingabe")
     d = KeypadDialog("Spannung", "13,5", minimum=1.0, maximum=60.0, decimals=1, unit=" V")
     check("Startwert gilt", d.number() == 13.5 and d._set_button.isEnabled())
+    check("ohne Fensterleiste (Titel steht im Feld, Abbruch schliesst)",
+          bool(d.windowFlags() & Qt.WindowType.FramelessWindowHint))
     d._press("2")
     check("erster Tastendruck ersetzt", d.text() == "2")
     for key in ",", "5", "7":

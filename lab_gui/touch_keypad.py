@@ -70,6 +70,11 @@ class KeypadDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
+        # Ohne Fensterleiste (Nutzerwunsch 11.11.2026): Titel steht oben im Feld, "Abbruch" schliesst.
+        # Stattdessen ein Rahmen, damit sich das Feld vom Fenster dahinter abhebt.
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("touchKeypad")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._min, self._max = minimum, maximum
         self._decimals = decimals
         self._unit = unit.strip()
@@ -78,8 +83,11 @@ class KeypadDialog(QDialog):
         self._text = value_text
         self._fresh = True          # erster Tastendruck ersetzt den alten Wert
         pal = current_palette()
+        self.setStyleSheet(f"QDialog#touchKeypad {{ background-color: {pal.bg}; border: 2px solid {pal.border};"
+                           f" border-radius: 8px; }}")
 
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 14)
         head = QLabel(title)
         head.setStyleSheet("font-weight: bold;")
         outer.addWidget(head)
@@ -216,7 +224,9 @@ def open_for_spinbox(spin: QAbstractSpinBox) -> bool:
         decimals = 0
     dialog = KeypadDialog(field_title(spin), value_text, minimum=spin.minimum(), maximum=spin.maximum(),
                           decimals=decimals, unit=spin.suffix(), hex_mode=hex_mode, parent=spin.window())
-    if dialog.exec() != QDialog.DialogCode.Accepted:
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    spin.clearFocus()   # der Tipp gab dem Textfeld den Fokus -> kein Textcursor danach
+    if not accepted:
         return False
     value = dialog.number()
     if value is None:
@@ -241,7 +251,9 @@ class _HexLineFilter(QObject):
 
 def _open_for_hex_line(edit: QLineEdit) -> None:
     dialog = KeypadDialog(field_title(edit), edit.text(), hex_mode=True, allow_space=True, parent=edit.window())
-    if dialog.exec() == QDialog.DialogCode.Accepted:
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    edit.clearFocus()
+    if accepted:
         edit.setText(" ".join(dialog.text().split()).upper())
         edit.editingFinished.emit()
 
@@ -254,3 +266,5 @@ def attach_hex_keypad(edit: QLineEdit) -> None:
     if _HEX_FILTER is None:
         _HEX_FILTER = _HexLineFilter()
     edit.installEventFilter(_HEX_FILTER)
+    from touch_ui import KEYPAD_EDIT   # lokal: touch_ui -> theme; hier nur die Markierung
+    setattr(edit, KEYPAD_EDIT, True)   # TouchSizer: keine Bildschirmtastatur fuer dieses Feld

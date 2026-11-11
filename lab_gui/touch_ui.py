@@ -83,6 +83,18 @@ TOUCH_H = 44            # einheitliche Hoehe aller Knoepfe und Eingabefelder (To
 _ORIGINAL_SIZE = "_touch_original_size"
 TOUCH_LABEL = "_touch_label"
 SWIPE_ATTR = "_touch_swipe"            # am Viewport: Wischen eingeschaltet
+KEYPAD_EDIT = "_touch_keypad_edit"     # Textfeld mit eigenem Tastenfeld (touch_keypad.attach_hex_keypad)
+_NO_IM = "_touch_no_im"                # Texteingabe beim System abgemeldet (TouchSizer._keypad_edit)
+
+
+def _keypad_edit(widget: QWidget) -> QLineEdit | None:
+    """Textfeld, dessen Eingabe im Touch-Profil das eigene Tastenfeld uebernimmt: das innere Textfeld der
+    Zahlenfelder mit Tastenfeld (step_spinbox) und markierte Hex-Felder."""
+    if isinstance(widget, QAbstractSpinBox) and hasattr(widget, "_open_touch_keypad"):
+        return widget.lineEdit()
+    if isinstance(widget, QLineEdit) and getattr(widget, KEYPAD_EDIT, False):
+        return widget
+    return None
 
 
 def touch_label(button, text_fn: Callable[[], str]) -> None:
@@ -206,6 +218,13 @@ class TouchSizer(QObject):
             return
         if isinstance(widget, QAbstractScrollArea) and "QComboBox" not in type(widget.window()).__name__:
             self._update_swipe(widget)    # auch im Dashboard und in Tabellen
+        edit = _keypad_edit(widget)
+        if edit is not None and edit.testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled):
+            # Ein echter Fingertipp gibt dem Textfeld den Fokus, BEVOR der Tipp das Tastenfeld oeffnet --
+            # das meldete dem System eine Texteingabe, und die Bildschirmtastatur blitzte kurz auf
+            # (am Pi gesehen, 11.11.2026). Eingegeben wird hier ohnehin ueber das eigene Tastenfeld.
+            edit.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, False)
+            setattr(edit, _NO_IM, True)
         if self._excluded(widget):
             return
         name = type(widget).__name__
@@ -243,6 +262,10 @@ class TouchSizer(QObject):
 
     @staticmethod
     def _restore(widget: QWidget) -> None:
+        edit = _keypad_edit(widget)
+        if edit is not None and getattr(edit, _NO_IM, False):
+            edit.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
+            setattr(edit, _NO_IM, False)
         original = getattr(widget, _ORIGINAL_SIZE, None)
         if original is not None:
             if getattr(widget, TOUCH_LABEL, None) is not None:
