@@ -14,7 +14,8 @@ Semantic Versioning (`lab_gui/version.py`).
   Touch-Profil selbst mit Nein (`touch_keypad.deny_keyboard` am inneren Textfeld und an den CAN-Nutzdaten,
   `SteppedSpinBox.inputMethodQuery` am Zahlenfeld); der Attribut-Weg ist wieder entfernt. **Mock-verifiziert:**
   `check_touch_ui` stellt jetzt genau diese Frage (Zahlenfeld, inneres Textfeld, CAN-Nutzdaten: Nein; normales Textfeld
-  und ohne Touch-Profil: Ja) -- mit 0.37.2 rot, jetzt grün; alle 28 Prüfungen grün. Bestätigung am Display steht aus.
+  und ohne Touch-Profil: Ja) -- mit 0.37.2 rot, jetzt grün; alle 28 Prüfungen grün. **Am Display bestätigt**
+  (Nutzer, 11.11.2026): Zahlenfeld öffnet ohne Tastatur-Aufblitzen und ohne Fensterleiste, Sollwert an die KEL102.
 - **Touch: Bildschirmtastatur blitzte beim Öffnen des Zahlenfelds auf, Zahlenfeld mit Fensterleiste (0.37.2, Nutzer am
   Pi-Display, 11.11.2026).**
   - Ein echter Fingertipp gibt dem inneren Textfeld den Fokus, bevor der Tipp das Zahlenfeld öffnet; das Textfeld meldete
