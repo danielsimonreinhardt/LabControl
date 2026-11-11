@@ -589,9 +589,20 @@ class DeviceWorker(QObject):
         """Haelt alle Timer des Workers in SEINEM Thread an (MainWindow.closeEvent,
         vor QThread.quit()). Sonst raeumt Python den Worker erst beim Prozessende
         im Haupt-Thread ab, und Qt meldet unter Linux "Timers cannot be stopped
-        from another thread" (in WSL gesehen, 10.11.2026)."""
+        from another thread" (in WSL gesehen, 10.11.2026).
+
+        Danach (Timer stehen, kein Empfang mehr) die CAN-Busse schliessen: die Knoten haben ihre
+        Abschiedsframes schon gesendet (shutdown_can_nodes), offen blieb nur der Bus selbst --
+        python-can meldete dann bei jedem Beenden "SocketcanBus was not properly shut down"
+        (am Pi im Dienst-Log, 11.11.2026)."""
         for timer in self.findChildren(QTimer):
             timer.stop()
+        for can_id, bus in list(self._can_buses.items()):
+            try:
+                bus.close()
+            except Exception:   # Beenden darf daran nie haengen
+                logger.exception("CAN-Bus %s beim Beenden nicht geschlossen", can_id)
+        self._can_buses.clear()
 
     @Slot(bool)
     def set_test_running(self, running: bool) -> None:

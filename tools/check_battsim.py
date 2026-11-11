@@ -343,6 +343,19 @@ def run_worker() -> None:
     spin(0.2)
     check(seen["online"] == (sid, False), "Simulationsmodus aus -> Simulator getrennt")
 
+    # Beenden (MainWindow.closeEvent: shutdown_can_nodes, dann stop_timers) schliesst auch den Bus selbst --
+    # sonst meldete python-can bei jedem Beenden "SocketcanBus was not properly shut down" (Pi, 11.11.2026).
+    worker.set_simulation_mode(True)
+    spin(0.3)
+    bus = worker._can_buses.get(dw.SIM_CAN_ID)
+    closed: list[int] = []
+    if bus is not None:
+        real_close = bus.close
+        bus.close = lambda: (closed.append(1), real_close())
+    worker.shutdown_can_nodes()
+    worker.stop_timers()
+    check(bus is not None and closed == [1] and not worker._can_buses, "Beenden schliesst den CAN-Bus")
+
 
 def run_hardware(args) -> None:
     from can_bus.driver import CanBus

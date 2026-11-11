@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **CAN-Bus beim Beenden schließen (0.36.2, 11.11.2026).** Am Pi stand bei jedem Neustart des Dienstes
+  „SocketcanBus was not properly shut down“ im Log: Die CAN-Knoten senden beim Beenden ihre Abschiedsframes
+  (Batterie-Simulator: Ausgang sperren, Fernsteuerung abgeben -- das war schon richtig), der Bus selbst blieb aber
+  offen. `DeviceWorker.stop_timers` schließt ihn jetzt, nachdem die Timer stehen. **Mock-verifiziert**
+  (`check_battsim`: „Beenden schließt den CAN-Bus“, mit dem alten Stand rot), am Pi im Dienst-Log nach Neustart geprüft.
 - **Batterie-Zellsollwerte am Pi leer, sporadischer Fehler beim Beenden (0.36.1, 11.11.2026).**
   - In 0.36.0 hatten die Zellsollwerte im Touch-Profil keine −/+ Tasten (`NoButtons`). Unter Qt 6.12 (am Pi, PySide6
     ist nicht festgelegt, kommt also auch an den PC) ist das Textfeld eines Zahlenfelds mit `NoButtons` und
