@@ -21,7 +21,8 @@
 #     Dienst (Ergaenzung kiosk.conf; Qt-Fenster setzen ihren Zeiger selbst)
 #   7 Dialoge ohne Fensterleiste: labwc zeichnet keine (rc.xml windowRule), Qt auch nicht
 #     (QT_WAYLAND_DISABLE_WINDOWDECORATION=1 in kiosk.conf)
-#   8 Bootloader-Bild aus: DISABLE_HDMI=1 im Bootloader-EEPROM (Pi 5), wirksam nach dem naechsten Neustart
+#   8 nur mit KIOSK_BOOTLOADER=1: Bootloader-Bild aus, DISABLE_HDMI=1 im EEPROM (Pi 5). Schreibt den Bootloader
+#     mit der neuesten mitgelieferten Firmware neu (Firmware-Update, Entscheidung PI-16)
 # Wartung danach per SSH.
 set -euo pipefail
 
@@ -238,6 +239,10 @@ EOF
 echo "8/8 Bootloader-Bild aus (DISABLE_HDMI=1)"
 if rpi-eeprom-config | grep -q '^DISABLE_HDMI=1'; then
   echo "    schon gesetzt"
+elif [ "${KIOSK_BOOTLOADER:-0}" != "1" ]; then
+  # Schreibt den Bootloader neu, mit der neuesten mitgelieferten Firmware (ein Firmware-Update) -- nur auf
+  # ausdruecklichen Wunsch (Entscheidung PI-16): KIOSK_BOOTLOADER=1 tools/pi/kiosk_pi.sh
+  echo "    uebersprungen (Firmware-Update, nur mit KIOSK_BOOTLOADER=1)"
 else
   tmp=$(mktemp)
   rpi-eeprom-config | grep -v '^DISABLE_HDMI=' > "$tmp"
