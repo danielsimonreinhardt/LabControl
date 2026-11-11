@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Kiosk: eigene Sitzung ohne Desktop und Leiste (0.40.1, 11.11.2026).** Am Pi liefen nach 0.40.0 Desktop und Leiste
+  weiter: Raspberry Pi OS startet labwc mit `-m`, dann werden die Autostart-Dateien aller Konfig-Ordner
+  zusammengeführt und `/etc/xdg/labwc/autostart` startet `pcmanfm-pi` und `wf-panel-pi` immer mit. `kiosk_pi.sh`
+  legt jetzt die Sitzung `labcontrol-kiosk` an (wie `labwc-pi`, aber ohne `-m`) und stellt die automatische Anmeldung
+  darauf um (Sicherung von `lightdm.conf`, `--undo` stellt sie wieder her). Am Pi nach Neustart geprüft.
 - **Raspberry Pi: Kiosk mit LabControl-Logo (0.40.0, Nutzerwunsch 11.11.2026).** Beim Booten nur das Logo, kein
   Desktop, danach LabControl im Vollbild.
   - Neues Logo (`tools/pi/branding/make_branding.py` → `logo.svg`, `logo-mark.svg`, `splash.png`): Messbildschirm mit
