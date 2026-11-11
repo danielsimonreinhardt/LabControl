@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import QObject, QSize, Signal
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QEvent, QObject, QSize, Signal
+from PySide6.QtWidgets import QApplication, QScrollBar, QWidget
 
 # Pfeile fuer die Spin-Buttons (QAbstractSpinBox::up-arrow/down-arrow, siehe
 # stylesheet() unten) werden aus qtawesome erzeugt -- wie alle anderen Icons
@@ -470,13 +470,50 @@ def stylesheet(pal: Palette) -> str:
     QScrollArea {{
         border: none;
     }}
-    QScrollBar:horizontal, QScrollBar:vertical {{
-        background: {pal.surface_alt};
+    /* Schmale Scrollleisten, beim Ueberfahren breit zum Greifen (PI-20 b, 11.11.2026): die Leiste bleibt
+       12 px breit, nur der Griff waechst von 6 px auf die volle Breite -- der Inhalt daneben springt nicht.
+       "hot" setzt ScrollbarHover beim Betreten/Verlassen (QSS :hover erreicht den Griff nicht, geprueft). */
+    QScrollBar:vertical {{
+        width: 12px;
+        background: transparent;
         border: none;
     }}
-    QScrollBar::handle {{
+    QScrollBar:horizontal {{
+        height: 12px;
+        background: transparent;
+        border: none;
+    }}
+    QScrollBar[hot="true"] {{
+        background: {pal.surface_alt};
+    }}
+    QScrollBar::handle:vertical {{
         background: {pal.border_strong};
-        border-radius: {M.radius_sm}px;
+        border-radius: 3px;
+        min-height: 32px;
+        margin: 2px 3px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {pal.border_strong};
+        border-radius: 3px;
+        min-width: 32px;
+        margin: 3px 2px;
+    }}
+    QScrollBar[hot="true"]::handle:vertical {{
+        margin: 2px 1px;
+        border-radius: 5px;
+    }}
+    QScrollBar[hot="true"]::handle:horizontal {{
+        margin: 1px 2px;
+        border-radius: 5px;
+    }}
+    QScrollBar::add-line, QScrollBar::sub-line {{
+        width: 0px;
+        height: 0px;
+        border: none;
+        background: transparent;
+    }}
+    QScrollBar::add-page, QScrollBar::sub-page {{
+        background: transparent;
     }}
     /* Hinweistexte (setProperty("role", "hint")) -- ueber diese globale Regel
        statt per Instanz-Stylesheet, damit sie beim Live-Umschalten Hell/Dunkel
@@ -501,6 +538,23 @@ def stylesheet(pal: Palette) -> str:
     """
 
 
+class ScrollbarHover(QObject):
+    """Setzt beim Betreten/Verlassen eines Scrollbalkens die Eigenschaft "hot" (QSS: Griff voll breit, PI-20 b).
+    Nur am PC installiert; im Touch-Profil ist die Leiste reine Positionsanzeige (touch_ui, UX-8)."""
+
+    _TYPES = (QEvent.Type.Enter, QEvent.Type.Leave)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() in self._TYPES and isinstance(obj, QScrollBar):
+            hot = event.type() == QEvent.Type.Enter
+            if obj.property("hot") != hot:
+                obj.setProperty("hot", hot)
+                obj.style().unpolish(obj)
+                obj.style().polish(obj)
+                obj.update()
+        return False
+
+
 class ThemeManager(QObject):
     """Singleton: haelt die aktuell aktive Palette und benachrichtigt Widgets,
     die auf einen Theme-Wechsel live reagieren muessen (siehe Modul-Docstring)."""
@@ -513,6 +567,8 @@ class ThemeManager(QObject):
         super().__init__()
         self._palette = LIGHT
         self._touch = False
+        self._scroll_hover = ScrollbarHover(self)
+        self._scroll_hover_on = False
 
     @classmethod
     def instance(cls) -> "ThemeManager":
@@ -550,6 +606,13 @@ class ThemeManager(QObject):
             from touch_ui import touch_qss   # lokal: touch_ui importiert theme
             qss += touch_qss(self._palette)
         app.setStyleSheet(qss)
+        want_hover = not self._touch
+        if want_hover != self._scroll_hover_on:
+            if want_hover:
+                app.installEventFilter(self._scroll_hover)
+            else:
+                app.removeEventFilter(self._scroll_hover)
+            self._scroll_hover_on = want_hover
 
 
 def set_tone(label: QWidget, tone: str, strong: bool = False) -> None:

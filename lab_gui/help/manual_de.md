@@ -25,7 +25,8 @@ Die Anzeige aktualisiert sich automatisch etwa alle 500 ms.
   Geräte grundsätzlich zur Session gehören.
 - **Ansicht umschalten**: Der Pfeil-Button unten rechts im
   Dashboard-Rahmen wechselt zwischen normaler und kompakter Ansicht
-  (kleinere Kacheln, für viele gleichzeitig sichtbare Geräte).
+  (kleinere Kacheln, für viele gleichzeitig sichtbare Geräte). Ohne
+  gespeicherte Wahl startet LabControl kompakt; die Wahl wird gespeichert.
 - **Abdocken**: Der Button links daneben öffnet das Dashboard in einem
   eigenen Fenster, z. B. für einen zweiten Bildschirm; das Hauptfenster
   zeigt dann nur noch die Reiter. Schließen des Fensters (oder derselbe
@@ -648,7 +649,7 @@ läuft.
   den **Quittieren**-Button im roten Banner am oberen Fensterrand
   bestätigt wird – so bleibt ein unbeaufsichtigter Lauf nicht unbemerkt
   auf „ausgelöst“ stehen.
-- Der Sicherheitsstatus in der Statuszeile zeigt **AUS** (keine
+- Der Sicherheitsstatus in der Statuszeile (Chip mit Schild-Symbol) zeigt **AUS** (keine
   Grenzwerte aktiv), **AKTIV** (überwacht, alles im grünen Bereich) oder
   **AUSGELÖST** (Grenzwert überschritten, Ausgänge abgeschaltet).
 - Während eines Testlaufs überwacht der Watchdog zusätzlich die
@@ -667,11 +668,14 @@ läuft.
 
 ## 7. Statuszeile
 
-Am unteren Fensterrand zeigt je ein Label pro bekanntem Gerät dessen
-Verbindungsstatus (grün = verbunden, rot = getrennt). Die Verbindung
-wird automatisch alle 3 Sekunden neu versucht, solange ein Gerät nicht
-erreichbar ist. Daneben stehen der Sicherheitsstatus (siehe Abschnitt 6)
-und ganz rechts der „ALLE AUS“-Button.
+Am unteren Fensterrand steht zuerst der Sicherheitsstatus als Chip mit
+Schild-Symbol (siehe Abschnitt 6), danach je ein Chip pro bekanntem Gerät
+mit Symbol und Kurzname: ✓ verbunden (grün), ✕ getrennt (rot),
+Ⓗ Handbedienung (orange), z. B. „✓ NT1“. Der volle Name steht im
+Tooltip; ein Klick auf die Chips öffnet „Gerätezustand“ mit allen
+Geräten. Die Verbindung wird automatisch alle 3 Sekunden neu versucht,
+solange ein Gerät nicht erreichbar ist. Ganz rechts steht der
+„ALLE AUS“-Button.
 
 ---
 

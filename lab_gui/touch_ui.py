@@ -406,10 +406,12 @@ def touch_qss(pal: Palette) -> str:
         border: none;
         margin: 1px 2px;
     }}
-    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal,
+    QScrollBar[hot="true"]::handle:vertical, QScrollBar[hot="true"]::handle:horizontal {{
         background: {pal.border_strong};
         border: none;
         border-radius: {SCROLLBAR_W // 2}px;
+        margin: 0px;   /* die PC-Regel (theme.py, PI-20 b) setzt einen Rand fuer den schmalen Griff */
     }}
     QScrollBar::handle:vertical {{
         min-height: 40px;

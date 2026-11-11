@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
                      "scpiscope": "Scope", "fg": "FG", "battsim": "BS"}
-STATUS_CHIP_HEIGHT = 28
+STATUS_CHIP_HEIGHT = 28      # Touch-Profil
+STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
 
 
@@ -187,7 +188,9 @@ class MainWindow(QMainWindow):
         self._safety_status_label = QLabel()
         self._status_layout.addWidget(self._safety_status_label)
         self.statusBar().addPermanentWidget(self._status_container)
-        self._status_container.installEventFilter(self)   # Touch: Tipp -> Liste (_show_status_details)
+        self._status_container.installEventFilter(self)   # Tipp/Klick -> Liste (_show_status_details)
+        self._status_container.setCursor(Qt.CursorShape.PointingHandCursor)   # am PC: klickbar (PI-17 a)
+        self._status_layout.setSpacing(6)
 
         self._status_labels: dict[str, QLabel] = {}
         self._device_labels: dict[str, str] = {}
@@ -425,23 +428,29 @@ class MainWindow(QMainWindow):
         colors = {"off": pal.text_muted, "armed": pal.success, "tripped": pal.danger}
         color = colors.get(state, pal.text)
         label = self._safety_status_label
-        if self._touch:
-            # Touch-Profil: Chip wie die Geraete, Schild-Symbol statt "Sicherheit:" (Nutzerwunsch 11.11.2026)
-            icon = SAFETY_ICONS.get(state, "mdi.shield-outline")
-            label.setText(f'<img src="{touch_icon_path(icon, color, 18)}" width="18" height="18"'
-                          f' style="vertical-align: middle"> {texts.get(state, state)}')
-            label.setToolTip(f"{tr('Sicherheit:')} {texts.get(state, state)}")
-            label.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color};"
-                                f" border-radius: 13px; padding: 1px 9px; background: transparent;")
-            label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-            label.setFixedHeight(STATUS_CHIP_HEIGHT)
-            return
-        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        label.setMinimumHeight(0)
-        label.setMaximumHeight(16777215)
-        label.setToolTip("")
-        label.setText(f"{tr('Sicherheit:')} {texts.get(state, state)}")
-        label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        # Chip wie die Geraete, Schild-Symbol statt "Sicherheit:" (Nutzerwunsch 11.11.2026, seit PI-18 a auch am PC)
+        icon = SAFETY_ICONS.get(state, "mdi.shield-outline")
+        size = self._chip_icon_size()
+        label.setText(f'<img src="{touch_icon_path(icon, color, size)}" width="{size}" height="{size}"'
+                      f' style="vertical-align: middle"> {texts.get(state, state)}')
+        label.setToolTip(f"{tr('Sicherheit:')} {texts.get(state, state)}")
+        self._style_chip(label, color)
+
+    def _chip_height(self) -> int:
+        return STATUS_CHIP_HEIGHT if self._touch else STATUS_CHIP_HEIGHT_PC
+
+    def _chip_icon_size(self) -> int:
+        return 18 if self._touch else 15
+
+    def _style_chip(self, label: QLabel, color: str) -> None:
+        """Status-Chip (Geraete, Sicherheit): Rahmen und Schrift in der Zustandsfarbe, natuerliche Breite."""
+        height = self._chip_height()
+        padding = "1px 9px" if self._touch else "0px 7px"
+        label.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color};"
+                            f" border-radius: {height // 2 - 1}px; padding: {padding}; background: transparent;")
+        # Natuerliche Groesse statt die ganze Leiste zu fuellen (am Pi-Display gesehen)
+        label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        label.setFixedHeight(height)
 
     def _style_safety_banner(self) -> None:
         pal = ThemeManager.instance().palette
@@ -1638,31 +1647,15 @@ class MainWindow(QMainWindow):
         if status_label is None:
             return
         label = self._device_labels.get(device_id, device_id)
-        online = self._device_online.get(device_id, False)
         symbol, state, chip_color = self._status_state(device_id)
-        if self._touch:
-            # Touch-Profil: kurzer Chip mit Symbol statt "Name: Zustand" -- die volle Zeile passte ab vier
-            # Geraeten nicht mehr und war vor allem an der Farbe lesbar (GUI-Review UX-1). Tipp -> Liste.
-            status_label.setText(f"{symbol} {self._short_name(device_id)}")
-            status_label.setToolTip(f"{label}: {state}")
-            status_label.setStyleSheet(
-                f"color: {chip_color}; font-weight: bold; border: 1px solid {chip_color};"
-                f" border-radius: 13px; padding: 1px 9px; background: transparent;")
-            # Natuerliche Groesse statt die ganze Leiste zu fuellen (am Pi-Display gesehen)
-            status_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-            status_label.setFixedHeight(STATUS_CHIP_HEIGHT)
-            return
-        status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        status_label.setMinimumHeight(0)
-        status_label.setMaximumHeight(16777215)
-        status_label.setToolTip("")
-        status_label.setText(f"{label}: {state}")
-        pal = ThemeManager.instance().palette
-        color = pal.success if online else pal.danger
-        status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        # Kurzer Chip mit Symbol statt "Name: Zustand" -- die volle Zeile passte ab vier Geraeten nicht mehr und war
+        # vor allem an der Farbe lesbar (GUI-Review UX-1; seit PI-17 a auch am PC). Tipp/Klick -> Liste.
+        status_label.setText(f"{symbol} {self._short_name(device_id)}")
+        status_label.setToolTip(f"{label}: {state}")
+        self._style_chip(status_label, chip_color)
 
     def _show_status_details(self) -> None:
-        """Touch-Profil: Tipp auf die Leiste oben -> alle Geraete mit vollem Namen und Zustand."""
+        """Tipp/Klick auf die Statusanzeige -> alle Geraete mit vollem Namen und Zustand."""
         dialog = QDialog(self)
         dialog.setWindowTitle(tr("Gerätezustand"))
         layout = QVBoxLayout(dialog)
@@ -1685,9 +1678,9 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
-        # Touch-Profil: Tipp auf die Statusanzeige oben oeffnet die Liste (_show_status_details). Das
-        # Druecken annehmen, sonst kommt das Loslassen nicht an; Wischen erledigt der QScroller davor.
-        if obj is self._status_container and self._touch:
+        # Tipp/Klick auf die Statusanzeige oeffnet die Liste (_show_status_details; am PC seit PI-17 a). Das
+        # Druecken annehmen, sonst kommt das Loslassen nicht an; Wischen erledigt im Touch-Profil der QScroller davor.
+        if obj is self._status_container:
             if event.type() == QEvent.Type.MouseButtonPress:
                 return True
             if event.type() == QEvent.Type.MouseButtonRelease:

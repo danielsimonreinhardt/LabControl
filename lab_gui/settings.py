@@ -140,7 +140,8 @@ class Settings(QObject):
 
     @property
     def dashboard_compact(self) -> bool:
-        return bool(self._data.get("dashboard_compact", False))
+        # Ohne gespeicherte Wahl kompakt (PI-21 c, 11.11.2026: "Kompakter Modus als Standard"); der Umschalter bleibt
+        return bool(self._data.get("dashboard_compact", True))
 
     def set_dashboard_compact(self, enabled: bool) -> None:
         if enabled == self.dashboard_compact:

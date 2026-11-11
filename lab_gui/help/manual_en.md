@@ -25,7 +25,8 @@ display refreshes automatically about every 500 ms.
   belong to the session in general.
 - **Toggle view**: the arrow button at the bottom right of the dashboard
   frame switches between the normal and a compact view (smaller tiles,
-  for many devices visible at once).
+  for many devices visible at once). Without a saved choice LabControl
+  starts compact; the choice is saved.
 - **Detach**: the button to its left opens the dashboard in a window of
   its own, e.g. for a second screen; the main window then shows only the
   tabs. Closing that window (or the same button) brings the dashboard
@@ -620,7 +621,7 @@ whether a testcase is currently running.
   **Acknowledge** button in the red banner at the top of the window —
   so an unattended run doesn't silently keep sitting in the "triggered"
   state.
-- The safety status in the status bar shows **OFF** (no limits active),
+- The safety status in the status bar (chip with shield icon) shows **OFF** (no limits active),
   **ARMED** (monitored, everything within range), or **TRIGGERED**
   (limit exceeded, outputs switched off).
 - During a testcase run, the watchdog additionally monitors the
@@ -638,11 +639,13 @@ whether a testcase is currently running.
 
 ## 7. Status bar
 
-At the bottom of the window, one label per known device shows its
-connection status (green = connected, red = disconnected). The
+At the bottom of the window, the safety status comes first as a chip
+with a shield icon (see section 6), followed by one chip per known
+device with icon and short name: ✓ connected (green), ✕ disconnected
+(red), Ⓗ manual control (orange), e.g. "✓ PSU1". The full name is in the
+tooltip; clicking the chips opens "Device status" with all devices. The
 connection is retried automatically every 3 seconds as long as a device
-is unreachable. Next to it are the safety status (see section 6) and,
-at the far right, the "ALL OFF" button.
+is unreachable. The "ALL OFF" button is at the far right.
 
 ---
 

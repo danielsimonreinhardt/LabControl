@@ -6,6 +6,24 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Geändert
+- **Touch-Verbesserungen auch am PC (0.43.0, Entscheidungen PI-17 a, PI-18 a, PI-20 b, PI-21 c, 11.11.2026).**
+  - PI-17: Statusleiste mit einem Chip je Gerät (Symbol + Kurzname, z. B. „✓ NT1“) statt „Name: Zustand“, am PC
+    22 px hoch; voller Name im Tooltip, Klick öffnet „Gerätezustand“.
+  - PI-18: Sicherheit als Chip mit Schild-Symbol (aus/aktiv/ausgelöst), Zustand im Tooltip.
+  - PI-20: Scrollleisten fest 12 px breit, Griff 6 px; beim Überfahren füllt der Griff die Leiste (Eigenschaft
+    `hot`, gesetzt von `theme.ScrollbarHover`, nur am PC installiert -- QSS `:hover` erreicht den Griff nicht,
+    geprüft). Der Inhalt daneben springt dabei nicht. Pfeiltasten der Leisten entfallen. Touch-Profil unverändert
+    (6-px-Positionsanzeige).
+  - PI-21: Übersicht startet ohne gespeicherte Wahl kompakt („Kompakter Modus als Standard“), Umschalter bleibt;
+    eine gespeicherte Wahl gilt weiter.
+  - PI-19 zurückgezogen: meine Beschreibung des PC-Testablaufs im Board war falsch (dort gibt es keine Ablaufliste),
+    neu gefragt als PI-22.
+  - Handbuch (de/en): Statuszeile, Sicherheitsstatus, Standardansicht.
+  - **Mock-verifiziert:** `check_touch_ui` (Chips und Schild am PC 22 px, Klick öffnet „Gerätezustand“, Standard
+    kompakt) und neu `tools/check_scrollbar_hover.py` (Griff 6 → 10 px, Leiste bleibt 12 px, Touch ohne Filter).
+    Am echten Bildschirm noch nicht angesehen.
+
 ### Hinzugefügt
 - **Neues Logo auch in der Windows-App: Splash und Taskleisten-Symbol (0.42.0, Nutzerwunsch 11.11.2026).** Das Logo
   aus dem Pi-Bootscreen (Messbildschirm mit Sprungantwort, „Lab**Control**“, „MESSEN · STEUERN · PRÜFEN“) ersetzt das

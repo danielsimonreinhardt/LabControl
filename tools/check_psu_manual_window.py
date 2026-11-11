@@ -66,7 +66,8 @@ def main() -> int:
     mock = window._worker._psus[SIM]
 
     def status_text() -> str:
-        return window._status_labels[SIM].text()
+        # Seit PI-17 a (0.43.0) ein Chip "Ⓗ NT1"; der Zustand in Worten steht im Tooltip "Name: Zustand"
+        return window._status_labels[SIM].toolTip()
 
     check("Netzteil ist verbunden", panel._online and "verbunden" in status_text(), status_text())
 

@@ -247,7 +247,7 @@ def main() -> int:
     # Nutzerwunsch 11.11.2026: im Touch-Profil immer kompakt (etwas groesser), kein Umschalter, kein Rahmen im Rahmen
     psu_tile = dash._panels.get("psu:SIM")
     check("Uebersicht im Touch-Profil immer kompakt, ohne Umschalter",
-          dash._compact and dash._view_toggle_button.isHidden() and not dash._user_compact)
+          dash._compact and dash._view_toggle_button.isHidden())
     check("Kompaktkacheln groesser (Werte 20 px)", psu_tile is not None and psu_tile._large
           and "20px" in next(iter(psu_tile._compact_values.values())).styleSheet())
     check("kein Rahmen um die Kacheln (Rahmen im Rahmen)", "border: none" in dash.styleSheet()
@@ -436,10 +436,26 @@ def main() -> int:
     if psu is not None:
         check("ohne Touch: Zahlenfeld nimmt wieder Texteingabe an (Tippen am PC)",
               wants_keyboard(psu._voltage_spin) and wants_keyboard(psu._voltage_spin.lineEdit()))
-    check("ohne Touch: Sicherheit wieder als Text", w._safety_status_label.text().startswith("Sicherheit:"),
-          w._safety_status_label.text())
-    check("ohne Touch: gespeicherte Ansicht (normal) und Umschalter zurueck, Rahmen zurueck",
-          not w.dashboard._compact and not w.dashboard._view_toggle_button.isHidden() and w.dashboard.styleSheet() == "")
+    check("ohne Touch: Sicherheit bleibt Chip mit Schild, kleiner (PI-18 a)",
+          "<img" in w._safety_status_label.text() and w._safety_status_label.height() == 22,
+          f"{w._safety_status_label.text()} h={w._safety_status_label.height()}")
+    pc_chips = {d: lb.text() for d, lb in w._status_labels.items()}
+    check("ohne Touch: Geraete bleiben Chips mit Kurzname, voller Name im Tooltip (PI-17 a)",
+          pc_chips.get("psu:SIM", "").startswith("✓ NT")
+          and ":" in w._status_labels["psu:SIM"].toolTip()
+          and all(lb.height() == 22 for lb in w._status_labels.values()), str(pc_chips))
+    opened = []
+    real_details = w._show_status_details
+    w._show_status_details = lambda: opened.append(True)
+    try:
+        QTest.mouseClick(w._status_container, Qt.MouseButton.LeftButton)
+        for _ in range(3):
+            app.processEvents()
+    finally:
+        w._show_status_details = real_details
+    check("ohne Touch: Klick auf die Statusanzeige oeffnet 'Geraetezustand' (PI-17 a)", opened == [True], str(opened))
+    check("ohne Touch: Standard-Ansicht kompakt (PI-21 c), Umschalter zurueck, Rahmen zurueck",
+          w.dashboard._compact and not w.dashboard._view_toggle_button.isHidden() and w.dashboard.styleSheet() == "")
     check("ohne Touch: Dashboard wieder zweizeilig mit Titel", not w.dashboard._multi_row
           and w.dashboard.title() == "Dashboard"
           and len({p.geometry().top() for p in w.dashboard._panels.values() if p.isVisible()}) <= 2)
