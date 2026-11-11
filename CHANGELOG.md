@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Kiosk: Mauszeiger ausgeblendet (0.40.2, Nutzerwunsch 11.11.2026).** `kiosk_pi.sh` legt ein unsichtbares
+  Zeiger-Theme an (`~/.icons/labcontrol-invisible`, ein transparentes 1×1-Bild für alle Zeigernamen der installierten
+  Themes) und setzt `XCURSOR_THEME` für labwc (`~/.config/labwc/environment`) und den Dienst (systemd-Ergänzung
+  `kiosk-cursor.conf`, Qt-Fenster setzen ihren Zeiger selbst). Gilt auch über Hintergrund, Bildschirmtastatur und
+  Dialogen; `--undo` nimmt es zurück. Am Pi nach Neustart geprüft (Umgebung von labwc und LabControl).
 - **Kiosk: eigene Sitzung ohne Desktop und Leiste (0.40.1, 11.11.2026).** Am Pi liefen nach 0.40.0 Desktop und Leiste
   weiter: Raspberry Pi OS startet labwc mit `-m`, dann werden die Autostart-Dateien aller Konfig-Ordner
   zusammengeführt und `/etc/xdg/labwc/autostart` startet `pcmanfm-pi` und `wf-panel-pi` immer mit. `kiosk_pi.sh`

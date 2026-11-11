@@ -17,6 +17,9 @@
 #     rc.xml (Touch-Zuordnung), environment (Tastatur) und
 #   - ~/.config/labwc/autostart: nur Hintergrund (Logo per swaybg), kanshi und die XDG-Autostarts
 #     (Bildschirmtastatur, Ein/Aus-Taste, LabControl)
+#   - unsichtbarer Mauszeiger: Zeiger-Theme ~/.icons/labcontrol-invisible (1x1 transparent fuer alle
+#     Zeigernamen der installierten Themes), XCURSOR_THEME fuer labwc (~/.config/labwc/environment) und den
+#     Dienst (systemd-Ergaenzung) -- Qt-Fenster setzen ihren Zeiger selbst
 # Wartung danach per SSH; den Desktop gibt es mit --undo und einem Neustart zurueck.
 set -euo pipefail
 
@@ -31,6 +34,10 @@ SESSION_BIN=/usr/local/bin/labcontrol-kiosk-session
 AUTOSTART="$HOME/.config/labwc/autostart"
 BACKUP="$HOME/.local/share/labcontrol/kiosk-backup"
 CMDLINE_ADD="logo.nologo vt.global_cursor_default=0 loglevel=3"
+CURSOR_THEME=labcontrol-invisible
+CURSOR_DIR="$HOME/.icons/$CURSOR_THEME"
+LABWC_ENV="$HOME/.config/labwc/environment"
+SERVICE_DROPIN="$HOME/.config/systemd/user/labcontrol.service.d/kiosk-cursor.conf"
 
 if [ "${1:-}" = "--undo" ]; then
   echo "Kiosk zuruecknehmen"
@@ -39,6 +46,9 @@ if [ "${1:-}" = "--undo" ]; then
   [ -f "$BACKUP/lightdm.conf" ] && sudo cp "$BACKUP/lightdm.conf" "$LIGHTDM" && echo "  lightdm.conf wiederhergestellt"
   sudo rm -f "$SESSION_FILE" "$SESSION_BIN" && echo "  Kiosk-Sitzung entfernt"
   rm -f "$AUTOSTART" && echo "  labwc-Autostart entfernt (Desktop und Leiste wieder an)"
+  rm -rf "$CURSOR_DIR" "$SERVICE_DROPIN"
+  [ -f "$LABWC_ENV" ] && sed -i "/^XCURSOR_THEME=$CURSOR_THEME\$/d" "$LABWC_ENV"
+  systemctl --user daemon-reload && echo "  Mauszeiger wieder sichtbar"
   sudo /usr/sbin/plymouth-set-default-theme -R pix && echo "  Boot-Theme wieder pix"
   echo "Fertig -- wirksam nach einem Neustart."
   exit 0
@@ -54,7 +64,7 @@ mkdir -p "$BACKUP"
 [ -f "$BACKUP/config.txt" ] || cp "$CONFIG" "$BACKUP/config.txt"
 [ -f "$BACKUP/lightdm.conf" ] || cp "$LIGHTDM" "$BACKUP/lightdm.conf"
 
-echo "1/5 Boot-Logo (Plymouth-Theme labcontrol)"
+echo "1/6 Boot-Logo (Plymouth-Theme labcontrol)"
 sudo install -d "$THEME_DIR"
 sudo install -m 644 "$BRAND/splash.png" "$BRAND/labcontrol.script" "$BRAND/labcontrol.plymouth" "$THEME_DIR/"
 if [ "$(/usr/sbin/plymouth-set-default-theme)" != "labcontrol" ] || [ "${KIOSK_REBUILD:-0}" = "1" ]; then
@@ -64,7 +74,7 @@ else
   sudo update-initramfs -u >/dev/null   # Bild/Skript koennen sich geaendert haben
 fi
 
-echo "2/5 Kernel-Kommandozeile ohne Himbeeren, Cursor und Meldungen"
+echo "2/6 Kernel-Kommandozeile ohne Himbeeren, Cursor und Meldungen"
 line=$(head -n 1 "$CMDLINE")
 new="$line"
 for token in $CMDLINE_ADD; do
@@ -75,13 +85,13 @@ if [ "$new" != "$line" ]; then
   echo "    ergaenzt: $CMDLINE_ADD"
 fi
 
-echo "3/5 Firmware ohne Regenbogen"
+echo "3/6 Firmware ohne Regenbogen"
 if ! grep -q '^disable_splash=1' "$CONFIG"; then
   printf '\n# LabControl-Kiosk (tools/pi/kiosk_pi.sh)\n[all]\ndisable_splash=1\n' | sudo tee -a "$CONFIG" >/dev/null
   echo "    disable_splash=1 gesetzt"
 fi
 
-echo "4/5 Sitzung ohne Desktop und Leiste, Hintergrund = Logo"
+echo "4/6 Sitzung ohne Desktop und Leiste, Hintergrund = Logo"
 mkdir -p "$(dirname "$AUTOSTART")"
 cat > "$AUTOSTART" <<EOF
 # LabControl-Kiosk (tools/pi/kiosk_pi.sh): ersetzt /etc/xdg/labwc/autostart -- ohne Desktop (pcmanfm-pi)
@@ -92,7 +102,7 @@ cat > "$AUTOSTART" <<EOF
 /usr/bin/lxsession-xdg-autostart
 EOF
 
-echo "5/5 Kiosk-Sitzung (labwc ohne -m) fuer die automatische Anmeldung"
+echo "5/6 Kiosk-Sitzung (labwc ohne -m) fuer die automatische Anmeldung"
 sudo tee "$SESSION_BIN" >/dev/null <<'EOF'
 #!/bin/sh
 # LabControl-Kiosk-Sitzung (tools/pi/kiosk_pi.sh): wie /usr/bin/labwc-pi, aber labwc OHNE -m -- sonst
@@ -121,5 +131,28 @@ EOF
 sudo sed -i 's/^autologin-session=.*/autologin-session=labcontrol-kiosk/' "$LIGHTDM"
 grep -q '^autologin-session=labcontrol-kiosk' "$LIGHTDM" || { echo "autologin-session in $LIGHTDM nicht gefunden"; exit 1; }
 echo "    automatische Anmeldung startet labcontrol-kiosk"
+
+
+echo "6/6 Mauszeiger ausblenden (unsichtbares Zeiger-Theme)"
+mkdir -p "$CURSOR_DIR/cursors"
+# Xcursor-Datei mit einem 1x1-Bild, voll transparent (Format: libXcursor, ein Bild-Eintrag)
+python3 - "$CURSOR_DIR/cursors/blank" <<'EOF'
+import struct, sys
+image = struct.pack("<9I", 36, 0xFFFD0002, 1, 1, 1, 1, 0, 0, 0) + struct.pack("<I", 0)
+header = struct.pack("<4sIII", b"Xcur", 16, 0x10000, 1) + struct.pack("<III", 0xFFFD0002, 1, 28)
+open(sys.argv[1], "wb").write(header + image)
+EOF
+names=$(ls /usr/share/icons/*/cursors 2>/dev/null | grep -v ':$' | grep -v '^$' | sort -u)
+for name in $names default left_ptr pointer text; do
+  [ "$name" = blank ] || ln -sf blank "$CURSOR_DIR/cursors/$name"
+done
+printf '[Icon Theme]\nName=LabControl unsichtbar\nComment=Kiosk: kein Mauszeiger (tools/pi/kiosk_pi.sh)\n' > "$CURSOR_DIR/index.theme"
+touch "$LABWC_ENV"
+grep -q "^XCURSOR_THEME=$CURSOR_THEME\$" "$LABWC_ENV" || echo "XCURSOR_THEME=$CURSOR_THEME" >> "$LABWC_ENV"
+mkdir -p "$(dirname "$SERVICE_DROPIN")"
+printf '# LabControl-Kiosk (tools/pi/kiosk_pi.sh): Qt-Fenster ohne Mauszeiger\n[Service]\nEnvironment=XCURSOR_THEME=%s\n' \
+  "$CURSOR_THEME" > "$SERVICE_DROPIN"
+systemctl --user daemon-reload
+echo "    $(ls "$CURSOR_DIR/cursors" | wc -l) Zeigernamen auf transparent gesetzt"
 
 echo "Fertig -- wirksam nach einem Neustart (sudo reboot)."
