@@ -160,6 +160,33 @@ def main() -> int:
             QTest.qWait(15)
         check("Klick in wischbarer Flaeche kommt an", clicks == [1], str(clicks))
 
+        # Echter Fingertipp (ueber das Fenster) auf den Wert eines Zahlenfelds in der wischbaren
+        # Steuerung: muss das Tastenfeld oeffnen (am Pi ging es nicht, 11.11.2026)
+        from PySide6.QtCore import QPoint
+        from touch_keypad import KeypadDialog
+        spin = psu._voltage_spin
+        w.control_tab.scroll_area().ensureWidgetVisible(spin)
+        for _ in range(5):
+            app.processEvents()
+        touch_device = QTest.createTouchDevice()
+        window = w.windowHandle()
+        point = spin.mapTo(w, QPoint(spin.width() // 2, spin.height() // 2))
+        opened: list[bool] = []
+
+        def close_keypad() -> None:
+            dlg = next((d for d in app.topLevelWidgets() if isinstance(d, KeypadDialog) and d.isVisible()), None)
+            opened.append(dlg is not None)
+            if dlg is not None:
+                dlg.reject()
+        QTimer.singleShot(400, close_keypad)
+        QTest.touchEvent(window, touch_device).press(0, point, window).commit()
+        QTest.qWait(30)
+        QTest.touchEvent(window, touch_device).release(0, point, window).commit()
+        for _ in range(40):
+            app.processEvents()
+            QTest.qWait(15)
+        check("Fingertipp auf ein Zahlenfeld in der Steuerung oeffnet das Tastenfeld", opened == [True], str(opened))
+
     print("Uebersicht mehrzeilig, Batterie-Simulator 2 x 7, Zeitfenster-Tasten (Schritt 4.5)")
     w.tabs.setCurrentWidget(w._overview_page)
     for _ in range(10):

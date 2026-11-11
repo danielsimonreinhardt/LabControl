@@ -7,6 +7,13 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **Touch: Tipp auf ein Zahlenfeld öffnete das Tastenfeld nicht (0.37.1, Nutzer am Pi-Display, 11.11.2026).** Seit 0.33.0
+  wertete `SteppedSpinBox.mousePressEvent` den Tipp aus -- ein Finger auf dem WERT trifft aber das innere Textfeld des
+  Zahlenfelds, dort kam nie etwas an (stattdessen Textcursor). Die Prüfung klickte direkt aufs Zahlenfeld und sah das
+  nicht. Jetzt fängt ein Ereignisfilter am inneren Textfeld den Tipp ab. Betrifft alle Zahlenfelder im Touch-Profil
+  (Netzteil, Last, Funktionsgenerator, microHIL, Batterie-Simulator, CAN-ID). **Mock-verifiziert** mit echtem
+  Fingertipp über das Fenster (`QTest.touchEvent`): `check_touch_keypad` (freies Feld, kein Textcursor) und
+  `check_touch_ui` (Netzteil-Feld in der wischbaren Steuerung); beide mit dem alten Stand rot, alle 28 Prüfungen grün.
 - **CAN-Bus beim Beenden schließen (0.36.2, 11.11.2026).** Am Pi stand bei jedem Neustart des Dienstes
   „SocketcanBus was not properly shut down“ im Log: Die CAN-Knoten senden beim Beenden ihre Abschiedsframes
   (Batterie-Simulator: Ausgang sperren, Fernsteuerung abgeben -- das war schon richtig), der Bus selbst blieb aber

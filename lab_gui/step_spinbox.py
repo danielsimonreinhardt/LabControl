@@ -15,7 +15,7 @@ z.B. Durchlaufzahl, max. Iterationen, Intervall, Zeilenbereich).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QDoubleSpinBox, QSpinBox, QStyle, QStyleOptionSpinBox
 
 _DOUBLE_SMALL_STEP = 0.1
@@ -50,6 +50,17 @@ class _SteppedSpinMixin:
         self._hold_timer.timeout.connect(self._start_repeat)
         self._repeat_timer = QTimer(self)
         self._repeat_timer.timeout.connect(lambda: self._apply_step(self._large_step))
+        # Ein Tipp auf den WERT landet beim inneren Textfeld, nicht in mousePressEvent unten -- das
+        # sah nur die alte Pruefung so (Klick direkt aufs Zahlenfeld). Am Pi ging das Tastenfeld
+        # deshalb nie auf (11.11.2026). Referenz merken statt lineEdit() im Filter aufzurufen.
+        self._edit = self.lineEdit()
+        self._edit.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
+        if (obj is self._edit and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick)
+                and self._open_touch_keypad(event)):
+            return True
+        return super().eventFilter(obj, event)
 
     def _sub_control_at(self, pos):
         opt = QStyleOptionSpinBox()

@@ -99,6 +99,16 @@ def main() -> int:
     app.processEvents()
     check("Zeile merkt sich den Uebernehmen-Knopf", getattr(spin, tk.APPLY_PARTNER, None) is apply_button)
     center = QPoint(spin.width() // 3, spin.height() // 2)
+    touch_device = QTest.createTouchDevice()
+
+    def tap(widget, pos: QPoint) -> None:
+        """Echter Fingertipp ueber das Fenster: Qt stellt ihn dem Widget UNTER dem Finger zu -- beim
+        Zahlenfeld ist das sein inneres Textfeld, nicht das Zahlenfeld selbst (am Pi: Tastenfeld ging
+        nicht auf, 11.11.2026; die alte Pruefung klickte direkt aufs Zahlenfeld)."""
+        window = widget.window().windowHandle()
+        point = widget.mapTo(widget.window(), pos)
+        QTest.touchEvent(window, touch_device).press(0, point, window).commit()
+        QTest.touchEvent(window, touch_device).release(0, point, window).commit()
 
     ThemeManager.instance().set_touch(False)
     QTest.mouseClick(spin, Qt.MouseButton.LeftButton, pos=center)
@@ -116,12 +126,13 @@ def main() -> int:
         dlg._set_button.click()
 
     QTimer.singleShot(100, type_and_set)
-    QTest.mouseClick(spin, Qt.MouseButton.LeftButton, pos=center)
+    tap(spin, center)
     for _ in range(30):
         app.processEvents()
         QTest.qWait(20)
-    check("Touch: Tipp oeffnet das Tastenfeld, Setzen uebernimmt und sendet", spin.value() == 24.0 and applied == [24.0],
-          f"{spin.value()}, {applied}")
+    check("Touch: Fingertipp auf den Wert oeffnet das Tastenfeld, Setzen uebernimmt und sendet",
+          spin.value() == 24.0 and applied == [24.0], f"{spin.value()}, {applied}")
+    check("Touch: kein Textcursor im Feld (keine Bildschirmtastatur)", not spin.lineEdit().hasFocus())
 
     def cancel():
         dlg = keypad_open(app)
@@ -130,7 +141,8 @@ def main() -> int:
             dlg.reject()
 
     QTimer.singleShot(100, cancel)
-    QTest.mouseClick(spin, Qt.MouseButton.LeftButton, pos=center)
+    QTest.mouseClick(spin.window().windowHandle(), Qt.MouseButton.LeftButton,   # Maus ueber das Fenster
+                     pos=spin.mapTo(spin.window(), center))
     for _ in range(30):
         app.processEvents()
         QTest.qWait(20)
