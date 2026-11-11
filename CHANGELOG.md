@@ -35,6 +35,18 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Linux: Ein/Aus-Knopf als eigenes kleines Fenster; Linux-CI rot (0.38.1, 11.11.2026).** Nach dem Push von 0.37.3
+  war der CI-Job „Linux checks“ rot (`check_touch_keypad`). In WSL nachgestellt, zwei Ursachen:
+  - Die Knöpfe der Touch-Leiste (Anordnen, Vollbild, Ein/Aus) wurden ohne Elternteil angelegt.
+    `set_power_available(True)` machte den Ein/Aus-Knopf dadurch zu einem eigenen 48 × 44-Fenster -- auch ohne
+    Touch-Profil, überall unter Linux mit logind (WSL, Linux-PC; nicht am Pi im Touch-Profil, nicht unter Windows, nicht
+    in der CI ohne logind). Das Fenster hielt außerdem die Ereignisschleife offen (`check_shutdown_signals` in WSL
+    4,8 s statt < 4 s). Jetzt hängen die Knöpfe an der Leiste. `check_touch_ui` prüft, dass kein eigenes Fenster
+    entsteht (mit dem alten Stand rot).
+  - `check_touch_keypad` stürzte unter Linux mit PySide6 6.12 beim Interpreter-Ende ab (Exit 139, in WSL 4 von 5 Läufen,
+    auch schon mit Stand 0.35.0): offene Fenster wurden erst nach der QApplication abgeräumt. Die Prüfung räumt sie jetzt
+    vorher ab (5 von 5 Läufen Exit 0). Die App selbst war davon nicht betroffen.
+  - **Mock-verifiziert:** alle 28 Prüfungen grün in WSL (Ubuntu, Python 3.14, PySide6 6.12) und unter Windows.
 - **Touch: Bildschirmtastatur blitzte weiter auf (0.37.3, Nutzer am Pi-Display, 11.11.2026).** Der Weg aus 0.37.2
   (`WA_InputMethodEnabled` aus) wirkt nicht: Qt fragt das Fokus-Objekt per `InputMethodQuery` nach `ImEnabled`, und
   `QLineEdit` beantwortet das selbst mit Ja, solange es beschreibbar ist -- das Attribut liest Qt dabei gar nicht. Die

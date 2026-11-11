@@ -81,6 +81,13 @@ def main() -> int:
     check("vier Reiter, Dashboard ueber den Reitern", w.tabs.count() == 4 and w.dashboard.parent() is w.centralWidget())
     check("Einstellung zeigt 'aus', nicht automatisch", not w.settings_tab._touch_checkbox.isChecked()
           and not w.settings_tab._touch_auto)
+    # Linux mit logind (WSL, Linux-PC): der Ein/Aus-Knopf wurde ohne Touch-Profil ein eigenes kleines Fenster
+    import system_power
+    w._top_bar.set_power_available(True)
+    app.processEvents()
+    strays = [type(x).__name__ for x in app.topLevelWidgets() if x.isVisible() and x is not w]
+    w._top_bar.set_power_available(system_power.available())
+    check("Ein/Aus-Knopf ohne Touch-Profil kein eigenes Fenster", not strays, str(strays))
 
     print("Touch an (Haekchen in den Einstellungen)")
     w.settings_tab._touch_checkbox.setChecked(True)

@@ -192,6 +192,15 @@ def main() -> int:
     check("Nutzdaten per Hex-Tastenfeld", edit.text() == "01 A2" and finished == ["01 A2"], f"{edit.text()!r} {finished}")
     ThemeManager.instance().set_touch(False)
     id_row.deleteLater()
+    # Offene Fenster geordnet abbauen, solange die QApplication noch lebt: sonst raeumt Python sie beim
+    # Interpreter-Ende in beliebiger Reihenfolge ab, und unter Linux mit PySide6 6.12 stuerzte das in 4 von
+    # 5 Laeufen ab (Exit 139 -> Linux-CI rot, 11.11.2026; auch schon mit dem Stand 0.35.0).
+    from PySide6.QtCore import QCoreApplication, QEvent
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
     print()
     if FAILURES:
