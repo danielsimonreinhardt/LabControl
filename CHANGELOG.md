@@ -27,7 +27,13 @@ Semantic Versioning (`lab_gui/version.py`).
     Leitstand): Belegungstabelle, Editor/Speichern/Laden, Lauf mit Partner-Netzteil inkl. Prüfung auf dessen
     Messwert, Kachel gesperrt (Sollwert/Ausgang aus, Handbedienung frei), fremde Bedienung 409, Freigabe nach dem
     Ende, Ablehnung nicht unterstützter Aktionen, ALLE AUS bricht ab, Netz weg: Besitzer schaltet nach 3 s ab und
-    Leitstand bricht nach 3 s ab.
+    Leitstand bricht nach 3 s ab. Unter Windows (35 Prüfungen) und Linux (WSL) grün.
+  - **Am Pi geprüft (11.11.2026, Simulation, ohne Geräte):** Testaufbau als Leitstand auf dem Pi selbst gegen das
+    laufende LabControl 0.47.0 (lokal, weil der Hauptschalter sich bewusst nicht aus der Ferne einschalten lässt):
+    Belegung erteilt und in der Kachel gemeldet, Bedienen mit Belegung ok, fremde Bedienung `leased`, mit Lebenszeichen
+    nach 5 s noch belegt (5,0 V), danach ohne Lebenszeichen abgeschaltet -- laut Pi-Log 3,0 s nach dem letzten
+    Lebenszeichen (22:50:19,8 -> 22:50:22,800), Spannung 0 V, Verlängern danach `unknown_lease`. Pi-Einstellungen
+    danach zurückgesetzt. Offen: Lauf vom PC aus mit echten Geräten am Pi.
 
 ### Geändert
 - **ALLE AUS bricht einen laufenden Testablauf ab (0.47.0).** Bisher schaltete der Knopf (und ALLE AUS über
