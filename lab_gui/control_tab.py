@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import bisect
 import time
+from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import (
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -2012,6 +2014,151 @@ class PicoscopeControlGroup(QGroupBox):
         pass
 
 
+class JLinkControlGroup(QGroupBox):
+    """Kachel fuer den J-Link (PI-31 a, jlink_service.py): Ziel, Zielspannung und Kern (Stand der
+    letzten Bedienung -- der J-Link wird nicht im Hintergrund abgefragt), letzte Bedienung mit
+    Ergebnis, Knoepfe fuer Pruefen, Reset, Anhalten, Starten und Firmware flashen. Kein Preset-Zustand."""
+
+    action_requested = Signal(str, str, str)      # device_id, Aktion, Datei
+    panel_color_requested = Signal(str, object)
+    rename_requested = Signal(str, str, str)
+
+    def __init__(self, device_id: str, label: str) -> None:
+        super().__init__()
+        self._device_id = device_id
+        self._color_key: str | None = None
+        self._state: dict = {}
+        self.setTitle(label)
+        outer = QVBoxLayout(self)
+        self._subtitle = QLabel()
+        self._color_button = PanelColorButton()
+        self._color_button.color_selected.connect(lambda key: self.panel_color_requested.emit(self._device_id, key))
+        self._rename_button = IconButton("mdi.pencil-outline", "")
+        self._rename_button.clicked.connect(self._on_rename_clicked)
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
+        outer.addLayout(subtitle_row)
+
+        self._form = QFormLayout()
+        outer.addLayout(self._form)
+        self._target_label = QLabel()
+        self._vtref_label = QLabel()
+        self._last_label = QLabel()
+        self._file_label = QLabel()
+        for widget in (self._target_label, self._vtref_label, self._last_label, self._file_label):
+            widget.setWordWrap(True)
+            self._form.addRow(" ", widget)
+            _detint_label(self._form, widget)
+
+        self._check_button = IconButton("mdi.connection", "", text=tr("Prüfen"))
+        self._reset_button = IconButton("mdi.restart", "", text=tr("Reset"))
+        self._halt_button = IconButton("mdi.pause", "", text=tr("Anhalten"))
+        self._go_button = IconButton("mdi.play", "", text=tr("Starten"))
+        self._flash_button = IconButton("mdi.chip", "", text=tr("Flashen…"))
+        for button, action in ((self._check_button, "JLINK_CHECK"), (self._reset_button, "JLINK_RESET"),
+                               (self._halt_button, "JLINK_HALT"), (self._go_button, "JLINK_GO")):
+            button.clicked.connect(lambda _c=False, a=action: self.action_requested.emit(self._device_id, a, ""))
+        self._flash_button.clicked.connect(self._on_flash_clicked)
+        self._buttons = (self._check_button, self._reset_button, self._halt_button, self._go_button,
+                         self._flash_button)
+        self._button_row = _row(self._check_button, self._reset_button, self._halt_button)
+        self._button_row2 = _row(self._go_button, self._flash_button)
+        outer.addWidget(self._button_row)
+        outer.addWidget(self._button_row2)
+        outer.addStretch(1)
+
+        ThemeManager.instance().changed.connect(self._on_theme_changed)
+        Translator.instance().language_changed.connect(self._retranslate)
+        self._on_theme_changed(current_palette())
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        state = self._state
+        self._subtitle.setText(tr("J-Link"))
+        self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
+        self._rename_button.setToolTip(tr("Gerät umbenennen"))
+        self._form.labelForField(self._target_label).setText(tr("Ziel:"))
+        self._form.labelForField(self._vtref_label).setText(tr("Zielspannung:"))
+        self._form.labelForField(self._last_label).setText(tr("Zuletzt:"))
+        self._form.labelForField(self._file_label).setText(tr("Datei:"))
+        device = state.get("device") or tr("nicht eingestellt")
+        self._target_label.setText(f"{device} · {state.get('interface', 'SWD')} · {state.get('speed', 0)} kHz"
+                                   + (f" · {state['core']}" if state.get("core") else ""))
+        vtref = state.get("vtref")
+        self._vtref_label.setText(f"{vtref:.2f} V".replace(".", ",") if isinstance(vtref, (int, float)) else "--")
+        action = tr(JLINK_ACTION_TEXT.get(state.get("action", ""), state.get("action", "")))
+        if state.get("busy"):
+            last = tr("{action} läuft …", action=action)
+        elif "ok" in state:
+            mark = "✓" if state.get("ok") else "✕"
+            last = f"{mark} {state.get('time', '')} {action}" + (f": {state['message']}" if state.get("message") else "")
+        else:
+            last = "--"
+        self._last_label.setText(last)
+        set_tone(self._last_label, "muted" if state.get("busy") or "ok" not in state
+                 else "success" if state.get("ok") else "danger")
+        path = state.get("last_file", "")
+        self._file_label.setText(Path(path).name if path else "--")
+        self._file_label.setToolTip(path)
+        self._check_button.setText(tr("Prüfen"))
+        self._check_button.setToolTip(tr("Mit dem Ziel verbinden: Zielspannung und Kern lesen (der Kern läuft weiter)"))
+        self._reset_button.setText(tr("Reset"))
+        self._halt_button.setText(tr("Anhalten"))
+        self._go_button.setText(tr("Starten"))
+        self._flash_button.setText(tr("Flashen…"))
+        self._flash_button.setToolTip(tr("Firmware-Datei wählen und flashen (danach Reset und Start)"))
+        for button in self._buttons:
+            button.setEnabled(not state.get("busy"))
+
+    def _on_theme_changed(self, palette: Palette) -> None:
+        self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
+        for row in (self._button_row, self._button_row2):
+            row.setStyleSheet(_row_stylesheet(palette))
+        apply_panel_tint(self, self._color_key)
+
+    def _on_flash_clicked(self) -> None:
+        start = self._state.get("last_file", "")
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("Firmware-Datei wählen"), start,
+            tr("Firmware (*.hex *.srec *.s19 *.mot *.elf *.axf *.out);;Alle Dateien (*)"))
+        if path:
+            self.action_requested.emit(self._device_id, "JLINK_FLASH", path)
+
+    def set_state(self, state: dict) -> None:
+        self._state = dict(state)
+        self._retranslate()
+
+    def set_label(self, label: str) -> None:
+        self.setTitle(label)
+
+    def set_panel_color(self, color_key: str | None) -> None:
+        self._color_key = color_key
+        apply_panel_tint(self, color_key)
+        self._color_button.set_current_color(color_key)
+
+    def set_colors_enabled(self, enabled: bool) -> None:
+        self._color_button.setVisible(enabled)
+
+    def _on_rename_clicked(self) -> None:
+        new_label, ok = QInputDialog.getText(self, tr("Gerät umbenennen"), tr("Name:"), text=self.title())
+        if ok and new_label.strip():
+            self.rename_requested.emit("jlink", self._device_id, new_label.strip())
+
+    def capture_state(self) -> dict:
+        return {}
+
+    def apply_state(self, state: dict) -> None:
+        pass
+
+
+JLINK_ACTION_TEXT = {
+    "JLINK_CHECK": "Verbindung prüfen", "JLINK_FLASH": "Firmware flashen", "JLINK_RESET": "Reset",
+    "JLINK_HALT": "Anhalten", "JLINK_GO": "Starten",
+}
+
+
 class HilControlGroup(QGroupBox):
     """Steuersektion fuer den microHIL: Schalter fuer Digitalausgaenge
     (OUT1-8), Relais (REL1-4) und 12V-Ausgaenge (PWR12 1-2), Eingabefelder
@@ -2584,6 +2731,8 @@ class ControlTab(QWidget):
     operation_source = Signal(str)
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    # J-Link-Kachel (PI-31 a): device_id, Aktion, Datei -> MainWindow -> JLinkService
+    jlink_action_requested = Signal(str, str, str)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
     # device_ids) -- MainWindow verdrahtet das mit Settings.
     # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
@@ -2726,6 +2875,9 @@ class ControlTab(QWidget):
             section = PicoscopeControlGroup(device_id, label, kind="scpiscope")
         elif kind == "battsim":
             section = BattSimControlGroup(device_id, label)
+        elif kind == "jlink":
+            section = JLinkControlGroup(device_id, label)
+            section.action_requested.connect(self.jlink_action_requested)
         else:
             section = CanControlGroup(device_id, label)
         # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion
@@ -3203,6 +3355,14 @@ class ControlTab(QWidget):
 
     def set_battsim_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_jlink_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_jlink_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, JLinkControlGroup):
+            section.set_state(state)
 
     def set_battsim_state(self, device_id: str, state: dict) -> None:
         section = self._sections.get(device_id)

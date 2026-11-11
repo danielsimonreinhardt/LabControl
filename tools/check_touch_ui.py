@@ -180,7 +180,13 @@ def main() -> int:
     if psu is not None:
         from PySide6.QtTest import QTest
         w.tabs.setCurrentWidget(w.control_tab)
-        w.control_tab.scroll_area().ensureWidgetVisible(psu._manual_button)
+        # Netzteil-Kachel nach vorn (linke Spalte): Der Offscreen-Bildschirm ist nur 800 px breit, und seit
+        # dem simulierten J-Link (0.48.0) lag sie rechts bei x ~ 900 -- Mausereignisse dort gehen verloren
+        # (Grenze der Pruefumgebung, kein Fehler der App; am Pi-Display 1024 px kein Thema).
+        w.control_tab.set_tile_order(["psu:SIM"] + [d for d in w.control_tab._tile_order if d != "psu:SIM"])
+        for _ in range(5):
+            app.processEvents()
+        w.control_tab.scroll_area().ensureWidgetVisible(psu._output_off_button)
         for _ in range(5):
             app.processEvents()
         clicks: list[int] = []
@@ -189,7 +195,11 @@ def main() -> int:
         for _ in range(20):
             app.processEvents()
             QTest.qWait(15)
-        check("Klick in wischbarer Flaeche kommt an", clicks == [1], str(clicks))
+        target = psu._output_off_button
+        hit = w.childAt(target.mapTo(w, target.rect().center()))
+        check("Klick in wischbarer Flaeche kommt an", clicks == [1],
+              f"{clicks} sichtbar={target.isVisible()} aktiv={target.isEnabled()} "
+              f"getroffen={type(hit).__name__ if hit else None}{' (Knopf)' if hit is target else ''}")
 
         # Echter Fingertipp (ueber das Fenster) auf den Wert eines Zahlenfelds in der wischbaren
         # Steuerung: muss das Tastenfeld oeffnen (am Pi ging es nicht, 11.11.2026)

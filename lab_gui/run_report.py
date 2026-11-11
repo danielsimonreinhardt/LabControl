@@ -143,6 +143,8 @@ def _step_started_text(record: RunRecord, index: int) -> str:
             detail += f": {step.value:g}"
     elif step.device_kind == "battsim":
         detail = battsim_step_detail(step)
+    elif step.device_kind == "jlink":
+        detail = Path(step.file_path).name if step.action == "JLINK_FLASH" else "–"
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)

@@ -114,6 +114,8 @@ class TestRunner(QObject):
     # Pfad statt execute_action, da eine CAN-ID + Datenbytes nicht in dessen
     # einzelnen float-Wert passen (siehe testcase_model.py: can_id/can_data).
     execute_can_send = Signal(str, int, str, bool)
+    # device_id, Aktion, Datei -- J-Link (PI-31 a), ausgefuehrt vom JLinkService
+    execute_jlink = Signal(str, str, str)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -475,6 +477,9 @@ class TestRunner(QObject):
                     self._start_arb(step)
                 elif step.action == "CAN_SEND":
                     self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
+                elif step.device_kind == "jlink":
+                    # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
+                    self.execute_jlink.emit(step.device_id, step.action, step.file_path)
                 else:
                     self.execute_action.emit(
                         step.device_id, step.device_kind, step.action, step.value, step.hil_channel

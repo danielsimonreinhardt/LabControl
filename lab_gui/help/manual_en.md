@@ -213,6 +213,28 @@ Operation:
 *Tested against an emulated simulator only so far; the hardware check is
 pending.*
 
+### J-Link (flashing and reset)
+
+A SEGGER J-Link on the PC can be added as a device: in the settings under
+**Devices → J-Link** tick "Use J-Link" and enter the **target device** (e.g.
+`S32K144`), the interface (SWD/JTAG) and the speed; with several J-Links also
+the serial number. The SEGGER J-Link software (J-Link Commander) is required;
+LabControl finds it by itself.
+
+The tile shows the target, the target voltage, the last operation with its
+result and the last flashed file. **"Check"** connects to the target and reads
+target voltage and core (the core keeps running), plus **"Reset"**,
+**"Halt"**, **"Run"** and **"Flash…"** (choose a file, then reset and run). Test
+sequences offer the same operations; for flashing, choose the file (HEX, SREC
+or ELF) in the value column. A failed step aborts the sequence.
+
+LabControl opens the J-Link only for the duration of one operation and never
+polls it in the background – the IDE debugger stays usable while nothing is
+running. With the **EDU license** SEGGER shows a confirmation dialog once every
+24 hours; until it is dismissed the operation waits (time limit 30 s, flashing
+180 s) and then reports this reason. Every operation is logged, flashing with
+file name and checksum (SHA-256).
+
 ---
 
 ## 3. "Testcase" tab

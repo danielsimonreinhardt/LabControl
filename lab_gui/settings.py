@@ -79,6 +79,8 @@ class Settings(QObject):
     scpi_scopes_changed = Signal(list)
     # Verbund-Partner (PI-23 a, partner_link.py): kompletter Block wie share_config_changed.
     partner_config_changed = Signal(dict)
+    # J-Link (PI-31 a, jlink_service.py): kompletter Block
+    jlink_config_changed = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -517,6 +519,37 @@ class Settings(QObject):
         self._data["share_control_timeout_min"] = minutes
         self._save()
         self._emit_share_config()
+
+    # -- J-Link (PI-31 a, siehe jlink_service.py) -----------------------------
+
+    @property
+    def jlink_config(self) -> dict:
+        """{"enabled", "device", "interface", "speed", "serial", "commander"}: Zielbaustein (z. B.
+        "S32K144"), SWD/JTAG, Takt in kHz, Seriennummer (leer = einziger J-Link), Pfad zum Commander
+        (leer = automatisch suchen)."""
+        stored = self._data.get("jlink")
+        stored = stored if isinstance(stored, dict) else {}
+
+        def text(key: str, limit: int = 200) -> str:
+            value = stored.get(key, "")
+            return value.strip()[:limit] if isinstance(value, str) else ""
+        interface = stored.get("interface") if stored.get("interface") in ("SWD", "JTAG") else "SWD"
+        try:
+            speed = max(5, min(50000, int(stored.get("speed", 4000))))
+        except (TypeError, ValueError):
+            speed = 4000
+        return {"enabled": bool(stored.get("enabled", False)), "device": text("device", 60),
+                "interface": interface, "speed": speed, "serial": text("serial", 20),
+                "commander": text("commander", 400)}
+
+    def set_jlink_config(self, **changes) -> None:
+        current = self.jlink_config
+        merged = {**current, **{k: v for k, v in changes.items() if k in current}}
+        self._data["jlink"] = merged
+        if self.jlink_config == current:
+            return
+        self._save()
+        self.jlink_config_changed.emit(self.jlink_config)
 
     # -- Verbund-Partner (PI-23 a, siehe partner_link.py) ---------------------
 

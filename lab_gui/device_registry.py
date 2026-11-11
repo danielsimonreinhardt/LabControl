@@ -26,6 +26,7 @@ KIND_DISPLAY = {
     "scpiscope": "Oszilloskop",
     "fg": "Funktionsgenerator",
     "battsim": "Batterie-Simulator",
+    "jlink": "J-Link",
 }
 
 

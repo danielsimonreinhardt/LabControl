@@ -1098,12 +1098,43 @@ class TestcaseTab(QWidget):
         picoscope_page._channel_combo = picoscope_channel_combo
         picoscope_page._range_combo = picoscope_range_combo
 
+        # J-Link "Firmware flashen" (PI-31 a): Dateiname + Knopf zum Waehlen, voller Pfad im Tooltip
+        file_page = QWidget()
+        file_layout = QHBoxLayout(file_page)
+        file_layout.setContentsMargins(2, 0, 2, 0)
+        file_label = QLabel()
+        file_button = IconButton("mdi.folder-open-outline", tr("Firmware-Datei wählen…"))
+        file_layout.addWidget(file_label, 1)
+        file_layout.addWidget(file_button)
+        file_page._path = step.file_path
+        file_page._label = file_label
+
+        def refresh_file_label() -> None:
+            path = file_page._path
+            file_label.setText(Path(path).name if path else tr("keine Datei gewählt"))
+            file_label.setToolTip(path)
+            set_tone(file_label, "muted" if path else "warning")
+
+        def choose_file() -> None:
+            start = file_page._path or str(data_store.target_dir("testcases"))
+            path_str, _ = QFileDialog.getOpenFileName(
+                self, tr("Firmware-Datei wählen"), start,
+                tr("Firmware (*.hex *.srec *.s19 *.mot *.elf *.axf *.out);;Alle Dateien (*)"))
+            if path_str:
+                file_page._path = path_str
+                refresh_file_label()
+
+        file_button.clicked.connect(choose_file)
+        file_page._refresh = refresh_file_label
+        refresh_file_label()
+
         value_stack = QStackedWidget()
         value_stack.addWidget(value_spin)       # Index 0: normaler Zahlenwert
         value_stack.addWidget(arb_page)         # Index 1: Arbiträrsignal-Zusammenfassung + Button
         value_stack.addWidget(can_page)         # Index 2: CAN-Frame-Zusammenfassung + Button
         value_stack.addWidget(hil_page)         # Index 3: microHIL Kanal + Wert
         value_stack.addWidget(picoscope_page)   # Index 4: PicoScope Kanal + Bereich
+        value_stack.addWidget(file_page)        # Index 5: J-Link-Firmware-Datei
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -1316,6 +1347,8 @@ class TestcaseTab(QWidget):
                 value_stack.setCurrentIndex(3)
             elif kind == "picoscope":
                 value_stack.setCurrentIndex(4)
+            elif code == "JLINK_FLASH":
+                value_stack.setCurrentIndex(5)
             else:
                 value_stack.setCurrentIndex(0)
             # Pass/Fail-Pruefung setzt eine Messung voraus, die der Runner
@@ -2003,6 +2036,7 @@ class TestcaseTab(QWidget):
         can_page: QWidget = value_stack.widget(2)
         hil_page: QWidget = value_stack.widget(3)
         picoscope_page: QWidget = value_stack.widget(4)
+        file_page: QWidget = value_stack.widget(5)
         duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
         check_page = self._table.cellWidget(row, COL_CHECK)
         enabled_container = self._table.cellWidget(row, COL_ENABLED)
@@ -2045,6 +2079,7 @@ class TestcaseTab(QWidget):
             can_id=can_params["id"],
             can_data=can_params["data"],
             can_extended=can_params["extended"],
+            file_path=file_page._path if action_code == "JLINK_FLASH" else "",
             check_enabled=check_params["enabled"],
             check_field=check_params["field"],
             check_min=check_params["min"],
@@ -2616,6 +2651,8 @@ class TestcaseTab(QWidget):
             ch = "A" if step.hil_channel != 2 else "B"
             range_name = _PICO_RANGE_BY_CODE.get(int(step.value), "?")
             detail = tr("Kanal {ch}, {range}", ch=ch, range=range_name)
+        elif step.device_kind == "jlink":
+            detail = Path(step.file_path).name if step.action == "JLINK_FLASH" else "–"
         else:
             detail = f"{step.value}"
         self._set_status(

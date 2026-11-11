@@ -49,6 +49,8 @@ from scope_service import ScopeService
 from settings import Settings
 from settings_tab import SettingsTab
 from share_api import new_token
+from jlink.driver import find_commander as find_jlink_commander
+from jlink_service import JLinkService
 from partner_link import PartnerLink
 from partner_tab import PartnerTab
 from share_remote import RemoteBridge
@@ -66,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
-                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS"}
+                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL"}
 STATUS_CHIP_HEIGHT = 28      # Touch-Profil
 STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
@@ -216,7 +218,7 @@ class MainWindow(QMainWindow):
         self._manual_devices: set[str] = set()
         self._online_devices: dict[str, set[str]] = {
             "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
-            "scpiscope": set(), "battsim": set(),
+            "scpiscope": set(), "battsim": set(), "jlink": set(),
         }
 
         self._registry = DeviceRegistry()
@@ -286,6 +288,7 @@ class MainWindow(QMainWindow):
         Translator.instance().language_changed.connect(self._retranslate)
         self._wire_touch()
         self._wire_partner()
+        self._wire_jlink()
         self._style_safety_banner()
         self._retranslate()
 
@@ -462,6 +465,54 @@ class MainWindow(QMainWindow):
         self._partner_nav_button.setVisible(visible)
         self.testcase_tab.set_verbund(app_logging.host_name(), self._partner_host_name, visible)
         self._render_partner_chip()
+
+    # -- J-Link (Verbund V3, PI-31 a; jlink_service.py) ------------------------
+
+    def _wire_jlink(self) -> None:
+        self._jlink = JLinkService(self)
+        self._pending_jlink_req = 0
+        self._jlink.device_added.connect(self._on_jlink_added)
+        self._jlink.device_removed.connect(self._on_jlink_removed)
+        self._jlink.state_changed.connect(self.dashboard.update_jlink)
+        self._jlink.state_changed.connect(self.control_tab.set_jlink_state)
+        self._jlink.finished.connect(self._on_jlink_finished)
+        self.control_tab.jlink_action_requested.connect(
+            lambda device_id, action, path: self._jlink.run(device_id, action, path, source="Kachel"))
+        self._test_runner.execute_jlink.connect(self._on_test_execute_jlink)
+        self.settings_tab.jlink_config_edited.connect(lambda cfg: self._settings.set_jlink_config(**cfg))
+        self._settings.jlink_config_changed.connect(self._on_jlink_config)
+        self._on_jlink_config(self._settings.jlink_config)
+
+    def _on_jlink_config(self, config: dict) -> None:
+        self.settings_tab.set_jlink_config(config, find_jlink_commander(config.get("commander", "")))
+        self._jlink.apply(config, self._settings.simulation_mode)
+
+    def _on_jlink_added(self, kind: str, device_id: str) -> None:
+        self._registry.on_device_added(kind, device_id)
+        self._set_online(kind, device_id, True)
+        self.dashboard.set_jlink_online(device_id, True)
+        self.control_tab.set_jlink_online(device_id, True)
+        state = self._jlink.state(device_id)
+        self.dashboard.update_jlink(device_id, state)
+        self.control_tab.set_jlink_state(device_id, state)
+
+    def _on_jlink_removed(self, kind: str, device_id: str) -> None:
+        self._registry.on_device_removed(kind, device_id)
+        self._set_online(kind, device_id, False)
+        self.dashboard.set_jlink_online(device_id, False)
+        self.control_tab.set_jlink_online(device_id, False)
+
+    def _on_test_execute_jlink(self, device_id: str, action: str, file_path: str) -> None:
+        resolved_id, error = self._resolve_device_id("jlink", device_id)
+        if resolved_id is None:
+            self._test_runner.on_action_completed(False, error, 0.0)
+            return
+        self._pending_jlink_req = self._jlink.run(resolved_id, action, file_path, source="Testablauf")
+
+    def _on_jlink_finished(self, request: int, _device_id: str, _action: str, ok: bool, message: str) -> None:
+        if request and request == self._pending_jlink_req:
+            self._pending_jlink_req = 0
+            self._test_runner.on_action_completed(ok, message, 0.0)
 
     # -- Verbund V2: Leitstand (PI-24 a, PI-26 a) ------------------------------
 
@@ -769,6 +820,10 @@ class MainWindow(QMainWindow):
                 self._on_scpiscope_connected(device_id, False)
             elif kind == "battsim":
                 self._on_battsim_connected(device_id, False)
+            elif kind == "jlink":
+                self._set_online("jlink", device_id, False)
+                self.dashboard.set_jlink_online(device_id, False)
+                self.control_tab.set_jlink_online(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -843,6 +898,8 @@ class MainWindow(QMainWindow):
             section.reset_fail.connect(self._worker.reset_battsim_fail)
             section.voltage_limit_changed.connect(self._settings.set_battsim_voltage_limit)
             section.voltage_limit_changed.connect(self._worker.set_battsim_voltage_limit)
+        elif kind == "jlink":
+            pass   # Kachel meldet ueber control_tab.jlink_action_requested (siehe _wire_jlink)
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -1684,8 +1741,9 @@ class MainWindow(QMainWindow):
         # ohne diesen Ausschluss wuerde jeder Lauf mit PICO_*-Schritt nach
         # STALE_TIMEOUT_S faelschlich als "veraltet" abgebrochen, obwohl
         # nichts falsch lief (an echter Hardware reproduziert).
+        # J-Link ebenso: keine Messwerte, kein Ausgang (PI-31 a)
         self._safety.begin_run_supervision(
-            {d for d in step_device_ids if not d.startswith("picoscope:")}
+            {d for d in step_device_ids if not d.startswith(("picoscope:", "jlink:"))}
         )
         self._set_picoscope_test_running.emit(True)
         # Sperrt (ab Phase 2) den schreibenden Netzwerkzugriff und wird

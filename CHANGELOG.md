@@ -7,6 +7,29 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **J-Link als Gerät am PC: Flashen, Reset, Anhalten, Starten (0.48.0, Verbund V3, Entscheidung PI-31 a,
+  11.11.2026).**
+  - Treiber `device-driver/jlink/` über den J-Link Commander, je Bedienung ein eigener Prozess -- LabControl hält den
+    J-Link nie dauerhaft, der Debugger in der IDE bleibt nutzbar. Keine Hintergrund-Abfrage (jede öffnet die Sonde).
+    Zeitlimit 30 s (Flashen 180 s); bei Ablauf nennt die Meldung den EDU-Bestätigungsdialog als wahrscheinlichen
+    Grund. `.bin` abgelehnt (keine Startadresse), HEX/SREC/ELF gehen.
+  - `lab_gui/jlink_service.py`: eigene Threads statt DeviceWorker (Flashen blockiert sonst den Abfrage-Zyklus der
+    Netzteile), höchstens eine Bedienung gleichzeitig, Log je Bedienung wie PI-15, beim Flashen mit Dateiname und
+    SHA-256.
+  - Einstellungen → Geräte → J-Link: Zielbaustein, SWD/JTAG, Takt, optional Seriennummer und Pfad zum Commander
+    (sonst automatisch gesucht). Kachel in Steuerung und Übersicht (Ziel, Zielspannung, Kern, letzte Bedienung,
+    Datei; Prüfen, Reset, Anhalten, Starten, Flashen…). In der Simulation gibt es `jlink:SIM`.
+  - Testablauf: Geräteart „J-Link“ mit „Firmware flashen“ (Datei in der Wert-Spalte, neues Feld
+    `TestStep.file_path`), „Reset“, „Anhalten“, „Starten“, „Verbindung prüfen“; ein Fehler bricht den Ablauf ab.
+    Der Watchdog überwacht J-Links nicht (keine Messwerte). Über den Verbund geht der J-Link nicht -- Abläufe mit
+    J-Link startet man am PC (Leitstand). RTT-Ausgabe (PI-31 b) folgt später.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_jlink.py` (aufgezeichnete Commander-Ausgaben, Treiber gegen einen
+    nachgebauten Commander inkl. Fehler und Zeitlimit, Dienst mit Simulation, Hauptfenster mit Kachel, Testablauf,
+    Fehlerabbruch, Editor). Kein echter J-Link angesprochen (EDU-Dialog) -- Hardware-Test steht aus. Alle 36
+    Prüfungen unter Windows grün, die betroffenen auch unter Linux (WSL).
+  - `check_touch_ui`: Mit der J-Link-Kachel rutschte die Netzteil-Kachel in die rechte Spalte (x ≈ 900) -- außerhalb
+    des nur 800 px breiten Offscreen-Bildschirms, Mausereignisse dort gehen verloren (unter Linux). Die Prüfung stellt
+    das Netzteil jetzt nach vorn und meldet bei einem Fehlschlag, welches Widget getroffen wurde.
 - **Verbund Pi + PC, Stufe V2: gemeinsame Testabläufe mit Belegung und Lebenszeichen (0.47.0, Entscheidungen
   PI-24 a, PI-25 a, PI-26 a, 11.11.2026).**
   - Leitstand (PI-24 a): Partnergeräte stehen in der Geräteauswahl des Testablaufs („Pi · Netzteil 1“, ID

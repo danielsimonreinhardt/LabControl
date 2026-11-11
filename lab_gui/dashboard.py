@@ -146,19 +146,23 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "bs_cell_max": ("Zelle max", "V"),
     "bs_fail": ("FAIL-Grund", ""),
     "bs_controller": ("Regler", ""),
+    "jl_target": ("Ziel", ""),
+    "jl_vtref": ("Zielspannung", "V"),
+    "jl_last": ("Zuletzt", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
 CAN_FIELD_KEYS = ["tx_count", "rx_count"]
 FG_FIELD_KEYS = ["fg_ch1", "fg_ch2"]
 BATTSIM_FIELD_KEYS = ["bs_state", "bs_output", "bs_stack", "bs_cell_min", "bs_cell_max", "bs_fail", "bs_controller"]
+JLINK_FIELD_KEYS = ["jl_target", "jl_vtref", "jl_last"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus",
-              "fg": "Funktionsgenerator", "battsim": "Batterie-Simulator"}
+              "fg": "Funktionsgenerator", "battsim": "Batterie-Simulator", "jlink": "J-Link"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
 KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip",
-             "fg": "mdi.sine-wave", "battsim": "mdi.battery-charging-outline"}
+             "fg": "mdi.sine-wave", "battsim": "mdi.battery-charging-outline", "jlink": "mdi.chip"}
 
 # "Verbindung getrennt"-Kennzeichnung oben rechts im Panel: no_device_tile.OfflineBadge (Symbol
 # mdi.close-network-outline + "getrennt", Theme-Farben); Position per resizeEvent nachgefuehrt, da die
@@ -182,6 +186,9 @@ FIELD_ICONS: dict[str, str] = {
     "bs_cell_max": "mdi.arrow-collapse-up",
     "bs_fail": "mdi.alert-circle-outline",
     "bs_controller": "mdi.tune-variant",
+    "jl_target": "mdi.chip",
+    "jl_vtref": "mdi.flash-outline",
+    "jl_last": "mdi.history",
 }
 
 
@@ -1445,7 +1452,7 @@ class DashboardWidget(QGroupBox):
                 panel.plot_requested.connect(self.picoscope_plot_requested)
             else:
                 field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS,
-                              "battsim": BATTSIM_FIELD_KEYS}.get(
+                              "battsim": BATTSIM_FIELD_KEYS, "jlink": JLINK_FIELD_KEYS}.get(
                     kind, CAN_FIELD_KEYS
                 )
                 panel = _DevicePanel(kind, device_id, label, field_keys)
@@ -1533,6 +1540,27 @@ class DashboardWidget(QGroupBox):
     @Slot(str, bool)
     def set_battsim_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    @Slot(str, bool)
+    def set_jlink_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def update_jlink(self, device_id: str, state: dict) -> None:
+        """J-Link (PI-31 a): Ziel, Zielspannung, letzte Bedienung -- Stand der letzten Bedienung,
+        der J-Link wird nicht im Hintergrund abgefragt."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        panel.set_value("jl_target", state.get("device") or "--")
+        vtref = state.get("vtref")
+        panel.set_value("jl_vtref", f"{vtref:.2f}" if isinstance(vtref, (int, float)) else "--")
+        if state.get("busy"):
+            last = tr("läuft …")
+        elif "ok" in state:
+            last = ("✓ " if state.get("ok") else "✕ ") + state.get("time", "")
+        else:
+            last = "--"
+        panel.set_value("jl_last", last)
 
     def _set_online(self, device_id: str, online: bool) -> None:
         panel = self._panels.get(device_id)

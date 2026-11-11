@@ -225,6 +225,29 @@ Bedienung in der Sektion:
 *Bisher nur gegen einen nachgebildeten Simulator getestet, die Prüfung am
 Gerät steht aus.*
 
+### J-Link (Flashen und Reset)
+
+Ein SEGGER J-Link am PC lässt sich als Gerät einbinden: in den Einstellungen
+unter **Geräte → J-Link** „J-Link verwenden“ anhaken und den **Zielbaustein**
+(z. B. `S32K144`), die Schnittstelle (SWD/JTAG) und den Takt eintragen; bei
+mehreren J-Links die Seriennummer. Gebraucht wird die SEGGER J-Link Software
+(J-Link Commander), LabControl sucht sie selbst.
+
+Die Kachel zeigt Ziel, Zielspannung, die letzte Bedienung mit Ergebnis und die
+zuletzt geflashte Datei. **„Prüfen“** verbindet sich mit dem Ziel und liest
+Zielspannung und Kern (der Kern läuft dabei weiter), dazu **„Reset“**,
+**„Anhalten“**, **„Starten“** und **„Flashen…“** (Datei wählen, danach Reset und
+Start). Im Testablauf gibt es dieselben Bedienungen; beim Flashen wählt man die
+Datei (HEX, SREC oder ELF) in der Wert-Spalte. Ein fehlgeschlagener Schritt
+bricht den Ablauf ab.
+
+LabControl öffnet den J-Link nur für die Dauer einer Bedienung und fragt ihn
+nicht im Hintergrund ab – der Debugger in der IDE bleibt nutzbar, solange gerade
+nichts läuft. Bei der **EDU-Lizenz** zeigt SEGGER einmal je 24 Stunden einen
+Bestätigungsdialog; bis er weggeklickt ist, wartet die Bedienung (Zeitlimit
+30 s, Flashen 180 s) und meldet danach diesen Grund. Jede Bedienung steht im
+Log, beim Flashen mit Dateiname und Prüfsumme (SHA-256).
+
 ---
 
 ## 3. Reiter „Testablauf“

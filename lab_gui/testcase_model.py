@@ -154,6 +154,16 @@ BATTSIM_ACTIONS = {
 }
 BATTSIM_READ_ACTIONS = {"BS_CELL_READ", "BS_STACK_READ"}
 
+# J-Link (Verbund V3, PI-31 a; lab_gui/jlink_service.py). Laeuft nicht ueber den DeviceWorker,
+# sondern ueber den JLinkService; "Firmware flashen" traegt die Datei in TestStep.file_path.
+JLINK_ACTIONS = {
+    "JLINK_FLASH": "Firmware flashen",
+    "JLINK_RESET": "Reset",
+    "JLINK_HALT": "Anhalten",
+    "JLINK_GO": "Starten",
+    "JLINK_CHECK": "Verbindung prüfen",
+}
+
 
 def battsim_step_detail(step) -> str:
     """Kurzbeschreibung eines Batterie-Simulator-Schritts fuer Statuszeile und
@@ -199,6 +209,7 @@ DEVICE_ACTIONS = {
     "picoscope": PICO_ACTIONS,
     "fg": FG_ACTIONS,
     "battsim": BATTSIM_ACTIONS,
+    "jlink": JLINK_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -210,6 +221,7 @@ DEVICE_KIND_LABELS = {
     "picoscope": "Oszilloskop",
     "fg": "Funktionsgenerator",
     "battsim": "Batterie-Simulator",
+    "jlink": "J-Link",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -259,6 +271,7 @@ VALUELESS_ACTIONS = {
     "FG_OUT_ON", "FG_OUT_OFF",
     "BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF", "BS_CELL_ON", "BS_CELL_OFF",
     "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
+    *JLINK_ACTIONS,
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -318,6 +331,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     **{code: ("", 0, 0) for code in ("BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF",
                                       "BS_CELL_ON", "BS_CELL_OFF", "BS_ALL_ON", "BS_ALL_OFF",
                                       "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ")},
+    **{code: ("", 0, 0) for code in JLINK_ACTIONS},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -454,6 +468,9 @@ class TestStep:
     can_id: int = 0            # Arbitration-ID (11-bit Standard oder 29-bit Extended)
     can_data: str = ""         # Hex-String, z.B. "01 A2 FF" (max. 8 Bytes, klassisches CAN)
     can_extended: bool = False  # 29-bit Extended-ID statt 11-bit Standard-ID
+
+    # -- Datei (nur JLINK_FLASH): Firmware (HEX/SREC/ELF) mit vollem Pfad --
+    file_path: str = ""
 
     # -- Geraete-Kanal (microHIL + PicoScope) -----------------------------
     # Urspruenglich nur fuer microHIL gedacht (Name historisch gewachsen),

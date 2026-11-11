@@ -791,6 +791,8 @@ class SettingsTab(QWidget):
     share_control_timeout_changed = Signal(int)     # Minuten
     # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
     partner_config_edited = Signal(dict)
+    # J-Link (PI-31 a): {"enabled", "device", "interface", "speed", "serial", "commander"}
+    jlink_config_edited = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -940,6 +942,8 @@ class SettingsTab(QWidget):
         layout.addWidget(self._scpi_edit)
 
         layout.addWidget(_separator())
+        self._build_jlink_section(layout)
+        layout.addWidget(_separator())
 
         # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) --------------
         self._info_hint = QLabel()
@@ -954,6 +958,100 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
         return page
+
+    # -- J-Link (PI-31 a, jlink_service.py) -----------------------------------------
+
+    def _build_jlink_section(self, layout: QVBoxLayout) -> None:
+        self._jlink_title = QLabel()
+        self._jlink_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self._jlink_title)
+        self._jlink_hint = QLabel()
+        self._jlink_hint.setWordWrap(True)
+        self._jlink_hint.setProperty("role", "hint")
+        layout.addWidget(self._jlink_hint)
+        self._jlink_enabled = QCheckBox()
+        self._jlink_enabled.toggled.connect(lambda _c: self._emit_jlink_config())
+        layout.addWidget(self._jlink_enabled)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self._jlink_device = QLineEdit()
+        self._jlink_device.setPlaceholderText("S32K144")
+        self._jlink_device.setMinimumWidth(200)
+        self._jlink_device.editingFinished.connect(self._emit_jlink_config)
+        self._jlink_device_label = QLabel()
+        form.addRow(self._jlink_device_label, self._jlink_device)
+        self._jlink_interface = QComboBox()
+        self._jlink_interface.addItems(["SWD", "JTAG"])
+        self._jlink_interface.currentIndexChanged.connect(lambda _i: self._emit_jlink_config())
+        self._jlink_interface_label = QLabel()
+        form.addRow(self._jlink_interface_label, self._jlink_interface)
+        self._jlink_speed = SteppedSpinBox()
+        self._jlink_speed.setRange(5, 50000)
+        self._jlink_speed.setSuffix(" kHz")
+        self._jlink_speed.valueChanged.connect(lambda _v: self._emit_jlink_config())
+        self._jlink_speed_label = QLabel()
+        form.addRow(self._jlink_speed_label, self._jlink_speed)
+        self._jlink_serial = QLineEdit()
+        self._jlink_serial.setMaxLength(20)
+        self._jlink_serial.editingFinished.connect(self._emit_jlink_config)
+        self._jlink_serial_label = QLabel()
+        form.addRow(self._jlink_serial_label, self._jlink_serial)
+        self._jlink_commander = QLineEdit()
+        self._jlink_commander.setMinimumWidth(320)
+        self._jlink_commander.editingFinished.connect(self._emit_jlink_config)
+        self._jlink_commander_label = QLabel()
+        form.addRow(self._jlink_commander_label, self._jlink_commander)
+        layout.addLayout(form)
+        self._jlink_status = QLabel()
+        self._jlink_status.setWordWrap(True)
+        layout.addWidget(self._jlink_status)
+
+    def _retranslate_jlink(self) -> None:
+        self._jlink_title.setText(tr("J-Link (Flashen und Reset im Testablauf)"))
+        self._jlink_hint.setText(tr(
+            "LabControl ruft für jeden Schritt den J-Link Commander auf und gibt den J-Link danach "
+            "wieder frei – der Debugger in der IDE bleibt nutzbar. Bei der EDU-Lizenz erscheint einmal "
+            "je 24 h ein Bestätigungsdialog von SEGGER; bis er weggeklickt ist, wartet der Schritt "
+            "(Zeitlimit 30 s, Flashen 180 s)."))
+        self._jlink_enabled.setText(tr("J-Link verwenden"))
+        self._jlink_device_label.setText(tr("Zielbaustein:"))
+        self._jlink_interface_label.setText(tr("Schnittstelle:"))
+        self._jlink_speed_label.setText(tr("Takt:"))
+        self._jlink_serial_label.setText(tr("Seriennummer (optional):"))
+        self._jlink_serial.setPlaceholderText(tr("einziger angeschlossener J-Link"))
+        self._jlink_commander_label.setText(tr("J-Link Commander (optional):"))
+        self._jlink_commander.setPlaceholderText(tr("automatisch suchen"))
+
+    def _emit_jlink_config(self) -> None:
+        self.jlink_config_edited.emit({
+            "enabled": self._jlink_enabled.isChecked(),
+            "device": self._jlink_device.text().strip(),
+            "interface": self._jlink_interface.currentText(),
+            "speed": self._jlink_speed.value(),
+            "serial": self._jlink_serial.text().strip(),
+            "commander": self._jlink_commander.text().strip(),
+        })
+
+    def set_jlink_config(self, config: dict, commander_found: str) -> None:
+        widgets = (self._jlink_enabled, self._jlink_device, self._jlink_interface, self._jlink_speed,
+                   self._jlink_serial, self._jlink_commander)
+        for widget in widgets:
+            widget.blockSignals(True)
+        self._jlink_enabled.setChecked(bool(config.get("enabled")))
+        self._jlink_device.setText(config.get("device", ""))
+        self._jlink_interface.setCurrentText(config.get("interface", "SWD"))
+        self._jlink_speed.setValue(int(config.get("speed", 4000)))
+        self._jlink_serial.setText(config.get("serial", ""))
+        self._jlink_commander.setText(config.get("commander", ""))
+        for widget in widgets:
+            widget.blockSignals(False)
+        if commander_found:
+            self._jlink_status.setText(tr("J-Link Commander: {path}", path=commander_found))
+            set_tone(self._jlink_status, "muted")
+        else:
+            self._jlink_status.setText(tr("J-Link Commander nicht gefunden – SEGGER J-Link Software "
+                                          "installieren oder den Pfad eintragen"))
+            set_tone(self._jlink_status, "warning")
 
     def set_scpi_scopes(self, addresses: list[str]) -> None:
         self._scpi_edit.blockSignals(True)
@@ -1374,6 +1472,7 @@ class SettingsTab(QWidget):
         )
         self._info_hint.setText(tr("Geräte-Info -- z. B. die aktuell geflashte Firmware-Version."))
         self._scpi_title.setText(tr("Oszilloskope im Netzwerk (SCPI)"))
+        self._retranslate_jlink()
         self._scpi_hint.setText(
             tr(
                 "IP-Adresse oder VISA-Adresse je Oszilloskop, mehrere durch Komma getrennt, z. B. "
