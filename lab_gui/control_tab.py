@@ -1337,8 +1337,6 @@ class BattSimControlGroup(QGroupBox):
             spin.setDecimals(4)
             spin.setSuffix(" V")
             spin.setMaximumWidth(130)
-            # Touch-Profil: ohne -/+ (Zahlenfeld per Tipp), sonst passen zwei Zellbloecke nicht nebeneinander
-            spin.setProperty("touchPlain", True)
             spin.valueChanged.connect(lambda _v, s=spin: self._mark_edited(s))
             button = IconButton("mdi.check", "")
             button.clicked.connect(lambda _=False, n=n, s=spin: self.set_cell_voltage.emit(self._device_id, n, s.value()))
@@ -1420,14 +1418,16 @@ class BattSimControlGroup(QGroupBox):
             grid.setColumnMinimumWidth(column, 0)
             grid.setColumnStretch(column, 0)
         if two_blocks:
-            grid.setColumnMinimumWidth(stride - 1, 20)
-        grid.setHorizontalSpacing(6 if two_blocks else 8)
+            grid.setColumnMinimumWidth(stride - 1, 16)
+        grid.setHorizontalSpacing(4 if two_blocks else 8)
         for actual in self._cell_actuals:
             actual.setMinimumWidth(0 if two_blocks else 90)
         self._render_cells()
+        # Zellsollwerte behalten im Touch-Profil ihre -/+ Tasten. Ohne (NoButtons) waere die Zeile schmaler,
+        # aber Qt 6.12 macht das Textfeld eines Zahlenfelds mit NoButtons und Stylesheet-padding 1 px breit
+        # (Wert unsichtbar, am Pi gesehen 11.11.2026; 6.11 nicht betroffen).
         for spin in self._cell_spins:
-            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons if two_blocks
-                                  else QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+            spin.setMaximumWidth(16777215 if two_blocks else 130)   # Touch: Breite aus dem Stylesheet
         # Touch: Raster direkt in die Kachel (natuerliche Hoehe), am PC zurueck in den Scrollbereich
         host = self._grid_host
         if two_blocks:

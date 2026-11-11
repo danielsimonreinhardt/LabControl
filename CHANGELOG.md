@@ -6,6 +6,18 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **Batterie-Zellsollwerte am Pi leer, sporadischer Fehler beim Beenden (0.36.1, 11.11.2026).**
+  - In 0.36.0 hatten die Zellsollwerte im Touch-Profil keine −/+ Tasten (`NoButtons`). Unter Qt 6.12 (am Pi, PySide6
+    ist nicht festgelegt, kommt also auch an den PC) ist das Textfeld eines Zahlenfelds mit `NoButtons` und
+    Stylesheet-`padding` nur 1 px breit -- der Wert war unsichtbar; unter 6.11 (PC) nicht. Im Minimalfall nachgestellt
+    (jede `padding`-Angabe, auch 0). Die Zellen behalten jetzt ihre −/+ Tasten (passt am Pi: Raster 638 von 794 px);
+    `check_touch_ui` prüft die Breite des Textfelds.
+  - Beim Beenden warf `DashboardWidget.eventFilter` sporadisch in verschachtelten Ereignissen immer wieder (Aufruf von
+    `viewport()` auf schon abgebautem Objekt, seit 0.36.0) -- jetzt Vergleich mit einer gemerkten Referenz. Am Pi
+    offscreen: alter Stand 3 von 15 Läufen mit Fehler, neuer 0 von 15.
+  - Ausgeschaltete Zellen: Zusatz „(aus)“ entfällt im Touch-Profil weiter (grau).
+
 ### Hinzugefügt
 - **Touch-Profil, Schritt 5: Übersicht mehrzeilig, Batterie-Simulator 2 × 7, Zeitfenster-Tasten (0.36.0, Pi-Plan
   Phase 4, 11.11.2026).**
@@ -17,14 +29,16 @@ Semantic Versioning (`lab_gui/version.py`).
     Navigation nennt die Seite), der Ansicht-Umschalter steht als 44-px-Knopf unter den Kacheln. Ziehen im Modus
     „Anordnen“ nutzt dasselbe Packen. Am PC unverändert.
   - Batterie-Simulator (Steuerung): Zellen im Touch-Profil als 2 × 7-Raster (1–7 | 8–14) ohne eigenen Scrollbereich
-    (14 Zeilen zu 44 px passten nicht, und der innere Scrollbereich fing das Wischen ab). Zellsollwerte ohne −/+ (ein
-    Tipp öffnet das Zahlenfeld, „Setzen“ sendet den Sollwert), ausgeschaltete Zellen grau statt „(aus)“,
-    „(Fehler)“ statt „(Sollwertfehler)“.
+    (14 Zeilen zu 44 px passten nicht, und der innere Scrollbereich fing das Wischen ab). Ein Tipp auf den
+    Zellsollwert öffnet das Zahlenfeld, „Setzen“ sendet den Sollwert; ausgeschaltete Zellen grau statt „(aus)“,
+    „(Fehler)“ statt „(Sollwertfehler)“. (In 0.36.0 ohne −/+, siehe 0.36.1.)
   - Verlauf: Zeitfenster im Touch-Profil als Tastenleiste 30 s … 30 min statt Auswahlliste (ein Tipp statt zwei).
   - Nebenbei behoben (auch am PC): die Spaltenüberschrift „Sollwert“ der Batterie-Zellen stand über der ✓-Spalte
     statt über dem Feld.
   - **Mock-verifiziert** (`check_touch_ui.py`: kein Abschneiden, keine Überlappung, mehrzeilig, HIL ganz sichtbar,
-    2 × 7 mit Rückweg in eine Spalte, Zeitfenster-Tasten mit Rückweg; alle 28 Prüfungen grün).
+    2 × 7 mit Rückweg in eine Spalte, Zeitfenster-Tasten mit Rückweg; alle 28 Prüfungen grün unter Windows,
+    `check_touch_ui` auch am Pi), am Pi offscreen per Bildschirmfoto angesehen (1024 × 600, Fenster-Mindestbreite 955).
+    Mit dem Finger am Display noch nicht ausprobiert.
 - **Touch-Profil, Schritt 4: Wischen, Modus „Anordnen“, Beschriftungen statt Tooltips (0.35.0, Pi-Plan Phase 4, 10.11.2026).**
   - Wischen (kinetisches Scrollen) in allen Scroll-Flächen, Listen und Tabellen im Touch-Profil -- über den
     `TouchSizer`, also auch in später erscheinenden Kacheln; ohne Touch-Profil wieder aus. Ein normaler Tipp auf einen

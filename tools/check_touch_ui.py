@@ -187,11 +187,15 @@ def main() -> int:
         pos8 = bs._grid.getItemPosition(bs._grid.indexOf(bs._cell_spins[7]))
         check("Zellen 2 x 7: Zelle 8 rechts neben Zelle 1", pos8[0] == pos1[0] and pos8[1] > pos1[1], f"{pos1} {pos8}")
         check("Zellraster ohne eigenen Scrollbereich", bs._grid_scroll.isHidden() and bs._grid_host.parent() is bs)
-        check("Zellsollwerte ohne -/+ (Zahlenfeld per Tipp)",
-              bs._cell_spins[0].buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons)
         w.tabs.setCurrentWidget(w.control_tab)
         for _ in range(5):
             app.processEvents()
+        from PySide6.QtWidgets import QLineEdit
+        edit = bs._cell_spins[0].findChild(QLineEdit)
+        # Qt 6.12 machte das Textfeld mit NoButtons + Stylesheet-padding 1 px breit (am Pi gesehen)
+        check("Zellsollwert: Textfeld zeigt den Wert (mit -/+)", edit.width() >= 60
+              and bs._cell_spins[0].buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows,
+              f"Textfeld {edit.width()} px")
         check("Batterie-Kachel: Raster passt in die Kachel", bs._grid_host.width() >= bs._grid_host.sizeHint().width(),
               f"{bs._grid_host.width()} / {bs._grid_host.sizeHint().width()}")
         bs.set_state({"remote": True, "output_on": False, "voltage_limit": 4.3,

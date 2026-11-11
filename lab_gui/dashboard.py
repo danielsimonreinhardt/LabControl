@@ -498,6 +498,7 @@ class DashboardWidget(QGroupBox):
         self._panel_layout.addWidget(self._empty_tile, 0, 0)
 
         self._scroll_area = QScrollArea()
+        self._viewport = self._scroll_area.viewport()   # fuer eventFilter, siehe dort
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setWidget(self._container)
         ThemeManager.instance().changed.connect(self._style_scroll_area)
@@ -736,9 +737,9 @@ class DashboardWidget(QGroupBox):
         self._scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff if on else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         if on:
-            self._scroll_area.viewport().installEventFilter(self)
+            self._viewport.installEventFilter(self)
         else:
-            self._scroll_area.viewport().removeEventFilter(self)
+            self._viewport.removeEventFilter(self)
         # Touch: Knopfspalte rechts kostet Kachelbreite -> als Zeile unter die Kacheln
         if on:
             self._body_layout.removeItem(self._corner_layout)
@@ -756,7 +757,7 @@ class DashboardWidget(QGroupBox):
 
     def _avail_width(self) -> int:
         margins = self._panel_layout.contentsMargins()
-        return self._scroll_area.viewport().width() - margins.left() - margins.right()
+        return self._viewport.width() - margins.left() - margins.right()
 
     def _max_cols(self) -> int:
         """Rasterspalten, die in die sichtbare Breite passen (nur im Touch-Profil, set_multi_row)."""
@@ -815,7 +816,9 @@ class DashboardWidget(QGroupBox):
         self._relayout_panels(reset_width=True)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
-        if obj is self._scroll_area.viewport():
+        # Nur Python-Referenz vergleichen: viewport() beim Beenden (Objekt schon abgebaut) warf in
+        # verschachtelten Ereignissen immer wieder -> Rekursion (am Pi gesehen, 11.11.2026)
+        if obj is self._viewport:
             # Touch-Profil: andere Breite -> Spaltenzahl und Kachelbreite neu (set_multi_row)
             if event.type() == QEvent.Type.Resize and self._multi_row and self._laid_out is not None \
                     and self._laid_out[2] != self._avail_width():

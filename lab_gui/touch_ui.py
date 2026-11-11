@@ -324,13 +324,6 @@ def touch_qss(pal: Palette) -> str:
         border-color: {pal.accent};
         color: #ffffff;
     }}
-    /* Felder ohne -/+ (Zellsollwerte des Batterie-Simulators, 2 x 7): Wert per Zahlenfeld */
-    QGroupBox QAbstractSpinBox[touchPlain="true"] {{
-        padding-left: 8px;
-        padding-right: 8px;
-        min-width: 90px;
-        max-width: 104px;
-    }}
     QCheckBox, QRadioButton {{
         spacing: 10px;
         min-height: {TOUCH_MIN - 8}px;
