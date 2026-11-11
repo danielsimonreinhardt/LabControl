@@ -640,6 +640,27 @@ Start wird eine Verbindung für Erfassungen getrennt, und bis zum Laufende werde
 keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
 `captures` neben dem Programm.
 
+**Verbund mit einem zweiten LabControl (z. B. Raspberry Pi und PC).** Ganz unten
+im Unterreiter „Netzwerk“ trägt man unter **„Verbund mit einem zweiten
+LabControl“** die Adresse des anderen Rechners (z. B. `192.168.178.181:8420`)
+und dessen Token ein und hakt **„Verbund aktivieren“** an. Auf dem anderen
+Rechner muss die Freigabe für **alle Geräte im lokalen Netzwerk** laufen, und
+die gewünschten Geräte müssen dort zum **Lesen** (und zum Bedienen zum
+**Steuern**) freigegeben sein. Dann erscheint der Reiter **„Verbund“**: je
+freigegebenem Gerät des Partners eine Kachel „Pi · Netzteil 1“ mit seinen
+Werten und den dort erlaubten Bedienungen (Knöpfe wie „Ausgang EIN“, dazu eine
+Zeile „Aktion – Wert – Senden“ und bei Bedarf der Kanal). Die Kachel meldet
+das Ergebnis jeder Bedienung (✓ oder ✕ mit Grund). Bedienen geht nur, solange
+am Partner der Hauptschalter „Fernsteuerung“ an ist; der Kopf des Reiters
+sagt, wenn nicht. Jedes Gerät gehört dem Rechner, an dem es steckt: Grenzwerte,
+Handbedienung und Sicherheitsabschaltung prüft immer dieser.
+
+**ALLE AUS wirkt im Verbund auf beide Rechner**: der Knopf, ALLE AUS über MCP
+oder das Netzwerk und eine Sicherheitsabschaltung schalten auch beim Partner
+alles ab. Stop oder Fehler eines Testablaufs betreffen nur den eigenen Rechner.
+Die Statuszeile zeigt den Verbund als Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“
+(getrennt). Beim Beenden der App wird am Partner nichts abgeschaltet.
+
 ---
 
 ## 6. Sicherheit: Software-Watchdog

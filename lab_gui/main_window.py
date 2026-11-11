@@ -46,8 +46,10 @@ from scope_service import ScopeService
 from settings import Settings
 from settings_tab import SettingsTab
 from share_api import new_token
+from partner_link import PartnerLink
+from partner_tab import PartnerTab
 from share_remote import RemoteBridge
-from share_server import ShareServer
+from share_server import ShareServer, is_verbund_client
 from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
@@ -165,9 +167,14 @@ class MainWindow(QMainWindow):
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
         self.settings_tab = SettingsTab()
+        # Verbund Pi + PC (PI-23 a): Verbindung zur Partner-Instanz und ihr Reiter. Der Reiter ist nur
+        # sichtbar, solange ein Partner eingetragen ist (_on_partner_config).
+        self._partner = PartnerLink(app_logging.host_name(), self)
+        self.partner_tab = PartnerTab(self._partner)
         self.tabs.addTab(self.control_tab, "")
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
+        self.tabs.addTab(self.partner_tab, "")
         self.tabs.addTab(self.settings_tab, "")
         # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
         # nie an Dashboard oder Sicherheitsbanner darueber.
@@ -187,6 +194,10 @@ class MainWindow(QMainWindow):
         self._status_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._safety_status_label = QLabel()
         self._status_layout.addWidget(self._safety_status_label)
+        # Verbund-Chip "⇄ Pi" (verbunden/getrennt), nur mit eingetragenem Partner sichtbar
+        self._partner_chip = QLabel()
+        self._partner_chip.hide()
+        self._status_layout.addWidget(self._partner_chip)
         self.statusBar().addPermanentWidget(self._status_container)
         self._status_container.installEventFilter(self)   # Tipp/Klick -> Liste (_show_status_details)
         self._status_container.setCursor(Qt.CursorShape.PointingHandCursor)   # am PC: klickbar (PI-17 a)
@@ -261,21 +272,23 @@ class MainWindow(QMainWindow):
         self._remote_status_label.hide()
         self.statusBar().addPermanentWidget(self._remote_status_label)
         self._all_off_button = QPushButton()
-        self._all_off_button.clicked.connect(lambda: self._safe_stop("manual all-off"))
+        self._all_off_button.clicked.connect(lambda: self._safe_stop("manual all-off", propagate=True))
         self.statusBar().addPermanentWidget(self._all_off_button)
         self._style_all_off_button()
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
         self._wire_touch()
+        self._wire_partner()
         self._style_safety_banner()
         self._retranslate()
 
     def _retranslate(self) -> None:
-        self.tabs.setTabText(0, tr("Steuerung"))
-        self.tabs.setTabText(1, tr("Testablauf"))
-        self.tabs.setTabText(2, tr("Verlauf"))
-        self.tabs.setTabText(3, tr("Einstellungen"))
+        for page, text in ((self.control_tab, tr("Steuerung")), (self.testcase_tab, tr("Testablauf")),
+                           (self.timeline_tab, tr("Verlauf")), (self.partner_tab, tr("Verbund")),
+                           (self.settings_tab, tr("Einstellungen"))):
+            self.tabs.setTabText(self.tabs.indexOf(page), text)
+        self._render_partner_chip()
         if self.tabs.indexOf(self._overview_page) >= 0:
             self.tabs.setTabText(self.tabs.indexOf(self._overview_page), tr("Übersicht"))
         self._nav.retranslate()
@@ -395,9 +408,64 @@ class MainWindow(QMainWindow):
         # im Status-Endpoint bemerkbar (siehe live_state._lock_state).
         self._safety.state_changed.connect(self._live_state.on_safety_state_changed)
 
-    def _safe_stop(self, reason: str) -> None:
+    def _safe_stop(self, reason: str, propagate: bool = False) -> None:
+        """propagate: auch am Verbund-Partner ALLE AUS (PI-27 a) -- fuer ALLE AUS per Knopf, MCP oder
+        Netzwerk, nicht fuer Stop/Fehler eines Testablaufs (der betrifft nur die eigenen Geraete)."""
         logger.warning("Safe-Stop ausgelöst: %s", reason)
         self._request_all_off.emit(reason)
+        if propagate:
+            self._partner.all_off(reason)
+
+    # -- Verbund Pi + PC (PI-23 a, PI-27 a) ------------------------------------
+
+    def _wire_partner(self) -> None:
+        self.settings_tab.partner_config_edited.connect(lambda cfg: self._settings.set_partner_config(**cfg))
+        self._settings.partner_config_changed.connect(self._on_partner_config)
+        self._partner.connection_changed.connect(lambda *_: self._render_partner_chip())
+        self._partner.snapshot_changed.connect(lambda *_: self._render_partner_chip())
+        self._partner.all_off_finished.connect(self._on_partner_all_off_finished)
+        self._on_partner_config(self._settings.partner_config)
+
+    def _on_partner_config(self, config: dict) -> None:
+        self.settings_tab.set_partner_config(config)
+        self._partner.apply(config)
+        visible = self._partner.enabled
+        self.tabs.setTabVisible(self.tabs.indexOf(self.partner_tab), visible)
+        self._partner_nav_button.setVisible(visible)
+        self._render_partner_chip()
+
+    def _render_partner_chip(self) -> None:
+        chip = self._partner_chip
+        link = self._partner
+        if not link.enabled:
+            chip.hide()
+            self.settings_tab.set_partner_status(tr("Verbund aus"), "muted")
+            return
+        pal = ThemeManager.instance().palette
+        name = link.name()
+        if link.is_connected():
+            snap = link.snapshot()
+            count = len(snap.tiles) if snap is not None else 0
+            chip.setText(f"⇄ {name}")
+            chip.setToolTip(tr("Verbund: verbunden mit {name} ({n} Geräte)", name=name, n=count))
+            self._style_chip(chip, pal.success)
+            self.settings_tab.set_partner_status(
+                tr("Verbunden mit {name}, LabControl {version}, {n} Geräte freigegeben", name=name,
+                   version=snap.version if snap else "?", n=count), "success")
+        else:
+            chip.setText(f"✕ {name}")
+            chip.setToolTip(tr("Verbund: {name} nicht verbunden – {reason}", name=name, reason=tr(link.reason())))
+            self._style_chip(chip, pal.danger)
+            self.settings_tab.set_partner_status(
+                tr("Nicht verbunden: {reason}", reason=tr(link.reason())), "danger")
+        chip.show()
+
+    def _on_partner_all_off_finished(self, ok: bool, message: str) -> None:
+        if ok:
+            return
+        self.statusBar().showMessage(
+            tr("ALLE AUS am Verbund-Partner {name} nicht bestätigt: {message}",
+               name=self._partner.name(), message=tr(message)), 15000)
 
     def _on_all_off_finished(self, failures: str) -> None:
         if not failures:
@@ -415,6 +483,9 @@ class MainWindow(QMainWindow):
 
     def _on_safety_tripped(self, device_id: str, reason: str) -> None:
         self._test_runner.stop()
+        # Die eigenen Ausgaenge schaltet der Watchdog selbst ab (all_off_requested); der Partner
+        # bekommt ALLE AUS dazu (PI-27 a).
+        self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
         self._safety_banner_label.setText(reason)
         self._safety_banner.show()
 
@@ -935,8 +1006,9 @@ class MainWindow(QMainWindow):
 
     def _on_share_all_off(self, _request_id: int, client: str) -> None:
         # Derselbe Weg wie der ALLE-AUS-Knopf. Ohne die Pruefungen von oben --
-        # der Notaus geht immer.
-        self._safe_stop(f"remote all-off ({client})")
+        # der Notaus geht immer. Kommt es vom Verbund-Partner, nicht zurueckreichen (er hat es
+        # selbst ausgeloest); von MCP oder einem anderen Client schon (PI-27 a).
+        self._safe_stop(f"remote all-off ({client})", propagate=not is_verbund_client(client))
 
     def _on_share_control_toggled(self, active: bool) -> None:
         """Hauptschalter "Fernsteuerung aktiv" im Netzwerk-Reiter."""
@@ -1059,6 +1131,7 @@ class MainWindow(QMainWindow):
         self._nav.add_page(self.control_tab, "mdi.tune-variant", lambda: tr("Steuerung"))
         self._nav.add_page(self.testcase_tab, "mdi.playlist-play", lambda: tr("Testablauf"))
         self._nav.add_page(self.timeline_tab, "mdi.chart-line", lambda: tr("Verlauf"))
+        self._partner_nav_button = self._nav.add_page(self.partner_tab, "mdi.lan-connect", lambda: tr("Verbund"))
         self._nav.add_page(self.settings_tab, "mdi.cog-outline", lambda: tr("Einstellungen"))
         self._nav.selected.connect(self.tabs.setCurrentWidget)
         self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))
@@ -1663,6 +1736,10 @@ class MainWindow(QMainWindow):
         safety = QLabel(self._safety_status_label.toolTip() or self._safety_status_label.text())
         safety.setStyleSheet("font-weight: bold;")
         layout.addWidget(safety)
+        if self._partner.enabled:
+            partner = QLabel(self._partner_chip.toolTip())
+            partner.setStyleSheet("font-weight: bold;")
+            layout.addWidget(partner)
         for device_id in self._status_labels:
             symbol, state, color = self._status_state(device_id)
             row = QLabel(f"{symbol}  {self._device_labels.get(device_id, device_id)} – {state}")
@@ -1692,6 +1769,7 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_partner_chip()
         self._style_safety_banner()
         self._style_all_off_button()
 
@@ -1748,6 +1826,9 @@ class MainWindow(QMainWindow):
         # sofortiger Neustart am belegten Port). Ausserdem darf ein
         # schreibender Zugriff (Phase 2) keinen Worker im Abbau treffen.
         self._share_server.stop()
+        # Verbund: nur die Abfrage beenden. Beenden HIER schaltet am Partner nichts ab -- seine
+        # Geraete gehoeren ihm (Grundsatz 1); belegte Geraete regelt ab V2 das Lebenszeichen.
+        self._partner.stop()
         # Abgedocktes Dashboard-Fenster mit schliessen (es hat kein Eltern-Fenster,
         # siehe dashboard_window.py); der Zustand bleibt fuer den naechsten Start.
         self._closing = True

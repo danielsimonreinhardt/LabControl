@@ -329,6 +329,8 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         "v": API_VERSION,
         "app": "LabControl",
         "version": app_info.get("version", ""),
+        # Rechnername (seit 0.45.0, fuer den Verbund Pi + PC)
+        "host": app_info.get("host", ""),
         "lock": snapshot.get("lock", "free"),
         # Roher Watchdog-Zustand ("off"/"armed"/"tripped") zusaetzlich zum
         # abgeleiteten lock: nur so kann ein Client "keine Grenzwerte

@@ -44,10 +44,14 @@ from PySide6.QtCore import QObject, Signal
 
 import app_logging
 import share_api
+from partner_client import PEER_HEADER
 from paths import app_dir
 from version import __version__
 
 logger = logging.getLogger(__name__)
+
+# Kennung im Aufrufer-Text fuer Anfragen der Verbund-Instanz (siehe client_label).
+VERBUND_TAG = "Verbund:"
 
 # Anfragen laufen in je einem Thread. Die Semaphore deckelt, wie viele
 # gleichzeitig arbeiten duerfen -- billige Versicherung dagegen, dass ein
@@ -87,6 +91,19 @@ def lan_address() -> str:
         return "127.0.0.1"
     finally:
         sock.close()
+
+
+def client_label(ip: str, peer: str | None) -> str:
+    """Aufrufer fuer Log und Executor: die IP, bei einer Verbund-Instanz (Kopf PEER_HEADER,
+    siehe partner_client.py) zusaetzlich " Verbund:<Rechnername>". Der Name wird auf harmlose
+    Zeichen gekuerzt -- er landet im Log und darf dort keine Zeilen einschleusen."""
+    name = "".join(c for c in (peer or "") if c.isalnum() or c in "-_.")[:40]
+    return f"{ip} {VERBUND_TAG}{name}" if name else ip
+
+
+def is_verbund_client(client: str) -> bool:
+    """Kommt die Anfrage (client wie von client_label) vom Verbund-Partner?"""
+    return f" {VERBUND_TAG}" in (client or "")
 
 
 def _is_local(client_ip: str, server_ip: str) -> bool:
@@ -238,7 +255,7 @@ class _ShareRequestHandler(BaseHTTPRequestHandler):
             response = share_api.dispatch(
                 method, self.path, self.headers.get, self.server.share_state, app_info,
                 body=body, executor=self.server.share_executor, scopes=self.server.share_scopes,
-                client=self.client_address[0],
+                client=client_label(self.client_address[0], self.headers.get(PEER_HEADER)),
                 local=_is_local(self.client_address[0], self.request.getsockname()[0]))
             if response.status == 401:
                 self._log_auth_failure()
@@ -308,7 +325,8 @@ class ShareServer(QObject):
         self._server: _ShareHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._current: tuple[bool, str, int] | None = None
-        self._app_info = {"version": __version__, "simulation": False}
+        # host: Rechnername fuer die Verbund-Instanz ("Pi · NT1", partner_link.py)
+        self._app_info = {"version": __version__, "simulation": False, "host": app_logging.host_name()}
         self._url = ""
 
     def set_simulation(self, simulation: bool) -> None:

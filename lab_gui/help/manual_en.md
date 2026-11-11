@@ -613,6 +613,26 @@ connection for acquisitions is closed, and no new ones are accepted until the ru
 ends. Every acquisition is also saved as a CSV file in the `captures` folder next
 to the program.
 
+**Link with a second LabControl (e.g. Raspberry Pi and PC).** At the bottom of
+the "Network" sub-tab, under **"Link with a second LabControl"**, enter the
+other computer's address (e.g. `192.168.178.181:8420`) and its token and tick
+**"Enable link"**. On the other computer the share must run for **all devices
+on the local network**, and the devices you want must be shared there for
+**reading** (and for **control** to operate them). The **"Link"** tab then
+shows one tile per shared partner device, e.g. "Pi · Power supply 1", with its
+values and the operations allowed there (buttons such as "Output ON", a row
+"action – value – send" and, where needed, the channel). The tile reports the
+result of every operation (✓ or ✕ with the reason). Operating only works while
+the "remote control" master switch is on at the partner; the tab header says
+so if it is not. Every device belongs to the computer it is plugged into:
+limits, manual control and the safety shutdown are always checked there.
+
+**In a link, ALL OFF acts on both computers**: the button, ALL OFF via MCP or
+the network and a safety shutdown also switch everything off at the partner.
+Stopping a test sequence or a failed step only affects the own computer. The
+status bar shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
+(disconnected). Closing the app switches nothing off at the partner.
+
 ---
 
 ## 6. Safety: software watchdog

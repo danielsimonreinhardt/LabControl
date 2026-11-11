@@ -789,6 +789,8 @@ class SettingsTab(QWidget):
     share_control_toggled = Signal(bool)            # Hauptschalter Fernsteuerung
     share_local_bypass_toggled = Signal(bool)       # lokal ohne Hauptschalter
     share_control_timeout_changed = Signal(int)     # Minuten
+    # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
+    partner_config_edited = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1065,6 +1067,7 @@ class SettingsTab(QWidget):
             )
         )
         self._share_table.retranslate()
+        self._retranslate_partner()
 
     def _build_network_page(self) -> QWidget:
         """Reiter "Netzwerk": ausgewaehlte Kacheln im lokalen Netz bereitstellen
@@ -1187,8 +1190,90 @@ class SettingsTab(QWidget):
         self._share_table.share_changed.connect(self.share_device_changed)
         layout.addWidget(self._share_table)
 
+        layout.addWidget(_separator())
+        self._build_partner_section(layout)
+
         layout.addStretch()
         return page
+
+    # -- Verbund mit einer zweiten LabControl-Instanz (PI-23 a, partner_link.py) --
+
+    def _build_partner_section(self, layout: QVBoxLayout) -> None:
+        self._partner_title = QLabel()
+        self._partner_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self._partner_title)
+        self._partner_hint = QLabel()
+        self._partner_hint.setWordWrap(True)
+        self._partner_hint.setProperty("role", "hint")
+        layout.addWidget(self._partner_hint)
+
+        self._partner_enabled_checkbox = QCheckBox()
+        self._partner_enabled_checkbox.toggled.connect(lambda _c: self._emit_partner_config())
+        layout.addWidget(self._partner_enabled_checkbox)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self._partner_address_edit = QLineEdit()
+        self._partner_address_edit.setMinimumWidth(260)
+        self._partner_address_edit.setPlaceholderText("192.168.178.181:8420")
+        self._partner_address_edit.editingFinished.connect(self._emit_partner_config)
+        self._partner_address_label = QLabel()
+        form.addRow(self._partner_address_label, self._partner_address_edit)
+        self._partner_token_edit = QLineEdit()
+        self._partner_token_edit.setMinimumWidth(260)
+        self._partner_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._partner_token_edit.editingFinished.connect(self._emit_partner_config)
+        self._partner_token_label = QLabel()
+        form.addRow(self._partner_token_label, self._partner_token_edit)
+        self._partner_name_edit = QLineEdit()
+        self._partner_name_edit.setMaxLength(24)
+        self._partner_name_edit.editingFinished.connect(self._emit_partner_config)
+        self._partner_name_label = QLabel()
+        form.addRow(self._partner_name_label, self._partner_name_edit)
+        layout.addLayout(form)
+
+        self._partner_status = QLabel()
+        self._partner_status.setWordWrap(True)
+        layout.addWidget(self._partner_status)
+
+    def _retranslate_partner(self) -> None:
+        self._partner_title.setText(tr("Verbund mit einem zweiten LabControl"))
+        self._partner_hint.setText(tr(
+            "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter "
+            "„Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf "
+            "beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, "
+            "Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ "
+            "einschalten. Seinen Token hier eintragen."))
+        self._partner_enabled_checkbox.setText(tr("Verbund aktivieren"))
+        self._partner_address_label.setText(tr("Adresse des anderen Rechners:"))
+        self._partner_token_label.setText(tr("Dessen Token:"))
+        self._partner_name_label.setText(tr("Anzeigename (optional):"))
+        self._partner_name_edit.setPlaceholderText(tr("Rechnername"))
+
+    def _emit_partner_config(self) -> None:
+        self.partner_config_edited.emit({
+            "enabled": self._partner_enabled_checkbox.isChecked(),
+            "address": self._partner_address_edit.text().strip(),
+            "token": self._partner_token_edit.text().strip(),
+            "name": self._partner_name_edit.text().strip(),
+        })
+
+    def set_partner_config(self, config: dict) -> None:
+        widgets = (self._partner_enabled_checkbox, self._partner_address_edit,
+                   self._partner_token_edit, self._partner_name_edit)
+        for widget in widgets:
+            widget.blockSignals(True)
+        self._partner_enabled_checkbox.setChecked(bool(config.get("enabled")))
+        self._partner_address_edit.setText(config.get("address", ""))
+        self._partner_token_edit.setText(config.get("token", ""))
+        self._partner_name_edit.setText(config.get("name", ""))
+        for widget in widgets:
+            widget.blockSignals(False)
+
+    def set_partner_status(self, text: str, tone: str) -> None:
+        """tone: "success", "danger" oder "muted" (theme.set_tone)."""
+        self._partner_status.setText(text)
+        set_tone(self._partner_status, tone)
 
     def _on_share_token_copy(self) -> None:
         QApplication.clipboard().setText(self._share_token_edit.text())

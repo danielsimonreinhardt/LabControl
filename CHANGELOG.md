@@ -7,6 +7,31 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Verbund Pi + PC, Stufe V1: Partnergeräte sehen und bedienen, ALLE AUS über beide Rechner (0.45.0,
+  Entscheidungen PI-23 a, PI-27 a, 11.11.2026).** Eine LabControl-Instanz koppelt sich über die vorhandene
+  Netzwerk-Freigabe mit einer zweiten (z. B. PC mit dem Pi); jedes Gerät bleibt beim Rechner, an dem es steckt, und
+  der prüft weiter Token, Freigabe, Hauptschalter, Grenzwerte und Sperren.
+  - Einstellungen → Netzwerk → „Verbund mit einem zweiten LabControl“: Adresse (Port 8420, wenn keiner angegeben),
+    Token des Partners, optional Anzeigename (sonst sein Rechnername). Gespeichert als `partner_*` in den
+    Einstellungen.
+  - Neuer Reiter „Verbund“ (nur mit eingetragenem Partner, im Touch-Profil auch in der Navigation): Kopf mit
+    Verbindung, Version, Hauptschalter und Sperre des Partners; je freigegebenem Partnergerät eine Kachel
+    „Pi · Netzteil 1“, generisch aus der Freigabe gebaut (Werte aus `fields`, Bedienelemente aus `actions` mit den
+    Wertebereichen des Besitzers, Kanalfeld für Funktionsgenerator/microHIL/Batterie-Simulator). Ergebnis jeder
+    Bedienung in der Kachel (✓/✕ mit Grund), gesperrt mit Grund, solange am Partner der Hauptschalter aus ist.
+  - Statuszeile/Leiste oben: Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“ (getrennt), auch in „Gerätezustand“.
+  - ALLE AUS (Knopf, über MCP/Netzwerk) und die Sicherheitsabschaltung schicken zusätzlich ALLE AUS an den Partner
+    (PI-27 a), in eigenem Thread vor wartenden Bedienungen. ALLE AUS, das vom Partner selbst kommt, wird nicht
+    zurückgereicht (Kennung `X-LabControl-Peer`); Stop/Fehler eines Testablaufs und das Beenden der App schalten
+    am Partner nichts ab.
+  - Bedienungen an Partnergeräten stehen im eigenen Log („Verbund Pi Netzteil 1: PSU_VOLT (wert=5) -> ok“) und
+    beim Partner als „Fernsteuerung von <IP> Verbund:<Rechner>“. `/api/v1/status` nennt zusätzlich `host`.
+  - Abfrage im Sekundentakt (Status + Werte), Befehle der Reihe nach in einem Thread.
+  - Noch nicht in V1: Partnergeräte in der Übersicht und in Testabläufen, Belegung und Lebenszeichen (V2).
+  - **Mock-verifiziert:** neue Prüfung `tools/check_partner_link.py` (47 Punkte: Client gegen echten ShareServer mit
+    Stub-Executor, Hauptfenster mit Partner, Bedienen, Wertebereich, Hauptschalter, ALLE AUS in alle Richtungen ohne
+    Ping-Pong, Verbindungsverlust und Wiederkehr, falscher Token, Verbund aus); `check_touch_ui` zählt nur sichtbare
+    Reiter. Handbuch de/en ergänzt.
 - **Testablauf am PC: Hinweis „Noch kein Testablauf“ statt leerer Tabelle (0.44.0, Entscheidung PI-22 a,
   11.11.2026).** Über der Tabelle stehen der Ordner der Abläufe (gemeinsamer Ordner auf dem Netzlaufwerk oder lokal)
   und die Knöpfe „Ablauf öffnen …“ und „Neuen Ablauf beginnen“ (Cursor in die erste Zeile). Der Hinweis verschwindet

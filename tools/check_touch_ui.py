@@ -41,6 +41,11 @@ def wants_keyboard(widget) -> bool:
     return bool(event.value(Qt.InputMethodQuery.ImEnabled))
 
 
+def visible_tabs(w) -> int:
+    """Sichtbare Reiter -- der Reiter "Verbund" ist ohne eingetragenen Partner verborgen (0.45.0)."""
+    return sum(1 for i in range(w.tabs.count()) if w.tabs.isTabVisible(i))
+
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'OK  ' if ok else 'FEHL'} {name}" + (f"  ({detail})" if detail and not ok else ""))
     if not ok:
@@ -85,7 +90,7 @@ def main() -> int:
     base_font = app.font().pointSizeF()
     check("Statusleiste sichtbar, Leiste oben/Navigation verborgen",
           w.statusBar().isVisible() and not w._top_bar.isVisible() and not w._nav.isVisible())
-    check("vier Reiter, Dashboard ueber den Reitern", w.tabs.count() == 4 and w.dashboard.parent() is w.centralWidget())
+    check("vier Reiter (Verbund ohne Partner verborgen), Dashboard ueber den Reitern", visible_tabs(w) == 4 and w.dashboard.parent() is w.centralWidget())
     check("Einstellung zeigt 'aus', nicht automatisch", not w.settings_tab._touch_checkbox.isChecked()
           and not w.settings_tab._touch_auto)
     # Linux mit logind (WSL, Linux-PC): der Ein/Aus-Knopf wurde ohne Touch-Profil ein eigenes kleines Fenster
@@ -101,7 +106,7 @@ def main() -> int:
     app.processEvents()
     check("gespeichert", json.loads((DATA / "settings.json").read_text(encoding="utf-8")).get("touch_mode") is True)
     check("Navigation links sichtbar, Reiterleiste verborgen", w._nav.isVisible() and not w.tabs.tabBar().isVisible())
-    check("Uebersicht ist eigener Reiter und gewaehlt", w.tabs.count() == 5 and w.tabs.currentWidget() is w._overview_page
+    check("Uebersicht ist eigener Reiter und gewaehlt", visible_tabs(w) == 5 and w.tabs.currentWidget() is w._overview_page
           and w._overview_page.isAncestorOf(w.dashboard))
     check("Leiste oben mit ALLE AUS, Statusleiste verborgen", w._top_bar.isVisible() and not w.statusBar().isVisible()
           and w._all_off_button.isVisible() and w._top_bar.isAncestorOf(w._all_off_button))
@@ -420,7 +425,7 @@ def main() -> int:
     check("Statusleiste mit ALLE AUS zurueck", w.statusBar().isVisible() and w._all_off_button.isVisible()
           and w.statusBar().isAncestorOf(w._all_off_button) and not w._top_bar.isVisible())
     check("Dashboard wieder ueber den Reitern, vier Reiter, Reiterleiste da",
-          w.dashboard.parent() is w.centralWidget() and w.tabs.count() == 4 and w.tabs.tabBar().isVisible()
+          w.dashboard.parent() is w.centralWidget() and visible_tabs(w) == 4 and w.tabs.tabBar().isVisible()
           and not w._nav.isVisible() and w.dashboard.isVisible())
     check("Schrift wie vorher", abs(app.font().pointSizeF() - base_font) < 0.01)
     check("Stylesheet ohne Touch-Regeln", not ThemeManager.instance().touch and "touchNav" not in app.styleSheet())

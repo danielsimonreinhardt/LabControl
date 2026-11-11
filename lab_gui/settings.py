@@ -77,6 +77,8 @@ class Settings(QObject):
     share_config_changed = Signal(dict)
     # Adressen der SCPI-Oszilloskope (IP oder VISA-Adresse), siehe scpi_scopes.
     scpi_scopes_changed = Signal(list)
+    # Verbund-Partner (PI-23 a, partner_link.py): kompletter Block wie share_config_changed.
+    partner_config_changed = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -515,6 +517,35 @@ class Settings(QObject):
         self._data["share_control_timeout_min"] = minutes
         self._save()
         self._emit_share_config()
+
+    # -- Verbund-Partner (PI-23 a, siehe partner_link.py) ---------------------
+
+    @property
+    def partner_config(self) -> dict:
+        """{"enabled", "address", "token", "name"} -- Adresse wie eingegeben (partner_client.
+        normalize_url macht daraus die URL), Name leer = Rechnername des Partners."""
+        def text(key: str, limit: int) -> str:
+            value = self._data.get(key, "")
+            return value.strip()[:limit] if isinstance(value, str) else ""
+        return {
+            "enabled": bool(self._data.get("partner_enabled", False)),
+            "address": text("partner_address", 200),
+            "token": text("partner_token", 200),
+            "name": text("partner_name", 24),
+        }
+
+    def set_partner_config(self, **changes) -> None:
+        current = self.partner_config
+        merged = {**current, **{k: v for k, v in changes.items() if k in current}}
+        merged["enabled"] = bool(merged["enabled"])
+        for key in ("address", "token", "name"):
+            merged[key] = str(merged[key]).strip()
+        if merged == current:
+            return
+        for key, value in merged.items():
+            self._data[f"partner_{key}"] = value
+        self._save()
+        self.partner_config_changed.emit(self.partner_config)
 
     def set_share_device(self, device_id: str, read: bool, control: bool, measure: bool = False) -> None:
         """Freigabe EINES Geraets. Analog zu set_panel_color geraete-individuell
