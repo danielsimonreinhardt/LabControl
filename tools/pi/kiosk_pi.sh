@@ -7,7 +7,8 @@
 #
 # Was es aendert (Sicherung der Originale beim ersten Lauf in ~/.local/share/labcontrol/kiosk-backup):
 #   1 Plymouth-Theme "labcontrol" (tools/pi/branding) statt "pix", initramfs wird neu gebaut
-#   2 /boot/firmware/cmdline.txt: logo.nologo vt.global_cursor_default=0 loglevel=3
+#   2 /boot/firmware/cmdline.txt: logo.nologo vt.global_cursor_default=0 loglevel=3 fbcon=map:9 (Textkonsole
+#     zeichnet nicht auf den Bildschirm -- sonst uebermalt sie das Boot-Logo, wenn tty1 in den Textmodus faellt)
 #   3 /boot/firmware/config.txt: disable_splash=1 (kein Regenbogen der Firmware)
 #   4 ~/.config/labwc/autostart: nur Hintergrund (Logo per swaybg), kanshi und die XDG-Autostarts
 #     (Bildschirmtastatur, Ein/Aus-Taste, LabControl) -- ohne Desktop (pcmanfm-pi) und Leiste (wf-panel-pi)
@@ -39,7 +40,7 @@ AUTOSTART="$HOME/.config/labwc/autostart"
 LABWC_RC="$HOME/.config/labwc/rc.xml"
 LABWC_ENV="$HOME/.config/labwc/environment"
 BACKUP="$HOME/.local/share/labcontrol/kiosk-backup"
-CMDLINE_ADD="logo.nologo vt.global_cursor_default=0 loglevel=3"
+CMDLINE_ADD="logo.nologo vt.global_cursor_default=0 loglevel=3 fbcon=map:9"
 CURSOR_THEME=labcontrol-invisible
 CURSOR_DIR="$HOME/.icons/$CURSOR_THEME"
 DROPIN_DIR="$HOME/.config/systemd/user/labcontrol.service.d"
@@ -163,8 +164,8 @@ User=$USER
 WorkingDirectory=$HOME
 PAMName=login
 TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
+# Kein TTYReset/TTYVHangup: das setzte tty1 (mit dem Boot-Logo) in den Textmodus zurueck, die leere Konsole
+# uebermalte das Logo knapp zwei Sekunden lang, bis labwc stand (Nutzerhinweis 11.11.2026)
 StandardInput=tty-fail
 StandardOutput=journal
 StandardError=journal

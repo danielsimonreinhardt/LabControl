@@ -6,6 +6,13 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **Kiosk: schwarze Lücke beim Booten blieb (0.40.4, Nutzerhinweis 11.11.2026).** Der Kiosk-Dienst setzte mit
+  `TTYReset`/`TTYVHangup` tty1 zurück, auf dem das Boot-Logo liegt -- tty1 fiel in den Textmodus, die leere Konsole
+  übermalte das Logo knapp zwei Sekunden lang, bis labwc stand (Journal: 5,7 s bis 7,6 s). Beides entfernt;
+  zusätzlich `fbcon=map:9`, damit die Textkonsole gar nicht mehr auf den Bildschirm zeichnet (Bootmeldungen dann
+  nur noch per SSH/Journal; `--undo` stellt die Kommandozeile wieder her).
+
 ### Hinzugefügt
 - **Kiosk ohne Bootloader-Bild und ohne schwarze Lücke, Dialoge ohne Fensterleiste; Sicherheit als Chip (0.40.3,
   Nutzerhinweise 11.11.2026).**
