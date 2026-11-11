@@ -6,6 +6,12 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Geändert
+- **Pi: Bootloader-Bild ausgeblendet (Entscheidung PI-16 a, 11.11.2026).** Mit `KIOSK_BOOTLOADER=1 kiosk_pi.sh`
+  ausgeführt: Bootloader-EEPROM auf den Stand 30.10.2026 aktualisiert (vorher 11.05.2026), bisherige Einstellungen
+  übernommen, dazu `DISABLE_HDMI=1`. **Hardware-verifiziert:** nach dem Neustart `rpi-eeprom-update` „up to date“,
+  `DISABLE_HDMI=1` aktiv, Kiosk-Dienst und LabControl laufen. Dialoge ohne Fensterleiste vom Nutzer am Display bestätigt.
+
 ### Behoben
 - **Kiosk: schwarze Lücke beim Booten blieb (0.40.4, Nutzerhinweis 11.11.2026).** Der Kiosk-Dienst setzte mit
   `TTYReset`/`TTYVHangup` tty1 zurück, auf dem das Boot-Logo liegt -- tty1 fiel in den Textmodus, die leere Konsole
