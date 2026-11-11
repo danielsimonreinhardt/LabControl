@@ -221,6 +221,12 @@ A row-based editor for automated test sequences. Every row is either an
 **action step** (device + action + value + wait time) or a **flow
 control element** (loop, condition, variable).
 
+As long as no sequence is loaded and nothing has been entered, the hint
+**"No test sequence yet"** is shown above the table, with the folder the
+sequences are stored in and the buttons **"Open sequence …"** and **"Start
+a new sequence"** (puts the cursor into the first row). It disappears as
+soon as a sequence is loaded or a step is edited.
+
 ### Toolbar
 
 - **"+" button**: the arrow next to it opens a menu with every insertable

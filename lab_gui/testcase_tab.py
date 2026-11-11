@@ -15,10 +15,12 @@ import qtawesome as qta
 from PySide6.QtCore import QEvent, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -499,6 +501,34 @@ class TestcaseTab(QWidget):
         button_row.addWidget(self._save_button)
         layout.addLayout(button_row)
 
+        # PI-22 a: Hinweis ueber der leeren Tabelle, solange weder ein Ablauf geladen noch etwas
+        # bearbeitet ist. Verschwindet beim Laden, bei jeder Strukturaenderung ueber die Knoepfe und
+        # sobald der Fokus in die Tabelle geht (siehe _dismiss_hint/_on_focus_changed).
+        self._hint_box = QFrame()
+        self._hint_box.setObjectName("testcaseEmptyHint")
+        hint_layout = QHBoxLayout(self._hint_box)
+        hint_layout.setContentsMargins(14, 10, 14, 10)
+        hint_layout.setSpacing(12)
+        self._hint_icon = QLabel()
+        hint_layout.addWidget(self._hint_icon, 0, Qt.AlignmentFlag.AlignTop)
+        hint_text_col = QVBoxLayout()
+        hint_text_col.setSpacing(2)
+        self._hint_title = QLabel()
+        self._hint_text = QLabel()
+        self._hint_text.setWordWrap(True)
+        self._hint_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        hint_text_col.addWidget(self._hint_title)
+        hint_text_col.addWidget(self._hint_text)
+        hint_layout.addLayout(hint_text_col, 1)
+        self._hint_open = IconButton("mdi.folder-open-outline", "", text=tr("Ablauf öffnen …"))
+        self._hint_new = IconButton("mdi.plus", "", text=tr("Neuen Ablauf beginnen"))
+        self._hint_open.clicked.connect(self._load_from_file)
+        self._hint_new.clicked.connect(self._on_hint_new)
+        hint_layout.addWidget(self._hint_open, 0, Qt.AlignmentFlag.AlignVCenter)
+        hint_layout.addWidget(self._hint_new, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self._hint_box)
+        self._hint_dismissed = False
+
         self._table = QTableWidget(0, len(BASE_COLUMNS))
         header = self._table.horizontalHeader()
         # Feste Spalten (FIXED_COLUMNS) bekommen ihre Default-Breite und bleiben
@@ -579,6 +609,14 @@ class TestcaseTab(QWidget):
 
         self._add_row_clicked()
 
+        # Bedienungen, die den Ablauf veraendern, blenden den Hinweis aus (nach _add_row_clicked oben,
+        # damit die Startzeile ihn nicht gleich wieder verschwinden laesst).
+        for button in (self._add_button, self._remove_button, self._up_button, self._down_button,
+                       self._clear_all_button, self._block_insert_button):
+            button.clicked.connect(self._dismiss_hint)
+        self._add_menu.triggered.connect(lambda _action: self._dismiss_hint())
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
+
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
 
@@ -609,6 +647,9 @@ class TestcaseTab(QWidget):
         self._report_button.setToolTip(tr("Report…"))
         self._action_report_html.setText(tr("Report öffnen (HTML)"))
         self._action_report_pdf.setText(tr("Als PDF exportieren…"))
+        self._hint_open.setText(tr("Ablauf öffnen …"))
+        self._hint_new.setText(tr("Neuen Ablauf beginnen"))
+        self._refresh_hint()
         self._set_status(self._status_key, kind=self._status_kind, **self._status_key_kwargs)
         for row in range(self._table.rowCount()):
             self._retranslate_row(row)
@@ -659,6 +700,7 @@ class TestcaseTab(QWidget):
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_status_style()
+        self._refresh_hint()
         # Arbiträrsignal-Zusammenfassung je Zeile (arb_page, Index 1 im
         # value_stack) haengt nicht am ThemeManager-Signal -- Zeilen kommen
         # und gehen (Zeile hinzufuegen/entfernen/verschieben), ein direktes
@@ -2052,6 +2094,7 @@ class TestcaseTab(QWidget):
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return False
         self._current_path = path
+        self._dismiss_hint()
         self._report_remapped(remap_devices(steps, file_devices, self._known_devices), file_devices)
 
         self._table.setRowCount(0)
@@ -2065,6 +2108,48 @@ class TestcaseTab(QWidget):
         return True
 
     # -- Ausfuehren-Ansicht (Touch-Profil, touch_run_view.py) ---------------------
+
+    # -- Hinweis "Noch kein Testablauf" (PI-22 a) ------------------------------
+
+    def hint_visible(self) -> bool:
+        """Steht der Hinweis gerade (nicht ausgeblendet)? Fuer Pruefskripte."""
+        return not self._hint_dismissed
+
+    def _refresh_hint(self) -> None:
+        if not hasattr(self, "_hint_box"):
+            return
+        self._hint_box.setVisible(not self._hint_dismissed)
+        if self._hint_dismissed:
+            return
+        pal = current_palette()
+        self._hint_title.setText(tr("Noch kein Testablauf"))
+        self._hint_text.setText(tr("Einen gespeicherten Ablauf öffnen oder unten den ersten Schritt eintragen. "
+                                   "Abläufe liegen in:\n{folder}",
+                                   folder=str(data_store.target_dir("testcases"))))
+        self._hint_icon.setPixmap(qta.icon("mdi.playlist-edit", color=pal.text_muted).pixmap(32, 32))
+        self._hint_title.setStyleSheet("font-weight: bold;")
+        self._hint_text.setStyleSheet(f"color: {pal.text_muted};")
+        self._hint_box.setStyleSheet(
+            f"QFrame#testcaseEmptyHint {{ background: {pal.surface_alt}; border: 1px solid {pal.border};"
+            f" border-radius: 6px; }}")
+
+    def _dismiss_hint(self) -> None:
+        if self._hint_dismissed:
+            return
+        self._hint_dismissed = True
+        self._hint_box.setVisible(False)
+
+    def _on_hint_new(self) -> None:
+        self._dismiss_hint()
+        if self._table.rowCount() > 0:
+            self._table.selectRow(0)
+            widget = self._table.cellWidget(0, COL_DEVICE)
+            (widget or self._table).setFocus()
+
+    def _on_focus_changed(self, _old, new) -> None:
+        if not self._hint_dismissed and new is not None and (
+                new is self._table or self._table.isAncestorOf(new)):
+            self._dismiss_hint()
 
     def _check_touch(self) -> None:
         touch = ThemeManager.instance().touch

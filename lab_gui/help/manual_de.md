@@ -233,6 +233,12 @@ Zeilenbasierter Editor für automatisierte Testabläufe. Jede Zeile ist
 entweder ein **Aktionsschritt** (Gerät + Aktion + Wert + Wartezeit) oder
 ein **Ablaufsteuerungs-Element** (Schleife, Bedingung, Variable).
 
+Solange noch kein Ablauf geladen und nichts eingetragen ist, steht über
+der Tabelle der Hinweis **„Noch kein Testablauf“** mit dem Ordner, in dem
+die Abläufe liegen, und den Knöpfen **„Ablauf öffnen …“** und **„Neuen
+Ablauf beginnen“** (setzt den Cursor in die erste Zeile). Er verschwindet,
+sobald ein Ablauf geladen ist oder man einen Schritt bearbeitet.
+
 ### Werkzeugleiste
 
 - **„+“-Button**: öffnet über den Pfeil daneben ein Menü mit allen

@@ -6,6 +6,15 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Testablauf am PC: Hinweis „Noch kein Testablauf“ statt leerer Tabelle (0.44.0, Entscheidung PI-22 a,
+  11.11.2026).** Über der Tabelle stehen der Ordner der Abläufe (gemeinsamer Ordner auf dem Netzlaufwerk oder lokal)
+  und die Knöpfe „Ablauf öffnen …“ und „Neuen Ablauf beginnen“ (Cursor in die erste Zeile). Der Hinweis verschwindet
+  beim Laden, bei Strukturänderungen über die Werkzeugleiste und sobald der Fokus in die Tabelle geht. Das Touch-Profil
+  hat weiter seine eigene Ausführen-Ansicht. Handbuch de/en ergänzt.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_testcase_hint.py` (Startzustand, „Neu“, Laden, Fokus, Zeile
+    hinzufügen, Fokus auf den Hinweis-Knopf blendet nicht aus, Englisch).
+
 ### Geändert
 - **Touch-Verbesserungen auch am PC (0.43.0, Entscheidungen PI-17 a, PI-18 a, PI-20 b, PI-21 c, 11.11.2026).**
   - PI-17: Statusleiste mit einem Chip je Gerät (Symbol + Kurzname, z. B. „✓ NT1“) statt „Name: Zustand“, am PC
