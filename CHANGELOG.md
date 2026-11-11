@@ -10,7 +10,8 @@ Semantic Versioning (`lab_gui/version.py`).
 - **Kiosk ohne Bootloader-Bild und ohne schwarze Lücke, Dialoge ohne Fensterleiste; Sicherheit als Chip (0.40.3,
   Nutzerhinweise 11.11.2026).**
   - Beim Kaltstart erschien erst der Pi-Bootloader-Bildschirm, dann das Logo, kurz Schwarz, dann wieder das Logo.
-    `kiosk_pi.sh` setzt `DISABLE_HDMI=1` im Bootloader-EEPROM (alte Konfiguration gesichert) und ersetzt die
+    `kiosk_pi.sh` kann `DISABLE_HDMI=1` im Bootloader-EEPROM setzen -- das schreibt den Bootloader mit der neuesten
+    Firmware neu, deshalb nur mit `KIOSK_BOOTLOADER=1` (Entscheidung PI-16 offen; alte Konfiguration gesichert) --, und ersetzt die
     Anmeldung über lightdm durch den Systemdienst `labcontrol-kiosk.service`: labwc direkt auf tty1, das Boot-Logo gibt
     vorher die Grafik frei, bleibt aber stehen (`plymouth deactivate`), und endet erst mit `--retain-splash`, wenn
     labwc den Logo-Hintergrund zeigt (lightdm hatte es ganz beendet). lightdm und die Text-Anmeldung auf tty1 sind
