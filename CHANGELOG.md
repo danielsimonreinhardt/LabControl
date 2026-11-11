@@ -35,6 +35,20 @@ Semantic Versioning (`lab_gui/version.py`).
     (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
 
 ### Behoben
+- **Prüfungen fassten echte Geräte an (0.38.2, 11.11.2026).** Nach dem Aufspielen von 0.38.1 meldete der Dienst am Pi
+  „Last getrennt: Konnte Zahl nicht aus Antwort lesen: 'CC'“ und „multiple access on port?“ -- genau während der
+  Prüfläufe am Pi, ebenso bei jedem Aufspielen vorher (09:14, 09:32, 09:43). Ursache: Der Simulationsmodus fügt nur
+  simulierte Geräte hinzu, echte sucht der Worker weiter. `check_touch_ui` (seit 0.32.0) baute ein `MainWindow`
+  ohne Sperre und öffnete die laufende Last mit (Linux erlaubt zwei Programme am selben seriellen Port). Am PC hätte
+  es freie Geräte verbunden und beim Schließen ALLE AUS bzw. die Netzteil-Freigabe (1 V / 0 A / EIN) gesendet. Die
+  App selbst war nicht betroffen.
+  - Neu `tools/no_hardware.py` (`block()`: keine Suche nach Last, Netzteil, microHIL, Funktionsgenerator,
+    PicoScope), in `check_touch_ui` genutzt; die Prüfung stellt zusätzlich fest, dass nur simulierte Geräte
+    verbunden sind.
+  - Neu `tools/check_hardware_isolation.py`: Jede Prüfung, die ein `MainWindow` oder einen `DeviceWorker` baut, muss
+    die Gerätesuche abschalten (mit dem alten `check_touch_ui` rot).
+  - **Hardware-verifiziert:** neuer `check_touch_ui` am Pi bei laufendem Dienst mit echter Last -- keine Trennung im
+    Dienst-Log (vorher je Lauf 3–4). Alle 29 Prüfungen grün in WSL und unter Windows.
 - **Linux: Ein/Aus-Knopf als eigenes kleines Fenster; Linux-CI rot (0.38.1, 11.11.2026).** Nach dem Push von 0.37.3
   war der CI-Job „Linux checks“ rot (`check_touch_keypad`). In WSL nachgestellt, zwei Ursachen:
   - Die Knöpfe der Touch-Leiste (Anordnen, Vollbild, Ein/Aus) wurden ohne Elternteil angelegt.

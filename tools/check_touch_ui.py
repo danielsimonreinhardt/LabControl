@@ -68,6 +68,8 @@ def main() -> int:
     check("offscreen (Tests/CI) -> kein Vorschlag", not touch_ui.suggest_touch(screen(800, 600)))
 
     print("Start ohne Touch (nie gewaehlt, offscreen)")
+    import no_hardware
+    no_hardware.block()   # echte Geraete nicht anfassen (am Pi stoerte diese Pruefung die laufende Last)
     settings = Settings()
     from i18n import Translator
     Translator.instance().set_language(settings.language)   # wie main.py (laedt auch die Qt-Uebersetzung)
@@ -75,6 +77,11 @@ def main() -> int:
     w.resize(1024, 600)
     w.show()
     app.processEvents()
+    from PySide6.QtTest import QTest
+    QTest.qWait(1500)   # Worker: erste Suchrunde abwarten
+    worker = w._worker
+    real = [d for group in (worker._loads, worker._psus, worker._hils, worker._fgs) for d in group if "SIM" not in d]
+    check("nur simulierte Geraete verbunden (keine echte Hardware angefasst)", not real, str(real))
     base_font = app.font().pointSizeF()
     check("Statusleiste sichtbar, Leiste oben/Navigation verborgen",
           w.statusBar().isVisible() and not w._top_bar.isVisible() and not w._nav.isVisible())
