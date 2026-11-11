@@ -242,7 +242,10 @@ soon as a sequence is loaded or a step is edited.
   the current position — handy for recurring sections such as a
   charge/discharge profile.
 - **Folder icon** / **floppy-disk icon**: load/save a testcase (JSON
-  file in the `testcases/` folder).
+  file in the `testcases/` folder). If the opened file was changed elsewhere
+  since it was opened (e.g. on the second computer in the shared folder),
+  saving asks: **"Overwrite"**, **"Save as copy"** (creates
+  "Name (copy).json") or **"Cancel"**.
 
 ### Editing a row (action step)
 

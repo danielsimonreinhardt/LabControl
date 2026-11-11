@@ -563,5 +563,11 @@
   "Gerät meldet Fehler": "device reports an error",
   "ALLE AUS dort unvollständig": "ALL OFF incomplete there",
   "unbestätigt, Werte prüfen": "unconfirmed, check values",
-  "unbestätigt": "unconfirmed"
+  "unbestätigt": "unconfirmed",
+  "Testablauf wurde geändert": "Test sequence was changed",
+  "„{name}“ wurde seit dem Öffnen geändert (zuletzt {time}), vermutlich an einem anderen Rechner. Überschreiben verwirft diese Änderungen.": "\"{name}\" was changed since it was opened (last {time}), probably on another computer. Overwriting discards those changes.",
+  "Überschreiben": "Overwrite",
+  "Als Kopie speichern": "Save as copy",
+  " (Kopie)": " (copy)",
+  " (Kopie {n})": " (copy {n})"
 }

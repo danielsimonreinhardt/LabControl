@@ -7,8 +7,10 @@ run_requested/stop_requested angesteuert wird.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import qtawesome as qta
@@ -241,6 +243,32 @@ BLINK_INTERVAL_MS = 400
 _INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 
 
+def _file_digest(path: Path) -> str | None:
+    """SHA-256 des Dateiinhalts; None, wenn nicht lesbar (dann keine Konfliktpruefung). Inhalt statt
+    Aenderungszeit: auf Netzlaufwerken ist die Zeit zu grob und zwischen Rechnern nicht verlaesslich."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _same_file(a: Path, b: Path) -> bool | None:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return None
+
+
+def _free_copy_path(path: Path) -> Path:
+    """"Ablauf.json" -> "Ablauf (Kopie).json", "Ablauf (Kopie 2).json", ..."""
+    for n in range(1, 1000):
+        suffix = tr(" (Kopie)") if n == 1 else tr(" (Kopie {n})", n=n)
+        candidate = path.with_name(f"{path.stem}{suffix}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    return path.with_name(f"{path.stem} ({datetime.now():%Y%m%d-%H%M%S}){path.suffix}")
+
+
 def _sanitize_filename(name: str) -> str:
     cleaned = "".join(" " if c in _INVALID_FILENAME_CHARS else c for c in name).strip()
     return cleaned or "baustein"
@@ -395,6 +423,8 @@ class TestcaseTab(QWidget):
         # Namen im Nachlauf-Report (siehe run_report.py) -- ohne Datei
         # (neu erstellter, ungespeicherter Ablauf) zeigt der Report "Unbenannt".
         self._current_path: Path | None = None
+        # Inhalt der Datei beim Laden/Speichern (SHA-256), fuer die Konfliktpruefung (PI-30 a)
+        self._file_digest: str | None = None
         self._report_available = False
 
         # device_id -> (kind, label) fuer alle in dieser Session bekannten Geraete;
@@ -2061,21 +2091,68 @@ class TestcaseTab(QWidget):
     # -- Speichern/Laden -----------------------------------------------------
 
     def _save_to_file(self) -> None:
-        # Gemeinsamer Ordner auf dem Netzlaufwerk (PI-12 b), sonst lokal DEFAULT_DIR
+        # Gemeinsamer Ordner auf dem Netzlaufwerk (PI-12 b), sonst lokal DEFAULT_DIR; mit geladenem
+        # Ablauf startet der Dialog bei dieser Datei.
+        start = str(self._current_path) if self._current_path else str(data_store.target_dir("testcases"))
         path_str, _ = QFileDialog.getSaveFileName(
-            self, tr("Testablauf speichern"), str(data_store.target_dir("testcases")), tr("Testablauf (*.json)")
+            self, tr("Testablauf speichern"), start, tr("Testablauf (*.json)")
         )
         if not path_str:
             return
         path = Path(path_str)
         if path.suffix != ".json":
             path = path.with_suffix(".json")
+        path = self._resolve_save_conflict(path)
+        if path is None:
+            return
         try:
             save_steps(self.steps(), path, self._known_devices)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
             return
         self._current_path = path
+        self._file_digest = _file_digest(path)
+
+    # -- PI-30 a: Konfliktpruefung beim Speichern ----------------------------------
+    # Pi und PC teilen sich den Ordner der Ablaeufe (PI-12 b). Wurde die geoeffnete Datei seither
+    # anderswo geaendert, ueberschreibt "Speichern" das nicht stillschweigend.
+
+    def _resolve_save_conflict(self, path: Path) -> Path | None:
+        """Ziel nach der Konfliktpruefung: path, eine Kopie daneben oder None (abgebrochen)."""
+        if (self._current_path is None or self._file_digest is None or not path.exists()
+                or _same_file(path, self._current_path) is False):
+            return path
+        current = _file_digest(path)
+        if current is None or current == self._file_digest:
+            return path
+        choice = self._ask_save_conflict(path)
+        if choice == "overwrite":
+            logger.warning("Testablauf %s: anderswo geändert, trotzdem überschrieben", path.name)
+            return path
+        if choice == "copy":
+            copy = _free_copy_path(path)
+            logger.info("Testablauf %s: anderswo geändert, als Kopie %s gespeichert", path.name, copy.name)
+            return copy
+        return None
+
+    def _ask_save_conflict(self, path: Path) -> str:
+        """"overwrite" | "copy" | "cancel" (eigene Methode, damit Pruefungen sie ersetzen koennen)."""
+        try:
+            changed = datetime.fromtimestamp(path.stat().st_mtime).strftime("%d.%m. %H:%M:%S")
+        except OSError:
+            changed = "?"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("Testablauf wurde geändert"))
+        box.setText(tr("„{name}“ wurde seit dem Öffnen geändert (zuletzt {time}), vermutlich an einem "
+                       "anderen Rechner. Überschreiben verwirft diese Änderungen.", name=path.name, time=changed))
+        overwrite = box.addButton(tr("Überschreiben"), QMessageBox.ButtonRole.DestructiveRole)
+        copy = box.addButton(tr("Als Kopie speichern"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(tr("Abbrechen"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(copy)
+        box.exec()
+        clicked = box.clickedButton()
+        return "overwrite" if clicked is overwrite else "copy" if clicked is copy else "cancel"
 
     def _load_from_file(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
@@ -2094,6 +2171,7 @@ class TestcaseTab(QWidget):
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return False
         self._current_path = path
+        self._file_digest = _file_digest(path)
         self._dismiss_hint()
         self._report_remapped(remap_devices(steps, file_devices, self._known_devices), file_devices)
 

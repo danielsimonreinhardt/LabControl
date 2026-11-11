@@ -7,6 +7,13 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Testablauf speichern: Konfliktprüfung (0.46.0, Entscheidung PI-30 a, 11.11.2026).** Pi und PC teilen sich den
+  Ordner der Abläufe (PI-12 b). Wurde die geöffnete Datei seit dem Laden/letzten Speichern anderswo geändert (Vergleich
+  über den Inhalt, SHA-256 -- Änderungszeiten sind auf Netzlaufwerken zu ungenau), fragt „Speichern“ nach:
+  „Überschreiben“, „Als Kopie speichern“ (Vorgabe; „Name (Kopie).json“, „(Kopie 2)“, …) oder „Abbrechen“. Der
+  Speichern-Dialog startet bei der geladenen Datei. Handbuch de/en ergänzt.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_testcase_save_conflict.py` (unverändert ohne Rückfrage, Abbrechen,
+    Kopie und zweite Kopie, Überschreiben, kein Fehlalarm danach, anderer Name ohne Rückfrage).
 - **Verbund Pi + PC, Stufe V1: Partnergeräte sehen und bedienen, ALLE AUS über beide Rechner (0.45.0,
   Entscheidungen PI-23 a, PI-27 a, 11.11.2026).** Eine LabControl-Instanz koppelt sich über die vorhandene
   Netzwerk-Freigabe mit einer zweiten (z. B. PC mit dem Pi); jedes Gerät bleibt beim Rechner, an dem es steckt, und

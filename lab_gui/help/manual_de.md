@@ -255,7 +255,10 @@ sobald ein Ablauf geladen ist oder man einen Schritt bearbeitet.
   Baustein an der aktuellen Position ein – praktisch für wiederkehrende
   Abschnitte wie ein Lade-/Entladeprofil.
 - **Ordner-Symbol** / **Diskette-Symbol**: Testablauf laden/speichern
-  (JSON-Datei im Ordner `testcases/`).
+  (JSON-Datei im Ordner `testcases/`). Wurde die geöffnete Datei seit dem
+  Öffnen anderswo geändert (z. B. am zweiten Rechner im gemeinsamen Ordner),
+  fragt das Speichern nach: **„Überschreiben“**, **„Als Kopie speichern“**
+  (legt „Name (Kopie).json“ an) oder **„Abbrechen“**.
 
 ### Eine Zeile bearbeiten (Aktionsschritt)
 
