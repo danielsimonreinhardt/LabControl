@@ -42,7 +42,7 @@ from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 from i18n import Translator, tr
 from icons import IconButton
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER
-from theme import Palette, ThemeManager, form_control_qss
+from theme import METRICS, Palette, ThemeManager, form_control_qss
 from theme import current as current_palette
 
 STATUS_ICON = {
@@ -198,9 +198,11 @@ class PicoscopePanel(QGroupBox):
         # das gesamte Stylesheet des Widgets inkl. aller Kind-Selektoren).
         button_rule = (
             f"QPushButton#picoscopeLaunchButton {{"
-            f" background-color: {palette.accent}; color: {palette.surface};"
-            f" border: 1px solid {palette.accent}; border-radius: 4px;"
+            f" background-color: {palette.accent}; color: {palette.on_accent};"
+            f" border: 1px solid {palette.accent}; border-radius: {METRICS.radius_sm}px;"
             f" font-weight: bold; padding: 6px 12px; }}"
+            f"QPushButton#picoscopeLaunchButton:focus {{"
+            f" border: {METRICS.focus_width}px solid {palette.focus}; }}"
             f"QPushButton#picoscopeLaunchButton:hover {{"
             f" background-color: {palette.accent_hover}; border-color: {palette.accent_hover}; }}"
             f"QPushButton#picoscopeLaunchButton:pressed {{"
@@ -209,11 +211,11 @@ class PicoscopePanel(QGroupBox):
         if not self._online:
             self.setStyleSheet(
                 f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
                 f"{button_rule}"
             )
             return
-        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
+        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:
             self.setStyleSheet(f"QGroupBox {{ {border_rule} }}{button_rule}")
             return

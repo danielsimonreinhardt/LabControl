@@ -1,7 +1,7 @@
 {
   "Simulationsmodus (simulierte Geräte statt Hardware)": "Simulation mode (simulated devices instead of hardware)",
   "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\nelektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\nangeschlossene Hardware zu testen.": "In simulation mode, a virtual lab power supply and a virtual electronic load\nare available in the Dashboard/Control tab to test the GUI without connected\nhardware.",
-  "Dark Mode (Amber Industrial statt Modern Light)": "Dark mode (Amber Industrial instead of Modern Light)",
+  "Dark Mode (Slate Ops Dark statt Slate Ops Light)": "Dark mode (Slate Ops Dark instead of Slate Ops Light)",
   "Touch-Bedienung (große Bedienelemente, Navigation links, Übersicht als eigener Reiter)": "Touch operation (large controls, navigation on the left, overview as its own tab)",
   "– automatisch, kleiner Bildschirm": "– automatic, small screen",
   "Ausschalten": "Power off",

@@ -195,13 +195,13 @@ class TouchRunView(QWidget):
         color = {"error": pal.danger, "success": pal.success}.get(self._status_kind, pal.text)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 17px; font-weight: bold;")
         self._start_button.setStyleSheet(
-            f"QPushButton {{ background-color: {pal.accent}; color: {pal.surface}; font-weight: bold; }}"
+            f"QPushButton {{ background-color: {pal.accent}; color: {pal.on_accent}; font-weight: bold; }}"
             f"QPushButton:disabled {{ background-color: {pal.surface_alt}; color: {pal.text_muted}; }}")
-        self._start_button.set_color_override(pal.surface if self._start_button.isEnabled() else None)
+        self._start_button.set_color_override(pal.on_accent if self._start_button.isEnabled() else None)
         self._stop_button.setStyleSheet(
-            f"QPushButton {{ background-color: {pal.danger}; color: #ffffff; font-weight: bold; }}"
+            f"QPushButton {{ background-color: {pal.danger}; color: {pal.on_status}; font-weight: bold; }}"
             f"QPushButton:disabled {{ background-color: {pal.surface_alt}; color: {pal.text_muted}; }}")
-        self._stop_button.set_color_override("#ffffff" if self._stop_button.isEnabled() else None)
+        self._stop_button.set_color_override(pal.on_status if self._stop_button.isEnabled() else None)
         if 0 <= self._current_step < self._steps.count():
             self._steps.item(self._current_step).setBackground(QColor(pal.selection))
 

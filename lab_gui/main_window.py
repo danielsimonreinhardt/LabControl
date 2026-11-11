@@ -47,7 +47,7 @@ from share_server import ShareServer
 from testcase_model import TestStep, kind_label
 from testcase_runner import TestRunner
 from testcase_tab import TestcaseTab
-from theme import PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
+from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
 from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch
 from touch_ui import sizer as touch_sizer
@@ -416,22 +416,25 @@ class MainWindow(QMainWindow):
     def _style_safety_banner(self) -> None:
         pal = ThemeManager.instance().palette
         self._safety_banner.setStyleSheet(
-            f"#safetyBanner {{ background-color: {pal.danger}; border-radius: 4px; }}"
+            f"#safetyBanner {{ background-color: {pal.danger}; border-radius: {METRICS.radius_sm}px; }}"
         )
         # background: transparent noetig, sonst uebernimmt das Label (eigenes
         # Instanz-Stylesheet) die globale "QWidget { background-color: pal.bg }"-
         # Regel statt den roten Banner-Hintergrund durchscheinen zu lassen --
         # weisser Text auf fast-weissem Grund (siehe BUGS_OFFEN.md #26).
         self._safety_banner_label.setStyleSheet(
-            "color: #ffffff; font-weight: bold; background: transparent;"
+            f"color: {pal.on_status}; font-weight: bold; background: transparent;"
         )
 
     def _style_all_off_button(self) -> None:
         pal = ThemeManager.instance().palette
         padding = "6px 18px" if self._touch else "2px 10px"   # Touch: mindestens 64 x 44 px
+        # Mit Selektor statt nackter Deklaration, damit auch der Tastaturfokus
+        # sichtbar ist (ein Instanz-Stylesheet verdeckt die :focus-Regel aus theme.py).
         self._all_off_button.setStyleSheet(
-            f"background-color: {pal.danger}; color: #ffffff; font-weight: bold; "
-            f"border: 1px solid {pal.danger}; border-radius: 4px; padding: {padding};"
+            f"QPushButton {{ background-color: {pal.danger}; color: {pal.on_status}; font-weight: bold; "
+            f"border: 1px solid {pal.danger}; border-radius: {METRICS.radius_sm}px; padding: {padding}; }}"
+            f"QPushButton:focus {{ border: {METRICS.focus_width}px solid {pal.focus}; }}"
         )
         self._all_off_button.setMinimumSize(*((96, 44) if self._touch else (0, 0)))
 

@@ -32,15 +32,12 @@ CONTROL_TILE_DRAG_MIME_TYPE = "application/x-lab-gui-control-tile-device-id"
 PANEL_DRAG_HANDLE_HEIGHT = 28
 # Optik des schwebenden Abbilds waehrend des Ziehens (Nutzerfeedback: ein
 # direkt durchgereichtes panel.grab() erschien beim Ziehen deutlich
-# vergroessert). Fester Blauton statt palette.accent: die Akzentfarbe ist im
-# Amber-Industrial-Theme selbst gelb/amber und auf einer ebenfalls
-# amberfarbenen Kachel kaum zu erkennen, waehrend Blau in beiden Themes
-# zuverlaessig als "hier wird gerade gezogen" heraussticht.
-PANEL_DRAG_BORDER_COLOR = "#2f7dfd"
+# vergroessert). Rahmenfarbe aus dem Theme-Token Palette.drag_outline (hebt
+# sich in beiden Modi von Kachel- und Panel-Toenungsfarben ab).
 PANEL_DRAG_OPACITY = 0.55
 
 
-def make_drag_pixmap(widget: QWidget, border_color: str = PANEL_DRAG_BORDER_COLOR, opacity: float = PANEL_DRAG_OPACITY) -> QPixmap:
+def make_drag_pixmap(widget: QWidget, border_color: str | None = None, opacity: float = PANEL_DRAG_OPACITY) -> QPixmap:
     """Baut das schwebende Abbild waehrend des Ziehens: leicht durchsichtig
     mit farbigem Rahmen, in EXAKT der Groesse von `widget` -- ein direkt an
     QDrag.setPixmap() durchgereichtes widget.grab() erschien beim Ziehen
@@ -49,6 +46,9 @@ def make_drag_pixmap(widget: QWidget, border_color: str = PANEL_DRAG_BORDER_COLO
     korrekt beruecksichtigt. Ein selbst zusammengesetztes Pixmap mit explizit
     auf 1.0 gesetztem devicePixelRatio umgeht das zuverlaessig, unabhaengig
     vom Skalierungsfaktor des Bildschirms."""
+    if border_color is None:
+        from theme import current   # lokal wie in theme._restyle: kein Import-Zyklus
+        border_color = current().drag_outline
     size = widget.size()
     pixmap = QPixmap(size)
     pixmap.setDevicePixelRatio(1.0)

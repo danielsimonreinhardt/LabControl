@@ -64,6 +64,7 @@ from settings import (
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import ThemeManager
 from theme import current as current_palette
+from theme import set_tone
 
 # field -> deutscher Basis-Anzeigename (Uebersetzungsschluessel), analog zu
 # testcase_model.COND_FIELD_LABELS.
@@ -77,13 +78,13 @@ _FIELD_LABELS = {
 def _separator() -> QFrame:
     """Duenne horizontale Trennlinie zwischen den thematischen Gruppen im
     Einstellungen-Tab (Darstellung / Hilfe / Geraeteverwaltung / Sicherheit,
-    siehe SettingsTab.__init__). Fixe Farbe aus der beim Erzeugen aktuellen
-    Palette statt eines nativen QFrame-Rahmens -- analog zu _hint/
-    _safety_hint (siehe dort) faerbt SettingsTab bislang nichts bei einem
-    spaeteren Theme-Wechsel nach, das gilt fuer diese Linien ebenso."""
+    siehe SettingsTab.__init__). Farbe ueber die globale Theme-Regel
+    QFrame[role="separator"] (theme.stylesheet) statt eines nativen
+    QFrame-Rahmens -- wechselt dadurch beim Live-Umschalten Hell/Dunkel mit,
+    genau wie die Hinweistexte (QLabel[role="hint"])."""
     line = QFrame()
     line.setFixedHeight(1)
-    line.setStyleSheet(f"background-color: {current_palette().border};")
+    line.setProperty("role", "separator")
     return line
 
 
@@ -818,7 +819,7 @@ class SettingsTab(QWidget):
 
         self._hint = QLabel()
         self._hint.setWordWrap(True)
-        self._hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._hint)
 
         # Simulationsmodus nur im Dev-Betrieb anbieten, in Release-.exe
@@ -929,7 +930,7 @@ class SettingsTab(QWidget):
         layout.addWidget(self._scpi_title)
         self._scpi_hint = QLabel()
         self._scpi_hint.setWordWrap(True)
-        self._scpi_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._scpi_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._scpi_hint)
         self._scpi_edit = QLineEdit()
         self._scpi_edit.setPlaceholderText("192.168.1.50")
@@ -941,7 +942,7 @@ class SettingsTab(QWidget):
         # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) --------------
         self._info_hint = QLabel()
         self._info_hint.setWordWrap(True)
-        self._info_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._info_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._info_hint)
 
         self._info_sections_layout = QVBoxLayout()
@@ -973,7 +974,7 @@ class SettingsTab(QWidget):
 
         self._can_hint = QLabel()
         self._can_hint.setWordWrap(True)
-        self._can_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._can_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._can_hint)
 
         self._can_table = _CanConfigTable()
@@ -994,7 +995,7 @@ class SettingsTab(QWidget):
 
         self._safety_hint = QLabel()
         self._safety_hint.setWordWrap(True)
-        self._safety_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._safety_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._safety_hint)
 
         # Ein eigenes Layout fuer die dynamisch je Geraet erzeugten
@@ -1074,7 +1075,7 @@ class SettingsTab(QWidget):
 
         self._share_hint = QLabel()
         self._share_hint.setWordWrap(True)
-        self._share_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._share_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._share_hint)
 
         self._share_enabled_checkbox = QCheckBox()
@@ -1147,7 +1148,7 @@ class SettingsTab(QWidget):
         # -- Fernsteuerung: Hauptschalter mit Zeitlimit ----------------------
         self._share_control_hint = QLabel()
         self._share_control_hint.setWordWrap(True)
-        self._share_control_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._share_control_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._share_control_hint)
 
         # Nicht gespeichert: nach jedem App-Start ist die Fernsteuerung aus.
@@ -1179,7 +1180,7 @@ class SettingsTab(QWidget):
 
         self._share_devices_hint = QLabel()
         self._share_devices_hint.setWordWrap(True)
-        self._share_devices_hint.setStyleSheet(f"color: {current_palette().text_muted};")
+        self._share_devices_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
         layout.addWidget(self._share_devices_hint)
 
         self._share_table = _ShareTable()
@@ -1225,8 +1226,7 @@ class SettingsTab(QWidget):
 
     def set_share_status(self, text: str, is_error: bool) -> None:
         self._share_status.setText(text)
-        color = current_palette().danger if is_error else current_palette().text_muted
-        self._share_status.setStyleSheet(f"color: {color};")
+        set_tone(self._share_status, "danger" if is_error else "muted")
 
     def set_share_control_state(self, active: bool, text: str) -> None:
         """Zeigt den Zustand des Hauptschalters an (von MainWindow, sekuendlich
@@ -1236,9 +1236,7 @@ class SettingsTab(QWidget):
         self._share_control_checkbox.blockSignals(True)
         self._share_control_checkbox.setChecked(active)
         self._share_control_checkbox.blockSignals(False)
-        color = current_palette().warning if active else current_palette().text_muted
-        self._share_control_status.setStyleSheet(f"color: {color}; font-weight: bold;" if active
-                                                 else f"color: {color};")
+        set_tone(self._share_control_status, "warning" if active else "muted", strong=active)
         self._share_control_status.setText(text)
 
     def set_share_url(self, url: str) -> None:
@@ -1253,7 +1251,7 @@ class SettingsTab(QWidget):
                 "angeschlossene Hardware zu testen."
             )
         )
-        self._dark_checkbox.setText(tr("Dark Mode (Amber Industrial statt Modern Light)"))
+        self._dark_checkbox.setText(tr("Dark Mode (Slate Ops Dark statt Slate Ops Light)"))
         touch_text = tr("Touch-Bedienung (große Bedienelemente, Navigation links, Übersicht als eigener Reiter)")
         if self._touch_auto:
             touch_text += " " + tr("– automatisch, kleiner Bildschirm")
@@ -1388,20 +1386,19 @@ class SettingsTab(QWidget):
         if not status or status.get("target") == "off":
             self._data_status_label.setText("")
             return
-        pal = current_palette()
         files, size = status.get("pending_files", 0), status.get("pending_bytes", 0)
         waiting = tr("{files} Datei(en), {mb} MB warten lokal", files=files, mb=f"{size / 1_048_576:.1f}") if files else ""
         if status.get("target") == "network":
             text = tr("Daten gehen ins Netzlaufwerk: {path}", path=status.get("path", ""))
             text += f" ({waiting})" if waiting else ""
-            color = pal.success
+            tone = "success"
         else:
             text = tr("Netzlaufwerk nicht nutzbar ({reason}), Daten bleiben lokal und werden nachgeschoben",
                       reason=status.get("reason") or tr("wird geprüft"))
             text += f": {waiting}" if waiting else ""
-            color = pal.danger if status.get("reason") else pal.text_muted
+            tone = "danger" if status.get("reason") else "muted"
         self._data_status_label.setText(text)
-        self._data_status_label.setStyleSheet(f"color: {color};")
+        set_tone(self._data_status_label, tone)
 
     def set_log_status(self, status: dict) -> None:
         """Wohin das Log gerade schreibt (app_logging.status())."""
@@ -1415,21 +1412,20 @@ class SettingsTab(QWidget):
         if not status:
             self._log_status_label.setText("")
             return
-        pal = current_palette()
         if status.get("target") == "network":
             text = tr("Log schreibt ins Netzlaufwerk: {path}", path=status.get("path", ""))
-            color = pal.success
+            tone = "success"
         elif status.get("reason"):
             text = tr("Netzlaufwerk nicht nutzbar ({reason}), Log schreibt lokal: {path}",
                       reason=status.get("reason", ""), path=status.get("path", ""))
-            color = pal.danger
+            tone = "danger"
         else:
             text = tr("Log schreibt lokal: {path}", path=status.get("path", ""))
-            color = pal.text_muted
+            tone = "muted"
         if getattr(self, "_log_env_override", ""):
             text += " " + tr("(festgelegt über LABCONTROL_NETWORK_DIR)")
         self._log_status_label.setText(text)
-        self._log_status_label.setStyleSheet(f"color: {color};")
+        set_tone(self._log_status_label, tone)
 
     # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) -------------------
 

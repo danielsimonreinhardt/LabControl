@@ -64,7 +64,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabe
 from i18n import Translator, tr
 from microhil.driver import AIN_COUNT, AOUT_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT, defects_for_device_id
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT
-from theme import Palette, ThemeManager, no_own_background
+from theme import METRICS, Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 
 DOT_ICON_SIZE = 15
@@ -723,10 +723,10 @@ class MicroHilPanel(QGroupBox):
         if not self._online:
             self.setStyleSheet(
                 f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
             )
             return
-        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
+        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:
             self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
             return

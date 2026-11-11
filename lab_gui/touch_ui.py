@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from theme import Palette, ThemeManager
+from theme import METRICS, Palette, ThemeManager
 from theme import current as current_palette
 
 TOUCH_SCREEN_MAX = (1024, 600)
@@ -352,7 +352,7 @@ def touch_qss(pal: Palette) -> str:
     QPushButton[segment="true"]:checked {{
         background-color: {pal.accent};
         border-color: {pal.accent};
-        color: #ffffff;
+        color: {pal.on_accent};
     }}
     QCheckBox, QRadioButton {{
         spacing: 10px;
@@ -398,7 +398,7 @@ def touch_qss(pal: Palette) -> str:
         background-color: transparent;
         color: {pal.text_muted};
         border: none;
-        border-radius: 6px;
+        border-radius: {METRICS.radius_md}px;
         padding: 6px 2px;
     }}
     QWidget#touchNav QToolButton:checked {{
@@ -559,5 +559,5 @@ class TopBar(QWidget):
         self._arrange_button.setIcon(qta.icon("mdi.check" if arranging else "mdi.cursor-move",
                                               color=pal.surface if arranging else pal.text))
         self._arrange_button.setStyleSheet(
-            f"QToolButton {{ background-color: {pal.accent}; color: {pal.surface}; font-weight: bold; }}"
+            f"QToolButton {{ background-color: {pal.accent}; color: {pal.on_accent}; font-weight: bold; }}"
             if arranging else "")

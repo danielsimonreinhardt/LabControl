@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout
 
 from i18n import Translator, tr
+from theme import METRICS
 
 # Fest verdrahtete Farben (siehe Docstring oben) statt theme.Palette-Werten --
 # oeffentlich, damit dashboard._DevicePanel dieselben Werte fuer sein eigenes
@@ -31,7 +32,7 @@ class NoDeviceTile(QGroupBox):
         super().__init__()
         self.setStyleSheet(
             f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-            f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+            f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
         )
         self.setMinimumSize(220, 100)
 

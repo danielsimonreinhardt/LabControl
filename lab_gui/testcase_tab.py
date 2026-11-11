@@ -45,9 +45,10 @@ import data_store
 from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from theme import Palette, ThemeManager
+from theme import METRICS, Palette, ThemeManager
 from touch_run_view import TouchRunView
 from theme import current as current_palette
+from theme import set_tone
 from testcase_model import (
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
@@ -940,7 +941,8 @@ class TestcaseTab(QWidget):
         can_layout = QHBoxLayout(can_page)
         can_layout.setContentsMargins(2, 0, 2, 0)
         can_summary_label = QLabel()
-        can_summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+        can_summary_label.setStyleSheet("font-style: italic;")
+        set_tone(can_summary_label, "muted")   # Farbe ueber Theme-Regel, folgt Hell/Dunkel live
         can_button = IconButton("mdi.card-bulleted-outline", tr("CAN-Frame definieren…"))
         can_layout.addWidget(can_summary_label, 1)
         can_layout.addWidget(can_button)
@@ -1695,7 +1697,7 @@ class TestcaseTab(QWidget):
         overlay.value_label.setText(tr("{n} Schritte", n=group.count))
         pal = current_palette()
         color = self._row_style_color(row) or pal.surface
-        label_style = f"color: {pal.text}; font-style: italic;"
+        label_style = f"color: {self._row_text_color(color)}; font-style: italic;"
         for label in (overlay.device_label, overlay.action_label, overlay.value_label):
             label.setStyleSheet(label_style)
         overlay.setStyleSheet(f"background-color: {color};")
@@ -1777,7 +1779,7 @@ class TestcaseTab(QWidget):
         overlay.label.setText(f"{self._block_total_duration(group):g} s")
         pal = current_palette()
         color = self._row_style_color(row) or pal.surface
-        overlay.label.setStyleSheet(f"color: {pal.text};")
+        overlay.label.setStyleSheet(f"color: {self._row_text_color(color)};")
         overlay.setStyleSheet(f"background-color: {color};")
         x = self._table.columnViewportPosition(COL_DURATION)
         width = self._table.columnWidth(COL_DURATION)
@@ -2495,18 +2497,28 @@ class TestcaseTab(QWidget):
     # Auswahlfarbe ersetzen. Farben kommen aus der aktiven Palette (siehe
     # theme.py), damit die Hervorhebung zu beiden Farb-Themes passt.
 
+    @staticmethod
+    def _row_text_color(color: str | None) -> str:
+        """Schriftfarbe zu einer Zeilenfarbe aus _row_style_color: auf den
+        gefuellten Statusflaechen (bestanden/Blinken = check_pass, Fehler =
+        danger) on_status, sonst die normale Textfarbe."""
+        pal = current_palette()
+        return pal.on_status if color in (pal.check_pass, pal.danger) else pal.text
+
     def _row_style_color(self, row: int) -> str | None:
         pal = current_palette()
         if row == self._error_row:
             return pal.danger
         if row == self._blink_row and self._blink_on:
-            return pal.success
+            # check_pass statt success: als gefuellte Zeilenflaeche mit
+            # on_status-Schrift (success ist eine reine Schriftfarbe).
+            return pal.check_pass
         # Dauerhaftes Pass/Fail-Ergebnis einer Pruefung (siehe on_step_result):
         # unter Fehler/Blinken (die gerade laufende Zeile soll sichtbar
         # blinken, auch wenn sie in einer frueheren Schleifeniteration schon
         # ein Ergebnis hat), aber ueber der dezenteren Auswahlfarbe.
-        # check_pass statt success, damit "bestanden" auch im Dark-Theme
-        # gruen ist (dort ist success amber, siehe theme.Palette.check_pass).
+        # check_pass (gefuellte Flaeche, Schrift on_status) statt success
+        # (reine Schriftfarbe), siehe theme.Palette.check_pass.
         if row in self._check_results:
             return pal.check_pass if self._check_results[row] else pal.danger
         if row == self._selected_row:
@@ -2517,7 +2529,8 @@ class TestcaseTab(QWidget):
         if row < 0 or row >= self._table.rowCount():
             return
         color = self._row_style_color(row)
-        style = f"background-color: {color};" if color else ""
+        text_color = self._row_text_color(color)
+        style = f"background-color: {color}; color: {text_color};" if color else ""
         # Der Baustein-Rechtsversatz einer Zeile steckt NICHT im Stylesheet,
         # sondern in der Widget-Geometrie bzw. im Delegate der Spalte "#"
         # (siehe _apply_member_row_shifts/_NumColumnDelegate): Padding wuerde
@@ -2544,7 +2557,7 @@ class TestcaseTab(QWidget):
                 if isinstance(widget, QComboBox):
                     widget.setStyleSheet(self._combo_row_style(color, left, border))
                 else:
-                    base = f"background-color: {color};" if color else ""
+                    base = f"background-color: {color}; color: {text_color};" if color else ""
                     widget.setStyleSheet(f"{base} padding-left: {left}px; {border}")
             elif isinstance(widget, QComboBox):
                 widget.setStyleSheet(combo_style)
@@ -2560,6 +2573,7 @@ class TestcaseTab(QWidget):
         number_item = self._table.item(row, COL_NUM)
         if number_item is not None:
             number_item.setBackground(QBrush(QColor(color)) if color else QBrush())
+            number_item.setForeground(QBrush(QColor(text_color)) if color else QBrush())
         # Baustein-Kopfzeilen-Overlay traegt seinen eigenen Hintergrund
         # (haengt nicht als Zellen-Widget an der Schleife oben, siehe
         # _BlockHeaderOverlay) -- separat nachziehen, damit Auswahl-/Blink-/
@@ -2595,12 +2609,13 @@ class TestcaseTab(QWidget):
         # Stylesheet der ComboBox allein, keine Kaskade noetig.
         pal = current_palette()
         combo_bg = color or pal.surface
-        box_border = border or f"border: 1px solid {pal.border};"
+        box_border = border or f"border: 1px solid {pal.border_strong};"
         return (
             f"QComboBox {{"
-            f" background-color: {combo_bg}; color: {pal.text};"
-            f" {box_border} border-radius: 4px;"
+            f" background-color: {combo_bg}; color: {self._row_text_color(color)};"
+            f" {box_border} border-radius: {METRICS.radius_sm}px;"
             f" padding: 3px 6px 3px {6 + indent_px}px; }}"
+            f"QComboBox:focus {{ border-color: {pal.focus}; }}"
             f"QComboBox QAbstractItemView {{"
             f" background-color: {pal.surface}; color: {pal.text}; }}"
             f"QComboBox QAbstractItemView::item {{"
@@ -2619,10 +2634,13 @@ class TestcaseTab(QWidget):
         statt nur "padding-left" (siehe dortiger Kommentar)."""
         pal = current_palette()
         bg = color or pal.surface
-        box_border = border or f"border: 1px solid {pal.border};"
+        box_border = border or f"border: 1px solid {pal.border_strong};"
+        # Mit Selektor (statt nackter Deklaration), damit :focus greifen kann.
         return (
-            f"background-color: {bg}; color: {pal.text}; {box_border}"
-            f" border-radius: 4px; padding: 3px 6px 3px {6 + indent_px}px;"
+            f"QLineEdit, QAbstractSpinBox {{"
+            f" background-color: {bg}; color: {self._row_text_color(color)}; {box_border}"
+            f" border-radius: {METRICS.radius_sm}px; padding: 3px 6px 3px {6 + indent_px}px; }}"
+            f"QLineEdit:focus, QAbstractSpinBox:focus {{ border-color: {pal.focus}; }}"
         )
 
     def _on_selection_changed(self) -> None:

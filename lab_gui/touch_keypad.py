@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import tr
-from theme import ThemeManager
+from theme import METRICS, ThemeManager
 from theme import current as current_palette
 
 KEY_SIZE = (84, 56)
@@ -98,7 +98,7 @@ class KeypadDialog(QDialog):
         self._display.setMinimumHeight(64)
         self._display.setStyleSheet(
             f"font-size: 30px; font-weight: bold; padding: 4px 12px; background: {pal.surface};"
-            f" border: 1px solid {pal.border}; border-radius: 6px;")
+            f" border: 1px solid {pal.border}; border-radius: {METRICS.radius_md}px;")
         outer.addWidget(self._display)
 
         grid = QGridLayout()
@@ -121,7 +121,7 @@ class KeypadDialog(QDialog):
         cancel = self._key(tr("Abbruch"), self.reject)
         self._set_button = self._key(tr("Setzen"), self.accept)
         self._set_button.setStyleSheet(
-            f"QPushButton {{ background-color: {pal.accent}; color: {pal.surface}; font-weight: bold; }}"
+            f"QPushButton {{ background-color: {pal.accent}; color: {pal.on_accent}; font-weight: bold; }}"
             f"QPushButton:disabled {{ background-color: {pal.surface_alt}; color: {pal.text_muted}; }}")
         self._set_button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         grid.addWidget(self._clear_button, 0, side)

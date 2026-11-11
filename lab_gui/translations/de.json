@@ -1,7 +1,7 @@
 {
   "Simulationsmodus (simulierte Geräte statt Hardware)": "Simulationsmodus (simulierte Geräte statt Hardware)",
   "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\nelektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\nangeschlossene Hardware zu testen.": "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\nelektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\nangeschlossene Hardware zu testen.",
-  "Dark Mode (Amber Industrial statt Modern Light)": "Dark Mode (Amber Industrial statt Modern Light)",
+  "Dark Mode (Slate Ops Dark statt Slate Ops Light)": "Dark Mode (Slate Ops Dark statt Slate Ops Light)",
   "Kein Gerät verbunden": "Kein Gerät verbunden",
   "Verbindung getrennt": "Verbindung getrennt",
   "Sprache:": "Sprache:",

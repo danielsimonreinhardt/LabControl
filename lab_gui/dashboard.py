@@ -45,7 +45,7 @@ from microhil_panel import MicroHilPanel
 from no_device_tile import OFFLINE_BACKGROUND, OFFLINE_BORDER, OFFLINE_TEXT, NoDeviceTile
 from picoscope2000.driver import launch_app as launch_picoscope_app
 from picoscope_panel import PicoscopePanel
-from theme import Palette, ThemeManager, no_own_background
+from theme import METRICS, Palette, ThemeManager, no_own_background
 from theme import current as current_palette
 from touch_ui import TOUCH_H
 from tile_grid import (
@@ -378,10 +378,10 @@ class _DevicePanel(QGroupBox):
             # war im Amber-Dark-Theme praktisch unlesbar (Screenshot-Bug).
             self.setStyleSheet(
                 f"QGroupBox {{ background-color: {OFFLINE_BACKGROUND}; "
-                f"border: 1px solid {OFFLINE_BORDER}; border-radius: 6px; }}"
+                f"border: 1px solid {OFFLINE_BORDER}; border-radius: {METRICS.radius_md}px; }}"
             )
             return
-        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: 6px;"
+        border_rule = f"border: 1px solid {palette.text_muted}; border-radius: {METRICS.radius_md}px;"
         if self._color_key is None:
             self.setStyleSheet(f"QGroupBox {{ {border_rule} }}")
             return

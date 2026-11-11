@@ -67,7 +67,7 @@ from panel_color import PanelColorButton, apply_panel_tint
 from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
 from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from theme import Palette, ThemeManager, form_control_qss
+from theme import METRICS, Palette, ThemeManager, form_control_qss
 from touch_keypad import attach_hex_keypad, set_apply_partner
 from touch_ui import touch_label
 from theme import current as current_palette
@@ -226,21 +226,20 @@ def _style_toggle_buttons(
     state=None (Zustand noch unbekannt, z.B. vor der ersten Hardware-Rueckfrage
     bei der Last) laesst beide Buttons im neutralen Standard-Look.
 
-    Nutzt bewusst pal.check_pass statt pal.success: success ist im Amber-
-    Industrial-Theme absichtlich amber (Theme-Akzent, siehe theme.Palette),
-    aber die EIN/AUS-Anzeige eines Ausgangs ist eine sicherheitsrelevante
+    Nutzt bewusst pal.check_pass statt pal.success: success ist eine reine
+    Schriftfarbe (siehe theme.Palette), die EIN/AUS-Anzeige eines Ausgangs ist eine sicherheitsrelevante
     Information (auf einen Blick erkennbar, ob Spannung/Strom anliegt) und
     muss deshalb in beiden Themes gruen bleiben -- check_pass ist genau dafuer
     vorgesehen (siehe dessen Docstring in theme.py)."""
     # Zustandsupdates kommen mit 10 Hz je Geraet; setStyleSheet loest jedes Mal ein Neu-Polieren
     # des Widgets aus, auch wenn sich nichts geaendert hat -- deshalb nur bei Aenderung setzen.
-    style_key = (state, pal.check_pass, pal.danger, pal.surface)
+    style_key = (state, pal.check_pass, pal.danger, pal.on_status)
     if getattr(on_button, "_toggle_style_key", None) == style_key:
         return
     on_button._toggle_style_key = style_key
     active_style = "background-color: {color}; color: {text}; font-weight: bold;"
-    on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.surface) if state is True else "")
-    off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.surface) if state is False else "")
+    on_button.setStyleSheet(active_style.format(color=pal.check_pass, text=pal.on_status) if state is True else "")
+    off_button.setStyleSheet(active_style.format(color=pal.danger, text=pal.on_status) if state is False else "")
 
 
 class _DigitalOutToggle(QPushButton):
@@ -291,15 +290,16 @@ def _style_digital_out_toggle(button: _DigitalOutToggle, on: bool, pal: Palette)
     theme.py: die EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und
     muss deshalb in beiden Themes gruen bleiben)."""
     # Siehe _style_toggle_buttons: nur bei geaendertem Zustand/geaenderter Palette neu setzen.
-    style_key = (on, pal.check_pass, pal.text_muted, pal.text, pal.border, pal.surface_alt)
+    style_key = (on, pal.check_pass, pal.text_muted, pal.text, pal.border, pal.surface_alt, pal.focus)
     if getattr(button, "_toggle_style_key", None) == style_key:
         return
     button._toggle_style_key = style_key
     button.dot_label.setPixmap(_dot_pixmap(on, pal))
     button.number_label.setStyleSheet(f"background: transparent; border: none; color: {pal.text};")
     button.setStyleSheet(
-        f"QPushButton {{ border: 1px solid {pal.border}; border-radius: 6px; "
+        f"QPushButton {{ border: 1px solid {pal.border}; border-radius: {METRICS.radius_md}px; "
         f"background-color: {pal.surface_alt}; }}"
+        f"QPushButton:focus {{ border-color: {pal.focus}; }}"
     )
 
 
@@ -340,12 +340,13 @@ class _SegmentedToggle(QPushButton):
         off_bg = QColor(pal.border) if (not on and enabled) else idle_bg
         on_bg = QColor(pal.check_pass) if (on and enabled) else idle_bg
         off_text = QColor(pal.text) if (not on and enabled) else muted
-        on_text = QColor(pal.surface) if (on and enabled) else muted
+        on_text = QColor(pal.on_status) if (on and enabled) else muted
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         clip_path = QPainterPath()
-        clip_path.addRoundedRect(rect, 6, 6)
+        radius = METRICS.radius_md
+        clip_path.addRoundedRect(rect, radius, radius)
         painter.setClipPath(clip_path)
         painter.fillRect(off_rect, off_bg)
         painter.fillRect(on_rect, on_bg)
@@ -356,9 +357,13 @@ class _SegmentedToggle(QPushButton):
         painter.setPen(QPen(on_text))
         painter.drawText(on_rect, Qt.AlignmentFlag.AlignCenter, tr(self.SEGMENT_LABELS[1]))
 
-        painter.setPen(QPen(QColor(pal.border), 1))
+        # Tastaturfokus: Rahmen in Fokusfarbe und doppelt so breit.
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(pal.focus), METRICS.focus_width))
+        else:
+            painter.setPen(QPen(QColor(pal.border), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, 6, 6)
+        painter.drawRoundedRect(rect, radius, radius)
         painter.end()
 
 
@@ -2445,6 +2450,9 @@ class _PresetSlotButton(QWidget):
                 border-radius: 8px;
                 font-weight: bold;
                 padding: 2px 4px;
+            }}
+            QPushButton:focus {{
+                border: {METRICS.focus_width}px solid {pal.focus};
             }}
             QPushButton:hover {{
                 border: 2px solid {pal.accent};

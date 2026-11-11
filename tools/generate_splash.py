@@ -31,7 +31,8 @@ from version import __version__  # noqa: E402
 OUT_PATH = REPO_ROOT / "lab_gui" / "icons" / "splash.png"
 WIDTH, HEIGHT = 480, 280
 
-# Amber-Industrial-Farbwerte (siehe theme.py: AMBER_DARK) fest verdrahtet
+# Amber-Industrial-Farbwerte (frueheres Dark-Theme, seit 0.38.0 nur noch App-Symbol/
+# Splash-Branding, siehe app_icon.py) fest verdrahtet
 # statt importiert -- der Splash erscheint bereits vor Settings/ThemeManager,
 # lange bevor die App-eigene Theme-Wahl geladen ist.
 BG = QColor("#14171c")

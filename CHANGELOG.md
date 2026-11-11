@@ -6,6 +6,34 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Geändert
+- **Neues Farb-Theme „Slate Ops“ (0.38.0, Nutzerwahl 11.11.2026).** Ersetzt Modern Light / Amber Industrial in
+  beiden Modi (Slate Ops Light / Slate Ops Dark): Schiefergrau mit Himmelblau als Akzent (Vorschlag ui-ux-pro-max,
+  Kategorie IoT-/Ops-Dashboard). Grün ist bewusst nicht Akzent, sondern bleibt „bestanden/EIN“. Umgesetzt über das
+  bestehende Token-System in `theme.py`, kein zweites Theme-System:
+  - Neue Palette-Tokens `border_strong` (Feldrahmen), `on_accent` / `on_status` (Schrift auf Akzent- bzw.
+    Status-Flächen), `focus` (Tastaturfokus) und `drag_outline` (Kachel ziehen); neue Form-Tokens `METRICS`
+    (Radien, Abstände, Fokusbreite).
+  - Fest verdrahtetes Weiß bzw. `surface` als Schrift auf farbigen Flächen ersetzt (ALLE AUS, Sicherheits-Banner,
+    Start/Stop im Touch-Ablauf, EIN/AUS-Tasten, Segment-Tasten, Tastenfeld, PicoScope-Knopf); Pass/Fail- und
+    Blink-Zeilen im Testablauf schreiben auf der Statusfarbe mit `on_status`. Inline-Radien kommen aus `METRICS`,
+    der Ziehen-Rahmen aus `drag_outline` statt fest `#2f7dfd`.
+  - Tastaturfokus sichtbar: `:focus`-Regeln für Knöpfe, Eingabefelder, Auswahllisten und Checkboxen, dazu eigene
+    Fokusrahmen für Presets, ALLE AUS, PicoScope-Knopf, Digital-Ausgänge und AUS|EIN-Schalter.
+  - Behoben: Hinweistexte, Trennlinien und Status-Zeilen (Log-Pfad, Netzlaufwerk-Daten, Freigabe) im Reiter
+    Einstellungen sowie die CAN-Zusammenfassung im Testablauf behielten nach dem Live-Umschalten Hell/Dunkel die alte
+    Farbe (Hinweis im Dark-Theme 2,4:1). Jetzt über globale Theme-Regeln (`QLabel[role="hint"]`,
+    `QLabel[tone=...]` per `theme.set_tone`, `QFrame[role="separator"]`).
+  - **Mock-verifiziert (offscreen, Simulation):** WCAG-Kontrast aller Text-/Flächenpaare beider Modi nachgerechnet
+    (Text ≥ 4,5:1 inkl. `text_muted` auf allen Panel-Tönungen, Feldrahmen/Fokus ≥ 3:1); Fokus-Prüfung über alle
+    Knöpfe/Felder aller Reiter, Desktop und Touch, hell und dunkel: 0 ohne sichtbaren Fokus; nach Live-Umschalten
+    keine Widgets mit Farben des alten Modus; Screenshots Desktop 1400 x 900 und Touch 1024 x 600 / 800 x 480;
+    `check_touch_ui`, `check_control_tab`, `check_touch_run`, `check_touch_keypad`, `check_dashboard_*` grün.
+    Am echten Display/Pi noch nicht angesehen.
+  - Unverändert fest (bewusst themeunabhängig): Export-Grafiken/Berichte (`scope_plot`, `report_chart`,
+    `run_report`), Freigabe-Webseite (`share_render`), App-Symbol/Splash (Amber-Branding), Kurvenfarben
+    (`timeline_tab.SERIES_COLORS`), graue „kein Gerät“-Kachel (`no_device_tile`).
+
 ### Behoben
 - **Touch: Bildschirmtastatur blitzte weiter auf (0.37.3, Nutzer am Pi-Display, 11.11.2026).** Der Weg aus 0.37.2
   (`WA_InputMethodEnabled` aus) wirkt nicht: Qt fragt das Fokus-Objekt per `InputMethodQuery` nach `ImEnabled`, und

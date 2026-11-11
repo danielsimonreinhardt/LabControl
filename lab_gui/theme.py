@@ -1,5 +1,5 @@
-"""Zentrales Farb-Theme der Labor-App: zwei Paletten (Modern Light / Amber
-Industrial) plus der QSS-Stylesheet-Aufbau dafuer.
+"""Zentrales Farb-Theme der Labor-App: zwei Paletten (Slate Ops Light /
+Slate Ops Dark), die Form-Tokens METRICS plus der QSS-Stylesheet-Aufbau dafuer.
 
 Widgets mit eigenem Zeichnen bzw. inline setStyleSheet-Aufrufen (Status-Label
 verbunden/getrennt, Blink-Farbe im Testcase-Tab, Oszilloskop-Vorschau im
@@ -50,20 +50,34 @@ class Palette:
     bg: str
     surface: str
     surface_alt: str
+    # Dezente Trennlinien (Gruppen, Tabs, Tabellenraster) -- darf unter 3:1 liegen.
     border: str
+    # Umrandung bedienbarer Felder (Eingabefelder, Checkbox-Kaestchen): >= 3:1
+    # gegen surface (WCAG 1.4.11), damit ein Feld als Feld erkennbar ist.
+    border_strong: str
     text: str
     text_muted: str
     accent: str
     accent_hover: str
+    # Schrift-/Symbolfarbe AUF einer accent-/accent_hover-Flaeche
+    # (Hover-Button, gewaehlte Segment-Taste) -- >= 4.5:1 gegen beide.
+    on_accent: str
+    # Statusfarbe als SCHRIFT auf bg/surface (Status-Labels "verbunden",
+    # "Aufnahme laeuft" ...). Im Slate-Ops-Theme in beiden Modi gruen.
     success: str
-    # Zeilenhintergrund fuer bestandene Pass/Fail-Pruefungen im Testcase-Tab.
-    # Eigener Wert statt success, weil success im Amber-Industrial-Theme
-    # bewusst amber ist (Theme-Akzent) -- ein Pruefergebnis soll aber in
-    # beiden Themes intuitiv gruen (bestanden) vs. rot (fehlgeschlagen) sein.
+    # Gefuellte "bestanden/EIN"-Flaeche: Pass/Fail-Zeilen im Testablauf,
+    # EIN-Taste im Control-Tab, Status-Punkte. Text darauf: on_status.
     check_pass: str
     warning: str
+    # Rot -- sowohl als Schrift auf surface als auch als gefuellte Flaeche
+    # (Sicherheits-Banner, "Alles aus", FAIL-Zeile; Text darauf: on_status).
     danger: str
+    # Schriftfarbe auf gefuellten Statusflaechen (check_pass, danger) --
+    # >= 4.5:1 gegen beide; im Dark-Theme deshalb dunkel statt weiss.
+    on_status: str
     selection: str
+    # Tastaturfokus-Rahmen (:focus) -- >= 3:1 gegen bg und surface.
+    focus: str
     plot_bg: str
     plot_grid: str
     plot_signal: str
@@ -72,13 +86,30 @@ class Palette:
     # panel_color.py) -- PANEL_COLOR_ORDER-Schluessel -> Hex-Farbe, je Theme
     # eigens abgestimmt (helle Toenung in Light, gedeckte Toenung in Dark).
     panel_tints: dict[str, str]
+    # Ziehen einer Kachel (tile_grid.make_drag_pixmap): Rahmen des schwebenden
+    # Abbilds -- muss sich von Kachel- und Panel-Toenungsfarben abheben.
+    drag_outline: str
+
+
+@dataclass(frozen=True)
+class Metrics:
+    """Theme-unabhaengige Form-Tokens (Radien, Abstaende, Fokusrahmen) --
+    gemeinsam fuer beide Paletten, im QSS und in Instanz-Stylesheets genutzt."""
+    radius_sm: int = 4      # Buttons, Eingabefelder, Banner
+    radius_md: int = 6      # Gruppen, Tab-Flaeche, Kacheln
+    radius_check: int = 3   # Checkbox-Kaestchen
+    pad_button: str = "5px 12px"
+    pad_field: str = "3px 6px"
+    focus_width: int = 2
+
+
+METRICS = Metrics()
 
 
 # Interner Farbschluessel -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
 # Reihenfolge bestimmt die Anzeigereihenfolge im Panel-Farbmenue (siehe
 # panel_color.PanelColorButton). Bewusst ohne reines Rot/Ampel-Gruen/Amber-Gelb
-# -- Verwechslungsgefahr mit Fail/Pass-Zeilen, Sicherheits-Banner bzw. dem
-# Amber-Industrial-Theme-Akzent selbst.
+# -- Verwechslungsgefahr mit Fail/Pass-Zeilen bzw. dem Sicherheits-Banner.
 PANEL_COLOR_ORDER = ["blue", "teal", "green", "orange", "violet", "pink", "gray"]
 PANEL_COLOR_LABELS = {
     "blue": "Blau",
@@ -91,28 +122,36 @@ PANEL_COLOR_LABELS = {
 }
 
 
+# "Slate Ops" (ui-ux-pro-max, Kategorie IoT-/Ops-Dashboard): Schiefergrau mit
+# Himmelblau als Akzent. Gruen ist bewusst NICHT Akzent (anders als der
+# Vorschlag des Skills), sondern bleibt fuer "bestanden/EIN" reserviert --
+# sonst waere eine Akzent-Taste nicht von einer bestandenen Pruefung zu
+# unterscheiden. Alle Paare per WCAG-Kontrast nachgerechnet (Text >= 4.5:1,
+# Feldrahmen/Fokus >= 3:1), siehe CHANGELOG v0.38.0.
 LIGHT = Palette(
-    name="Modern Light",
-    bg="#f5f7fa",
+    name="Slate Ops Light",
+    bg="#f8fafc",
     surface="#ffffff",
-    surface_alt="#eef1f6",
-    border="#d8dee6",
-    text="#1e2530",
-    text_muted="#5b6472",
-    accent="#4f46e5",
-    accent_hover="#6366f1",
-    success="#16a34a",
-    check_pass="#16a34a",
-    warning="#d97706",
-    danger="#dc2626",
-    selection="#e0e7ff",
-    # Anders als im Amber-Industrial-Theme (siehe unten, bewusst dunkles
-    # Oszilloskop-Schwarz) folgt der Diagramm-Hintergrund hier der restlichen
-    # hellen UI (surface/border) statt fest schwarz zu sein (siehe BUGS.md #9).
+    surface_alt="#f1f5f9",
+    border="#cbd5e1",
+    border_strong="#7d8ba0",
+    text="#0f172a",
+    text_muted="#475569",
+    accent="#0369a1",
+    accent_hover="#075985",
+    on_accent="#ffffff",
+    success="#15803d",
+    check_pass="#15803d",
+    warning="#b45309",
+    danger="#b91c1c",
+    on_status="#ffffff",
+    selection="#e0f2fe",
+    focus="#0369a1",
+    # Diagramm-Hintergrund folgt der hellen UI (siehe BUGS.md #9).
     plot_bg="#ffffff",
-    plot_grid="#d8dee6",
-    plot_signal="#22c55e",
-    plot_ref="#f59e0b",
+    plot_grid="#cbd5e1",
+    plot_signal="#0284c7",
+    plot_ref="#d97706",
     panel_tints={
         "blue": "#dbeafe",
         "teal": "#cffafe",
@@ -120,48 +159,46 @@ LIGHT = Palette(
         "orange": "#ffedd5",
         "violet": "#ede9fe",
         "pink": "#fce7f3",
-        "gray": "#e5e7eb",
+        "gray": "#e2e8f0",
     },
+    drag_outline="#0369a1",
 )
 
-AMBER_DARK = Palette(
-    name="Amber Industrial",
-    bg="#14171c",
-    surface="#1e2229",
-    surface_alt="#262b33",
-    border="#2c313a",
-    text="#e8e6e1",
-    text_muted="#9a978f",
-    accent="#ff9f1c",
-    accent_hover="#ffb347",
-    success="#ff9f1c",
-    # Dunkleres Gruen als im Light-Theme, damit der helle Text (#e8e6e1)
-    # auf dem Zeilenhintergrund lesbar bleibt.
-    check_pass="#15803d",
-    warning="#ffcc00",
-    danger="#ef4444",
-    selection="#3a2f1d",
-    # Bewusst dunkles Oszilloskop-Schwarz, passend zum ohnehin dunklen
-    # Amber-Industrial-Theme (siehe LIGHT oben fuer den Kontrast dazu).
-    plot_bg="#0c0e11",
-    plot_grid="#2c313a",
-    plot_signal="#ff9f1c",
-    plot_ref="#ffcc00",
-    # Deutlich kraeftiger/heller als surface (#1e2229, Leuchtdichte ~34) statt
-    # nur einer abgeschwaechten Variante der Light-Werte -- die urspruengliche
-    # erste Fassung lag mit Leuchtdichte ~34-45 so nah an surface, dass die
-    # Faerbung im Dark-Theme praktisch nicht auffiel (BUGS.md #10d). Ziel
-    # bewusst ~65-83 (deutlich abgesetzt, aber noch kein Neon-/Akzent-Ton, der
-    # mit `accent`/`success`/`warning`/`danger` verwechselt werden koennte).
+DARK = Palette(
+    name="Slate Ops Dark",
+    bg="#0f172a",
+    surface="#1b2336",
+    surface_alt="#272f42",
+    border="#475569",
+    border_strong="#6b7a90",
+    text="#f8fafc",
+    text_muted="#b0bccc",
+    accent="#38bdf8",
+    accent_hover="#7dd3fc",
+    on_accent="#0f172a",
+    success="#22c55e",
+    check_pass="#22c55e",
+    warning="#fbbf24",
+    danger="#f87171",
+    on_status="#0f172a",
+    selection="#0c4a6e",
+    focus="#7dd3fc",
+    plot_bg="#0b1120",
+    plot_grid="#334155",
+    plot_signal="#38bdf8",
+    plot_ref="#fbbf24",
+    # Deutlich heller als surface (BUGS.md #10d), aber kein Neon-/Statuston,
+    # und dunkel genug, dass auch text_muted darauf >= 4.5:1 erreicht.
     panel_tints={
         "blue": "#2a4a75",
-        "teal": "#1f5f57",
-        "green": "#2c6138",
-        "orange": "#7a4a1a",
+        "teal": "#1b544d",
+        "green": "#265431",
+        "orange": "#6b4117",
         "violet": "#4f3878",
-        "pink": "#7a3559",
-        "gray": "#4a5058",
+        "pink": "#763356",
+        "gray": "#404c5e",
     },
+    drag_outline="#7dd3fc",
 )
 
 
@@ -186,17 +223,25 @@ def form_control_qss(pal: Palette) -> str:
     als eigenes (staerker priorisiertes) Stylesheet auf die Buttons/
     Eingabefelder, sodass sie nicht mehr beim Vorfahren (der GroupBox)
     nachschauen muessen."""
+    M = METRICS
     return f"""
     QPushButton {{
         background-color: {pal.surface_alt};
         color: {pal.text};
         border: 1px solid {pal.border};
-        border-radius: 4px;
-        padding: 5px 12px;
+        border-radius: {M.radius_sm}px;
+        padding: {M.pad_button};
+    }}
+    /* Tastaturfokus (Tab-Taste): Fokusfarbe als Rahmen plus Auswahl-Toenung,
+       ohne Rahmenbreite/Padding zu aendern (kein Springen des Layouts).
+       Steht VOR :hover, damit ein Hover auf einem fokussierten Knopf gewinnt. */
+    QPushButton:focus {{
+        border-color: {pal.focus};
+        background-color: {pal.selection};
     }}
     QPushButton:hover {{
         background-color: {pal.accent};
-        color: {pal.surface};
+        color: {pal.on_accent};
         border-color: {pal.accent};
     }}
     QPushButton:pressed {{
@@ -219,7 +264,7 @@ def form_control_qss(pal: Palette) -> str:
         background-color: {pal.surface_alt};
         color: {pal.text};
         border: 1px solid {pal.border};
-        border-radius: 4px;
+        border-radius: {M.radius_sm}px;
         padding: 5px 8px;
         /* Rechtes Padding um die Breite von ::menu-button erweitert (siehe
            dort): Qt zentriert das Icon sonst im GESAMTEN Button inkl.
@@ -229,9 +274,16 @@ def form_control_qss(pal: Palette) -> str:
            bleibt (per Screenshot-Vergleich austariert). */
         padding-right: 22px;
     }}
+    /* Tastaturfokus (Tab-Taste): Fokusfarbe als Rahmen plus Auswahl-Toenung,
+       ohne Rahmenbreite/Padding zu aendern (kein Springen des Layouts).
+       Steht VOR :hover, damit ein Hover auf einem fokussierten Knopf gewinnt. */
+    QToolButton:focus {{
+        border-color: {pal.focus};
+        background-color: {pal.selection};
+    }}
     QToolButton:hover {{
         background-color: {pal.accent};
-        color: {pal.surface};
+        color: {pal.on_accent};
         border-color: {pal.accent};
     }}
     QToolButton:pressed {{
@@ -269,9 +321,12 @@ def form_control_qss(pal: Palette) -> str:
     QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
         background-color: {pal.surface};
         color: {pal.text};
-        border: 1px solid {pal.border};
-        border-radius: 4px;
-        padding: 3px 6px;
+        border: 1px solid {pal.border_strong};
+        border-radius: {M.radius_sm}px;
+        padding: {M.pad_field};
+    }}
+    QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus, QComboBox:focus {{
+        border-color: {pal.focus};
     }}
     /* Ohne explizite :disabled-Regeln wuerden gesperrte Eingabefelder exakt
        wie aktive aussehen -- das Stylesheet oben ueberschreibt die native
@@ -285,6 +340,7 @@ def form_control_qss(pal: Palette) -> str:
 
 
 def stylesheet(pal: Palette) -> str:
+    M = METRICS
     return f"""
     QWidget {{
         background-color: {pal.bg};
@@ -298,7 +354,7 @@ def stylesheet(pal: Palette) -> str:
     QGroupBox {{
         background-color: {pal.surface};
         border: 1px solid {pal.border};
-        border-radius: 6px;
+        border-radius: {M.radius_md}px;
         margin-top: 14px;
         padding-top: 10px;
         font-weight: bold;
@@ -311,7 +367,7 @@ def stylesheet(pal: Palette) -> str:
     }}
     QTabWidget::pane {{
         border: 1px solid {pal.border};
-        border-radius: 6px;
+        border-radius: {M.radius_md}px;
         background-color: {pal.surface};
     }}
     QTabBar::tab {{
@@ -320,8 +376,8 @@ def stylesheet(pal: Palette) -> str:
         padding: 6px 16px;
         border: 1px solid {pal.border};
         border-bottom: none;
-        border-top-left-radius: 6px;
-        border-top-right-radius: 6px;
+        border-top-left-radius: {M.radius_md}px;
+        border-top-right-radius: {M.radius_md}px;
         margin-right: 2px;
     }}
     QTabBar::tab:selected {{
@@ -348,12 +404,12 @@ def stylesheet(pal: Palette) -> str:
     }}
     QAbstractSpinBox::up-button {{
         subcontrol-position: top right;
-        border-top-right-radius: 4px;
+        border-top-right-radius: {M.radius_sm}px;
         border-bottom: 1px solid {pal.border};
     }}
     QAbstractSpinBox::down-button {{
         subcontrol-position: bottom right;
-        border-bottom-right-radius: 4px;
+        border-bottom-right-radius: {M.radius_sm}px;
     }}
     QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{
         background-color: {pal.accent};
@@ -376,13 +432,16 @@ def stylesheet(pal: Palette) -> str:
     QCheckBox::indicator {{
         width: 16px;
         height: 16px;
-        border: 1px solid {pal.border};
-        border-radius: 3px;
+        border: 1px solid {pal.border_strong};
+        border-radius: {M.radius_check}px;
         background-color: {pal.surface};
     }}
     QCheckBox::indicator:checked {{
         background-color: {pal.accent};
         border-color: {pal.accent};
+    }}
+    QCheckBox::indicator:focus {{
+        border-color: {pal.focus};
     }}
     QCheckBox:disabled {{
         color: {pal.text_muted};
@@ -416,8 +475,24 @@ def stylesheet(pal: Palette) -> str:
         border: none;
     }}
     QScrollBar::handle {{
-        background: {pal.border};
-        border-radius: 4px;
+        background: {pal.border_strong};
+        border-radius: {M.radius_sm}px;
+    }}
+    /* Hinweistexte (setProperty("role", "hint")) -- ueber diese globale Regel
+       statt per Instanz-Stylesheet, damit sie beim Live-Umschalten Hell/Dunkel
+       mitwechseln. */
+    QLabel[role="hint"] {{
+        color: {pal.text_muted};
+    }}
+    /* Status-Texte mit wechselnder Bedeutung (set_tone) -- ebenfalls global,
+       damit sie beim Live-Umschalten Hell/Dunkel mitwechseln. */
+    QLabel[tone="muted"] {{ color: {pal.text_muted}; }}
+    QLabel[tone="success"] {{ color: {pal.success}; }}
+    QLabel[tone="warning"] {{ color: {pal.warning}; }}
+    QLabel[tone="danger"] {{ color: {pal.danger}; }}
+    QLabel[strong="true"] {{ font-weight: bold; }}
+    QFrame[role="separator"] {{
+        background-color: {pal.border};
     }}
     QStatusBar {{
         background-color: {pal.surface};
@@ -454,7 +529,7 @@ class ThemeManager(QObject):
         return self._touch
 
     def apply(self, dark: bool) -> None:
-        self._palette = AMBER_DARK if dark else LIGHT
+        self._palette = DARK if dark else LIGHT
         self._restyle()
         self.changed.emit(self._palette)
 
@@ -475,6 +550,17 @@ class ThemeManager(QObject):
             from touch_ui import touch_qss   # lokal: touch_ui importiert theme
             qss += touch_qss(self._palette)
         app.setStyleSheet(qss)
+
+
+def set_tone(label: QWidget, tone: str, strong: bool = False) -> None:
+    """Faerbt einen Status-Text ueber die globalen QLabel[tone=...]-Regeln
+    (muted/success/warning/danger) statt per Instanz-Stylesheet -- so folgt
+    er einem spaeteren Theme-Wechsel ohne eigenen Neu-Aufruf. Qt wertet
+    Property-Selektoren nur beim Polieren aus, daher unpolish/polish."""
+    label.setProperty("tone", tone)
+    label.setProperty("strong", strong)
+    label.style().unpolish(label)
+    label.style().polish(label)
 
 
 def current() -> Palette:
