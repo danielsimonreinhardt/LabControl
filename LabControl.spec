@@ -133,13 +133,14 @@ pyz = PYZ(a.pure)
 # die Phase ab, die sich beim Start bisher wie "haengt" anfuehlt (siehe
 # FEATURES.md Punkt 5). Geschlossen wird er in lab_gui/main.py per
 # pyi_splash.close(), sobald das Hauptfenster steht.
+import brand  # noqa: E402  (lab_gui/brand.py: Logo, Splash-Masse und -Farben, seit 0.42.0)
 splash = Splash(
     'lab_gui/icons/splash.png',
     binaries=a.binaries,
     datas=a.datas,
-    text_pos=(20, 255),
+    text_pos=brand.WIN_SPLASH_TEXT_POS,
     text_size=11,
-    text_color='#e8e6e1',
+    text_color=brand.MUTED,
 )
 
 exe = EXE(

@@ -6,4 +6,4 @@
            C111 51 115 51 120 47 C125 43 129 44 146 45"
         fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="146" cy="45" r="7" fill="#f8fafc"/>
-</g><text x="196" y="104" font-family="Segoe UI" font-weight="300" font-size="68" fill="#f8fafc">Lab<tspan font-weight="600" fill="#38bdf8">Control</tspan></text></svg>
+</g><text x="196" y="104" text-anchor="start" font-family="Segoe UI" font-weight="300" font-size="68" fill="#f8fafc">Lab<tspan font-weight="600" fill="#38bdf8">Control</tspan></text></svg>

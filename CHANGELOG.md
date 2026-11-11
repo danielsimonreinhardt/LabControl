@@ -7,6 +7,18 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Neues Logo auch in der Windows-App: Splash und Taskleisten-Symbol (0.42.0, Nutzerwunsch 11.11.2026).** Das Logo
+  aus dem Pi-Bootscreen (Messbildschirm mit Sprungantwort, „Lab**Control**“, „MESSEN · STEUERN · PRÜFEN“) ersetzt das
+  amberfarbene „L“ und den alten Amber-Splash.
+  - Eine Quelle: `lab_gui/brand.py` beschreibt Bildmarke, Schriftzug und Farben (Slate Ops Dark) als SVG und rendert
+    mit QtSvg. Daraus entstehen Fenster-/Taskleisten-Symbol zur Laufzeit (`app_icon.py`), die `.ico` der .exe
+    (`tools/generate_icon.py`), der .exe-Splash 480 × 280 mit Version (`tools/generate_splash.py`, Ladetext unten
+    links in Grau, `LabControl.spec` liest Position und Farbe aus `brand.py`) und das Pi-Boot-Logo
+    (`tools/pi/branding/make_branding.py`).
+  - Für 16 und 24 px eine vereinfachte Bildmarke (ohne Gitter, dickere Striche), sonst verschwimmt sie in Titel- und
+    Taskleiste. Auf hellem und dunklem Hintergrund angesehen.
+  - **Mock-verifiziert:** Symbol lädt in allen 7 Größen, .exe mit PyInstaller gebaut (QtSvg enthalten); die .exe
+    selbst nicht gestartet (würde echte Geräte suchen).
 - **Jede Bedienung steht im Log (0.41.0, Entscheidung PI-15 a, 10.11.2026).** Bisher protokollierte nur der
   Batterie-Simulator seine Bedienungen; „Sollwert 12 V, Ausgang EIN“ an Netzteil, Last, Funktionsgenerator oder
   microHIL ließ sich im `labdash.log` nicht nachvollziehen. Jetzt eine Zeile je Bedienung, im selben Format wie beim
