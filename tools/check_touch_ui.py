@@ -125,6 +125,16 @@ def main() -> int:
     check("Leiste oben mit ALLE AUS, Statusleiste verborgen", w._top_bar.isVisible() and not w.statusBar().isVisible()
           and w._all_off_button.isVisible() and w._top_bar.isAncestorOf(w._all_off_button))
     check("Geraetezustand in der Leiste oben", w._top_bar.isAncestorOf(w._status_container) and w._status_container.isVisible())
+    area = w._top_bar._status_area
+    check("Sicherheits-Chip fest links, nicht im Wischbereich (Nutzerwunsch 12.11.2026)",
+          w._safety_status_label.parentWidget() is w._top_bar and w._safety_status_label.isVisible()
+          and not area.isAncestorOf(w._safety_status_label)
+          and w._safety_status_label.geometry().right() < area.geometry().left())
+    area.horizontalScrollBar().setValue(area.horizontalScrollBar().maximum())
+    app.processEvents()
+    check("Sicherheits-Chip bleibt beim Wischen sichtbar", w._safety_status_label.isVisible()
+          and w._safety_status_label.geometry().left() >= 0)
+    area.horizontalScrollBar().setValue(0)
     check("Fernsteuerungs-Hinweis bleibt verborgen", w._remote_status_label.isHidden())
     check("ALLE AUS mindestens 96 x 44 px", w._all_off_button.width() >= 96 and w._all_off_button.height() >= 44,
           f"{w._all_off_button.width()} x {w._all_off_button.height()}")

@@ -604,8 +604,11 @@ class TopBar(QWidget):
         self.retranslate()
         ThemeManager.instance().changed.connect(lambda _pal: self._recolor())
 
-    def adopt(self, status: QWidget, trailing: list[QWidget]) -> None:
-        """Statusanzeige in den wischbaren Bereich, die uebrigen rechts davon (ALLE AUS zuletzt)."""
+    def adopt(self, status: QWidget, trailing: list[QWidget], leading: QWidget | None = None) -> None:
+        """Statusanzeige in den wischbaren Bereich, die uebrigen rechts davon (ALLE AUS zuletzt).
+        `leading` steht fest links davor und wischt nicht mit (Sicherheits-Chip, Nutzerwunsch 12.11.2026)."""
+        if leading is not None:
+            self._layout.insertWidget(0, leading)
         self._status_area.setWidget(status)
         self._trailing = trailing
         for widget in trailing[:-1]:

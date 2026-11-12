@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Sicherheits-Chip fest links in der Leiste oben (0.53.1, Nutzerwunsch 12.11.2026).** Er stand bisher im
+  wischbaren Bereich und verschwand, wenn man die Geräte-Chips zur Seite wischte. Jetzt steht er vor diesem Bereich
+  (`TopBar.adopt(..., leading=...)`), am PC und im Touch-Profil; ein Klick darauf öffnet wie bei den anderen Chips
+  „Gerätezustand“. **Mock-verifiziert** (`check_touch_ui`: Chip außerhalb des Wischbereichs, bleibt beim Wischen
+  sichtbar).
 - **PC-Oberfläche nach dem Touch-Konzept, Verbund ohne Hauptschalter (0.53.0, Nutzerwunsch und PI-39 b,
   12.11.2026).**
   - **Rahmen wie im Touch-Profil auch am PC:** Navigation links (Symbol + Text, schmaler als am Pi) statt

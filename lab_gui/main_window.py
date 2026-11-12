@@ -235,8 +235,10 @@ class MainWindow(QMainWindow):
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
         self._status_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # Sicherheits-Chip steht fest links vor dem wischbaren Bereich (TopBar.adopt, leading)
         self._safety_status_label = QLabel()
-        self._status_layout.addWidget(self._safety_status_label)
+        self._safety_status_label.installEventFilter(self)
+        self._safety_status_label.setCursor(Qt.CursorShape.PointingHandCursor)
         # Verbund-Chip "⇄ Pi" (verbunden/getrennt), nur mit eingetragenem Partner sichtbar
         self._partner_chip = QLabel()
         self._partner_chip.hide()
@@ -1666,7 +1668,8 @@ class MainWindow(QMainWindow):
         # Fernsteuerungs-Hinweis und ALLE AUS in der Leiste oben
         self.tabs.tabBar().hide()
         self.statusBar().hide()
-        self._top_bar.adopt(self._status_container, [self._remote_status_label, self._all_off_button])
+        self._top_bar.adopt(self._status_container, [self._remote_status_label, self._all_off_button],
+                            leading=self._safety_status_label)
         # QScrollArea.setWidget zeigt das Widget nicht von selbst; der Fernsteuerungs-Hinweis bleibt verborgen,
         # bis der Hauptschalter an ist (_refresh_remote_status)
         self._status_container.show()
@@ -2343,7 +2346,7 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt override)
         # Tipp/Klick auf die Statusanzeige oeffnet die Liste (_show_status_details; am PC seit PI-17 a). Das
         # Druecken annehmen, sonst kommt das Loslassen nicht an; Wischen erledigt im Touch-Profil der QScroller davor.
-        if obj is self._status_container:
+        if obj is getattr(self, "_status_container", None) or obj is getattr(self, "_safety_status_label", None):
             if event.type() == QEvent.Type.MouseButtonPress:
                 return True
             if event.type() == QEvent.Type.MouseButtonRelease:
