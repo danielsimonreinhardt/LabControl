@@ -706,6 +706,36 @@ CAN-Botschaften – solche Abläufe starten mit einer Meldung gar nicht erst.
 Gespeichert wird mit Rechnernamen („@raspberrypi/psu:0001“), so meint dieselbe
 Datei an beiden Rechnern dieselben Geräte.
 
+**Aufzeichnung im Verbund.** Der Leitstand zeichnet die Werte der Partnergeräte
+(Netzteil, Last, microHIL) mit auf: Sie stehen im Verlauf zur Auswahl, landen in
+Aufzeichnung (CSV/MF4) und Bericht, etwa im Sekundentakt mit dem Zeitstempel
+beim Eintreffen. Die Uhren beider Rechner sollen über NTP laufen (Pi:
+systemd-timesyncd, PC: Windows-Zeitdienst); weichen sie um mehr als eine Sekunde
+ab, zeigt der Verbund-Chip „⚠“ und einen Hinweis. Für schnelle Vorgänge ist das
+Oszilloskop zuständig.
+
+**Claude (MCP) im Verbund.** Der MCP-Server bleibt auf den PC eingestellt. Die
+Freigabe des PCs zeigt Claude zusätzlich die Partnergeräte als
+`@raspberrypi/psu:0001` und reicht Befehle daran an den Partner weiter. Dafür
+müssen am PC der Hauptschalter (oder die Ausnahme für diesen PC) und am Partner
+dessen Hauptschalter an sein. Vor dem ersten Befehl belegt der PC das Gerät beim
+Partner („belegt durch PC · Claude (MCP)“) und meldet sich jede Sekunde; fehlt
+das 3 Sekunden, schaltet der Partner das Gerät ab. Die Belegung endet nach
+10 Minuten ohne Befehl von Claude, bei ALLE AUS, einer Sicherheitsabschaltung,
+dem Start eines Testablaufs oder wenn der Verbund umgestellt wird; abgeschaltet
+wird dabei nichts. Durchgereicht wird nur an Aufrufer auf demselben Rechner.
+
+**Batterie-Simulator: nur ein Sender.** Hängen Pi und PC am selben CAN-Bus, darf
+nur einer den Batterie-Simulator steuern (Botschaft 0x130, im Normalfall der
+Pi). LabControl hört 0x130 mit: Sendet schon ein anderer Rechner, wird
+„Fernsteuerung EIN“ abgelehnt, und die Kachel zeigt „anderer Rechner sendet
+0x130“. 0x130 von Hand oder per CAN-Schritt zu senden ist gesperrt, solange ein
+Batterie-Simulator am Bus hängt oder der Verbund-Partner einen führt.
+
+**LAN-Oszilloskop.** Ein Oszilloskop im Netzwerk gehört einem Rechner. Ist
+dieselbe Adresse an beiden eingetragen, weisen Verbund-Chip und Einstellungen
+darauf hin – dann an einem Rechner austragen.
+
 ---
 
 ## 6. Sicherheit: Software-Watchdog

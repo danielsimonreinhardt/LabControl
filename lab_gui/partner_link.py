@@ -271,11 +271,18 @@ class PartnerLink(QObject):
         client = self._client
         if client is None:
             return False
-        self.release_lease()
+        # Eine bestehende Belegung erst im SELBEN Thread freigeben, dann neu belegen -- sonst kann die neue
+        # Anforderung vor der Freigabe ankommen und an der eigenen alten Belegung scheitern (Erweitern
+        # einer Claude-Belegung, partner_passthrough.py)
+        old = self._lease_id
+        self._lease_id = ""
+        self._lease_stop.set()
         generation = next(self._lease_gens)
         self._lease_gen = generation
 
         def run_acquire() -> None:
+            if old:
+                _quiet(client.lease_release, old)
             try:
                 lease = client.lease_acquire(devices, run, LEASE_TTL_S)
             except PartnerError as exc:

@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import re
+import time
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
@@ -52,6 +53,7 @@ from share_api import new_token
 from jlink.driver import find_commander as find_jlink_commander
 from jlink_service import JLinkService
 from partner_link import PartnerLink
+from partner_passthrough import PartnerPassthrough
 from partner_tab import PartnerTab
 from share_remote import RemoteBridge
 from share_server import ShareServer, is_verbund_client
@@ -72,6 +74,24 @@ STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "p
 STATUS_CHIP_HEIGHT = 28      # Touch-Profil
 STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
+# Verbund (PI-33 a): ab dieser Abweichung der Uhren warnt der Leitstand -- Aufzeichnung und Bericht
+# mischen Zeitstempel beider Rechner, die Uhren sollen ueber NTP laufen.
+CLOCK_WARN_S = 1.0
+
+
+def lan_scope_hosts(addresses: list) -> list[str]:
+    """Adressen (IP/Hostname) der eingetragenen LAN-Oszilloskope (PI-29 a); USB und Simulation zaehlen
+    nicht -- die stecken an genau einem Rechner."""
+    from unit_mso1000hd.driver import KIND, SIM_RESOURCE, device_id_for, normalize_resource
+    hosts = []
+    for address in addresses or []:
+        try:
+            resource = normalize_resource(str(address))
+        except ValueError:
+            continue
+        if resource != SIM_RESOURCE and resource.upper().startswith("TCPIP"):
+            hosts.append(device_id_for(resource).removeprefix(f"{KIND}:").lower())
+    return sorted(set(hosts))
 
 
 class MainWindow(QMainWindow):
@@ -113,6 +133,8 @@ class MainWindow(QMainWindow):
     _request_all_off = Signal(str)  # reason
     # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
     _request_devices_off = Signal(list, str)
+    # PI-28: Partner fuehrt einen Batterie-Simulator -> hier kein 0x130 von Hand/aus Ablaeufen
+    _request_partner_battsim = Signal(bool)
 
     def __init__(self, settings: Settings | None = None) -> None:
         super().__init__()
@@ -409,6 +431,7 @@ class MainWindow(QMainWindow):
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
         self._request_devices_off.connect(self._worker.devices_off)
+        self._request_partner_battsim.connect(self._worker.set_partner_battsim)
         self.control_tab.operation_source.connect(self._worker.set_operation_source)   # PI-15: Preset im Log
         self._worker.all_off_finished.connect(self._on_all_off_finished)
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
@@ -429,6 +452,7 @@ class MainWindow(QMainWindow):
             self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"))
         if propagate:
             self._partner.all_off(reason)
+        self._passthrough.release("ALLE AUS")
 
     # -- Verbund Pi + PC (PI-23 a, PI-27 a) ------------------------------------
 
@@ -441,14 +465,20 @@ class MainWindow(QMainWindow):
         self._partner.all_off_finished.connect(self._on_partner_all_off_finished)
         # Leitstand (V2): Bedienungen eines Testablaufs, Belegung und deren Verlust
         self._partner_host_name = ""
+        self._partner_battsim = False
+        self._verbund_warnings: list[str] = []
+        self._partner_known: dict[str, str] = {}   # Partnergeraet -> Anzeigename in Verlauf/Aufzeichnung
         self._pending_partner_req = 0
         self._pending_run_steps: list[TestStep] | None = None
         self._partner.action_finished.connect(self._on_partner_action_finished)
         self._partner.lease_acquired.connect(self._on_partner_lease_acquired)
         self._partner.lease_lost.connect(self._on_partner_lease_lost)
+        self._run_has_lease = False
         for sig in (self._test_runner.run_finished, self._test_runner.run_stopped):
-            sig.connect(self._partner.release_lease)
-        self._test_runner.step_failed.connect(lambda *_args: self._partner.release_lease())
+            sig.connect(self._release_run_lease)
+        self._test_runner.step_failed.connect(lambda *_args: self._release_run_lease())
+        # Claude (MCP) im Verbund (PI-32 a): Befehle an durchgereichte Partnerkacheln
+        self._passthrough = PartnerPassthrough(self._partner, self._share_bridge, self._passthrough_blocked, self)
         # Besitzer (V2): Belegungen durch den Partner anzeigen, abgelaufene abschalten
         self._lease_view: dict[str, str] = {}
         self._lease_timer = QTimer(self)
@@ -457,14 +487,60 @@ class MainWindow(QMainWindow):
         self._lease_timer.start()
         self._on_partner_config(self._settings.partner_config)
 
+    def _release_run_lease(self) -> None:
+        if self._run_has_lease:
+            self._run_has_lease = False
+            self._partner.release_lease()
+
+    def _passthrough_blocked(self) -> str:
+        """Fuer PartnerPassthrough: dieselbe letzte Pruefung wie _on_share_action fuer eigene Geraete
+        (durchgereicht wird nur an Aufrufer auf diesem Rechner, deshalb gilt die lokale Ausnahme)."""
+        if self._safety.is_tripped() or self._test_runner.is_running() or self._pending_run_steps is not None:
+            return "locked"
+        if not (self._live_state.remote_active() or self._settings.share_config["local_bypass"]):
+            return "inactive"
+        return ""
+
     def _on_partner_config(self, config: dict) -> None:
         self.settings_tab.set_partner_config(config)
+        self._passthrough.release("Verbund umgestellt")
         self._partner.apply(config)
         visible = self._partner.enabled
         self.tabs.setTabVisible(self.tabs.indexOf(self.partner_tab), visible)
         self._partner_nav_button.setVisible(visible)
         self.testcase_tab.set_verbund(app_logging.host_name(), self._partner_host_name, visible)
+        if not visible:
+            self._set_partner_battsim(False)
         self._render_partner_chip()
+
+    def _check_verbund_warnings(self, snap) -> None:
+        """Hinweise zum Verbund (Chip, Einstellungen, Log bei Wechsel): dasselbe LAN-Oszilloskop an
+        beiden Rechnern eingetragen (PI-29 a), Uhren weichen ab (PI-33 a, NTP)."""
+        warnings = []
+        both = sorted(set(lan_scope_hosts(self._settings.scpi_scopes)) & {s.lower() for s in snap.lan_scopes})
+        if both:
+            warnings.append(tr("LAN-Oszilloskop {hosts} ist auch bei {name} eingetragen – es gehört einem Rechner, "
+                               "bitte an einem austragen", hosts=", ".join(both), name=self._partner.name()))
+        offset = snap.clock_offset_s
+        if offset is not None and abs(offset) > CLOCK_WARN_S:
+            warnings.append(tr("Uhren weichen um {s} s ab – NTP an beiden Rechnern prüfen",
+                               s=f"{offset:+.1f}"))
+        if warnings != self._verbund_warnings:
+            for text in warnings:
+                if text not in self._verbund_warnings:
+                    logger.warning("Verbund: %s", text)
+            self._verbund_warnings = warnings
+            self._render_partner_chip()
+
+    def verbund_warnings(self) -> list[str]:
+        return list(self._verbund_warnings)
+
+    def _set_partner_battsim(self, present: bool) -> None:
+        if present != self._partner_battsim:
+            self._partner_battsim = present
+            logger.info("Verbund: Partner %s Batterie-Simulator%s", "führt einen" if present else "ohne",
+                        " - 0x130 wird hier nicht gesendet" if present else "")
+            self._request_partner_battsim.emit(present)
 
     # -- J-Link (Verbund V3, PI-31 a; jlink_service.py) ------------------------
 
@@ -520,10 +596,16 @@ class MainWindow(QMainWindow):
         """Partnergeraete fuer den Testablauf: in die Geraeteauswahl ("Pi · Netzteil 1") und ihre
         Messwerte in Bedingungen, Pruefungen und Bericht."""
         if snap is None or not snap.host:
+            self._live_state.set_partner(None)
             return
+        # PI-32 a: Kacheln fuer den MCP-Server an diesem Rechner (share_api.partner_tiles)
+        self._live_state.set_partner({"host": snap.host, "name": self._partner.name(), "tiles": snap.tiles,
+                                      "received": time.monotonic()})
         if snap.host != self._partner_host_name:
             self._partner_host_name = snap.host
             self.testcase_tab.set_verbund(app_logging.host_name(), snap.host, self._partner.enabled)
+        self._set_partner_battsim(any(t.get("kind") == "battsim" for t in snap.tiles))
+        self._check_verbund_warnings(snap)
         name = self._partner.name()
         for tile in snap.tiles:
             kind, remote_id = tile.get("kind", ""), tile.get("id", "")
@@ -533,26 +615,36 @@ class MainWindow(QMainWindow):
             label = f"{name} · {tile.get('label') or remote_id}"
             if not self.testcase_tab.knows_device(device_id, kind, label):
                 self.testcase_tab.on_device_known(kind, device_id, label)
+            if self._partner_known.get(device_id) != label:
+                # PI-33 a: der Leitstand zeichnet Partnerwerte mit auf -- Verlauf, Aufzeichnung (CSV/MF4)
+                # und Bericht kennen das Geraet unter "Pi · Netzteil 1"
+                self._partner_known[device_id] = label
+                for sink in (self.timeline_tab, self._recorder, self._run_recorder):
+                    sink.on_device_known(kind, device_id, label)
             if tile.get("stale") or not tile.get("online", True):
                 continue   # alte Werte nicht als frisch melden (Bedingung/Pruefung schlaegt dann fehl)
             values = {f.get("key"): f.get("value") for f in tile.get("fields", []) if "value" in f}
             voltage, current = values.get("voltage"), values.get("current")
             if kind == "psu" and isinstance(voltage, (int, float)) and isinstance(current, (int, float)):
                 cc = any(f.get("key") == "mode" and f.get("text") == "CC" for f in tile.get("fields", []))
-                self._test_runner.on_psu_measurement(device_id, float(voltage), float(current), cc)
-                self._run_recorder.on_psu_measurement(device_id, float(voltage), float(current), cc)
+                for sink in (self._test_runner, self._run_recorder, self._recorder):
+                    sink.on_psu_measurement(device_id, float(voltage), float(current), cc)
+                self.timeline_tab.update_psu(device_id, float(voltage), float(current), cc)
             elif kind == "load" and isinstance(voltage, (int, float)) and isinstance(current, (int, float)):
                 power = values.get("power")
                 power = float(power) if isinstance(power, (int, float)) else float(voltage) * float(current)
-                self._test_runner.on_load_measurement(device_id, float(voltage), float(current), power)
-                self._run_recorder.on_load_measurement(device_id, float(voltage), float(current), power)
+                for sink in (self._test_runner, self._run_recorder, self._recorder):
+                    sink.on_load_measurement(device_id, float(voltage), float(current), power)
+                self.timeline_tab.update_load(device_id, float(voltage), float(current), power)
             elif kind == "hil":
                 ain = [values.get(f"ain{n}") for n in range(1, 5)]
                 if all(isinstance(v, (int, float)) for v in ain):
                     self._test_runner.on_hil_analog_input(device_id, [float(v) for v in ain])
+                    self.timeline_tab.update_hil_analog_in(device_id, [float(v) for v in ain])
                 inputs = [values.get(f"in{n}") for n in range(1, 9)]
                 if all(isinstance(v, (int, float)) for v in inputs):
                     self._test_runner.on_hil_digital_state(device_id, [bool(v) for v in inputs], [])
+                    self.timeline_tab.update_hil_digital(device_id, [bool(v) for v in inputs], [])
 
     def _partner_steps(self, steps: list[TestStep]) -> tuple[list[TestStep], dict[str, str], str]:
         """Schritte fuer den Lauf: eigener Rechnername aufgeloest. Liefert (Schritte, Partnergeraete mit
@@ -585,16 +677,21 @@ class MainWindow(QMainWindow):
     def _on_partner_lease_acquired(self, ok: bool, message: str) -> None:
         steps, self._pending_run_steps = self._pending_run_steps, None
         if steps is None:
-            if ok:
+            if self._passthrough.expects_lease():   # Belegung fuer Claude (PI-32 a)
+                self._passthrough.on_lease_acquired(ok, message)
+            elif ok:
                 self._partner.release_lease()   # Lauf inzwischen verworfen
             return
         if not ok:
             self._refuse_run(tr("Geräte beim {name} nicht belegt: {reason}", name=self._partner.name(),
                                 reason=tr(message)))
             return
+        self._run_has_lease = True
         self._start_run(steps)
 
     def _on_partner_lease_lost(self, reason: str) -> None:
+        self._run_has_lease = False
+        self._passthrough.on_lease_lost(reason)
         if self._test_runner.is_running():
             self._test_runner.abort(tr("Verbund: Verbindung zu {name} verloren ({reason}) – Ablauf abgebrochen",
                                        name=self._partner.name(), reason=tr(reason)))
@@ -659,12 +756,15 @@ class MainWindow(QMainWindow):
         if link.is_connected():
             snap = link.snapshot()
             count = len(snap.tiles) if snap is not None else 0
-            chip.setText(f"⇄ {name}")
-            chip.setToolTip(tr("Verbund: verbunden mit {name} ({n} Geräte)", name=name, n=count))
-            self._style_chip(chip, pal.success)
+            warnings = self._verbund_warnings
+            chip.setText(f"⇄ {name}" + (" ⚠" if warnings else ""))
+            chip.setToolTip("\n".join([tr("Verbund: verbunden mit {name} ({n} Geräte)", name=name, n=count),
+                                       *warnings]))
+            self._style_chip(chip, pal.warning if warnings else pal.success)
             self.settings_tab.set_partner_status(
-                tr("Verbunden mit {name}, LabControl {version}, {n} Geräte freigegeben", name=name,
-                   version=snap.version if snap else "?", n=count), "success")
+                "\n".join([tr("Verbunden mit {name}, LabControl {version}, {n} Geräte freigegeben", name=name,
+                              version=snap.version if snap else "?", n=count), *warnings]),
+                "warning" if warnings else "success")
         else:
             chip.setText(f"✕ {name}")
             chip.setToolTip(tr("Verbund: {name} nicht verbunden – {reason}", name=name, reason=tr(link.reason())))
@@ -699,6 +799,7 @@ class MainWindow(QMainWindow):
         # Die eigenen Ausgaenge schaltet der Watchdog selbst ab (all_off_requested); der Partner
         # bekommt ALLE AUS dazu (PI-27 a).
         self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
+        self._passthrough.release("Sicherheitsabschaltung")
         self._safety_banner_label.setText(reason)
         self._safety_banner.show()
 
@@ -1197,6 +1298,9 @@ class MainWindow(QMainWindow):
             lambda *_args: self._live_state.refresh_labels())
 
         self._share_server.set_simulation(self._settings.simulation_mode)
+        self._share_server.set_lan_scopes(lan_scope_hosts(self._settings.scpi_scopes))
+        self._settings.scpi_scopes_changed.connect(
+            lambda addresses: self._share_server.set_lan_scopes(lan_scope_hosts(addresses)))
         self._live_state.set_share_config(self._settings.share_config)
         self._share_server.apply(self._settings.share_config)
 
@@ -1718,6 +1822,7 @@ class MainWindow(QMainWindow):
             if not self._partner.is_connected():
                 self._refuse_run(tr("Verbund-Partner {name} nicht verbunden", name=self._partner.name()))
                 return
+            self._passthrough.release("Testablauf startet")   # PartnerLink fuehrt nur eine Belegung
             self._pending_run_steps = steps
             self.testcase_tab.show_message(tr("Belege Geräte beim {name} …", name=self._partner.name()))
             self._partner.acquire_lease(sorted(partner_devices), self.testcase_tab.current_testcase_name())

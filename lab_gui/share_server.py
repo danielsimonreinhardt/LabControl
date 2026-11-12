@@ -336,6 +336,13 @@ class ShareServer(QObject):
         if self._server is not None:
             self._server.share_app_info = self._app_info
 
+    def set_lan_scopes(self, hosts: list[str]) -> None:
+        """Adressen der hier eingetragenen LAN-Oszilloskope (PI-29 a): der Verbund-Partner warnt, wenn
+        er dasselbe Geraet ebenfalls eingetragen hat -- ein LAN-Oszilloskop gehoert einem Rechner."""
+        self._app_info = {**self._app_info, "lan_scopes": sorted({str(h) for h in hosts if h})}
+        if self._server is not None:
+            self._server.share_app_info = self._app_info
+
     def is_running(self) -> bool:
         return self._server is not None
 

@@ -677,6 +677,35 @@ such sequences do not start and say why. Files are saved with computer names
 ("@raspberrypi/psu:0001"), so the same file means the same devices on both
 computers.
 
+**Recording in a link.** The control station also records the partner's device
+values (PSU, load, microHIL): they can be selected in the timeline and end up
+in the recording (CSV/MF4) and the report, about once per second with the time
+of arrival. Both clocks should run on NTP (Pi: systemd-timesyncd, PC: Windows
+time service); if they differ by more than a second, the link chip shows "⚠"
+and a hint. Fast events belong to the oscilloscope.
+
+**Claude (MCP) in a link.** The MCP server stays pointed at the PC. The PC's
+share additionally shows Claude the partner devices as `@raspberrypi/psu:0001`
+and forwards commands for them to the partner. This needs the master switch
+(or the exception for this PC) on the PC and the partner's own master switch.
+Before the first command the PC reserves the device at the partner ("reserved
+by PC · Claude (MCP)") and reports every second; if that stops for 3 seconds,
+the partner switches the device off. The reservation ends after 10 minutes
+without a command from Claude, on ALL OFF, a safety shutdown, the start of a
+test sequence or when the link is changed; nothing is switched off then. Only
+callers on the same computer get the partner devices.
+
+**Battery simulator: one sender only.** If Pi and PC share a CAN bus, only one
+of them may control the battery simulator (message 0x130, normally the Pi).
+LabControl listens for 0x130: if another computer is already sending it,
+"Remote control ON" is rejected and the tile shows "another computer is sending
+0x130". Sending 0x130 by hand or from a CAN step is blocked while a battery
+simulator is attached to the bus or the link partner runs one.
+
+**LAN oscilloscope.** A network oscilloscope belongs to one computer. If the
+same address is configured on both, the link chip and the settings point it
+out – remove it on one of them.
+
 ---
 
 ## 6. Safety: software watchdog

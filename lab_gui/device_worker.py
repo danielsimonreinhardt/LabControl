@@ -48,6 +48,7 @@ from can_bus.dbc import DbcError, decode_frame, load_dbc
 from can_bus.node import CanNode, CanScheduler
 from battsim.driver import (
     CELL_COUNT as BATTSIM_CELL_COUNT,
+    CONTROL_ID as BATTSIM_CONTROL_ID,
     DEFAULT_VOLTAGE_LIMIT_V as BATTSIM_DEFAULT_LIMIT_V,
     KIND as BATTSIM_KIND,
     BattSim,
@@ -500,6 +501,9 @@ class DeviceWorker(QObject):
         self._battsims: dict[str, BattSim] = {}
         self._battsim_bus: dict[str, str] = {}      # battsim-ID -> CAN-Interface-ID
         self._battsim_online: dict[str, bool] = {}
+        # PI-28: anderer 0x130-Sender gesehen (fuers Log nur bei Wechsel) / Partner fuehrt einen Simulator
+        self._battsim_foreign: dict[str, bool] = {}
+        self._partner_has_battsim = False
         # Grenzwert je Simulator (Einstellungen, settings.battsim_voltage_limits).
         self._battsim_limits: dict[str, float] = {}
         # Nachgebildeter Simulator am simulierten Bus (Simulationsmodus).
@@ -943,6 +947,7 @@ class DeviceWorker(QObject):
     def _drop_battsim(self, battsim_id: str, send_shutdown: bool) -> None:
         node = self._battsims.pop(battsim_id, None)
         can_id = self._battsim_bus.pop(battsim_id, "")
+        self._battsim_foreign.pop(battsim_id, None)
         if node is None:
             return
         scheduler = self._can_schedulers.get(can_id)
@@ -982,6 +987,15 @@ class DeviceWorker(QObject):
                 else:
                     self.battsim_connected.emit(battsim_id, False)
                     self.device_removed.emit(BATTSIM_KIND, battsim_id)
+            foreign = node.foreign_sender()
+            if foreign != self._battsim_foreign.get(battsim_id, False):
+                self._battsim_foreign[battsim_id] = foreign
+                if foreign:
+                    logger.warning("Batterie-Simulator %s: ein anderer Teilnehmer sendet 0x130%s", battsim_id,
+                                   " -- gleichzeitig mit diesem Rechner!" if node.get_state().remote_requested else
+                                   ", Fernsteuerung hier gesperrt")
+                else:
+                    logger.info("Batterie-Simulator %s: kein anderer 0x130-Sender mehr", battsim_id)
             if online:
                 self.battsim_state.emit(battsim_id, self._battsim_state_dict(node))
 
@@ -1006,6 +1020,7 @@ class DeviceWorker(QObject):
             "limit_active": st.limit_active,
             "supply_current": st.supply_current_a,
             "fw_version": st.fw_version,
+            "foreign_sender": st.foreign_sender,
             "cells": [
                 {"index": c.index, "setpoint": c.setpoint_v, "enable": c.enable_requested,
                  "voltage": c.voltage_v, "enabled": c.enabled, "error": c.setpoint_error,
@@ -2160,6 +2175,14 @@ class DeviceWorker(QObject):
     # fuer bytes aber nicht garantiert getestet ist.
 
     def _send_can(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> tuple[bool, str]:
+        if not extended and arbitration_id == BATTSIM_CONTROL_ID and (
+                self._partner_has_battsim or any(c == device_id for c in self._battsim_bus.values())):
+            # PI-28: 0x130 sendet nur der Treiber des Batterie-Simulators (am Pi). Ein zweiter Sender bringt
+            # den Alive-Zaehler durcheinander, die Firmware geht in FAIL.
+            message = ("0x130 steuert den Batterie-Simulator und wird nur von dessen Treiber gesendet"
+                       + (" (im Verbund am Partner)" if self._partner_has_battsim else ""))
+            logger.warning("CAN %s: Senden von 0x130 abgelehnt: %s", device_id, message)
+            return False, message
         try:
             data = bytes.fromhex(data_hex.replace(" ", ""))
         except ValueError as exc:
@@ -2168,6 +2191,12 @@ class DeviceWorker(QObject):
         if ok:
             self._can_stats[device_id][0] += 1
         return ok, message
+
+    @Slot(bool)
+    def set_partner_battsim(self, present: bool) -> None:
+        """Verbund (PI-28): der Partner-Rechner fuehrt einen Batterie-Simulator -- dann sendet dieser
+        Rechner 0x130 auch von Hand oder aus einem Ablauf nicht."""
+        self._partner_has_battsim = bool(present)
 
     @Slot(str, int, str, bool)
     def send_can_frame(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:

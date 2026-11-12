@@ -7,6 +7,36 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Verbund Pi + PC, Stufe V4: Claude über den PC, gemeinsame Aufzeichnung, ein 0x130-Sender, LAN-Oszilloskop an
+  einem Rechner (0.49.0, Entscheidungen PI-28 a, PI-29 a, PI-32 a, PI-33 a, 12.11.2026).**
+  - Claude/MCP (PI-32 a): Der MCP-Server spricht weiter nur mit dem PC. Dessen Freigabe zeigt Aufrufern auf demselben
+    Rechner zusätzlich die Geräte des Partners als `@<Rechner>/<ID>` (z. B. `@raspberrypi/psu:0001`, mit `partner` im
+    Eintrag); andere Aufrufer und der Partner selbst bekommen nichts durchgereicht (keine Schleife). Befehle daran
+    prüft der PC (Hauptschalter bzw. lokale Ausnahme, Sperrzustand, Aktion und Wert gegen die Nennwerte der
+    Partnerkachel) und reicht sie an den Besitzer weiter, der wie immer selbst prüft. Vorher belegt der PC das Gerät
+    dort („Claude (MCP)“, `lab_gui/partner_passthrough.py`); weitere Geräte erweitern die Belegung. Lebenszeichen wie
+    bei Abläufen: fehlt es 3 s, schaltet der Besitzer ab. Die Belegung endet nach 10 min ohne Claude-Befehl, bei
+    ALLE AUS, Sicherheitsabschaltung, Ablaufstart und Umstellen des Verbunds (Freigeben schaltet nichts ab).
+    `control_blocked`/`at` nennen, an welchem Rechner es hakt. MCP-Hinweistext ergänzt.
+  - Aufzeichnung (PI-33 a): Werte von Partner-Netzteilen, -Lasten und -microHILs laufen jetzt auch in Verlauf und
+    Aufzeichnung (CSV/MF4) des Leitstands, nicht nur in Bedingungen und Bericht (Sekundentakt, Zeitstempel beim
+    Eintreffen). Die Freigabe meldet die Uhrzeit mit Millisekunden (`clock`); weichen die Uhren um mehr als 1 s ab,
+    zeigt der Verbund-Chip einen Hinweis (NTP prüfen).
+  - CAN (PI-28 a): Der Batterie-Simulator-Treiber hört 0x130 mit. Sendet ein anderer Teilnehmer 0x130 (z. B. LabControl
+    am anderen Rechner), wird „Fernsteuerung EIN“ abgelehnt; vor dem ersten Einschalten wird 0,5 s mitgehört. Ein
+    fremder Sender während der eigenen Fernsteuerung steht in Kachel, Freigabe (`foreign_sender`) und Log. 0x130 von
+    Hand oder per CAN-Schritt ist gesperrt, solange am Bus ein Batterie-Simulator hängt oder der Verbund-Partner einen
+    führt.
+  - LAN-Oszilloskop (PI-29 a): Die Freigabe meldet die eingetragenen LAN-Oszilloskope (`lan_scopes`); ist dieselbe
+    Adresse an beiden Rechnern eingetragen, zeigen Verbund-Chip und Einstellungen einen Hinweis.
+  - Belegung erweitern: PartnerLink gab eine alte Belegung bisher in einem eigenen Thread frei -- die neue Anforderung
+    konnte vorher ankommen und an der eigenen alten Belegung scheitern. Freigeben und Belegen laufen jetzt
+    nacheinander im selben Thread.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_verbund_v4.py` (zwei Hauptfenster: Durchreichen, Bedienen über die
+    Freigabe des PCs wie der MCP-Server, Belegung und Sperre beim Besitzer, ALLE AUS, Leerlauf, Abschalten nach 3 s
+    ohne Lebenszeichen, Verlauf/Aufzeichnung, Hinweise, 0x130-Sperre), `check_battsim` um fremde 0x130-Sender
+    erweitert. Alle 37 Prüfungen unter Windows grün, die betroffenen auch unter Linux (WSL). Mit echter Hardware noch
+    nicht geprüft (Batterie-Simulator am Pi, Claude über den PC).
 - **J-Link als Gerät am PC: Flashen, Reset, Anhalten, Starten (0.48.0, Verbund V3, Entscheidung PI-31 a,
   11.11.2026).**
   - Treiber `device-driver/jlink/` über den J-Link Commander, je Bedienung ein eigener Prozess -- LabControl hält den

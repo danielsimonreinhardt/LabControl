@@ -1563,9 +1563,12 @@ class BattSimControlGroup(QGroupBox):
             parts.append(tr("Firmware {v}", v=state["fw_version"]))
         if state.get("tx_error"):
             parts.append(tr("Senden gestört: {err}", err=state["tx_error"]))
+        if state.get("foreign_sender"):   # PI-28
+            parts.append(tr("anderer Rechner sendet 0x130"))
         self._status_label.setText(" · ".join(parts))
         pal = current_palette()
-        color = pal.danger if state.get("failed") else pal.text
+        color = (pal.danger if state.get("failed") or (state.get("foreign_sender") and state.get("remote"))
+                 else pal.warning if state.get("foreign_sender") else pal.text)
         self._status_label.setStyleSheet(f"color: {color}; background: transparent;")
 
     def _on_theme_changed(self, palette: Palette) -> None:

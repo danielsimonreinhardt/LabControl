@@ -89,6 +89,8 @@ BATTSIM_STATE_FIELDS = {
     "controller": ("Regler", ""),
     "supply_current": ("Versorgungsstrom", "A"),
     "fw_version": ("Firmware", ""),
+    # PI-28: ein anderer Teilnehmer sendet 0x130 (1) -- dann ist "Fernsteuerung EIN" hier gesperrt
+    "foreign_sender": ("Anderer 0x130-Sender", ""),
     **{f"cell{n}_voltage": (f"Zelle {n} Istwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
     **{f"cell{n}_setpoint": (f"Zelle {n} Sollwert", "V") for n in range(1, BATTSIM_CELL_COUNT + 1)},
     **{f"cell{n}_on": (f"Zelle {n} ein", "") for n in range(1, BATTSIM_CELL_COUNT + 1)},

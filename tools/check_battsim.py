@@ -68,7 +68,7 @@ def run_mock() -> None:
     sched = CanScheduler(bus, name="test")
     sched.attach(node)
 
-    pump(bus, node, 0.4)
+    pump(bus, node, 0.6)   # > LISTEN_BEFORE_REMOTE_S (PI-28)
     st = node.get_state()
     check(st.online, "online, sobald 0x120 kommt")
     check(st.status == 1, f"Startzustand STANDBY (ist {st.status_name})")
@@ -183,7 +183,7 @@ def run_mock_v2() -> None:
     sched = CanScheduler(bus, name="testv2")
     sched.attach(node)
 
-    pump(bus, node, 0.4)
+    pump(bus, node, 0.6)
     st = node.get_state()
     check(st.online and st.fail_reason == 0 and st.fail_reason_name == "keiner", "0x121 kommt, FAIL-Grund 0 'keiner'")
     check(st.controller_on is True, "Regler ein aus 0x121")
@@ -264,6 +264,57 @@ def run_mock_v2() -> None:
     sched2.stop(send_shutdown=False)
 
 
+def run_single_sender() -> None:
+    """PI-28: nur ein Sender fuer 0x130. Ein fremdes 0x130 (z. B. LabControl am anderen Rechner) sperrt
+    "Fernsteuerung EIN"; vorher wird LISTEN_BEFORE_REMOTE_S lang mitgehoert."""
+    print()
+    print("Nur ein 0x130-Sender (PI-28)")
+    from battsim.driver import FOREIGN_SENDER_HOLD_S
+    from can_bus.driver import CanFrame
+    bus = MockCanBus()
+    sim = SimulatedBattSim(seed=4, firmware="v2")
+    bus.attach_peer(sim)
+    node = BattSim()
+    sched = CanScheduler(bus, name="pi28")
+    sched.attach(node)
+    pump(bus, node, 0.2)
+
+    def refused(fragment: str) -> tuple[bool, str]:
+        try:
+            node.set_remote(True)
+        except BattSimValueError as exc:
+            return fragment in str(exc), str(exc)
+        return False, "angenommen"
+
+    ok, msg = refused("mitgehört")
+    check(ok and node.get_state().remote_requested is False, f"nach 0,2 s noch abgelehnt: {msg}")
+
+    def foreign_traffic(seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            bus._rx_queue.append(CanFrame(CONTROL_ID, bytes([0x21, 0x0A]), False, 0.0))
+            pump(bus, node, 0.1)
+
+    foreign_traffic(0.6)
+    st = node.get_state()
+    check(st.foreign_sender, "fremdes 0x130 erkannt (foreign_sender)")
+    ok, msg = refused("anderer Teilnehmer")
+    check(ok, f"Fernsteuerung EIN bei fremdem Sender abgelehnt: {msg}")
+    check(not [f for f in bus.sent_frames if f.arbitration_id == CONTROL_ID], "dabei kein eigenes 0x130 gesendet")
+    pump(bus, node, FOREIGN_SENDER_HOLD_S + 0.2)
+    check(not node.get_state().foreign_sender, "fremder Sender still -> nach 1 s wieder frei")
+    node.set_remote(True)
+    pump(bus, node, 0.4)
+    check(sim.state == STATUS_REMOTE, "danach Fernsteuerung EIN angenommen")
+    # Fremder Sender taucht WAEHREND der eigenen Fernsteuerung auf: angezeigt, eigenes Senden bleibt
+    foreign_traffic(0.3)
+    st = node.get_state()
+    check(st.foreign_sender and st.remote_requested, "fremder Sender waehrend eigener Fernsteuerung wird angezeigt")
+    node.set_remote(True)   # erneutes EIN bei schon eingeschalteter Fernsteuerung: keine Ablehnung
+    check(True, "erneutes EIN bei eigener Fernsteuerung bleibt erlaubt")
+    sched.stop(send_shutdown=True)
+
+
 def run_worker() -> None:
     """Derselbe Weg wie in der App: DeviceWorker im Simulationsmodus, der
     nachgebildete Simulator haengt am simulierten CAN-Bus."""
@@ -328,6 +379,14 @@ def run_worker() -> None:
     check(act("BS_CELL_VOLT", 4.5, 3)[0], "nach Grenzwert 4,6 V angenommen")
     check(not act("BS_CELL_VOLT", 1.0, 15)[0], "Zelle 15 abgelehnt")
 
+    # PI-28: 0x130 von Hand / aus einem Ablauf ist gesperrt, solange der Treiber am Bus haengt bzw. der
+    # Verbund-Partner einen Simulator fuehrt; andere IDs gehen weiter
+    ok, msg = worker._send_can(dw.SIM_CAN_ID, 0x130, "01 02", False)
+    check(not ok and "0x130" in msg, f"0x130 von Hand abgelehnt ({msg})")
+    check(worker._send_can(dw.SIM_CAN_ID, 0x131, "01", False)[0], "0x131 geht")
+    check(worker._send_can(dw.SIM_CAN_ID, 0x130, "01", True)[0], "Extended-ID 0x130 geht (anderer Frame)")
+    check(st.get("foreign_sender") is False, "Zustands-Dict: foreign_sender False")
+
     worker.all_outputs_off("check")
     spin(0.6)
     st = seen["state"]
@@ -355,6 +414,17 @@ def run_worker() -> None:
     worker.shutdown_can_nodes()
     worker.stop_timers()
     check(bus is not None and closed == [1] and not worker._can_buses, "Beenden schliesst den CAN-Bus")
+
+    # Ohne eigenen Simulator, aber Partner mit Simulator (Verbund): 0x130 ebenfalls gesperrt
+    mock = MockCanBus()
+    worker._can_buses["can:x"] = mock
+    worker._can_stats["can:x"] = [0, 0]
+    check(worker._send_can("can:x", 0x130, "01", False)[0], "ohne Simulator am Bus und ohne Partner: 0x130 geht")
+    worker.set_partner_battsim(True)
+    ok, msg = worker._send_can("can:x", 0x130, "01", False)
+    check(not ok and "Partner" in msg, f"Partner fuehrt Simulator: 0x130 abgelehnt ({msg})")
+    worker.set_partner_battsim(False)
+    del worker._can_buses["can:x"]
 
 
 def run_hardware(args) -> None:
@@ -427,6 +497,7 @@ def main() -> int:
     else:
         run_mock()
         run_mock_v2()
+        run_single_sender()
         run_worker()
     print()
     if FAILS:

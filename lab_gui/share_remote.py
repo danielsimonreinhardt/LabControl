@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 REMOTE_TIMEOUT_S = 8.0
 # ALLE AUS versucht jedes Geraet zweimal (siehe device_worker.all_outputs_off).
 ALL_OFF_TIMEOUT_S = 15.0
+# Aktion an einem Geraet des Verbund-Partners (PI-32 a): ggf. erst belegen, dann wartet der Besitzer
+# selbst bis zu REMOTE_TIMEOUT_S auf sein Geraet.
+PARTNER_TIMEOUT_S = 14.0
 
 # Gleichzeitig auf den Worker wartende Aktionen. Der Rest der 8 Server-Slots
 # (share_server.MAX_CONCURRENT_REQUESTS) bleibt fuer Lesen und ALLE AUS frei.
@@ -78,6 +81,8 @@ class RemoteBridge(QObject):
     # id, device_id, kind, action, value, channel, local (Aufruf vom selben Rechner)
     action_requested = Signal(int, str, str, str, float, int, bool)
     all_off_requested = Signal(int, str)                       # id, client
+    # Verbund (PI-32 a): id, ID beim Partner, qualifizierte ID, kind, action, value, channel, client
+    partner_action_requested = Signal(int, str, str, str, str, float, int, str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -117,14 +122,40 @@ class RemoteBridge(QObject):
                     + (f" kanal={channel}" if channel else ""), result)
         return result
 
+    def submit_partner_action(self, remote_id: str, device_id: str, kind: str, action: str, value: float,
+                              channel: int, client: str) -> RemoteResult:
+        """Aktion an einer durchgereichten Partnerkachel (share_api._partner_tile_action). Dieselbe
+        Drosselung wie eigene Aktionen; ausgefuehrt von partner_passthrough.PartnerPassthrough."""
+        if not self._take_token():
+            result = RemoteResult("error", "rate_limited")
+        elif not self._write_slots.acquire(blocking=False):
+            result = RemoteResult("error", "busy")
+        else:
+            try:
+                result = self._wait(
+                    lambda req_id: self.partner_action_requested.emit(
+                        req_id, remote_id, device_id, kind, action, value, channel, client),
+                    PARTNER_TIMEOUT_S)
+            finally:
+                self._write_slots.release()
+        self._audit(client + " (lokal, Verbund)", f"{device_id} {action}"
+                    + (f" wert={value:g}" if value else "")
+                    + (f" kanal={channel}" if channel else ""), result)
+        return result
+
     def _run_action(self, device_id: str, kind: str, action: str, value: float, channel: int,
                     local: bool) -> RemoteResult:
+        return self._wait(
+            lambda req_id: self.action_requested.emit(req_id, device_id, kind, action, value, channel, local),
+            REMOTE_TIMEOUT_S)
+
+    def _wait(self, emit, timeout_s: float) -> RemoteResult:
         req_id = next(self._ids)
         pending = _Pending()
         with self._lock:
             self._pending[req_id] = pending
-        self.action_requested.emit(req_id, device_id, kind, action, value, channel, local)
-        done = pending.event.wait(REMOTE_TIMEOUT_S)
+        emit(req_id)
+        done = pending.event.wait(timeout_s)
         with self._lock:
             # Kam das Ergebnis nach dem Timeout, findet complete() keinen
             # Eintrag mehr und verwirft es -- der Client bekommt "pending".

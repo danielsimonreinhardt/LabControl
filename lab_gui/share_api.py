@@ -51,6 +51,12 @@ ausgefuehrt ueber `scopes` (im Betrieb scope_service.ScopeService):
 Erfassen braucht Token + Lesen + das eigene Haekchen "Messen" (E1), aber NICHT
 den Hauptschalter: ein Oszilloskop hat keinen Ausgang. Ein Testablauf, der
 das Oszilloskop nutzt, hat Vorrang (409 scope_in_test_run).
+
+Verbund (PI-32 a, seit 0.49.0): Aufrufer auf DIESEM Rechner (MCP-Server am PC) sehen zusaetzlich die
+Kacheln des Verbund-Partners unter "@<rechner>/<id>" (partner_tiles) und koennen sie bedienen. Die
+Befehle gehen ueber den Verbund an den Besitzer, der wie immer selbst prueft; dieser Rechner belegt die
+Geraete dort und haelt das Lebenszeichen (partner_passthrough.py). An andere Aufrufer -- auch an den
+Partner selbst -- wird nichts durchgereicht, sonst kaemen seine Geraete ueber ihn im Kreis zurueck.
 """
 from __future__ import annotations
 
@@ -63,6 +69,7 @@ import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import remote_actions
+import verbund_ids
 from field_catalog import field_info, field_order
 from lease_table import DEFAULT_TTL_S as DEFAULT_LEASE_TTL_S
 from lease_table import LEASE_HEADER, LeaseConflict
@@ -88,6 +95,10 @@ TEXT_TYPE = "text/plain; charset=utf-8"
 # Obergrenze fuer den Rumpf einer POST-Anfrage. Eine Aktion ist ein paar
 # Dutzend Byte gross; alles darueber ist ein Fehler oder ein Angriff.
 MAX_BODY_BYTES = 4096
+
+# Verbund (PI-32 a): so alt darf der letzte Stand des Partners sein, bevor seine Kacheln als veraltet
+# gelten und nicht mehr bedient werden (Abfrage alle 1 s).
+PARTNER_STALE_S = 3.0
 
 
 class Response:
@@ -158,6 +169,45 @@ def visible_tiles(snapshot: dict) -> dict[str, dict]:
         for device_id, entry in devices.items()
         if shared.get(device_id, {}).get("read")
     }
+
+
+def partner_tiles(snapshot: dict) -> dict[str, dict]:
+    """Kacheln des Verbund-Partners fuer Aufrufer auf diesem Rechner (PI-32 a), {} fuer alle anderen.
+
+    Schluessel und "id" sind die qualifizierte Kennung "@<rechner>/<id>", "label" traegt den
+    Partnernamen davor, "partner" nennt Rechner und ID beim Besitzer. Steuerbar ist, was der Partner
+    zum Steuern freigegeben hat; "control_available" verbindet seine Sicht mit der dieses Rechners
+    (Hauptschalter bzw. lokale Ausnahme, Sperrzustand) und mit dem Alter des Stands."""
+    partner = snapshot.get("partner") or {}
+    host = partner.get("host") or ""
+    if not snapshot.get("local") or not host:
+        return {}
+    name = partner.get("name") or host
+    stale = float(partner.get("age_s", 0.0)) > PARTNER_STALE_S
+    own_block = ("remote_control_inactive" if not remote_effective(snapshot)
+                 else "locked" if snapshot.get("lock", "free") != "free" else "")
+    tiles: dict[str, dict] = {}
+    for tile in partner.get("tiles", []):
+        remote_id = tile.get("id") if isinstance(tile, dict) else None
+        if not isinstance(remote_id, str) or not remote_id or verbund_ids.is_qualified(remote_id):
+            continue
+        device_id = verbund_ids.qualify(host, remote_id)
+        item = dict(tile)
+        item.update({"id": device_id, "label": f"{name} · {tile.get('label') or remote_id}",
+                     "partner": {"host": host, "name": name, "id": remote_id}})
+        if stale:
+            item["stale"] = True
+        if item.get("control"):
+            blocked = ("partner_unreachable" if stale else own_block
+                       or ("" if tile.get("control_available") else tile.get("control_blocked") or "partner_blocked"))
+            item["control_available"] = not blocked
+            item["control_blocked"] = blocked
+        tiles[device_id] = item
+    return tiles
+
+
+def _partner_summary(tile: dict) -> dict:
+    return {key: tile.get(key) for key in ("id", "kind", "label", "online", "read", "control", "partner")}
 
 
 def _controllable(snapshot: dict, device_id: str) -> bool:
@@ -312,8 +362,10 @@ def _requested_ids(query: dict, key: str) -> list[str] | None:
 
 def _select(snapshot: dict, ids: list[str] | None) -> list[dict]:
     tiles = visible_tiles(snapshot)
-    chosen = list(tiles) if ids is None else [i for i in ids if i in tiles]
-    return [_tile_detail(i, tiles[i], snapshot) for i in chosen]
+    partner = partner_tiles(snapshot)
+    chosen = (list(tiles) + list(partner) if ids is None
+              else [i for i in ids if i in tiles or i in partner])
+    return [_tile_detail(i, tiles[i], snapshot) if i in tiles else partner[i] for i in chosen]
 
 
 def _int_param(query: dict, key: str, default: int, low: int, high: int) -> int:
@@ -344,6 +396,11 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         "test_running": bool(snapshot.get("test_running")),
         "simulation": bool(app_info.get("simulation")),
         "time": int(time.time()),
+        # Uhrzeit mit Millisekunden (seit 0.49.0): der Verbund-Leitstand prueft damit, ob die Uhren
+        # beider Rechner (NTP) zusammenpassen -- Aufzeichnung und Bericht mischen ihre Zeitstempel.
+        "clock": round(time.time(), 3),
+        # Adressen der hier eingetragenen LAN-Oszilloskope (PI-29 a, Warnung bei doppeltem Eintrag)
+        "lan_scopes": list(app_info.get("lan_scopes", [])),
         "uptime_s": round(app_info.get("uptime_s", 0.0), 1),
         "tiles": len(visible_tiles(snapshot)),
         # Hauptschalter der Fernsteuerung. Ohne ihn geht KEIN Schreiben
@@ -372,13 +429,16 @@ def _tiles(snapshot: dict) -> Response:
     return _json(200, {
         "v": API_VERSION,
         "lock": snapshot.get("lock", "free"),
-        "tiles": [_tile_summary(i, e, snapshot) for i, e in tiles.items()],
+        "tiles": [_tile_summary(i, e, snapshot) for i, e in tiles.items()]
+                 + [_partner_summary(t) for t in partner_tiles(snapshot).values()],
     })
 
 
 def _tile(snapshot: dict, device_id: str) -> Response:
     tiles = visible_tiles(snapshot)
     entry = tiles.get(device_id)
+    if entry is None and device_id in (partner := partner_tiles(snapshot)):
+        return _json(200, {**partner[device_id], "v": API_VERSION})
     if entry is None:
         # Identische Antwort fuer "nicht freigegeben" und "gibt es nicht" --
         # siehe Modul-Docstring.
@@ -472,6 +532,8 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
     if executor is None:
         return _error(501, "not_implemented")
     entry = visible_tiles(snapshot).get(device_id)
+    if entry is None and device_id in (partner := partner_tiles(snapshot)):
+        return _partner_tile_action(snapshot, partner[device_id], body, executor, client)
     if entry is None:
         # Wie beim Lesen: "nicht freigegeben" und "gibt es nicht" sind
         # ununterscheidbar.
@@ -515,6 +577,45 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
     result = executor.submit_action(device_id, kind, action, value, channel, client,
                                     bool(snapshot.get("local")))
     return _result_response(result, {"device": device_id, "action": action,
+                                     **({"value": value} if definition.needs_value else {}),
+                                     **({"channel": channel} if definition.channels else {}),
+                                     **({"message": result.message} if result.message else {})})
+
+
+def _partner_tile_action(snapshot: dict, tile: dict, body: bytes, executor, client: str) -> Response:
+    """Aktion an einer durchgereichten Partnerkachel (PI-32 a). Hier geprueft wird, was DIESER Rechner
+    verantwortet (Hauptschalter/lokale Ausnahme, Sperrzustand, Aktion und Wert laut Partnerkachel);
+    Freigabe, Grenzwerte, Handbedienung und Hauptschalter am Geraet prueft der Besitzer."""
+    if not hasattr(executor, "submit_partner_action"):
+        return _error(501, "not_implemented")
+    payload = _parse_body(body)
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    partner = tile.get("partner", {})
+    if not tile.get("control"):
+        return _error(403, "control_not_permitted", partner=partner.get("name"))
+    blocked = tile.get("control_blocked") or ""
+    if blocked == "remote_control_inactive":
+        # eigener Hauptschalter oder der des Partners -- "at" sagt, welcher
+        at = partner.get("name") if remote_effective(snapshot) else "local"
+        return _error(403, blocked, at=at)
+    if blocked == "locked":
+        return _error(409, "locked", lock=snapshot.get("lock", "free"))
+    if blocked:   # device_offline, partner_unreachable, Sperre beim Partner ...
+        return _error(409, blocked, partner=partner.get("name"))
+    kind = tile.get("kind", "")
+    action = payload.get("action")
+    if not isinstance(action, str):
+        return _error(400, "unknown_action", allowed=list(remote_actions.REMOTE_ACTIONS.get(kind, {})))
+    definition, code, detail = remote_actions.validate(
+        kind, action, payload.get("value"), payload.get("channel"), tile.get("ratings"))
+    if definition is None:
+        return _error(400, code, **detail)
+    value = float(payload["value"]) if definition.needs_value else 0.0
+    channel = int(payload["channel"]) if definition.channels else 0
+    result = executor.submit_partner_action(partner.get("id", ""), tile["id"], kind, action, value, channel,
+                                            client)
+    return _result_response(result, {"device": tile["id"], "action": action,
                                      **({"value": value} if definition.needs_value else {}),
                                      **({"channel": channel} if definition.channels else {}),
                                      **({"message": result.message} if result.message else {})})
@@ -749,10 +850,20 @@ def _post_route(path: str) -> tuple[str, str] | None:
         return None
     prefix, suffix = f"{API_PREFIX}/tiles/", "/actions"
     if path.startswith(prefix) and path.endswith(suffix) and len(path) > len(prefix) + len(suffix):
-        device_id = path[len(prefix):-len(suffix)]
-        if "/" not in device_id:
+        device_id = _route_tile_id(path[len(prefix):-len(suffix)])
+        if device_id:
             return "action", device_id
     return None
+
+
+def _route_tile_id(text: str) -> str:
+    """Kachel-ID aus einem Pfadstueck: ohne "/" oder qualifiziert "@<rechner>/<id>" (Verbund, PI-32 a,
+    der MCP-Server kodiert "/" als %2F, dispatch hat schon dekodiert). "" = keine Kachel-Route."""
+    if "/" not in text:
+        return text
+    if text.startswith("@") and text.count("/") == 1 and not text.endswith("/"):
+        return text
+    return ""
 
 
 _GET_ONLY_PATHS = ("/", "/display", f"{API_PREFIX}/status", f"{API_PREFIX}/tiles",
@@ -767,7 +878,7 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
         # ein Methodenfehler und verraet nichts, was eine Authentifizierung
         # schuetzen muesste.
         tile_prefix = f"{API_PREFIX}/tiles/"
-        is_tile_read = path.startswith(tile_prefix) and "/" not in path[len(tile_prefix):]
+        is_tile_read = path.startswith(tile_prefix) and bool(_route_tile_id(path[len(tile_prefix):]))
         if path in _GET_ONLY_PATHS or is_tile_read:
             return _json(405, {"v": API_VERSION, "error": "method_not_allowed"},
                          {"Allow": "GET, HEAD"})
@@ -888,8 +999,8 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
     if path == f"{API_PREFIX}/values":
         return _values(snapshot, query)
     if path.startswith(f"{API_PREFIX}/tiles/"):
-        device_id = path[len(f"{API_PREFIX}/tiles/"):]
-        if "/" in device_id:
+        device_id = _route_tile_id(path[len(f"{API_PREFIX}/tiles/"):])
+        if not device_id:
             return _error(404, "not_found")
         return _tile(snapshot, device_id)
     return _error(404, "not_found")

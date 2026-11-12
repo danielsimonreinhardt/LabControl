@@ -29,6 +29,13 @@ BatterieSimulator, doc/can-verhalten.md) -- am Geraet noch zu bestaetigen:
 Der Treiber sendet NUR, solange die Fernsteuerung ueber LabControl
 eingeschaltet ist. Sonst wuerde ein zyklisches REMOTE=1 das Geraet aus einer am
 Geraet selbst gewaehlten Fernsteuerung sofort wieder herausholen.
+
+Nur ein Sender fuer 0x130 (Entscheidung PI-28, 11.11.2026): haengen Pi und PC am
+selben Bus, darf nur einer den Simulator steuern -- zwei Alive-Zaehler bringen die
+Firmware in FAIL ("Alive-Fehler 0x130"). Der Treiber hoert deshalb 0x130 mit (eigene
+Frames liefert CanBus.recv nicht, jedes empfangene 0x130 kommt also von einem
+anderen Teilnehmer) und lehnt "Fernsteuerung EIN" ab, solange ein fremder Sender
+aktiv ist oder noch keine LISTEN_BEFORE_REMOTE_S lang mitgehoert wurde.
 """
 from __future__ import annotations
 
@@ -73,6 +80,10 @@ REMOTE_RELEASE_S = 0.5
 # Dauer von MODE=1 beim Zuruecksetzen aus FAIL, bevor wieder MODE=2 kommt
 # (mehrere 0x130-Zyklen, damit die Firmware den Wechsel sicher sieht).
 FAIL_RESET_S = 0.5
+# PI-28: so lange vor "Fernsteuerung EIN" mithoeren (fuenf 0x130-Zyklen eines anderen Senders) ...
+LISTEN_BEFORE_REMOTE_S = 0.5
+# ... und so lange gilt ein fremder Sender nach seinem letzten 0x130 als aktiv.
+FOREIGN_SENDER_HOLD_S = 1.0
 
 # Werte der DBC (VAL_ 304 / VAL_ 288).
 REMOTE_STANDALONE, REMOTE_REMOTE = 1, 2
@@ -148,6 +159,8 @@ class BattSimState:
     limit_active: bool | None = None       # LIMIT-Leitung der 48-V-Versorgung
     supply_current_a: float | None = None
     fw_version: str | None = None
+    # PI-28: ein anderer Teilnehmer sendet 0x130 (z. B. LabControl auf dem anderen Rechner)
+    foreign_sender: bool = False
 
     @property
     def failed(self) -> bool:
@@ -162,7 +175,8 @@ def load_database(path: Path | str = DBC_PATH):
 
 
 class BattSim(CanNode):
-    rx_ids = frozenset((STATUS_ID, STATUS_EXT_ID, *CELL_STATUS_IDS))
+    # CONTROL_ID nur zum Mithoeren (PI-28), siehe Modul-Docstring
+    rx_ids = frozenset((STATUS_ID, STATUS_EXT_ID, CONTROL_ID, *CELL_STATUS_IDS))
 
     def __init__(self, cell_count: int = CELL_COUNT, voltage_limit_v: float = DEFAULT_VOLTAGE_LIMIT_V,
                  dbc_path: Path | str = DBC_PATH) -> None:
@@ -190,6 +204,9 @@ class BattSim(CanNode):
         self._cell_status: list[int | None] = [None] * DBC_CELL_COUNT
         self._ext: dict[str, float | int] = {}
         self._last_ext_at: float | None = None
+        # Mithoeren 0x130 (PI-28)
+        self._listening_since = time.monotonic()
+        self._foreign_control_at: float | None = None
 
     # -- Grenzwert ---------------------------------------------------------
 
@@ -209,9 +226,21 @@ class BattSim(CanNode):
     def set_remote(self, on: bool) -> None:
         """Fernsteuerung ein: REMOTE=2, MODE=2, Ausgang gesperrt (sicherer
         Einstieg in REMOTE/STOP). Aus: REMOTE=1 fuer REMOTE_RELEASE_S, dann
-        endet das Senden."""
+        endet das Senden.
+
+        Ein ist abgelehnt, solange ein anderer Teilnehmer 0x130 sendet oder noch
+        nicht LISTEN_BEFORE_REMOTE_S lang mitgehoert wurde (PI-28)."""
         with self._lock:
             if on:
+                if not self._remote:
+                    now = time.monotonic()
+                    if self._foreign_active(now):
+                        raise BattSimValueError(
+                            "Ein anderer Teilnehmer sendet 0x130 und steuert den Batterie-Simulator "
+                            "(z. B. LabControl auf dem anderen Rechner). Nur ein Rechner darf ihn steuern.")
+                    if now - self._listening_since < LISTEN_BEFORE_REMOTE_S:
+                        raise BattSimValueError(
+                            "Bus wird noch mitgehört (0x130 eines anderen Senders), bitte gleich erneut versuchen")
                 self._active = True
                 self._remote = True
                 self._mode = MODE_ON
@@ -271,6 +300,15 @@ class BattSim(CanNode):
 
     # -- Zustand -----------------------------------------------------------
 
+    def foreign_sender(self, now: float | None = None) -> bool:
+        """Sendet gerade ein anderer Teilnehmer 0x130 (PI-28)?"""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            return self._foreign_active(now)
+
+    def _foreign_active(self, now: float) -> bool:
+        return self._foreign_control_at is not None and now - self._foreign_control_at <= FOREIGN_SENDER_HOLD_S
+
     def online(self, now: float | None = None) -> bool:
         now = time.monotonic() if now is None else now
         with self._lock:
@@ -320,12 +358,18 @@ class BattSim(CanNode):
                 supply_current_a=ext.get("supply_current"),
                 fw_version=(None if "fw_major" not in ext
                             else f"{int(ext['fw_major'])}.{int(ext['fw_minor'])}.{int(ext['fw_patch'])}"),
+                foreign_sender=self._foreign_active(now),
             )
 
     # -- CanNode -----------------------------------------------------------
 
     def on_frame(self, frame: CanFrame) -> None:
         if frame.extended or frame.arbitration_id not in self.rx_ids:
+            return
+        if frame.arbitration_id == CONTROL_ID:
+            # Eigene Frames liefert der Bus nicht zurueck: dieses 0x130 kommt von einem anderen Sender.
+            with self._lock:
+                self._foreign_control_at = time.monotonic()
             return
         try:
             values = self._db.decode_message(frame.arbitration_id, frame.data,

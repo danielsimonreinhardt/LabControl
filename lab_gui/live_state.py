@@ -117,6 +117,15 @@ class LiveState(QObject):
         # Belegungen durch den Verbund-Partner (Verbund V2, PI-25/26): eigene, thread-sichere Tabelle;
         # share_api belegt/verlaengert/gibt frei, MainWindow raeumt Abgelaufenes ab.
         self.leases = LeaseTable()
+        # Verbund-Partner (PI-32 a): seine Kacheln, wie sie der Abfrage-Thread zuletzt geliefert hat --
+        # share_api reicht sie an Aufrufer auf DIESEM Rechner (MCP) durch. {} = kein Partner verbunden.
+        self._partner: dict = {}
+
+    @Slot(object)
+    def set_partner(self, partner: dict | None) -> None:
+        """{"host", "name", "tiles": [...], "received": monotone Zeit} oder None (getrennt/aus)."""
+        with self._lock:
+            self._partner = copy.deepcopy(partner) if partner else {}
 
     # -- Interne Helfer (immer unter gehaltenem Lock aufzurufen) -------------
 
@@ -249,6 +258,7 @@ class LiveState(QObject):
             "controller": _flag(state.get("controller_on")),
             "supply_current": state.get("supply_current"),
             "fw_version": state.get("fw_version"),
+            "foreign_sender": int(bool(state.get("foreign_sender"))),
         }
         for cell in state.get("cells", []):
             n = cell["index"]
@@ -366,6 +376,9 @@ class LiveState(QObject):
             test_running = self._test_running
             remaining = max(0.0, self._remote_until - now)
             safety_limits = copy.deepcopy(self._safety_limits)
+            partner = copy.deepcopy(self._partner)
+        if partner:
+            partner["age_s"] = round(now - partner.pop("received", now), 3)
         # Ausserhalb des Locks: reine Rechnung auf der bereits geloesten Kopie.
         for entry in devices.values():
             age = now - entry.pop("ts")
@@ -383,6 +396,8 @@ class LiveState(QObject):
             # Belegungen durch den Verbund-Partner (PI-25 a), ohne die geheime Belegungs-ID
             "leases": {device_id: {"holder": lease.holder_name(), "run": lease.run}
                        for device_id, lease in self.leases.snapshot().items()},
+            # Verbund-Partner (PI-32 a), {} ohne Verbindung
+            "partner": partner,
         }
 
     def share_config(self) -> dict:

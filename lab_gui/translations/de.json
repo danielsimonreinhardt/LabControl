@@ -429,6 +429,8 @@
   "Zustand: {name}": "Zustand: {name}",
   "Stapel {v} V": "Stapel {v} V",
   "Senden gestört: {err}": "Senden gestört: {err}",
+  "anderer Rechner sendet 0x130": "anderer Rechner sendet 0x130",
+  "Anderer 0x130-Sender": "Anderer 0x130-Sender",
   "Zustand": "Zustand",
   "Ausgang": "Ausgang",
   "Stapel": "Stapel",

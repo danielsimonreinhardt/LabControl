@@ -16,6 +16,7 @@ nicht im Kreis zurueckgereicht wird (main_window._on_share_all_off).
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -54,6 +55,10 @@ class PartnerSnapshot:
     remote_effective: bool = False
     remote_remaining_s: float = 0.0
     tiles: list[dict] = field(default_factory=list)
+    # PI-29: LAN-Oszilloskope, die der Partner eingetragen hat (Adressen)
+    lan_scopes: list[str] = field(default_factory=list)
+    # Uhr des Partners minus eigene Uhr in s (Mitte der Anfrage), None = Partner meldet keine "clock"
+    clock_offset_s: float | None = None
 
 
 def normalize_url(address: str) -> str:
@@ -113,12 +118,16 @@ class PartnerClient:
 
     def snapshot(self) -> PartnerSnapshot:
         """Status und alle freigegebenen Kacheln mit Werten (zwei Anfragen)."""
+        sent = time.time()
         _, status = self._request("GET", "/api/v1/status")
+        received = time.time()
         if status.get("app") != "LabControl":
             raise PartnerError("bad_response", "kein LabControl")
         _, values = self._request("GET", "/api/v1/values")
         remote = status.get("remote_control") or {}
         tiles = values.get("tiles")
+        clock = status.get("clock")
+        scopes = status.get("lan_scopes")
         return PartnerSnapshot(
             host=str(status.get("host") or ""),
             version=str(status.get("version") or ""),
@@ -129,6 +138,9 @@ class PartnerClient:
             remote_effective=bool(remote.get("effective")),
             remote_remaining_s=float(remote.get("remaining_s") or 0.0),
             tiles=[t for t in tiles if isinstance(t, dict)] if isinstance(tiles, list) else [],
+            lan_scopes=[str(s) for s in scopes] if isinstance(scopes, list) else [],
+            clock_offset_s=(float(clock) - (sent + received) / 2
+                            if isinstance(clock, (int, float)) and not isinstance(clock, bool) else None),
         )
 
     def action(self, device_id: str, action: str, value: float | None = None,
