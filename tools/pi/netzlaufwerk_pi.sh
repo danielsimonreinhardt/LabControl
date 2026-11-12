@@ -31,26 +31,50 @@ fi
 
 PASSWORD="${NETZ_PASSWORT:-}"
 if [ -z "$PASSWORD" ]; then
-    read -r -s -p "Passwort fuer $SMB_USER an $SHARE: " PASSWORD
+    if sudo test -f "$CRED"; then
+        read -r -s -p "Passwort fuer $SMB_USER an $SHARE (Enter = gespeichertes behalten): " PASSWORD
+    else
+        read -r -s -p "Passwort fuer $SMB_USER an $SHARE: " PASSWORD
+    fi
     echo
 fi
-[ -n "$PASSWORD" ] || { echo "Kein Passwort -- Abbruch."; exit 1; }
-
 sudo install -d -m 755 /etc/labcontrol
-printf 'username=%s\npassword=%s\n' "$SMB_USER" "$PASSWORD" | sudo install -m 600 -o root -g root /dev/stdin "$CRED"
+if [ -n "$PASSWORD" ]; then
+    printf 'username=%s\npassword=%s\n' "$SMB_USER" "$PASSWORD" | sudo install -m 600 -o root -g root /dev/stdin "$CRED"
+    echo "Zugangsdaten: $CRED (nur root lesbar)"
+elif sudo test -f "$CRED"; then
+    echo "Zugangsdaten: $CRED behalten"
+else
+    echo "Kein Passwort -- Abbruch."
+    exit 1
+fi
 unset PASSWORD
-echo "Zugangsdaten: $CRED (nur root lesbar)"
 
+# LabControl haelt Dateien auf dem Netzlaufwerk offen (Log) -- fuer das Umhaengen anhalten; auch bei
+# einem Abbruch des Skripts danach wieder starten
+systemctl --user stop labcontrol.service 2>/dev/null || true
+trap 'systemctl --user start labcontrol.service 2>/dev/null || true' EXIT
 sudo mkdir -p "$MOUNTPOINT"
 [ -e /etc/fstab.vor-netzlaufwerk ] || sudo cp /etc/fstab /etc/fstab.vor-netzlaufwerk
-OPTS="credentials=$CRED,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,iocharset=utf8,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=15"
-if grep -qs " $MOUNTPOINT " /etc/fstab; then
-    echo "fstab hat schon einen Eintrag fuer $MOUNTPOINT -- unveraendert gelassen"
+# noserverino: die FritzBox liefert instabile Inode-Nummern ("bogus file nlink value 0"), ohne die Option
+# lassen sich offene Dateien nicht erneut oeffnen ("Veraltete Dateizugriffsnummer", 12.11.2026)
+OPTS="credentials=$CRED,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,iocharset=utf8,noserverino,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=15"
+LINE="$SHARE $MOUNTPOINT cifs $OPTS 0 0"
+if grep -qsF "$LINE" /etc/fstab; then
+    echo "fstab: Eintrag fuer $MOUNTPOINT ist aktuell"
+elif grep -qs " $MOUNTPOINT " /etc/fstab; then
+    tmp="$(mktemp)"
+    awk -v mp="$MOUNTPOINT" -v line="$LINE" '$2 == mp { print line; next } { print }' /etc/fstab > "$tmp"
+    sudo install -m 644 -o root -g root "$tmp" /etc/fstab
+    rm -f "$tmp"
+    echo "fstab: Eintrag fuer $MOUNTPOINT aktualisiert"
 else
-    echo "$SHARE $MOUNTPOINT cifs $OPTS 0 0" | sudo tee -a /etc/fstab >/dev/null
+    echo "$LINE" | sudo tee -a /etc/fstab >/dev/null
     echo "fstab: $SHARE -> $MOUNTPOINT (Automount)"
 fi
 UNIT="$(systemd-escape -p --suffix=automount "$MOUNTPOINT")"
+MOUNT_UNIT="$(systemd-escape -p --suffix=mount "$MOUNTPOINT")"
+sudo systemctl stop "$MOUNT_UNIT" 2>/dev/null || true
 sudo systemctl daemon-reload
 sudo systemctl restart "$UNIT"
 
@@ -61,10 +85,10 @@ if ! ls "$TARGET" >/dev/null 2>&1; then
     exit 2
 fi
 probe="$TARGET/.schreibtest-$(hostname)"
-touch "$probe" && rm -f "$probe" && echo "Schreiben in $TARGET: ok"
+echo eins > "$probe" && echo zwei >> "$probe" && grep -q zwei "$probe" && rm -f "$probe" \
+    && echo "Schreiben, Anhaengen und erneutes Oeffnen in $TARGET: ok"
 
 if [ -f "$SETTINGS" ]; then
-    systemctl --user stop labcontrol.service 2>/dev/null || true
     python3 - "$SETTINGS" "$TARGET" <<'EOF'
 import json, sys
 path, target = sys.argv[1], sys.argv[2]
@@ -75,7 +99,6 @@ with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
 print("LabControl: Netzlaufwerk =", target)
 EOF
-    systemctl --user start labcontrol.service 2>/dev/null || true
 else
     echo "Hinweis: $SETTINGS fehlt -- Netzlaufwerk in LabControl unter Einstellungen eintragen: $TARGET"
 fi
