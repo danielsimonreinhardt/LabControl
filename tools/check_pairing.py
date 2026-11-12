@@ -203,7 +203,9 @@ def main() -> int:
     window_a._start_pairing(f"127.0.0.1:{port_b}")
     spin(app, 6.0, lambda: window_b._pair_confirm is not None and window_b._pair_confirm.isVisible())
     window_b._pair_confirm._decide(False)
-    rejected = spin(app, 4.0, lambda: "abgelehnt" in window_a._pair_dialog._status.text())
+    # 10 s: in der Komplett-Pruefung unter Last kam die Ablehnung nach mehr als 4 s an (13.11.2026);
+    # spin endet sofort, sobald sie da ist
+    rejected = spin(app, 10.0, lambda: "abgelehnt" in window_a._pair_dialog._status.text())
     check("Ablehnen an B -> A meldet 'abgelehnt'", rejected, window_a._pair_dialog._status.text())
     check("... Token bei A unveraendert", window_a._settings.partner_config["token"] == "token-B")
     window_a._pair_dialog.accept()

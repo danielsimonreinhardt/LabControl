@@ -7,6 +7,15 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **„Anordnen“ in der Steuerung legte Kacheln unter Linux ans Ende statt in die Zielzelle (0.57.2, CI 13.11.2026).**
+  Die Zielzelle kam aus `QGridLayout.cellRect`; das liefert unter Linux nach dem Umordnen leere Zellen (Höhe 0),
+  die Kachel landete dann in Zeile 10. Die Rasterlinien kommen jetzt aus den echten Positionen der Kacheln
+  (`ControlTab._touch_grid_lines`/`_grid_line`), dieselbe Grundlage wie das Abbild beim Anordnen. Zwei Prüfungen
+  waren nur unter Linux rot und sind jetzt plattformfest: `check_arrange_overlay` zieht auf eine gleich große Kachel,
+  `check_dashboard_relayout` erlaubt ein einmaliges Mitwachsen bei einem neuen, breiteren Messwert auch für die
+  Geometrie (andere Schriftbreiten unter Linux). `check_pairing` wartet bis 10 s auf die Ablehnung (unter Last
+  kam sie nach mehr als 4 s an). **Mock-verifiziert:** alle Prüfungen unter Linux (WSL Ubuntu) und
+  Windows; am Pi (Touch) noch nicht von Hand geprüft.
 - **CAN-Botschaften kamen am Pi stoßweise an (0.57.1, Nutzerfeedback 12.11.2026).** Gemessen am Pi (nur lesend,
   eigener Socket auf can0): alle 8 Botschaften des Batterie-Simulators kommen exakt alle 100,0 ms, der Bus ist
   sauber. LabControl las CAN aber nur einmal je Poll-Zyklus, nach Last (~320 ms) und Netzteilen (je ~100–140 ms) —
@@ -15,7 +24,8 @@ Semantic Versioning (`lab_gui/version.py`).
   DBC-Signale sofort an die Anzeige; die CAN-Knoten (Batterie-Simulator) bekommen die Frames weiter im Worker, in
   Reihenfolge. Der Lese-Thread wartet nie blockierend (CanBus.recv teilt die Sperre mit send), damit die zyklische
   Botschaft 0x130 nicht verzögert wird. **Mock-verifiziert:** neue Prüfung `tools/check_can_reader.py` (gleichmäßig
-  trotz blockiertem Worker, Reihenfolge, Zähler, Fehler, Senden unverzögert, Simulation); am Pi noch nicht im Dienst.
+  trotz blockiertem Worker, Reihenfolge, Zähler, Fehler, Senden unverzögert, Simulation). **Hardware-verifiziert**
+  am Pi seit 12.11. 23:27: rund 80 Frames/s gleichmäßig, `RX dropped` bleibt bei 10.
 
 ### Geändert
 - **Programme koppeln statt Hauptschalter mit Zeitfenster (0.57.0, PI-41 c / PI-44 b, 12.11.2026).**

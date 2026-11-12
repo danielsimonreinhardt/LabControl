@@ -97,7 +97,10 @@ def main() -> int:
         # vorher waren es rund 150 je Sekunde.
         check("Dauerbetrieb (Messwerte laufen ein): keine Dauerschleife von Neuanordnungen", packs["n"] <= 2,
               f"{packs['n']} Packvorgaenge in 3 s")
-        check("Geometrie unveraendert", geometry() == before_geometry)
+        # Unveraendert, sofern die Ratsche nicht gerade (erlaubt, s. o.) gewachsen ist -- unter Linux mit
+        # anderen Schriftbreiten kommt ein neuer Spitzenwert oefter vor (CI 12.11.2026)
+        check("Geometrie unveraendert (ausser nach einem erlaubten Wachstum)",
+              packs["n"] > 0 or geometry() == before_geometry, f"{packs['n']} Packvorgaenge")
 
         # Auf einen ruhigen Moment warten: ein gerade eingelaufener, breiterer Messwert darf die
         # Ratsche legitim wachsen lassen (dann ist die Anordnung noch nicht "aktuell").

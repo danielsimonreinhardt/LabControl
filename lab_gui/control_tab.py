@@ -3297,10 +3297,14 @@ class ControlTab(QWidget):
             col_span = min(col_span, self._max_cols)
             if self._touch_layout:
                 # Touch: Zeilen in natuerlicher Hoehe -> echte Rastergrenzen statt Vielfache der Basiszelle
-                # (sonst landete eine Kachel ab der zweiten Zeile daneben, gemessen 12.11.2026)
-                self._grid.activate()
-                rects[device_id] = self._grid.cellRect(row, col).united(
-                    self._grid.cellRect(row + row_span - 1, col + col_span - 1))
+                # (sonst landete eine Kachel ab der zweiten Zeile daneben, gemessen 12.11.2026). Die Grenzen
+                # kommen aus den Kacheln selbst (_touch_grid_lines), nicht aus QGridLayout.cellRect: das
+                # lieferte unter Linux leere Zellen (Hoehe 0), die Kachel landete am Ende (CI 12.11.2026)
+                tops, lefts = self._touch_grid_lines()
+                top = self._grid_line(tops, row, step_y, margin.top())
+                left = self._grid_line(lefts, col, step_x, margin.left())
+                bottom = self._grid_line(tops, row + row_span, step_y, margin.top()) - self._grid_spacing
+                rects[device_id] = QRect(left, top, col_span * step_x - self._grid_spacing, max(1, bottom - top))
                 continue
             rects[device_id] = QRect(
                 margin.left() + col * step_x, margin.top() + row * step_y,
@@ -3331,21 +3335,53 @@ class ControlTab(QWidget):
         max_row = max(bottoms, default=0)
         return (max(0, min(row, max_row)), max(0, min(col, self._max_cols - col_span)))
 
+    def _touch_grid_lines(self) -> tuple[dict[int, int], dict[int, int]]:
+        """Touch-Profil: obere Kante je Zeile und linke Kante je Spalte, abgelesen an den platzierten,
+        sichtbaren Kacheln (dieselben Rechtecke wie im Abbild beim Anordnen)."""
+        tops: dict[int, int] = {}
+        lefts: dict[int, int] = {}
+        for device_id, (row, col) in self._positions(self._placed_ids()).items():
+            section = self._sections.get(device_id)
+            if section is None or section.isHidden():
+                continue
+            geometry = section.geometry()
+            tops[row] = min(tops.get(row, geometry.top()), geometry.top())
+            lefts[col] = min(lefts.get(col, geometry.left()), geometry.left())
+        return tops, lefts
+
+    @staticmethod
+    def _grid_line(known: dict[int, int], index: int, step: int, start: int) -> int:
+        """Kante der Zeile/Spalte `index`: abgelesen, sonst zwischen den Nachbarn verteilt bzw. mit der
+        Basiszelle fortgesetzt (Zeilen, in denen keine Kachel beginnt; unter der letzten Kachel)."""
+        if index in known:
+            return known[index]
+        below = [i for i in known if i < index]
+        above = [i for i in known if i > index]
+        if below and above:
+            lo, hi = max(below), min(above)
+            return round(known[lo] + (known[hi] - known[lo]) * (index - lo) / (hi - lo))
+        if below:
+            lo = max(below)
+            return known[lo] + (index - lo) * max(1, step)
+        if above:
+            hi = min(above)
+            return known[hi] - (hi - index) * max(1, step)
+        return start + index * max(1, step)
+
     def _nearest_grid_cell(self, x: float, y: float) -> tuple[int, int]:
-        """Touch-Profil: Zeile/Spalte, deren obere linke Ecke (aus dem echten Raster) am naechsten an
-        (x, y) liegt. Unter der letzten Zeile geht es in Schritten der Basiszelle weiter."""
-        self._grid.activate()
-        rows = max(1, self._grid.rowCount())
-        cols = max(1, self._grid.columnCount())
-        tops = [self._grid.cellRect(r, 0).top() for r in range(rows)]
-        lefts = [self._grid.cellRect(0, c).left() for c in range(cols)]
-        last = self._grid.cellRect(rows - 1, 0)
+        """Touch-Profil: Zeile/Spalte, deren obere linke Ecke am naechsten an (x, y) liegt (Kanten aus den
+        Kacheln, _touch_grid_lines). Unter der letzten Zeile geht es in Schritten der Basiszelle weiter."""
+        tops, lefts = self._touch_grid_lines()
         step_y = max(1, self._cell_height + self._grid_spacing)
-        tops.append(last.bottom() + 1 + self._grid_spacing)
-        row = min(range(len(tops)), key=lambda r: (abs(tops[r] - y), r))
-        if y > tops[-1]:
-            row = len(tops) - 1 + round((y - tops[-1]) / step_y)
-        col = min(range(len(lefts)), key=lambda c: (abs(lefts[c] - x), c))
+        step_x = max(1, self._cell_width + self._grid_spacing)
+        margin = self._grid.contentsMargins()
+        last_row = max(tops, default=0) + 1
+        row_tops = [self._grid_line(tops, r, step_y, margin.top()) for r in range(last_row + 1)]
+        col_lefts = [self._grid_line(lefts, c, step_x, margin.left()) for c in range(max(1, self._max_cols))]
+        row = min(range(len(row_tops)), key=lambda r: (abs(row_tops[r] - y), r))
+        if y > row_tops[-1]:
+            row = len(row_tops) - 1 + round((y - row_tops[-1]) / step_y)
+        col = min(range(len(col_lefts)), key=lambda c: (abs(col_lefts[c] - x), c))
         return row, col
 
     def _cells_with_dragged_at(self, dragged_id: str, pos) -> dict[str, tuple[int, int]]:

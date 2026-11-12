@@ -119,13 +119,23 @@ def main() -> int:
           f"Massstab {ctrl_overlay.scale():.2f}, Abbild {ctrl_overlay.height()} px")
     cells_before = dict(w.control_tab._positions(w.control_tab._placed_ids()))
     ids = sorted(crects, key=lambda d: (crects[d].y(), crects[d].x()))
-    a, b = ids[0], ids[-1]
+    a = ids[0]
+    # Ziel: die hinterste gleich grosse Kachel -- auf eine anders grosse Kachel abgelegt rueckt die gezogene
+    # regelgerecht in die naechste freie Zelle (unter Linux sind die Kacheln wegen der Schrift hoeher, CI 12.11.)
+    same = [d for d in ids[1:] if w.control_tab._tile_span(d) == w.control_tab._tile_span(a)]
+    b = same[-1] if same else ids[-1]
+    ct = w.control_tab
+    ct._grid.activate()
+    debug = (f"Abbild-Rechteck {b}: {crects[b].getRect()}, Raster-Zelle {ct._grid.cellRect(*cells_before[b]).getRect()}, "
+             f"Ziel aus Abbild {ct._nearest_grid_cell(crects[b].x(), crects[b].y())}, touch={ct._touch_layout}")
     drag(ctrl_overlay, ctrl_overlay._to_overlay(crects[a]).topLeft() + QPointF(6, 6),
          ctrl_overlay._to_overlay(crects[b]).topLeft() + QPointF(6, 6))
     pump(app)
     cells_after = dict(w.control_tab._positions(w.control_tab._placed_ids()))
     check("Steuerung: Kachel hat die Zelle gewechselt", cells_after.get(a) == cells_before.get(b),
-          f"{a}: {cells_before.get(a)} -> {cells_after.get(a)}, Ziel {cells_before.get(b)}")
+          f"{debug}; {a}: {cells_before.get(a)} -> {cells_after.get(a)}, Ziel {b} {cells_before.get(b)}, "
+          f"Spannen {w.control_tab._tile_span(a)}/{w.control_tab._tile_span(b)}, Spalten {w.control_tab._max_cols}, "
+          f"vorher {sorted(cells_before.items(), key=lambda kv: kv[1])}, nachher {sorted(cells_after.items(), key=lambda kv: kv[1])}")
 
     print("Anordnen aus")
     w._top_bar._arrange_button.setChecked(False)
