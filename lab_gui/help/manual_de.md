@@ -680,10 +680,13 @@ keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
 **Verbund mit einem zweiten LabControl (z. B. Raspberry Pi und PC).** Ganz unten
 im Unterreiter „Netzwerk“ trägt man unter **„Verbund“** die Partner-Adresse
 (z. B. `192.168.178.181:8420`) und den Partner-Token ein und hakt **„Verbund
-aktivieren“** an. Auf dem anderen Rechner muss die Freigabe für **alle Geräte
-im lokalen Netzwerk** laufen, und die gewünschten Geräte müssen dort zum
-**Lesen** (und zum Bedienen zum **Steuern**) freigegeben sein. Die Geräte des
-Partners erscheinen dann in **Übersicht und Steuerung** mit denselben Kacheln
+aktivieren“** an. Auf beiden Rechnern muss die Freigabe für **alle Geräte
+im lokalen Netzwerk** laufen. Der Verbund ist von beiden Rechnern gleichwertig
+bedienbar: Der gekoppelte Partner sieht und bedient **alle** Geräte des anderen
+Rechners, unabhängig von dessen Freigabeliste. Die Freigabeliste gilt weiter für
+alle anderen Zugriffe und für Claude (MCP): Claude bekommt Partnergeräte nur,
+wenn sie dort zum Lesen bzw. Steuern freigegeben sind. Die Geräte des
+Partners erscheinen in **Übersicht und Steuerung** mit denselben Kacheln
 wie eigene Geräte und dem Namen, den sie am Partner haben; einziges Merkmal ist
 das Netzwerk-Symbol hinter dem Kacheltitel (Tooltip: Rechnername). Was über den
 Verbund nicht geht (Handbedienung, OVP/OCP und Speicherplätze des Netzteils,

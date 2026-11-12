@@ -159,6 +159,32 @@ def section_client(app, state, executor, port) -> None:
     state.set_partner_ip("192.168.99.99")
     check("PI-39 b: Verbund-Kopf von fremder Adresse -> remote_control_inactive",
           error_of(lambda: client.action("psu:B1", "PSU_OUT_ON")) == "remote_control_inactive")
+    # Symmetrischer Verbund (0.55.0): der gekoppelte Partner sieht und bedient alle Geraete, auch ohne Freigabeliste
+    state.set_partner_ip("127.0.0.1")
+    tiles = {t["id"]: t for t in client.snapshot().tiles}
+    check("Verbund: Partner sieht auch nicht freigegebene Geraete (FG)", set(tiles) >= {"psu:B1", "load:B1", "fg:B1"},
+          str(set(tiles)))
+    check("Verbund: Partner darf alles Fernsteuerbare (Last ohne 'Steuern', FG)",
+          tiles.get("load:B1", {}).get("control") is True and tiles.get("fg:B1", {}).get("control") is True)
+    check("Verbund: Kachel nennt die Freigabeliste ('shared')",
+          tiles.get("psu:B1", {}).get("shared") == {"read": True, "control": True}
+          and tiles.get("load:B1", {}).get("shared") == {"read": True, "control": False}
+          and tiles.get("fg:B1", {}).get("shared") == {"read": False, "control": False})
+    reply = client.action("fg:B1", "FG_OUT_ON", channel=1)
+    check("Verbund: Bedienen eines nicht freigegebenen Geraets kommt an", reply.get("ok") is True
+          and executor.actions[-1][:2] == ("fg:B1", "FG_OUT_ON"))
+    check("ohne Verbund weiter nur die Freigabeliste",
+          {t["id"] for t in stranger.snapshot().tiles} == {"psu:B1", "load:B1"})
+    # Claude (MCP) am Partner bekommt davon nur die Freigabeliste (share_api.partner_tiles)
+    import share_api
+    mcp = share_api.partner_tiles({"local": True, "remote": {"active": False}, "lock": "free",
+                                   "share": {"local_bypass": True},
+                                   "partner": {"host": "pi", "name": "Pi", "age_s": 0.1,
+                                               "tiles": list(tiles.values())}})
+    check("MCP am Partner: nur freigegebene Geraete, Last nur lesbar",
+          set(mcp) == {"@pi/psu:B1", "@pi/load:B1"} and mcp["@pi/psu:B1"]["control"] is True
+          and mcp["@pi/load:B1"]["control"] is False and not mcp["@pi/load:B1"]["actions"]
+          and "shared" not in mcp["@pi/psu:B1"], str({k: v.get("control") for k, v in mcp.items()}))
     state.set_partner_ip("")
     state.set_remote_control(True, 600.0)
     check("Partner aus -> unreachable",

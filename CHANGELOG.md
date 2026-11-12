@@ -7,6 +7,14 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Verbund in beide Richtungen gleichwertig (0.55.0, Nutzerwunsch 12.11.2026).** Am Pi fehlten die Geräte des PCs,
+  weil dessen Freigabeliste leer war. Jetzt sieht und bedient der gekoppelte Partner (Verbund-Kennung von der
+  eingetragenen Adresse, PI-39 b) **alle** Geräte des anderen Rechners, unabhängig von der Freigabeliste
+  (`share_api.visible_tiles`/`_controllable`). Die Liste gilt weiter für alle anderen Aufrufer und für Claude: Die
+  Kacheln an den Partner tragen die Listen-Freigabe (`shared`), und `partner_tiles` reicht an MCP nur Freigegebenes
+  durch, steuerbar nur mit „Steuern“. **Mock-verifiziert** (`check_partner_link`: Partner sieht/bedient nicht
+  freigegebene Geräte, Fremde weiter nur die Liste, MCP-Durchreichung gefiltert). Zwischen PC und Pi noch nicht
+  ausprobiert.
 - **Knöpfe: Text oder Symbol (0.54.0, Review KN-1 bis KN-16 vom 12.11.2026).** Artefakt „Knöpfe: Text oder Symbol“,
   alle 186 Knöpfe aus PC- und Touch-Ansicht geprüft.
   - **Nur noch Symbol (Name im Tooltip):** J-Link Prüfen, Reset, Anhalten, Starten und Flashen (jetzt Download-Pfeil,

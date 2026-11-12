@@ -651,9 +651,12 @@ to the program.
 **Link with a second LabControl (e.g. Raspberry Pi and PC).** At the bottom of
 the "Network" sub-tab, under **"Linked setup"**, enter the partner address
 (e.g. `192.168.178.181:8420`) and the partner token and tick **"Enable link"**.
-On the other computer the share must run for **all devices on the local
-network**, and the devices you want must be shared there for **reading** (and
-for **control** to operate them). The partner's devices then appear in the
+On both computers the share must run for **all devices on the local network**.
+The link can be operated equally from both computers: the paired partner sees
+and operates **all** devices of the other computer, regardless of its share
+list. The share list still applies to all other access and to Claude (MCP):
+Claude only gets partner devices that are shared there for reading or control.
+The partner's devices then appear in the
 **overview and control view** with the same tiles as your own devices and the
 name they have at the partner; the only difference is the network icon behind
 the tile title (tooltip: computer name). What does not work over the link

@@ -164,12 +164,23 @@ def visible_tiles(snapshot: dict) -> dict[str, dict]:
     Endpoint geht hier durch, damit keiner sie versehentlich umgeht.
     """
     devices = snapshot.get("devices", {})
+    if snapshot.get("verbund"):
+        # Gekoppelter Partner: der Verbund ist von beiden Rechnern gleichwertig bedienbar (Nutzerwunsch
+        # 12.11.2026) -- er sieht alle eigenen Geraete, unabhaengig von der Freigabeliste. Die Liste gilt
+        # fuer alle anderen Aufrufer und fuer Claude am Partner ("shared" in der Kachel, partner_tiles).
+        return dict(devices)
     shared = snapshot.get("share", {}).get("devices", {})
     return {
         device_id: entry
         for device_id, entry in devices.items()
         if shared.get(device_id, {}).get("read")
     }
+
+
+def _list_flags(snapshot: dict, device_id: str) -> dict:
+    """Was die Freigabeliste selbst zu diesem Geraet sagt (ohne Verbund-Sonderrecht)."""
+    flags = snapshot.get("share", {}).get("devices", {}).get(device_id, {})
+    return {"read": bool(flags.get("read")), "control": bool(flags.get("read") and flags.get("control"))}
 
 
 def partner_tiles(snapshot: dict) -> dict[str, dict]:
@@ -193,7 +204,15 @@ def partner_tiles(snapshot: dict) -> dict[str, dict]:
         if not isinstance(remote_id, str) or not remote_id or verbund_ids.is_qualified(remote_id):
             continue
         device_id = verbund_ids.qualify(host, remote_id)
+        # Claude (MCP) bekommt vom Partner nur, was dessen Freigabeliste erlaubt ("shared", seit 0.55.0);
+        # dass der Partner diesem Rechner als Verbund alles zeigt, gilt fuer die Bedienung hier, nicht fuer MCP
+        shared = tile.get("shared")
+        if isinstance(shared, dict) and not shared.get("read"):
+            continue
         item = dict(tile)
+        item.pop("shared", None)
+        if isinstance(shared, dict) and not shared.get("control"):
+            item.update({"control": False, "actions": [], "control_available": False, "control_blocked": ""})
         item.update({"id": device_id, "label": f"{name} · {tile.get('label') or remote_id}",
                      "partner": {"host": host, "name": name, "id": remote_id}})
         if stale:
@@ -218,7 +237,9 @@ def _controllable(snapshot: dict, device_id: str) -> bool:
     steuerbar erscheinen, wenn jemand share_devices von Hand editiert."""
     flags = snapshot.get("share", {}).get("devices", {}).get(device_id, {})
     entry = snapshot.get("devices", {}).get(device_id, {})
-    return bool(flags.get("control")) and entry.get("kind") in remote_actions.CONTROL_KINDS
+    # Gekoppelter Partner: alles Fernsteuerbare, unabhaengig von der Liste (siehe visible_tiles)
+    allowed = bool(flags.get("control")) or bool(snapshot.get("verbund"))
+    return allowed and entry.get("kind") in remote_actions.CONTROL_KINDS
 
 
 def _measure_permitted(snapshot: dict, device_id: str) -> bool:
@@ -320,6 +341,9 @@ def _tile_summary(device_id: str, entry: dict, snapshot: dict) -> dict:
         "online": bool(entry.get("online", True)),
         "read": True,   # in visible_tiles bereits geprueft
         "control": _controllable(snapshot, device_id),
+        # Nur fuer den Verbund-Partner: was die Freigabeliste erlaubt -- danach richtet er die Durchreichung
+        # an Claude (partner_tiles), damit MCP nicht mehr bekommt als freigegeben
+        **({"shared": _list_flags(snapshot, device_id)} if snapshot.get("verbund") else {}),
     }
 
 
