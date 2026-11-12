@@ -74,6 +74,7 @@ from field_catalog import field_info, field_order
 from lease_table import DEFAULT_TTL_S as DEFAULT_LEASE_TTL_S
 from lease_table import LEASE_HEADER, LeaseConflict
 from lease_table import MAX_DEVICES as MAX_LEASE_DEVICES
+from pairing import PAIR_TTL_S, PairBusy
 from share_render import render_display, render_index, render_text
 
 from scope_api.base import ScopeError
@@ -944,6 +945,61 @@ def _lease_renew_release(kind: str, lease_id: str, leases, client: str) -> Respo
     return _json(200, {"v": API_VERSION, "ok": True, "released": lease is not None})
 
 
+# -- Kopplung mit einem zweiten LabControl (pairing.py) -------------------------------
+
+def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: str, pairing,
+                   app_info: dict) -> Response:
+    """POST /pair, GET /pair/<id>, POST /pair/<id>/complete, POST /pair/<id>/cancel -- ohne Token,
+    geschuetzt durch die Bestaetigung am Bildschirm (siehe pairing.py)."""
+    if pairing is None:
+        return _error(501, "not_implemented")
+    share = snapshot.get("share", {})
+    rest = path[len(f"{API_PREFIX}/pair"):].strip("/")
+    pair_id, _, verb = rest.partition("/")
+    if not rest:
+        if method != "POST":
+            return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "POST"})
+        if not share.get("token"):
+            return _error(503, "token_not_configured")
+        payload = _parse_body(body)
+        if payload is None:
+            return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+        port = payload.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+            return _error(400, "invalid_value", field="port")
+        host = payload.get("host") if isinstance(payload.get("host"), str) else ""
+        name = payload.get("name") if isinstance(payload.get("name"), str) else ""
+        try:
+            req = pairing.request(client.split(" ")[0] or "?", host, name, port)
+        except PairBusy:
+            return _error(409, "pair_busy")
+        logger.warning("Kopplung: Anfrage von %s (%s), Code %s", req.client_ip, req.label(), req.code)
+        return _json(200, {"v": API_VERSION, "ok": True, "pair": req.pair_id, "code": req.code,
+                           "expires_s": PAIR_TTL_S, "host": app_info.get("host", "")})
+    if not pair_id or verb not in ("", "complete", "cancel"):
+        return _error(404, "not_found")
+    if verb == "" and method in ("GET", "HEAD"):
+        req = pairing.status(pair_id)
+        if req is None:
+            return _error(404, "unknown_pair")
+        result = {"v": API_VERSION, "status": req.status}
+        if req.status == "accepted":
+            result.update(token=share.get("token", ""), port=share.get("port"), host=app_info.get("host", ""))
+        return _json(200, result)
+    if method != "POST" or verb == "":
+        return _json(405, {"v": API_VERSION, "error": "method_not_allowed"})
+    if verb == "cancel":
+        return _json(200, {"v": API_VERSION, "ok": pairing.cancel(pair_id)})
+    payload = _parse_body(body)
+    token = payload.get("token") if payload else None
+    if not isinstance(token, str) or not token:
+        return _error(400, "invalid_body")
+    if not pairing.complete(pair_id, token):
+        return _error(409, "pair_not_accepted")
+    logger.warning("Kopplung mit %s abgeschlossen", client.split(" ")[0])
+    return _json(200, {"v": API_VERSION, "ok": True})
+
+
 def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
              body: bytes = b"", executor=None, client: str = "", local: bool = False,
              scopes=None) -> Response:
@@ -969,6 +1025,10 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
 
     snapshot = state.snapshot()
     snapshot["local"] = bool(local)
+
+    if path == f"{API_PREFIX}/pair" or path.startswith(f"{API_PREFIX}/pair/"):
+        # Kopplung (pairing.py): ohne Token -- den gibt es erst danach
+        return _dispatch_pair(method, path, snapshot, body, client, getattr(state, "pairing", None), app_info)
 
     scope_route = _scope_route(path)
     if scope_route is not None:

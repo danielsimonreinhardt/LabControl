@@ -791,6 +791,8 @@ class SettingsTab(QWidget):
     share_control_timeout_changed = Signal(int)     # Minuten
     # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
     partner_config_edited = Signal(dict)
+    # Kopplung starten (pairing.py): eingetragene Adresse
+    partner_pair_requested = Signal(str)
     # J-Link (PI-31 a): {"enabled", "device", "interface", "speed", "serial", "commander"}
     jlink_config_edited = Signal(dict)
 
@@ -1316,7 +1318,19 @@ class SettingsTab(QWidget):
         self._partner_address_edit.setPlaceholderText("192.168.178.181:8420")
         self._partner_address_edit.editingFinished.connect(self._emit_partner_config)
         self._partner_address_label = QLabel()
-        form.addRow(self._partner_address_label, self._partner_address_edit)
+        # Kopplung (pairing.py): Token austauschen statt abtippen
+        self._partner_pair_button = QPushButton()
+        self._partner_pair_button.clicked.connect(
+            lambda: self.partner_pair_requested.emit(self._partner_address_edit.text().strip()))
+        self._partner_address_edit.textChanged.connect(
+            lambda text: self._partner_pair_button.setEnabled(bool(text.strip())))
+        self._partner_pair_button.setEnabled(False)
+        address_row = QWidget()
+        address_layout = QHBoxLayout(address_row)
+        address_layout.setContentsMargins(0, 0, 0, 0)
+        address_layout.addWidget(self._partner_address_edit)
+        address_layout.addWidget(self._partner_pair_button)
+        form.addRow(self._partner_address_label, address_row)
         self._partner_token_edit = QLineEdit()
         self._partner_token_edit.setMinimumWidth(260)
         self._partner_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -1341,9 +1355,14 @@ class SettingsTab(QWidget):
             "„Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf "
             "beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, "
             "Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ "
-            "einschalten. Seinen Token hier eintragen."))
+            "einschalten. Dann hier die Adresse eintragen und „Koppeln…“ drücken: Beide Rechner tauschen "
+            "ihre Token selbst aus (oder den Token von Hand eintragen)."))
         self._partner_enabled_checkbox.setText(tr("Verbund aktivieren"))
         self._partner_address_label.setText(tr("Adresse des anderen Rechners:"))
+        self._partner_pair_button.setText(tr("Koppeln…"))
+        self._partner_pair_button.setToolTip(tr(
+            "Fragt beim anderen Rechner an. Beide zeigen denselben Code; dort „Koppeln“ tippen, dann "
+            "tauschen beide ihre Token aus und schalten den Verbund ein."))
         self._partner_token_label.setText(tr("Dessen Token:"))
         self._partner_name_label.setText(tr("Anzeigename (optional):"))
         self._partner_name_edit.setPlaceholderText(tr("Rechnername"))
@@ -1367,6 +1386,7 @@ class SettingsTab(QWidget):
         self._partner_name_edit.setText(config.get("name", ""))
         for widget in widgets:
             widget.blockSignals(False)
+        self._partner_pair_button.setEnabled(bool(self._partner_address_edit.text().strip()))
 
     def set_partner_status(self, text: str, tone: str) -> None:
         """tone: "success", "danger" oder "muted" (theme.set_tone)."""

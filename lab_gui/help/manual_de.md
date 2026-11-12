@@ -681,6 +681,19 @@ am Partner der Hauptschalter „Fernsteuerung“ an ist; der Kopf des Reiters
 sagt, wenn nicht. Jedes Gerät gehört dem Rechner, an dem es steckt: Grenzwerte,
 Handbedienung und Sicherheitsabschaltung prüft immer dieser.
 
+**Koppeln statt Token abtippen.** Am einfachsten trägt man nur die Adresse des
+anderen Rechners ein und drückt **„Koppeln…“**. Beide Rechner zeigen dann
+denselben sechsstelligen Code; am anderen Rechner erscheint „Kopplung
+anfragen“ – stimmt der Code, dort **„Koppeln“** tippen. Danach tauschen beide
+ihre Token aus, tragen sich gegenseitig als Partner ein und schalten den
+Verbund ein; am Pi muss man so nichts abtippen. Die Anfrage gilt 60 Sekunden.
+„Ablehnen“ oder „Abbrechen“ verwerfen sie, es bleibt alles, wie es war.
+Voraussetzung: Am angefragten Rechner läuft die Freigabe für alle Geräte im
+lokalen Netzwerk. Damit der Partner auch den fragenden Rechner erreicht (ALLE AUS
+in beide Richtungen), braucht dieser ebenfalls die Freigabe im lokalen Netzwerk –
+sonst erinnert die Statuszeile daran. Welche Geräte gelesen und gesteuert werden
+dürfen, legt weiterhin jeder Rechner in seiner Freigabeliste fest.
+
 **ALLE AUS wirkt im Verbund auf beide Rechner**: der Knopf, ALLE AUS über MCP
 oder das Netzwerk und eine Sicherheitsabschaltung schalten auch beim Partner
 alles ab. Stop oder Fehler eines Testablaufs betreffen nur den eigenen Rechner.

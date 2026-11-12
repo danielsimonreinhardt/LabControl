@@ -652,6 +652,18 @@ the "remote control" master switch is on at the partner; the tab header says
 so if it is not. Every device belongs to the computer it is plugged into:
 limits, manual control and the safety shutdown are always checked there.
 
+**Pair instead of typing tokens.** The easiest way is to enter only the other
+computer's address and press **"Pair…"**. Both computers then show the same
+six-digit code; the other computer shows "Pairing request" – if the code
+matches, tap **"Pair"** there. Both then exchange their tokens, enter each other
+as partner and switch the link on; nothing has to be typed on the Pi. The
+request is valid for 60 seconds. "Decline" or "Cancel" discard it and nothing
+changes. Requirement: the share for all devices on the local network runs on the
+computer that is asked. So that the partner can also reach the asking computer
+(ALL OFF in both directions), it needs the network share as well – otherwise the
+status bar reminds you. Which devices may be read and controlled is still set by
+each computer in its own share list.
+
 **In a link, ALL OFF acts on both computers**: the button, ALL OFF via MCP or
 the network and a safety shutdown also switch everything off at the partner.
 Stopping a test sequence or a failed step only affects the own computer. The

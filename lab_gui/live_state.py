@@ -40,6 +40,7 @@ from PySide6.QtCore import QObject, Slot
 from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT
 from i18n import tr
 from lease_table import LeaseTable
+from pairing import PairingTable
 
 # Ab wann ein Wert als "steht" gilt. Bewusst identisch zu
 # safety.STALE_TIMEOUT_S (dort loest dieselbe Frist den Watchdog aus) --
@@ -117,6 +118,9 @@ class LiveState(QObject):
         # Belegungen durch den Verbund-Partner (Verbund V2, PI-25/26): eigene, thread-sichere Tabelle;
         # share_api belegt/verlaengert/gibt frei, MainWindow raeumt Abgelaufenes ab.
         self.leases = LeaseTable()
+        # Kopplung mit einem zweiten LabControl (Token austauschen, pairing.py); share_api nimmt Anfragen
+        # an, MainWindow zeigt den Bestaetigungsdialog und uebernimmt das Ergebnis.
+        self.pairing = PairingTable()
         # Verbund-Partner (PI-32 a): seine Kacheln, wie sie der Abfrage-Thread zuletzt geliefert hat --
         # share_api reicht sie an Aufrufer auf DIESEM Rechner (MCP) durch. {} = kein Partner verbunden.
         self._partner: dict = {}

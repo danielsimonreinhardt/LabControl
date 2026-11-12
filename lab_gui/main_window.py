@@ -52,6 +52,8 @@ from settings_tab import SettingsTab
 from share_api import new_token
 from jlink.driver import find_commander as find_jlink_commander
 from jlink_service import JLinkService
+from pairing_dialog import PairConfirmDialog, PairingDialog, PairingSession
+from partner_client import normalize_url
 from partner_link import PartnerLink
 from partner_passthrough import PartnerPassthrough
 from partner_tab import PartnerTab
@@ -459,6 +461,11 @@ class MainWindow(QMainWindow):
     def _wire_partner(self) -> None:
         self.settings_tab.partner_config_edited.connect(lambda cfg: self._settings.set_partner_config(**cfg))
         self._settings.partner_config_changed.connect(self._on_partner_config)
+        # Kopplung (pairing.py): fragende Seite (Knopf "Koppeln…") und bestaetigende Seite (_check_pairing)
+        self.settings_tab.partner_pair_requested.connect(self._start_pairing)
+        self._pair_session: PairingSession | None = None
+        self._pair_dialog: PairingDialog | None = None
+        self._pair_confirm: PairConfirmDialog | None = None
         self._partner.connection_changed.connect(lambda *_: self._render_partner_chip())
         self._partner.snapshot_changed.connect(lambda *_: self._render_partner_chip())
         self._partner.snapshot_changed.connect(self._on_partner_snapshot)
@@ -723,8 +730,85 @@ class MainWindow(QMainWindow):
 
     # -- Verbund V2: Besitzer (PI-25 a, PI-26 a) -------------------------------
 
+    # -- Kopplung: Token austauschen statt abtippen (pairing.py) ----------------
+
+    def _start_pairing(self, address: str) -> None:
+        """Fragende Seite: Anfrage an die eingetragene Adresse, Dialog mit Code."""
+        url = normalize_url(address)
+        if not url:
+            self.statusBar().showMessage(tr("Adresse ungültig: {address}", address=address), 8000)
+            return
+        if self._pair_session is not None:
+            return   # laeuft schon
+        if not self._settings.share_config["token"]:
+            self._settings.set_share_token(new_token())   # der Partner braucht einen Token von hier
+        share = self._settings.share_config
+        session = PairingSession(url, app_logging.host_name(), "", share["port"], share["token"], self)
+        dialog = PairingDialog(address, session, self)
+        session.finished.connect(
+            lambda ok, message, detail, result: self._on_pairing_finished(address, ok, message, detail, result))
+        self._pair_session, self._pair_dialog = session, dialog
+        logger.info("Kopplung: Anfrage an %s", url)
+        dialog.open()
+        session.start()
+
+    def _on_pairing_finished(self, address: str, ok: bool, message: str, detail: str, result: dict) -> None:
+        self._pair_session = None
+        if not ok:
+            logger.warning("Kopplung mit %s nicht abgeschlossen: %s%s", address, message,
+                           f" ({detail})" if detail else "")
+            return
+        self._settings.set_partner_config(enabled=True, address=address, token=result.get("token", ""))
+        logger.warning("Kopplung mit %s (%s): Token ausgetauscht, Verbund eingeschaltet",
+                       result.get("host") or "?", address)
+        self._pairing_share_hint(result.get("host") or address)
+
+    def _pairing_share_hint(self, partner: str) -> None:
+        """Erreicht der Partner diesen Rechner? Sonst Hinweis (die Freigabe stellt der Nutzer selbst um)."""
+        share = self._settings.share_config
+        if share["enabled"] and share["bind"] != "127.0.0.1":
+            self.statusBar().showMessage(tr("Gekoppelt mit {name}", name=partner), 10000)
+            return
+        self.statusBar().showMessage(tr(
+            "Gekoppelt mit {name}. Damit {name} diesen Rechner erreicht (ALLE AUS, Verbund-Reiter), hier unter "
+            "Netzwerk die Freigabe für alle Geräte im lokalen Netzwerk einschalten.", name=partner), 20000)
+
+    def _check_pairing(self) -> None:
+        """Bestaetigende Seite (alle 250 ms): neue Anfrage -> Dialog, erledigte/abgebrochene -> Dialog zu,
+        abgeschlossene -> Verbund-Einstellungen uebernehmen."""
+        table = self._live_state.pairing
+        req = table.take_new()
+        if req is not None:
+            if self._pair_confirm is not None:
+                self._pair_confirm.done(0)
+            logger.warning("Kopplung: Anfrage von %s (%s), Code %s", req.label(), req.client_ip, req.code)
+            dialog = PairConfirmDialog(req.pair_id, req.label(), req.client_ip, req.code, self)
+            dialog.decided.connect(self._on_pair_decided)
+            self._pair_confirm = dialog
+            dialog.open()
+        confirm = self._pair_confirm
+        if confirm is not None:
+            current = table.current()
+            if current is None or current.pair_id != confirm.pair_id or current.status != "pending":
+                if confirm.isVisible():
+                    confirm.done(0)   # abgebrochen oder abgelaufen; done() meldet kein "decided"
+                if current is None or current.status not in ("accepted",):
+                    self._pair_confirm = None
+        done = table.take_done()
+        if done is not None:
+            self._pair_confirm = None
+            self._settings.set_partner_config(enabled=True, address=done.address(), token=done.peer_token)
+            logger.warning("Kopplung mit %s (%s): Token ausgetauscht, Verbund eingeschaltet",
+                           done.label(), done.address())
+            self._pairing_share_hint(done.label())
+
+    def _on_pair_decided(self, pair_id: str, accept: bool) -> None:
+        if self._live_state.pairing.decide(pair_id, accept):
+            logger.warning("Kopplung %s", "bestätigt" if accept else "abgelehnt")
+
     def _check_leases(self) -> None:
         """Alle 250 ms: Belegungen ohne Lebenszeichen abschalten, Kacheln sperren/freigeben."""
+        self._check_pairing()
         leases = self._live_state.leases
         for lease in leases.pop_expired():
             names = ", ".join(self._device_labels.get(d, d) for d in lease.devices)

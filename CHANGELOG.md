@@ -7,6 +7,20 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Verbund: Koppeln statt Token abtippen (0.50.0, Nutzerwunsch 12.11.2026).**
+  - Einstellungen → Netzwerk → Verbund: Adresse eintragen, **„Koppeln…“**. Beide Rechner zeigen denselben
+    6-stelligen Code, am anderen erscheint „Kopplung anfragen“ mit „Koppeln“/„Ablehnen“. Nach der Bestätigung
+    tauschen beide ihre Token aus, tragen sich gegenseitig als Partner ein (der Gefragte nimmt Absenderadresse und
+    gemeldeten Port) und schalten den Verbund ein -- am Pi muss nichts getippt werden.
+  - Neue Routen `/api/v1/pair` (Anfrage), `/pair/<id>` (Stand, nach Bestätigung mit Token), `/pair/<id>/complete`
+    und `/cancel`, ohne Token. Geschützt durch die Bestätigung am Bildschirm mit Code-Vergleich, eine geheime
+    Anfrage-ID (128 Bit), 60 s Frist, höchstens eine offene Anfrage und 3 s Sperre nach Ablehnen/Abbruch
+    (`lab_gui/pairing.py`, `pairing_dialog.py`). Der eigene Token wird erst nach der Bestätigung übergeben; fehlt
+    einer, wird er vorher erzeugt. Die Freigabe-Einstellung (lokales Netz) stellt LabControl nicht selbst um, die
+    Statuszeile erinnert daran.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_pairing.py` (Tabelle, Routen, zwei Hauptfenster: Koppeln mit
+    Verbindungsaufbau, Ablehnen, Abbrechen). Alle 38 Prüfungen unter Windows grün, die betroffenen auch unter Linux.
+    Zwischen PC und Pi noch nicht ausprobiert.
 - **Verbund Pi + PC, Stufe V4: Claude über den PC, gemeinsame Aufzeichnung, ein 0x130-Sender, LAN-Oszilloskop an
   einem Rechner (0.49.0, Entscheidungen PI-28 a, PI-29 a, PI-32 a, PI-33 a, 12.11.2026).**
   - Claude/MCP (PI-32 a): Der MCP-Server spricht weiter nur mit dem PC. Dessen Freigabe zeigt Aufrufern auf demselben

@@ -430,6 +430,7 @@
   "Stapel {v} V": "Stapel {v} V",
   "Senden gestört: {err}": "Senden gestört: {err}",
   "anderer Rechner sendet 0x130": "anderer Rechner sendet 0x130",
+  "Gekoppelt mit {name}. Damit {name} diesen Rechner erreicht (ALLE AUS, Verbund-Reiter), hier unter Netzwerk die Freigabe für alle Geräte im lokalen Netzwerk einschalten.": "Gekoppelt mit {name}. Damit {name} diesen Rechner erreicht (ALLE AUS, Verbund-Reiter), hier unter Netzwerk die Freigabe für alle Geräte im lokalen Netzwerk einschalten.",
   "Anderer 0x130-Sender": "Anderer 0x130-Sender",
   "Zustand": "Zustand",
   "Ausgang": "Ausgang",
@@ -452,5 +453,5 @@
   "Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.": "Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.",
   "Anzeige leeren": "Anzeige leeren",
   "Δt": "Δt",
-  "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter „Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ einschalten. Seinen Token hier eintragen.": "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter „Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ einschalten. Seinen Token hier eintragen."
+  "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter „Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ einschalten. Dann hier die Adresse eintragen und „Koppeln…“ drücken: Beide Rechner tauschen ihre Token selbst aus (oder den Token von Hand eintragen).": "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter „Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ einschalten. Dann hier die Adresse eintragen und „Koppeln…“ drücken: Beide Rechner tauschen ihre Token selbst aus (oder den Token von Hand eintragen)."
 }

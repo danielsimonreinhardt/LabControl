@@ -173,6 +173,26 @@ class PartnerClient:
     def lease_release(self, lease: str) -> None:
         self._request("POST", f"/api/v1/leases/{lease}/release", {})
 
+    # -- Kopplung (pairing.py; ohne Token, den gibt es erst danach) ---------------------
+
+    def pair_request(self, host: str, name: str, port: int) -> dict:
+        """Kopplungsanfrage an den anderen Rechner: {"pair", "code", "expires_s", "host"}."""
+        _, payload = self._request("POST", "/api/v1/pair", {"host": host, "name": name, "port": port})
+        if not isinstance(payload.get("pair"), str) or not isinstance(payload.get("code"), str):
+            raise PartnerError("bad_response", "keine Kopplungs-ID")
+        return payload
+
+    def pair_status(self, pair_id: str) -> dict:
+        """{"status": pending|accepted|rejected|cancelled|expired|done, nach "accepted" auch token/port/host}."""
+        _, payload = self._request("GET", f"/api/v1/pair/{pair_id}", timeout=3.0)
+        return payload
+
+    def pair_complete(self, pair_id: str, token: str) -> None:
+        self._request("POST", f"/api/v1/pair/{pair_id}/complete", {"token": token})
+
+    def pair_cancel(self, pair_id: str) -> None:
+        self._request("POST", f"/api/v1/pair/{pair_id}/cancel", {}, timeout=2.0)
+
     def all_off(self) -> dict:
         _, payload = self._request("POST", "/api/v1/all-off", {}, ALL_OFF_TIMEOUT_S)
         return payload
