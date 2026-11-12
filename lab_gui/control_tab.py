@@ -522,6 +522,35 @@ class LoadControlGroup(QGroupBox):
         self._input_on = on
         self._update_input_buttons()
 
+    # Geraetestand in die Felder (PI-43 b): nur bei Aenderung am Geraet und nie in ein Feld, in dem gerade
+    # jemand tippt -- der Verbund-Partner meldet jede Sekunde, der eigene Worker nach jeder Bedienung
+    _LOAD_FUNCTION_CODES = {"CC": "CURR", "CV": "VOLT", "CR": "RES", "CW": "POW"}
+
+    def set_device_mode(self, function_code: str) -> None:
+        code = self._LOAD_FUNCTION_CODES.get(str(function_code).upper(), str(function_code).upper())
+        if code not in LOAD_MODES or code == getattr(self, "_device_mode", None):
+            return
+        self._device_mode = code
+        if self._mode_combo.hasFocus() or self._mode_combo.view().isVisible() or self._setpoint_spin.hasFocus():
+            return
+        index = self._mode_combo.findData(code)
+        if index >= 0 and index != self._mode_combo.currentIndex():
+            self._mode_combo.setCurrentIndex(index)   # -> _on_mode_index_changed: Einheit und Bereich
+
+    def set_device_setpoint(self, mode_code: str, value: float) -> None:
+        key = (str(mode_code), round(float(value), 6))
+        if key == getattr(self, "_device_setpoint", None):
+            return
+        self._device_setpoint = key
+        if self._setpoint_spin.hasFocus() or self._mode_combo.hasFocus() or self._mode_combo.view().isVisible():
+            return
+        index = self._mode_combo.findData(key[0])
+        if index >= 0 and index != self._mode_combo.currentIndex():
+            self._mode_combo.setCurrentIndex(index)
+        self._setpoint_spin.blockSignals(True)
+        self._setpoint_spin.setValue(key[1])
+        self._setpoint_spin.blockSignals(False)
+
     def _update_input_buttons(self) -> None:
         _style_toggle_buttons(self._on_button, self._off_button, self._input_on, current_palette())
 
@@ -775,9 +804,16 @@ class PsuControlGroup(QGroupBox):
             widget.setEnabled(not manual)
 
     def set_setpoints(self, volts: float, amps: float) -> None:
-        """Uebernimmt die Sollwerte des Geraets (beim Verbinden und nach der Handbedienung). Nur
-        die Felder, es wird nichts gesendet."""
-        for spin, value in ((self._voltage_spin, volts), (self._current_spin, amps)):
+        """Uebernimmt die Sollwerte des Geraets (beim Verbinden, nach der Handbedienung und seit 0.56.0 nach
+        jeder Aenderung, auch vom Verbund-Partner, PI-43 b). Nur die Felder, es wird nichts gesendet; nur bei
+        Aenderung am Geraet und nie in ein Feld, in dem gerade jemand tippt (der Partner meldet jede Sekunde)."""
+        last = getattr(self, "_device_setpoints", None)
+        self._device_setpoints = (round(float(volts), 6), round(float(amps), 6))
+        for n, (spin, value) in enumerate(((self._voltage_spin, volts), (self._current_spin, amps))):
+            if last is not None and abs(last[n] - float(value)) < 1e-6:
+                continue
+            if spin.hasFocus():
+                continue
             spin.blockSignals(True)
             spin.setValue(value)
             spin.blockSignals(False)
@@ -2959,14 +2995,15 @@ class ControlTab(QWidget):
         return self._sections.get(device_id)
 
     def set_remote(self, device_id: str, host: str) -> None:
-        """Kachel eines Partnergeraets: Symbol hinter dem Titel, Umbenennen (lokal) und nicht fernsteuerbare
-        Bedienelemente ausgeblendet. Sonst dieselbe Kachel wie fuer ein eigenes Geraet."""
+        """Kachel eines Partnergeraets: Symbol hinter dem Titel, nicht fernsteuerbare Bedienelemente
+        ausgeblendet. Sonst dieselbe Kachel wie fuer ein eigenes Geraet; Umbenennen und Farbe gehen seit
+        0.56.0 an den Besitzer (PI-43 b, MainWindow._on_rename_requested/_on_panel_color_requested)."""
         section = self._sections.get(device_id)
         if section is None:
             return
         from remote_badge import attach
         attach(section, host)
-        names = ("_rename_button",) + self._REMOTE_HIDDEN.get(self._section_kind.get(device_id, ""), ())
+        names = self._REMOTE_HIDDEN.get(self._section_kind.get(device_id, ""), ())
         for name in names:
             found = getattr(section, name, None)
             for widget in (found if isinstance(found, list) else [found]):
@@ -3530,6 +3567,16 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, LoadControlGroup):
             section.set_input_state(on)
+
+    def set_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, LoadControlGroup):
+            section.set_device_setpoint(mode_code, value)
+
+    def set_load_mode(self, device_id: str, function_code: str) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, LoadControlGroup):
+            section.set_device_mode(function_code)
 
     def set_psu_output_state(self, device_id: str, on: bool) -> None:
         section = self._sections.get(device_id)

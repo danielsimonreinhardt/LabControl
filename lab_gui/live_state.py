@@ -127,6 +127,16 @@ class LiveState(QObject):
         # IP-Adresse des gekoppelten Partners (PI-39 b): Anfragen mit Verbund-Kopf von dieser Adresse
         # brauchen keinen Hauptschalter (share_api.is_partner_caller). "" = kein Verbund.
         self._partner_ip = ""
+        # Kachelfarbe je eigenem Geraet (Settings.panel_color): der Verbund-Partner zeigt sie mit (PI-43 b)
+        self._colors: dict[str, str] = {}
+
+    @Slot(str, object)
+    def set_panel_color(self, device_id: str, color_key) -> None:
+        with self._lock:
+            if color_key:
+                self._colors[device_id] = str(color_key)
+            else:
+                self._colors.pop(device_id, None)
 
     def set_partner_ip(self, ip: str) -> None:
         with self._lock:
@@ -213,6 +223,10 @@ class LiveState(QObject):
     @Slot(str, bool)
     def on_load_input_state(self, device_id: str, on: bool) -> None:
         self._write(device_id, input=int(bool(on)))
+
+    @Slot(str, str, float)
+    def on_load_setpoint(self, device_id: str, mode_code: str, value: float) -> None:
+        self._write(device_id, setpoint=float(value), setpoint_mode=str(mode_code))
 
     @Slot(str, float, float)
     def on_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
@@ -402,6 +416,7 @@ class LiveState(QObject):
             safety_limits = copy.deepcopy(self._safety_limits)
             partner = copy.deepcopy(self._partner)
             partner_ip = self._partner_ip
+            colors = dict(self._colors)
         if partner:
             partner["age_s"] = round(now - partner.pop("received", now), 3)
         # Ausserhalb des Locks: reine Rechnung auf der bereits geloesten Kopie.
@@ -424,6 +439,7 @@ class LiveState(QObject):
             # Verbund-Partner (PI-32 a), {} ohne Verbindung
             "partner": partner,
             "partner_ip": partner_ip,
+            "colors": colors,
         }
 
     def share_config(self) -> dict:

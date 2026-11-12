@@ -351,6 +351,8 @@ class DeviceWorker(QObject):
     # device_id, Sollspannung (V), Sollstrom (A) laut Geraet: beim Verbinden und nach der
     # Handbedienung, damit die Felder der Kachel nicht veraltete Werte zeigen.
     psu_setpoints = Signal(str, float, float)
+    # device_id, Modus (CURR/VOLT/RES/POW), Sollwert -- nach jedem erfolgreich gesetzten Last-Sollwert (PI-43 b)
+    load_setpoint = Signal(str, str, float)
     # device_id, Handbedienung an/aus (siehe set_psu_manual)
     psu_manual_state = Signal(str, bool)
     psu_limits = Signal(str, float, float)   # device_id, OVP (V), OCP (A) -- siehe _emit_psu_limits
@@ -480,6 +482,8 @@ class DeviceWorker(QObject):
         self._fg_probe_after: dict[str, float] = {}
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
+        # Zuletzt bekannte Sollwerte je Netzteil [V, A] (_note_setpoint, PI-43 b)
+        self._psu_setpoints: dict[str, list[float]] = {}
         self._can_buses: dict[str, CanBus] = {}
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
@@ -1531,7 +1535,7 @@ class DeviceWorker(QObject):
         passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an)."""
         self._emit_psu_ratings(device_id)
         self._emit_psu_limits(device_id)
-        self._guard_psu(device_id, lambda psu: self.psu_setpoints.emit(device_id, *psu.get_setpoint()))
+        self._guard_psu(device_id, lambda psu: self._remember_psu_setpoints(device_id, *psu.get_setpoint()))
         self._guard_psu(device_id, lambda psu: self._emit_psu_output(device_id, psu.get_output()))
 
     def _emit_psu_ratings(self, device_id: str) -> None:
@@ -2310,7 +2314,26 @@ class DeviceWorker(QObject):
                  run: Callable[[], tuple[bool, str]]) -> tuple[bool, str]:
         ok, message = run()
         self._log_operation(kind, device_id, action, value, channel, self._operation_source, ok, message)
+        if ok:
+            self._note_setpoint(kind, device_id, action, value)
         return ok, message
+
+    def _note_setpoint(self, kind: str, device_id: str, action: str, value: float) -> None:
+        """Neuer Sollwert erfolgreich gesetzt -> melden, egal woher die Bedienung kam (Kachel, Verbund-Partner,
+        MCP, Testablauf, Preset). Die Kacheln an beiden Rechnern folgen damit dem Geraet (PI-43 b)."""
+        if kind == "psu" and action in ("PSU_VOLT", "PSU_CURR"):
+            setpoints = self._psu_setpoints.get(device_id)
+            if setpoints is None:
+                self._guard_psu(device_id, lambda psu: self._remember_psu_setpoints(device_id, *psu.get_setpoint()))
+                return
+            setpoints[0 if action == "PSU_VOLT" else 1] = float(value)
+            self.psu_setpoints.emit(device_id, setpoints[0], setpoints[1])
+        elif kind == "load" and action in ("CURR", "VOLT", "RES", "POW"):
+            self.load_setpoint.emit(device_id, action, float(value))
+
+    def _remember_psu_setpoints(self, device_id: str, volts: float, amps: float) -> None:
+        self._psu_setpoints[device_id] = [float(volts), float(amps)]
+        self.psu_setpoints.emit(device_id, float(volts), float(amps))
 
     @staticmethod
     def _log_operation(kind: str, device_id: str, action: str, value: float, channel: int, source: str,
@@ -2409,6 +2432,8 @@ class DeviceWorker(QObject):
                     "POW": "set_power",
                 }[action]
                 ok, message = self._guard_load(device_id, lambda load: getattr(load, setter_name)(value))
+                if ok:
+                    self._note_setpoint("load", device_id, action, value)
                 return ok, message, 0.0
             if action == "OUT_ON":
                 ok, message = self._guard_load(device_id, lambda load: load.set_input(True))
@@ -2421,9 +2446,13 @@ class DeviceWorker(QObject):
         if kind == "psu":
             if action == "PSU_VOLT":
                 ok, message = self._guard_psu(device_id, lambda psu: psu.set_voltage(value))
+                if ok:
+                    self._note_setpoint("psu", device_id, action, value)
                 return ok, message, 0.0
             if action == "PSU_CURR":
                 ok, message = self._guard_psu(device_id, lambda psu: psu.set_current(value))
+                if ok:
+                    self._note_setpoint("psu", device_id, action, value)
                 return ok, message, 0.0
             if action in ("PSU_OUT_ON", "PSU_OUT_OFF"):
                 # Reine Schaltaktion (siehe BUGS.md #17): Spannungs- und Stromsollwert bleiben

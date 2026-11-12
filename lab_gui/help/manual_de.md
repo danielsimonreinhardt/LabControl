@@ -692,7 +692,14 @@ das Netzwerk-Symbol hinter dem Kacheltitel (Tooltip: Rechnername). Was über den
 Verbund nicht geht (Handbedienung, OVP/OCP und Speicherplätze des Netzteils,
 PWM und 12-V-Ausgänge des microHIL, der Grenzwert des Batterie-Simulators,
 CAN-Frames senden), fehlt in der Partnerkachel; der CAN-Bus des Partners steht
-nur in der Übersicht. Der gekoppelte Partner braucht dort keinen Hauptschalter:
+nur in der Übersicht. **Beide Rechner zeigen dasselbe:** Die Felder einer Kachel
+(Sollspannung, Strombegrenzung, Last-Modus und -Sollwert, Funktionsgenerator,
+Zellwerte) folgen dem Gerät, egal an welchem Rechner, über Claude oder im
+Testablauf bedient wurde; ein Feld, in dem gerade jemand tippt, bleibt
+unangetastet. Name und Kachelfarbe gehören dem Rechner, an dem das Gerät steckt.
+Umbenennen oder Umfärben in einer Partnerkachel ändert sie dort, und beide Rechner
+zeigen das Ergebnis. Die Anordnung der Kacheln hat jeder Rechner für sich. Der
+gekoppelte Partner braucht dort keinen Hauptschalter:
 Die Kopplung, bei der an beiden Rechnern derselbe Code bestätigt wird, ist die
 Freigabe. Erkannt wird er an der Verbund-Kennung **und** an der eingetragenen
 Partner-Adresse. Bedienen geht, solange am Partner weder ein Testablauf läuft

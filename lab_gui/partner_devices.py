@@ -113,6 +113,10 @@ class PartnerDevices(QObject):
     hil_relay_state = Signal(str, list)
     hil_analog_input = Signal(str, list)
     action_failed = Signal(str, str, str)      # "@host/id", Aktion, Grund (Bedienung aus einer Kachel)
+    # PI-43 b: Name und Kachelfarbe kommen vom Besitzer, Last-Sollwert folgt dem Geraet
+    label_changed = Signal(str, str, str)      # kind, "@host/id", Name
+    color_changed = Signal(str, object)        # "@host/id", Farbschluessel oder None
+    load_setpoint = Signal(str, str, float)    # "@host/id", Modus (CURR/VOLT/RES/POW), Wert
 
     def __init__(self, link, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -120,6 +124,7 @@ class PartnerDevices(QObject):
         self._known: dict[str, tuple[str, str]] = {}    # rid -> (kind, label)
         self._online: dict[str, bool] = {}
         self._control: dict[str, bool] = {}
+        self._colors: dict[str, str | None] = {}
         self._requests: dict[int, str] = {}             # eigene Aktionsanfragen -> rid
         self._host = ""
         link.snapshot_changed.connect(self.on_snapshot)
@@ -154,9 +159,16 @@ class PartnerDevices(QObject):
             rid = qualify(self._host, tile_id)
             seen.add(rid)
             label = str(tile.get("label") or tile_id)
-            if self._known.get(rid) != (kind, label):
+            previous = self._known.get(rid)
+            if previous is None or previous[0] != kind:
                 self._known[rid] = (kind, label)
                 self.device_known.emit(kind, rid, label)
+            elif previous[1] != label:   # am Besitzer umbenannt (auch von hier aus, PI-43 b)
+                self._known[rid] = (kind, label)
+                self.label_changed.emit(kind, rid, label)
+            if "color" in tile and (rid not in self._colors or self._colors[rid] != tile.get("color")):
+                self._colors[rid] = tile.get("color") or None
+                self.color_changed.emit(rid, self._colors[rid])
             online = bool(tile.get("online", True)) and not tile.get("stale")
             self._set_online(kind, rid, online)
             self._set_control(rid, online and allowed and bool(tile.get("control"))
@@ -167,6 +179,7 @@ class PartnerDevices(QObject):
             kind, _label = self._known.pop(rid)
             self._online.pop(rid, None)
             self._control.pop(rid, None)
+            self._colors.pop(rid, None)
             self.device_forgotten.emit(kind, rid)
 
     def forget_all(self) -> None:
@@ -175,6 +188,7 @@ class PartnerDevices(QObject):
         self._known.clear()
         self._online.clear()
         self._control.clear()
+        self._colors.clear()
 
     def _set_online(self, kind: str, rid: str, online: bool) -> None:
         if self._online.get(rid) != online:
@@ -203,6 +217,8 @@ class PartnerDevices(QObject):
                 self.load_function_state.emit(rid, str(f.get("mode")))
             if "input" in f:
                 self.load_input_state.emit(rid, bool(_flag(f.get("input"))))
+            if f.get("setpoint_mode") and f.get("setpoint") is not None:
+                self.load_setpoint.emit(rid, str(f.get("setpoint_mode")), _num(f.get("setpoint")))
         elif kind == "can":
             self.can_stats.emit(rid, int(_num(f.get("tx_count"))), int(_num(f.get("rx_count"))))
         elif kind == "battsim":
@@ -229,6 +245,17 @@ class PartnerDevices(QObject):
         _host, tile_id = split(rid)
         label = f"{self._link.name()} {self._known.get(rid, ('', tile_id))[1]}"
         request_id = self._link.send_action(tile_id, code, value, channel, label)
+        if request_id:
+            self._requests[request_id] = rid
+        return request_id
+
+    def send_meta(self, rid: str, meta: dict) -> int:
+        """Name/Kachelfarbe einer Partnerkachel beim Besitzer aendern (PI-43 b). Sichtbar wird es mit dem
+        naechsten Abgleich -- der Besitzer fuehrt."""
+        if rid not in self._known:
+            return 0
+        _host, tile_id = split(rid)
+        request_id = self._link.send_meta(tile_id, meta, self._known[rid][1])
         if request_id:
             self._requests[request_id] = rid
         return request_id

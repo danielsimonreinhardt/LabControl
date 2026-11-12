@@ -663,6 +663,13 @@ the tile title (tooltip: computer name). What does not work over the link
 (manual mode, OVP/OCP and memory slots of the power supply, PWM and 12 V outputs
 of the microHIL, the battery simulator's limit, sending CAN frames) is missing
 from the partner tile; the partner's CAN bus is shown in the overview only.
+**Both computers show the same:** a tile's fields (voltage setpoint, current
+limit, load mode and setpoint, function generator, cell values) follow the
+device, no matter on which computer, via Claude or in a test sequence it was
+operated; a field someone is typing in is left alone. Name and tile colour belong
+to the computer the device is plugged into. Renaming or recolouring a partner
+tile changes them there, and both computers show the result. Each computer keeps
+its own tile arrangement.
 The paired partner needs no master switch there: pairing, with the same code
 confirmed on both computers, is the permission. It is recognised by the link
 header **and** the configured partner address. Operating works as long as no

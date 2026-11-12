@@ -7,6 +7,22 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Steuer-Kacheln synchron, Name und Farbe vom Besitzer (0.56.0, PI-43 b, 12.11.2026).**
+  - **Felder folgen dem Gerät:** Der Worker meldet nach jeder erfolgreich gesetzten Netzteil-Spannung/-Strombegrenzung
+    die Sollwerte (`psu_setpoints`, vorher nur beim Verbinden und nach der Handbedienung) und nach jedem Last-Sollwert
+    Modus und Wert (neues Signal `load_setpoint`), egal ob Kachel, Verbund-Partner, Claude, Testablauf oder Preset.
+    LiveState führt sie als Felder (`set_voltage`/`set_current`, neu `setpoint`/`setpoint_mode` bei der Last), der
+    Partner speist sie in seine Kachel. Die Kacheln übernehmen nur Änderungen am Gerät und nie in ein Feld, in dem
+    gerade getippt wird; die Last-Modusauswahl folgt der Modus-Abfrage. Behebt nebenbei, dass eine Partnerkachel eine
+    laufende Netzteil-Eingabe jede Sekunde zurücksetzte.
+  - **Name und Kachelfarbe:** Die Freigabe meldet die Farbe des Besitzers (`color`); Umbenennen und Umfärben in einer
+    Partnerkachel gehen über die neue Route `POST /api/v1/tiles/{id}/meta` (nur gekoppelter Partner) an den Besitzer,
+    der sie wie eine eigene Änderung übernimmt. Partnerkacheln zeigen dafür wieder den Stift. Die Anordnung bleibt je
+    Rechner.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_verbund_sync.py` (Worker-Meldungen aus Kachel und Fernsteuerung,
+    Felder folgen, Fokus schützt die Eingabe, Name/Farbe vom Partner), `check_partner_link` erweitert (gekoppelt:
+    Sollwerte, Last, Farbe, Name, Umbenennen geht an den Besitzer; Meta nur für den Partner). Zwischen PC und Pi noch
+    nicht ausprobiert.
 - **Verbund in beide Richtungen gleichwertig (0.55.0, Nutzerwunsch 12.11.2026).** Am Pi fehlten die Geräte des PCs,
   weil dessen Freigabeliste leer war. Jetzt sieht und bedient der gekoppelte Partner (Verbund-Kennung von der
   eingetragenen Adresse, PI-39 b) **alle** Geräte des anderen Rechners, unabhängig von der Freigabeliste

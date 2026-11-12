@@ -423,6 +423,10 @@ class MainWindow(QMainWindow):
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_setpoints.connect(self.control_tab.set_psu_setpoints)
+        # PI-43 b: Last-Sollwert und -Modus folgen dem Geraet, egal wer bedient hat
+        self._worker.load_setpoint.connect(self._live_state.on_load_setpoint)
+        self._worker.load_setpoint.connect(self.control_tab.set_load_setpoint)
+        self._worker.load_function_state.connect(self.control_tab.set_load_mode)
         self._worker.psu_manual_state.connect(self._on_psu_manual_state)
         # Nennwerte VOR den Schwellen verbinden (Reihenfolge der Verbindungen =
         # Reihenfolge der Aufrufe): erst die Bereiche der Felder, dann OVP/OCP.
@@ -523,7 +527,10 @@ class MainWindow(QMainWindow):
                 (pd.psu_setpoints, (ctrl.set_psu_setpoints,)),
                 (pd.psu_ratings, (ctrl.set_psu_ratings,)),
                 (pd.load_measurement, (dash.update_load,)),
-                (pd.load_function_state, (dash.set_load_mode,)),
+                (pd.load_function_state, (dash.set_load_mode, ctrl.set_load_mode)),
+                (pd.load_setpoint, (ctrl.set_load_setpoint,)),
+                (pd.color_changed, (dash.set_panel_color, ctrl.set_panel_color)),
+                (pd.label_changed, (dash.on_label_changed, ctrl.on_label_changed)),
                 (pd.load_input_state, (ctrl.set_load_input_state,)),
                 (pd.can_stats, (dash.update_can,)),
                 (pd.battsim_state, (dash.update_battsim, ctrl.set_battsim_state)),
@@ -1083,7 +1090,7 @@ class MainWindow(QMainWindow):
 
         # Umbenennen-Button sitzt seit BUGS.md #10c nur noch im Control-Tab
         # (dort aus dem Dashboard-Panel entfernt).
-        self.control_tab.rename_requested.connect(self._registry.rename)
+        self.control_tab.rename_requested.connect(self._on_rename_requested)   # Partnerkachel -> Besitzer (PI-43 b)
 
     def _replay_known_devices(self) -> None:
         """Stellt beim App-Start die aus der letzten Sitzung gespeicherten
@@ -1472,6 +1479,7 @@ class MainWindow(QMainWindow):
             self._on_share_action, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.all_off_requested.connect(
             self._on_share_all_off, Qt.ConnectionType.QueuedConnection)
+        self._share_bridge.meta_requested.connect(self._on_share_meta, Qt.ConnectionType.QueuedConnection)
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
@@ -1528,6 +1536,24 @@ class MainWindow(QMainWindow):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
         self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel)
+
+    def _on_share_meta(self, request_id: int, device_id: str, meta: dict) -> None:
+        """Name/Kachelfarbe vom Verbund-Partner (PI-43 b): wie eine Aenderung an diesem Rechner uebernehmen --
+        der Besitzer fuehrt, der Partner sieht das Ergebnis mit dem naechsten Abgleich."""
+        kind = self._device_kinds.get(device_id)
+        if kind is None:
+            self._share_bridge.complete(request_id, False, "unknown_tile", "", 0.0)
+            return
+        color = meta.get("color", "__keep__")
+        if color not in ("__keep__", None) and color not in PANEL_COLOR_ORDER:
+            self._share_bridge.complete(request_id, False, "invalid_value", "Farbe unbekannt", 0.0)
+            return
+        if "label" in meta:
+            self._registry.rename(kind, device_id, meta["label"])
+        if color != "__keep__":
+            self._settings.set_panel_color(device_id, color)
+        logger.info("Verbund: %s vom Partner geändert: %s", device_id, meta)
+        self._share_bridge.complete(request_id, True, "", "", 0.0)
 
     def _on_share_all_off(self, _request_id: int, client: str) -> None:
         # Derselbe Weg wie der ALLE-AUS-Knopf. Ohne die Pruefungen von oben --
@@ -1855,9 +1881,11 @@ class MainWindow(QMainWindow):
         # Farbauswahl selbst nur noch im Control-Tab (siehe BUGS.md #10b) --
         # Dashboard zeigt die Farbe weiterhin an (set_panel_color unten bleibt
         # verdrahtet), kann sie aber nicht mehr selbst auswaehlen.
-        self.control_tab.panel_color_requested.connect(self._settings.set_panel_color)
+        # Partnerkacheln: Farbe gehoert dem Besitzer (PI-43 b) -> an ihn schicken statt lokal speichern
+        self.control_tab.panel_color_requested.connect(self._on_panel_color_requested)
         self._settings.panel_color_changed.connect(self.dashboard.set_panel_color)
         self._settings.panel_color_changed.connect(self.control_tab.set_panel_color)
+        self._settings.panel_color_changed.connect(self._live_state.set_panel_color)
 
         # Neu erzeugte Panels/Sektionen (siehe dashboard.on_device_known/
         # control_tab.on_device_known, beide bereits ueber _wire_registry an
@@ -1937,6 +1965,19 @@ class MainWindow(QMainWindow):
         color_key = self._settings.panel_color(device_id)
         self.dashboard.set_panel_color(device_id, color_key)
         self.control_tab.set_panel_color(device_id, color_key)
+        self._live_state.set_panel_color(device_id, color_key)
+
+    def _on_panel_color_requested(self, device_id: str, color_key) -> None:
+        if self._partner_devices.is_remote(device_id):
+            self._partner_devices.send_meta(device_id, {"color": color_key})
+        else:
+            self._settings.set_panel_color(device_id, color_key)
+
+    def _on_rename_requested(self, kind: str, device_id: str, label: str) -> None:
+        if self._partner_devices.is_remote(device_id):
+            self._partner_devices.send_meta(device_id, {"label": label})
+        else:
+            self._registry.rename(kind, device_id, label)
 
     def _wire_testcase_tab(self) -> None:
         self._test_runner = TestRunner()

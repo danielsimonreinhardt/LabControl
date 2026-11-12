@@ -56,6 +56,12 @@ class StubExecutor:
     def __init__(self) -> None:
         self.actions: list[tuple] = []
         self.all_off: list[str] = []
+        self.meta: list[tuple] = []
+
+    def submit_meta(self, device_id, meta, client):
+        import share_api
+        self.meta.append((device_id, dict(meta)))
+        return share_api.RemoteResult("ok")
 
     def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False):
         import share_api
@@ -175,6 +181,19 @@ def section_client(app, state, executor, port) -> None:
           and executor.actions[-1][:2] == ("fg:B1", "FG_OUT_ON"))
     check("ohne Verbund weiter nur die Freigabeliste",
           {t["id"] for t in stranger.snapshot().tiles} == {"psu:B1", "load:B1"})
+    # PI-43 b: Name/Farbe aendern nur der gekoppelte Partner
+    client.meta("psu:B1", {"label": "Neu", "color": "teal"})
+    check("Meta vom Partner kommt an", executor.meta[-1:] == [("psu:B1", {"label": "Neu", "color": "teal"})],
+          str(executor.meta[-1:]))
+    check("Meta von Fremden -> verbund_only", error_of(lambda: stranger.meta("psu:B1", {"label": "x"})) == "verbund_only")
+    check("Meta mit Steuerzeichen im Namen -> invalid_value",
+          error_of(lambda: client.meta("psu:B1", {"label": "a\nb"})) == "invalid_value")
+    check("Meta fuer unbekanntes Geraet -> unknown_tile",
+          error_of(lambda: client.meta("psu:XX", {"color": None})) == "unknown_tile")
+    state.set_panel_color("psu:B1", "teal")
+    check("Kachel traegt die Farbe des Besitzers",
+          {t["id"]: t for t in client.snapshot().tiles}["psu:B1"].get("color") == "teal")
+    state.set_panel_color("psu:B1", None)
     # Claude (MCP) am Partner bekommt davon nur die Freigabeliste (share_api.partner_tiles)
     import share_api
     mcp = share_api.partner_tiles({"local": True, "remote": {"active": False}, "lock": "free",
@@ -248,9 +267,9 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     check("Steuerung: dieselbe Netzteil-Kachel wie fuer eigene Geraete, mit Symbol",
           isinstance(section, PsuControlGroup) and section.title() == "Netzteil 1"
           and section.findChild(RemoteBadge) is not None)
-    check("nicht fernsteuerbar ausgeblendet (Handbedienung, OVP, Umbenennen)",
+    check("nicht fernsteuerbar ausgeblendet (Handbedienung, OVP); Umbenennen da (geht an den Besitzer, PI-43 b)",
           section._manual_button.isHidden() and not section._ovp_row.isVisible()
-          and section._rename_button.isHidden())
+          and not section._rename_button.isHidden())
     spin(app, 2.0, lambda: "12.0" in panel._values["voltage"].text() if hasattr(panel, "_values") else True)
     check("Messwert des Partners in der Uebersicht", any("12" in lbl.text() for lbl in panel.findChildren(QLabel)),
           str([lbl.text() for lbl in panel.findChildren(QLabel)][:8]))
@@ -287,6 +306,48 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     state.set_remote_control(True, 600.0)
     spin(app, 3.0, lambda: section.isEnabled())
     check("Hauptschalter wieder an: bedienbar", section.isEnabled())
+
+    print("window -- gekoppelt (B kennt A als Partner): symmetrischer Verbund und PI-43 b")
+    state.set_partner_ip("127.0.0.1")
+    state.set_remote_control(False)
+    check("gekoppelt: Last ohne 'Steuern' bedienbar, auch ohne Hauptschalter",
+          spin(app, 4.0, lambda: load_section.isEnabled() and section.isEnabled()))
+    check("gekoppelt: auch nicht freigegebenes Geraet (FG) als Kachel da",
+          spin(app, 3.0, lambda: window.control_tab.section(rid_of("fg:B1")) is not None))
+    state.on_psu_setpoints("psu:B1", 9.0, 1.5)
+    check("PI-43 b: Netzteil-Sollwerte von B stehen in den Feldern",
+          spin(app, 3.0, lambda: abs(section._voltage_spin.value() - 9.0) < 1e-6
+               and abs(section._current_spin.value() - 1.5) < 1e-6),
+          f"{section._voltage_spin.value()} / {section._current_spin.value()}")
+    section._voltage_spin.setValue(3.3)
+    section._voltage_spin.setFocus()
+    spin(app, 1.5)
+    check("PI-43 b: gleicher Stand ueberschreibt eine laufende Eingabe nicht",
+          abs(section._voltage_spin.value() - 3.3) < 1e-6, str(section._voltage_spin.value()))
+    window.setFocus()
+    state.on_load_setpoint("load:B1", "VOLT", 12.5)
+    check("PI-43 b: Last-Modus und -Sollwert von B in der Kachel",
+          spin(app, 3.0, lambda: load_section._mode_combo.currentData() == "VOLT"
+               and abs(load_section._setpoint_spin.value() - 12.5) < 1e-6),
+          f"{load_section._mode_combo.currentData()} {load_section._setpoint_spin.value()}")
+    window._settings.set_panel_colors_enabled(True)   # Anzeige der Kachelfarben ist je Rechner schaltbar
+    state.set_panel_color("psu:B1", "teal")
+    check("PI-43 b: Kachelfarbe des Besitzers", spin(app, 3.0, lambda: section._color_key == "teal"
+                                                       and window.dashboard._panels[psu_id]._color_key == "teal"),
+          str(section._color_key))
+    state.on_label_changed("psu", "psu:B1", "NT am Pi")
+    check("PI-43 b: Name vom Besitzer in Steuerung und Uebersicht",
+          spin(app, 3.0, lambda: section.title() == "NT am Pi" and window.dashboard._panels[psu_id].title() == "NT am Pi"),
+          section.title())
+    before = len(executor.meta)
+    window._on_rename_requested("psu", psu_id, "Vom PC")
+    window._on_panel_color_requested(psu_id, "orange")
+    spin(app, 4.0, lambda: len(executor.meta) >= before + 2)
+    check("PI-43 b: Umbenennen/Umfaerben einer Partnerkachel geht an den Besitzer",
+          executor.meta[before:before + 2] == [("psu:B1", {"label": "Vom PC"}), ("psu:B1", {"color": "orange"})],
+          str(executor.meta[before:]))
+    check("... und wird hier nicht lokal gespeichert", window._settings.panel_color(psu_id) is None)
+    state.set_remote_control(True, 600.0)
 
     def all_off_count_after(action) -> int:
         before = len(executor.all_off)

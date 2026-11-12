@@ -344,6 +344,8 @@ def _tile_summary(device_id: str, entry: dict, snapshot: dict) -> dict:
         # Nur fuer den Verbund-Partner: was die Freigabeliste erlaubt -- danach richtet er die Durchreichung
         # an Claude (partner_tiles), damit MCP nicht mehr bekommt als freigegeben
         **({"shared": _list_flags(snapshot, device_id)} if snapshot.get("verbund") else {}),
+        # Kachelfarbe des Besitzers (PI-43 b), None = keine
+        "color": snapshot.get("colors", {}).get(device_id),
     }
 
 
@@ -558,6 +560,8 @@ def _result_response(result: RemoteResult, ok_payload: dict) -> Response:
         "rate_limited": (429, "rate_limited"),
         "busy": (429, "busy"),
         "device_error": (502, "device_error"),
+        "invalid_value": (400, "invalid_value"),
+        "unknown_tile": (404, "unknown_tile"),
     }
     status, code = table.get(result.code, (502, result.code or "device_error"))
     extra = {"message": result.message} if result.message else {}
@@ -886,11 +890,12 @@ def _post_route(path: str) -> tuple[str, str] | None:
         if lease_id and verb in ("renew", "release"):
             return f"lease_{verb}", lease_id
         return None
-    prefix, suffix = f"{API_PREFIX}/tiles/", "/actions"
-    if path.startswith(prefix) and path.endswith(suffix) and len(path) > len(prefix) + len(suffix):
-        device_id = _route_tile_id(path[len(prefix):-len(suffix)])
-        if device_id:
-            return "action", device_id
+    prefix = f"{API_PREFIX}/tiles/"
+    for suffix, kind in (("/actions", "action"), ("/meta", "meta")):
+        if path.startswith(prefix) and path.endswith(suffix) and len(path) > len(prefix) + len(suffix):
+            device_id = _route_tile_id(path[len(prefix):-len(suffix)])
+            if device_id:
+                return kind, device_id
     return None
 
 
@@ -933,8 +938,44 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
         if kind == "lease":
             return _lease_acquire(snapshot, body, leases, client)
         return _lease_renew_release(kind, device_id, leases, client)
+    if kind == "meta":
+        return _tile_meta(snapshot, device_id, body, executor, client)
     return _tile_action(snapshot, device_id, body, executor, client,
                         leases=leases, lease_header=header_get(LEASE_HEADER) or "")
+
+
+META_LABEL_MAX = 40
+
+
+def _tile_meta(snapshot: dict, device_id: str, body: bytes, executor, client: str) -> Response:
+    """POST /api/v1/tiles/{id}/meta {"label": "...", "color": "blue" | null} -- Name und Kachelfarbe eines
+    eigenen Geraets, nur fuer den gekoppelten Verbund-Partner (PI-43 b: am einen Rechner umbenennen/umfaerben
+    gilt auch am anderen, der Besitzer fuehrt). Ob die Farbe gueltig ist, prueft der GUI-Thread."""
+    if not snapshot.get("verbund"):
+        return _error(403, "verbund_only")
+    if executor is None or not hasattr(executor, "submit_meta"):
+        return _error(501, "not_implemented")
+    if device_id not in snapshot.get("devices", {}) or verbund_ids.is_qualified(device_id):
+        return _error(404, "unknown_tile")
+    payload = _parse_body(body)
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    meta: dict = {}
+    if "label" in payload:
+        label = payload["label"]
+        if (not isinstance(label, str) or not label.strip() or len(label.strip()) > META_LABEL_MAX
+                or any(ord(c) < 32 for c in label)):
+            return _error(400, "invalid_value", field="label", max_length=META_LABEL_MAX)
+        meta["label"] = label.strip()
+    if "color" in payload:
+        color = payload["color"]
+        if color is not None and (not isinstance(color, str) or not color or len(color) > 32):
+            return _error(400, "invalid_value", field="color")
+        meta["color"] = color
+    if not meta:
+        return _error(400, "invalid_body")
+    result = executor.submit_meta(device_id, meta, client)
+    return _result_response(result, {"device": device_id, **meta})
 
 
 # -- Belegung durch den Verbund-Partner (PI-25 a, PI-26 a; lease_table.py) ---------

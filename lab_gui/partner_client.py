@@ -177,6 +177,11 @@ class PartnerClient:
                                    lease=lease)
         return payload
 
+    def meta(self, device_id: str, meta: dict) -> dict:
+        """Name/Kachelfarbe eines Partnergeraets aendern (PI-43 b, share_api._tile_meta)."""
+        _, payload = self._request("POST", f"/api/v1/tiles/{device_id}/meta", dict(meta), ACTION_TIMEOUT_S)
+        return payload
+
     # -- Belegung (PI-25 a, PI-26 a; Gegenstueck: share_api._lease_*) ------------------
 
     def lease_acquire(self, devices: list[str], run: str, ttl_s: float) -> str:

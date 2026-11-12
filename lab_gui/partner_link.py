@@ -31,6 +31,7 @@ from partner_client import PartnerClient, PartnerError, PartnerSnapshot, normali
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 1.0
+META_ACTION = "META"   # Name/Kachelfarbe aendern (send_meta, PI-43 b)
 # Belegung (PI-26 a): Lebenszeichen jede Sekunde; der Besitzer schaltet nach 3 s ohne ab, der Leitstand
 # bricht nach 3 s ohne bestaetigtes Lebenszeichen ab -- beide Seiten mit derselben Frist.
 LEASE_RENEW_S = 1.0
@@ -63,6 +64,8 @@ ERROR_TEXTS = {
     "all_off_incomplete": "ALLE AUS dort unvollständig",
     "leased": "dort belegt",
     "unknown_lease": "Belegung abgelaufen",
+    "verbund_only": "nur für den gekoppelten Partner",
+    "invalid_value": "ungültiger Wert",
 }
 
 
@@ -224,12 +227,18 @@ class PartnerLink(QObject):
             if item is None or stop.is_set():
                 return
             request_id, device_id, action, value, channel, label = item
-            details = ", ".join(part for part in (
-                f"wert={value:g}" if value is not None else "",
-                f"kanal={channel}" if channel is not None else "") if part)
+            if action == META_ACTION:   # Name/Farbe (send_meta), value ist das dict
+                details = ", ".join(f"{k}={v}" for k, v in value.items())
+            else:
+                details = ", ".join(part for part in (
+                    f"wert={value:g}" if value is not None else "",
+                    f"kanal={channel}" if channel is not None else "") if part)
             what = f"Verbund {label or device_id}: {action}" + (f" ({details})" if details else "")
             try:
-                payload = client.action(device_id, action, value, channel, lease=self._lease_id)
+                if action == META_ACTION:
+                    payload = client.meta(device_id, value)
+                else:
+                    payload = client.action(device_id, action, value, channel, lease=self._lease_id)
             except PartnerError as exc:
                 message = error_text(exc.code)
                 if exc.code == "leased" and exc.payload.get("holder"):
@@ -258,6 +267,15 @@ class PartnerLink(QObject):
             return 0
         request_id = next(self._request_ids)
         self._actions.put((request_id, device_id, action, value, channel, label))
+        return request_id
+
+    def send_meta(self, device_id: str, meta: dict, label: str = "") -> int:
+        """Name/Kachelfarbe eines Partnergeraets beim Besitzer aendern (PI-43 b); gleiche Reihe wie die
+        Bedienungen, Ergebnis in action_finished (Aktion META_ACTION)."""
+        if self._client is None:
+            return 0
+        request_id = next(self._request_ids)
+        self._actions.put((request_id, device_id, META_ACTION, dict(meta), None, label))
         return request_id
 
     # -- Belegung und Lebenszeichen (PI-25 a, PI-26 a) -----------------------------

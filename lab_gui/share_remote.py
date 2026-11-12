@@ -84,6 +84,8 @@ class RemoteBridge(QObject):
     all_off_requested = Signal(int, str)                       # id, client
     # Verbund (PI-32 a): id, ID beim Partner, qualifizierte ID, kind, action, value, channel, client
     partner_action_requested = Signal(int, str, str, str, str, float, int, str)
+    # Verbund (PI-43 b): id, eigene Geraete-ID, {"label"?, "color"?}
+    meta_requested = Signal(int, str, object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -165,6 +167,17 @@ class RemoteBridge(QObject):
         if done and pending.result is not None:
             return pending.result
         return RemoteResult("pending", message="Keine Rueckmeldung innerhalb der Wartezeit")
+
+    def submit_meta(self, device_id: str, meta: dict, client: str) -> RemoteResult:
+        """Name/Kachelfarbe eines eigenen Geraets vom Verbund-Partner (share_api._tile_meta, PI-43 b). Der
+        GUI-Thread (meta_requested) uebernimmt sie wie eine Aenderung an diesem Rechner."""
+        if not self._take_token():
+            result = RemoteResult("error", "rate_limited")
+        else:
+            result = self._wait(lambda req_id: self.meta_requested.emit(req_id, device_id, dict(meta)),
+                                REMOTE_TIMEOUT_S)
+        self._audit(client, f"{device_id} Name/Farbe {meta}", result)
+        return result
 
     def submit_all_off(self, client: str) -> RemoteResult:
         pending = _Pending()
