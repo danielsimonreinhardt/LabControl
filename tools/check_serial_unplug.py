@@ -95,6 +95,60 @@ def check_drivers() -> None:
             check(f"{name}: {type(exc).__name__} -> {err_cls.__name__}", ok, got)
 
 
+class ScriptedPort:
+    """Port, der der Reihe nach vorgegebene Antworten liefert (read_until)."""
+    port = "/dev/ttyUSB0"
+
+    def __init__(self, replies: list[bytes]) -> None:
+        self.replies = list(replies)
+        self.written: list[bytes] = []
+
+    def reset_input_buffer(self):
+        pass
+
+    def write(self, data):
+        self.written.append(data)
+
+    def read_until(self, _end):
+        return self.replies.pop(0) if self.replies else b""
+
+    def close(self):
+        pass
+
+
+def check_stray_ok() -> None:
+    """Am Pi am 12.11.2026: auf GETD kam nur ein leeres "OK" (verspaetetes OK eines Sollwerts) --
+    der Treiber warf ValueError, der Worker trennte das Netzteil als "unerwarteter Fehler"."""
+    print("Netzteil: unklare Antwort auf GETD")
+    from hcs34xx import driver as hcs
+    dev = object.__new__(hcs.HCS34xx)
+    dev._ser = ScriptedPort([b"OK\r", b"120001501\rOK\r"])
+    try:
+        d = dev.get_display()
+        ok, got = d.voltage == 12.0 and d.current == 1.5 and d.constant_current, str(d)
+    except Exception as exc:  # noqa: BLE001
+        ok, got = False, f"{type(exc).__name__}: {exc}"
+    check("leeres OK -> einmal neu gefragt, Wert stimmt", ok and len(dev._ser.written) == 2, got)
+    dev._ser = ScriptedPort([b"OK\r", b"xx\rOK\r"])
+    try:
+        dev.get_display()
+        ok, got = False, "keine Ausnahme"
+    except hcs.PowerSupplyError:
+        ok, got = True, ""
+    except Exception as exc:  # noqa: BLE001
+        ok, got = False, f"{type(exc).__name__}: {exc}"
+    check("zweimal unklar -> PowerSupplyError (kein ValueError)", ok, got)
+    dev._ser = ScriptedPort([b"3x0100\rOK\r"])
+    try:
+        dev.get_max()
+        ok, got = False, "keine Ausnahme"
+    except hcs.PowerSupplyError:
+        ok, got = True, ""
+    except Exception as exc:  # noqa: BLE001
+        ok, got = False, f"{type(exc).__name__}: {exc}"
+    check("Feld mit Nicht-Ziffern -> PowerSupplyError", ok, got)
+
+
 def check_worker() -> None:
     print("DeviceWorker-Zyklus")
     app = QCoreApplication.instance() or QCoreApplication([])
@@ -137,6 +191,7 @@ def check_worker() -> None:
 
 def main() -> int:
     check_drivers()
+    check_stray_ok()
     check_worker()
     print()
     if FAILURES:

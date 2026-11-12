@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **0.50.2:** Netzteil HCS-34xx: Kam auf die Messwert-Abfrage `GETD` nur ein leeres „OK“ (am Pi am 12.11.2026, vermutlich
+  das verspätete OK eines Sollwert-Befehls), warf der Treiber einen `ValueError`. Der Worker trennte das Netzteil als
+  „unerwarteter Fehler“ und setzte es beim Wiederverbinden auf 0 A. Jetzt fragt der Treiber bei einer unklaren
+  Antwort einmal neu; bleibt sie unklar, ist das ein normaler Kommunikationsfehler. Auch die übrigen Antworten mit
+  Nicht-Ziffern werden als Kommunikationsfehler gemeldet. Prüfung: `check_serial_unplug` (Mock).
 - **0.50.1:** Ein beim Verbund-Partner nur eingetragener, aber nicht antwortender Batterie-Simulator (z. B. Vector-Adapter
   nicht gesteckt) sperrte hier das Senden von 0x130 von Hand bzw. per CAN-Schritt. Es zählt jetzt nur ein Simulator,
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).

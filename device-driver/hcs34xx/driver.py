@@ -190,8 +190,8 @@ class HCS34xx:
 
     @staticmethod
     def _decode_fields(text: str, field_width: int, scale: float) -> list[float]:
-        if len(text) % field_width != 0:
-            raise PowerSupplyError(f"Unerwartete Antwortlaenge: {text!r}")
+        if not text or len(text) % field_width != 0 or not text.isdigit():
+            raise PowerSupplyError(f"Unerwartete Antwort: {text!r}")
         return [
             int(text[i : i + field_width]) / scale
             for i in range(0, len(text), field_width)
@@ -319,8 +319,18 @@ class HCS34xx:
     # -- live display -----------------------------------------------------
 
     def get_display(self) -> Display:
-        """Aktuell angezeigte Spannung/Strom sowie CV/CC-Status."""
+        """Aktuell angezeigte Spannung/Strom sowie CV/CC-Status.
+
+        Antwort sind 9 Ziffern (VVVVIIIIS). Kommt stattdessen etwas anderes -- am Pi am 12.11.2026 ein
+        leeres "OK", vermutlich das verspaetete OK eines Sollwert-Befehls --, wird einmal neu gefragt;
+        bleibt es unklar, ist das ein PowerSupplyError (vorher ein ValueError, den der Worker als
+        unerwarteten Fehler behandelte)."""
         raw = self._query("GETD")
+        if not (len(raw) >= 9 and raw[:9].isdigit()):
+            logger.info("HCS34xx %s: unklare Antwort auf GETD (%r), frage erneut", self._ser.port, raw)
+            raw = self._query("GETD")
+            if not (len(raw) >= 9 and raw[:9].isdigit()):
+                raise PowerSupplyError(f"Unklare Antwort auf 'GETD': {raw!r}")
         v_text, i_text, status_text = raw[0:4], raw[4:8], raw[8:9]
         return Display(
             voltage=int(v_text) / 100,
