@@ -22,6 +22,7 @@ flowchart LR
 | `deploy_pi.ps1` | am PC: Stand per SSH zum Pi schieben und `update_pi.sh` aufrufen |
 | `slim_sd.sh` | nur für 8-GB-Karten: Browser, Compiler, fremde Firmware usw. entfernen (PI-14) |
 | `kiosk_pi.sh` | Kiosk: beim Booten nur das LabControl-Logo, kein Desktop/keine Leiste, dann die App im Vollbild; `--undo` nimmt alles zurück |
+| `netzlaufwerk_pi.sh` | SMB-Netzlaufwerk per systemd-Automount einhängen (Passwort verdeckt abgefragt, nur in `/etc/labcontrol/smb-credentials`) und in LabControl eintragen |
 | `branding/` | Logo und Boot-Bild (`make_branding.py` am PC erzeugt `splash.png`, `logo*.svg`), Plymouth-Theme `labcontrol` |
 
 ## Erstinstallation

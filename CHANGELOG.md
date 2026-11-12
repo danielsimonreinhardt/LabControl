@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- `tools/pi/netzlaufwerk_pi.sh`: hängt ein SMB-Netzlaufwerk am Pi per systemd-Automount ein (`nofail`, 15 s Frist,
+  Zugangsdaten nur in `/etc/labcontrol/smb-credentials`, Passwort verdeckt abgefragt) und trägt `<mount>/LABCONTROL`
+  als Netzlaufwerk in LabControl ein (12.11.2026). Am PC ist das Netzlaufwerk `\\192.168.178.1\data_exchange\LABCONTROL`
+  eingetragen (Zugangsdaten in der Windows-Anmeldeinformationsverwaltung); die Datenablage hat die vorhandenen
+  Erfassungen dorthin verschoben.
 - **Verbund: Koppeln statt Token abtippen (0.50.0, Nutzerwunsch 12.11.2026).**
   - Einstellungen → Netzwerk → Verbund: Adresse eintragen, **„Koppeln…“**. Beide Rechner zeigen denselben
     6-stelligen Code, am anderen erscheint „Kopplung anfragen“ mit „Koppeln“/„Ablehnen“. Nach der Bestätigung
