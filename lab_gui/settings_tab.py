@@ -855,7 +855,7 @@ class SettingsTab(QWidget):
         layout.addWidget(_separator())
 
         # -- Hilfe -------------------------------------------------------------
-        self._help_button = IconButton("mdi.help-circle-outline", "", text=tr("Hilfe"))
+        self._help_button = IconButton("mdi.help-circle-outline", "")   # nur Symbol (Review KN-7 a)
         self._help_button.clicked.connect(self._on_help_clicked)
         layout.addLayout(_button_row(self._help_button))
 
@@ -871,9 +871,10 @@ class SettingsTab(QWidget):
         # -- Geraeteverwaltung ---------------------------------------------
         # Zwei Stufen (Nutzerwunsch 2026-09-28): nur die gerade nicht
         # verbundenen Geraete vergessen, oder wie bisher alle.
-        self._remove_offline_button = QPushButton()
+        # Symbol davor, Text bleibt (Review KN-14 a)
+        self._remove_offline_button = IconButton("mdi.delete-sweep-outline", "", text=" ")
         self._remove_offline_button.clicked.connect(self._on_remove_offline_clicked)
-        self._reset_devices_button = QPushButton()
+        self._reset_devices_button = IconButton("mdi.delete-forever-outline", "", text=" ")
         self._reset_devices_button.clicked.connect(self._on_reset_devices_clicked)
         layout.addLayout(_button_row(self._remove_offline_button, self._reset_devices_button))
 
@@ -1011,7 +1012,7 @@ class SettingsTab(QWidget):
         self._can_table.changed.connect(self._on_can_table_changed)
         layout.addWidget(self._can_table)
 
-        self._can_add_button = IconButton("mdi.plus", "", text=tr("Interface hinzufügen"))
+        self._can_add_button = IconButton("mdi.plus", "")   # nur Symbol (Review KN-7 a)
         self._can_add_button.clicked.connect(self._on_can_add_clicked)
         layout.addLayout(_button_row(self._can_add_button))
         layout.addStretch(1)
@@ -1204,7 +1205,7 @@ class SettingsTab(QWidget):
         self._partner_address_edit.editingFinished.connect(self._emit_partner_config)
         self._partner_address_label = QLabel()
         # Kopplung (pairing.py): Token austauschen statt abtippen
-        self._partner_pair_button = QPushButton()
+        self._partner_pair_button = IconButton("mdi.link-variant", "", text=" ")   # Symbol davor (Review KN-14 a)
         self._partner_pair_button.clicked.connect(
             lambda: self.partner_pair_requested.emit(self._partner_address_edit.text().strip()))
         self._partner_address_edit.textChanged.connect(
@@ -1344,7 +1345,6 @@ class SettingsTab(QWidget):
         )
         self._render_log_status()
         self._render_data_status()
-        self._help_button.setText(tr("Hilfe"))
         self._help_button.setToolTip(tr("Öffnet das Benutzerhandbuch"))
         self._remove_offline_button.setText(tr("Nicht verbundene Geräte löschen"))
         self._remove_offline_button.setToolTip(
@@ -1368,7 +1368,7 @@ class SettingsTab(QWidget):
         for section in self._safety_sections.values():
             section.retranslate()
         self._can_table.retranslate()
-        self._can_add_button.setText(tr("Interface hinzufügen"))
+        self._can_add_button.setToolTip(tr("Interface hinzufügen"))
 
         self._subtabs.setTabText(0, tr("Allgemein"))
         self._subtabs.setTabText(1, tr("Geräte"))

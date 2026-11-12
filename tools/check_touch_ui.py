@@ -195,15 +195,17 @@ def main() -> int:
     for _ in range(5):
         app.processEvents()
     pause = w.timeline_tab._pause_button
-    check("Symbol-Knoepfe mit Text (Pause, Diagramm)", pause.text() == "Pause"
-          and w.timeline_tab._add_chart_button.text() == "Diagramm" and pause.width() > 44,
-          f"{pause.text()!r} {pause.width()}")
-    pause.setChecked(True)
-    check("Text folgt dem Zustand (Weiter)", pause.text() == "Weiter")
-    pause.setChecked(False)
+    chart = w.timeline_tab._add_chart_button
+    # Review KN-9 a / KN-8 b (12.11.2026): eindeutige Symbole auch am Pi ohne Text, die anderen mit Text
+    check("Unklare Symbol-Knoepfe mit Text (Diagramm, Leeren, Verwerfen)", chart.text() == "Diagramm"
+          and w.timeline_tab._view_clear_button.text() == "Leeren"
+          and w.timeline_tab._recording_clear_button.text() == "Verwerfen" and chart.width() > 44,
+          f"{chart.text()!r} {chart.width()}")
+    check("Eindeutige Symbol-Knoepfe ohne Text (Pause, Aufnahme)", pause.text() == ""
+          and w.timeline_tab._recording_toggle_button.text() == "")
     can = w.control_tab._sections.get("can:mock:SIM")
-    check("CAN: Senden/Leeren beschriftet", can is not None and can._send_button.text() == "Senden"
-          and can._clear_button.text() == "Leeren")
+    check("CAN: Senden/Je ID/Leeren auch am Pi nur Symbol (KN-8 b)", can is not None and can._send_button.text() == ""
+          and can._clear_button.text() == "" and can._delta_button.text() == "")
     if psu is not None:
         from PySide6.QtTest import QTest
         w.tabs.setCurrentWidget(w.control_tab)
@@ -478,7 +480,8 @@ def main() -> int:
               f"{psu._voltage_spin.maximumHeight()}")
     check("Presets wieder mit Eck-Knoepfen", all(not s._more_button.isVisible() for s in slots))
     check("ohne Touch: kein Wischen, Ziehen erlaubt", not swipe(ct_area) and w.control_tab._drag_allowed)
-    check("ohne Touch: Symbol-Knoepfe wieder ohne Text", pause.text() == "" and (can is None or can._send_button.text() == ""))
+    check("ohne Touch: Symbol-Knoepfe wieder ohne Text", chart.text() == "" and pause.text() == ""
+          and (can is None or can._send_button.text() == ""))
     if psu is not None:
         check("ohne Touch: Zahlenfeld nimmt wieder Texteingabe an (Tippen am PC)",
               wants_keyboard(psu._voltage_spin) and wants_keyboard(psu._voltage_spin.lineEdit()))

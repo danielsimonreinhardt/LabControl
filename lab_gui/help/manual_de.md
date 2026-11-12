@@ -6,8 +6,8 @@ Bereiche der Oberfläche: das Dashboard, die Seiten „Steuerung“,
 „Testablauf“, „Verlauf“ und „Einstellungen“ (Navigation links) und die
 Leiste oben mit dem Gerätezustand und „ALLE AUS“.
 
-Diese Seite lässt sich jederzeit über den Button **Hilfe** im Reiter
-„Einstellungen“ erneut öffnen.
+Diese Seite lässt sich jederzeit über den Knopf mit dem Fragezeichen (**Hilfe**)
+in den „Einstellungen“ erneut öffnen.
 
 ---
 
@@ -147,10 +147,11 @@ zeigt:
 
 - **Status** (frei, belegt, Testlauf, über MCP verbunden) sowie Typ und
   Seriennummer.
-- **Letzte Erfassung** über Netzwerk/MCP mit dem Knopf **„Kurve“** (zeigt
-  sie als Bild).
-- **„PicoScope 7 öffnen“** und – solange LabControl das Gerät für
-  Erfassungen hält – **„Trennen“**.
+- **Letzte Erfassung** über Netzwerk/MCP mit dem Knopf **Kurve** (Diagramm-Symbol,
+  zeigt sie als Bild).
+- **„PicoScope 7 öffnen“** (nur am PC, nicht im Touch-Profil) und – solange
+  LabControl das Gerät für Erfassungen hält – **Trennen** (Symbol mit getrenntem
+  Netzwerk).
 - Wie bei den anderen Geräten **umbenennen** (Stift) und **Panel-Farbe**
   (Farbkreis); beides gilt auch für die Dashboard-Kachel.
 
@@ -235,10 +236,13 @@ mehreren J-Links die Seriennummer. Gebraucht wird die SEGGER J-Link Software
 (J-Link Commander), LabControl sucht sie selbst.
 
 Die Kachel zeigt Ziel, Zielspannung, die letzte Bedienung mit Ergebnis und die
-zuletzt geflashte Datei. **„Prüfen“** verbindet sich mit dem Ziel und liest
-Zielspannung und Kern (der Kern läuft dabei weiter), dazu **„Reset“**,
-**„Anhalten“**, **„Starten“** und **„Flashen…“** (Datei wählen, danach Reset und
-Start). Im Testablauf gibt es dieselben Bedienungen; beim Flashen wählt man die
+zuletzt geflashte Datei. Darunter fünf Symbol-Knöpfe (Name im Tooltip):
+**Prüfen** (Stecker) verbindet sich mit dem Ziel und liest Zielspannung und Kern
+(der Kern läuft dabei weiter), **Reset** (Kreispfeil), **Anhalten** (Pause),
+**Starten** (Abspielen) und **Flashen** (Download-Pfeil: Datei wählen, danach
+Reset und Start). Der Dateidialog beginnt bei der zuletzt geflashten Datei und
+zeigt HEX, SREC/S19/MOT und ELF/AXF/OUT; `.bin` wird abgelehnt, weil sie keine
+Adresse enthält. Im Testablauf gibt es dieselben Bedienungen; beim Flashen wählt man die
 Datei (HEX, SREC oder ELF) in der Wert-Spalte. Ein fehlgeschlagener Schritt
 bricht den Ablauf ab.
 
@@ -259,9 +263,11 @@ ein **Ablaufsteuerungs-Element** (Schleife, Bedingung, Variable).
 
 Solange noch kein Ablauf geladen und nichts eingetragen ist, steht über
 der Tabelle der Hinweis **„Noch kein Testablauf“** mit dem Ordner, in dem
-die Abläufe liegen, und den Knöpfen **„Ablauf öffnen …“** und **„Neuen
-Ablauf beginnen“** (setzt den Cursor in die erste Zeile). Er verschwindet,
-sobald ein Ablauf geladen ist oder man einen Schritt bearbeitet.
+die Abläufe liegen. Er verschwindet, sobald ein Ablauf geladen ist oder man
+einen Schritt bearbeitet. Rechts in der Werkzeugleiste stehen **Neuer Ablauf**
+(Blatt mit Plus: leert die Tabelle bis auf eine Startzeile und löst die
+Verbindung zur Datei, mit Rückfrage, wenn schon etwas geladen oder eingetragen
+ist), **Laden** und **Speichern**.
 
 ### Werkzeugleiste
 
@@ -371,11 +377,11 @@ Prüfung fälschlich fehl.
 
 ### Start, Stop, Report
 
-- **Start**: beginnt die sequenzielle Ausführung aller aktiven Zeilen.
+- **Start** (Abspielen-Symbol): beginnt die sequenzielle Ausführung aller aktiven Zeilen.
   Während der Ausführung ist die Tabelle gesperrt, der aktuelle Schritt
   markiert und in der Statuszeile sichtbar (inkl. aktueller
   Schleifen-/Solange-Durchlauf, falls zutreffend).
-- **Stop**: bricht den Lauf ab und schaltet sofort alle Ausgänge ab
+- **Stop** (Quadrat): bricht den Lauf ab und schaltet sofort alle Ausgänge ab
   (Sicherheitsabschaltung).
 - **Report-Button** (nach jedem Lauf aktiv): öffnet einen Nachlauf-Report
   als HTML-Seite im Browser oder exportiert ihn als PDF. Der Report
@@ -509,7 +515,7 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Beide Knöpfe fragen vorher nach und lassen sich nicht rückgängig machen.
 - **Sicherheits-Grenzwerte (Watchdog)**: siehe Abschnitt 6.
 - **Netzwerk-Freigabe und Fernsteuerung**: siehe unten.
-- **Hilfe**: öffnet dieses Benutzerhandbuch.
+- **Hilfe** (Fragezeichen): öffnet dieses Benutzerhandbuch.
 
 ### Unterreiter „Netzwerk“: Kacheln im lokalen Netz bereitstellen
 

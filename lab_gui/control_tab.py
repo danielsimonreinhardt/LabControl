@@ -72,7 +72,6 @@ from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
 from theme import METRICS, Palette, ThemeManager, form_control_qss, set_tone
 from touch_keypad import attach_hex_keypad, set_apply_partner
-from touch_ui import touch_label
 from theme import current as current_palette
 from tile_grid import (
     CONTROL_TILE_DRAG_MIME_TYPE,
@@ -707,7 +706,7 @@ class PsuControlGroup(QGroupBox):
         self._update_limit_warning()
 
         # Umschalter Handbedienung / Kontrolle durch LabControl (siehe DeviceWorker.set_psu_manual).
-        self._manual_button = QPushButton()
+        self._manual_button = IconButton("mdi.hand-right", "", text=" ")   # Symbol davor (Review KN-12 a)
         self._manual_button.setCheckable(True)
         self._manual_button.toggled.connect(self._on_manual_toggled)
 
@@ -1302,7 +1301,7 @@ class BattSimControlGroup(QGroupBox):
         self._remote_off_button = QPushButton()
         self._output_on_button = QPushButton()
         self._output_off_button = QPushButton()
-        self._reset_button = QPushButton()
+        self._reset_button = IconButton("mdi.restore-alert", "", text=" ")   # Symbol davor (Review KN-12 a)
         self._remote_on_button.clicked.connect(lambda: self.set_remote.emit(self._device_id, True))
         self._remote_off_button.clicked.connect(lambda: self.set_remote.emit(self._device_id, False))
         self._output_on_button.clicked.connect(lambda: self.set_output.emit(self._device_id, True))
@@ -1720,9 +1719,7 @@ class CanControlGroup(QGroupBox):
         self._clear_button = IconButton("mdi.delete-sweep-outline", "")
         self._clear_button.clicked.connect(self.clear_traffic)
         # Touch-Profil: kurze Texte statt Tooltips
-        touch_label(self._send_button, lambda: tr("Senden"))
-        touch_label(self._delta_button, lambda: tr("Je ID"))
-        touch_label(self._clear_button, lambda: tr("Leeren"))
+        # Am Pi ohne Text, nur Symbol wie am PC (Review KN-8 b)
         view_row = QHBoxLayout()
         view_row.addWidget(self._delta_button)
         view_row.addWidget(self._clear_button)
@@ -1944,11 +1941,12 @@ class PicoscopeControlGroup(QGroupBox):
 
         self._launch_button = IconButton("mdi.open-in-new", "", text=tr("PicoScope 7 öffnen"))
         self._launch_button.clicked.connect(lambda: self.launch_requested.emit(self._device_id))
-        self._release_button = IconButton("mdi.lan-disconnect", "", text=tr("Trennen"))
+        # Trennen und Kurve nur Symbol, "PicoScope 7 öffnen" nur am PC (Review KN-3 a mit Notiz)
+        self._release_button = IconButton("mdi.lan-disconnect", "")
         self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
-        self._plot_button = IconButton("mdi.chart-line", "", text=tr("Kurve"))
+        self._plot_button = IconButton("mdi.chart-line", "")
         self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
-        self._launch_button.setVisible(kind == "picoscope")
+        self._launch_button.setVisible(kind == "picoscope" and not ThemeManager.instance().touch)
         self._button_row = _row(self._launch_button, self._release_button, self._plot_button)
         outer.addWidget(self._button_row)
         outer.addStretch(1)
@@ -1970,9 +1968,7 @@ class PicoscopeControlGroup(QGroupBox):
         self._device_label.setText(f"{device} ({self._serial})" if self._serial else device)
         self._capture_label.setText(self._capture_text or "--")
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
-        self._release_button.setText(tr("Trennen"))
         self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
-        self._plot_button.setText(tr("Kurve"))
         self._plot_button.setToolTip(tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen"))
         self._release_button.setVisible(self._status == "mcp")
         self._plot_button.setEnabled(bool(self._capture_text))
@@ -1981,6 +1977,7 @@ class PicoscopeControlGroup(QGroupBox):
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._button_row.setStyleSheet(_row_stylesheet(palette))
         apply_panel_tint(self, self._color_key)
+        self._launch_button.setVisible(self._kind == "picoscope" and not ThemeManager.instance().touch)
 
     def set_state(self, status: str, variant: str, serial: str) -> None:
         """Wie PicoscopePanel.set_state: leere variant/serial behalten den letzten Stand."""
@@ -2059,21 +2056,21 @@ class JLinkControlGroup(QGroupBox):
             self._form.addRow(" ", widget)
             _detint_label(self._form, widget)
 
-        self._check_button = IconButton("mdi.connection", "", text=tr("Prüfen"))
-        self._reset_button = IconButton("mdi.restart", "", text=tr("Reset"))
-        self._halt_button = IconButton("mdi.pause", "", text=tr("Anhalten"))
-        self._go_button = IconButton("mdi.play", "", text=tr("Starten"))
-        self._flash_button = IconButton("mdi.chip", "", text=tr("Flashen…"))
+        # Nur Symbole (Review KN-2 b, 12.11.2026); was sie tun, steht im Tooltip
+        self._check_button = IconButton("mdi.connection", "")
+        self._reset_button = IconButton("mdi.restart", "")
+        self._halt_button = IconButton("mdi.pause", "")
+        self._go_button = IconButton("mdi.play", "")
+        self._flash_button = IconButton("mdi.download", "")
         for button, action in ((self._check_button, "JLINK_CHECK"), (self._reset_button, "JLINK_RESET"),
                                (self._halt_button, "JLINK_HALT"), (self._go_button, "JLINK_GO")):
             button.clicked.connect(lambda _c=False, a=action: self.action_requested.emit(self._device_id, a, ""))
         self._flash_button.clicked.connect(self._on_flash_clicked)
         self._buttons = (self._check_button, self._reset_button, self._halt_button, self._go_button,
                          self._flash_button)
-        self._button_row = _row(self._check_button, self._reset_button, self._halt_button)
-        self._button_row2 = _row(self._go_button, self._flash_button)
+        self._button_row = _row(self._check_button, self._reset_button, self._halt_button, self._go_button,
+                                self._flash_button)
         outer.addWidget(self._button_row)
-        outer.addWidget(self._button_row2)
         outer.addStretch(1)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -2109,20 +2106,17 @@ class JLinkControlGroup(QGroupBox):
         path = state.get("last_file", "")
         self._file_label.setText(Path(path).name if path else "--")
         self._file_label.setToolTip(path)
-        self._check_button.setText(tr("Prüfen"))
         self._check_button.setToolTip(tr("Mit dem Ziel verbinden: Zielspannung und Kern lesen (der Kern läuft weiter)"))
-        self._reset_button.setText(tr("Reset"))
-        self._halt_button.setText(tr("Anhalten"))
-        self._go_button.setText(tr("Starten"))
-        self._flash_button.setText(tr("Flashen…"))
+        self._reset_button.setToolTip(tr("Reset"))
+        self._halt_button.setToolTip(tr("Anhalten"))
+        self._go_button.setToolTip(tr("Starten"))
         self._flash_button.setToolTip(tr("Firmware-Datei wählen und flashen (danach Reset und Start)"))
         for button in self._buttons:
             button.setEnabled(not state.get("busy"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
-        for row in (self._button_row, self._button_row2):
-            row.setStyleSheet(_row_stylesheet(palette))
+        self._button_row.setStyleSheet(_row_stylesheet(palette))
         apply_panel_tint(self, self._color_key)
 
     def _on_flash_clicked(self) -> None:

@@ -488,6 +488,8 @@ class TestcaseTab(QWidget):
         self._up_button = IconButton("mdi.arrow-up", "")
         self._down_button = IconButton("mdi.arrow-down", "")
         self._clear_all_button = IconButton("mdi.delete-sweep-outline", "")
+        # "Neu" neben "Laden" (Review KN-5, Notiz): ersetzt die Knoepfe im Hinweis "Noch kein Testablauf"
+        self._new_button = IconButton("mdi.file-plus-outline", "")
         self._load_button = IconButton("mdi.folder-open-outline", "")
         self._save_button = IconButton("mdi.content-save-outline", "")
         # Getauscht (BUGS.md #19): das Plus-Icon liest sich intuitiv als
@@ -520,6 +522,7 @@ class TestcaseTab(QWidget):
         self._up_button.clicked.connect(lambda: self._move_selected_row(-1))
         self._down_button.clicked.connect(lambda: self._move_selected_row(1))
         self._clear_all_button.clicked.connect(self._clear_all_rows)
+        self._new_button.clicked.connect(self._new_testcase)
         self._load_button.clicked.connect(self._load_from_file)
         self._save_button.clicked.connect(self._save_to_file)
         self._block_save_button.clicked.connect(self._save_block)
@@ -532,6 +535,7 @@ class TestcaseTab(QWidget):
         button_row.addWidget(self._block_save_button)
         button_row.addWidget(self._block_insert_button)
         button_row.addStretch()
+        button_row.addWidget(self._new_button)
         button_row.addWidget(self._load_button)
         button_row.addWidget(self._save_button)
         layout.addLayout(button_row)
@@ -555,12 +559,7 @@ class TestcaseTab(QWidget):
         hint_text_col.addWidget(self._hint_title)
         hint_text_col.addWidget(self._hint_text)
         hint_layout.addLayout(hint_text_col, 1)
-        self._hint_open = IconButton("mdi.folder-open-outline", "", text=tr("Ablauf öffnen …"))
-        self._hint_new = IconButton("mdi.plus", "", text=tr("Neuen Ablauf beginnen"))
-        self._hint_open.clicked.connect(self._load_from_file)
-        self._hint_new.clicked.connect(self._on_hint_new)
-        hint_layout.addWidget(self._hint_open, 0, Qt.AlignmentFlag.AlignVCenter)
-        hint_layout.addWidget(self._hint_new, 0, Qt.AlignmentFlag.AlignVCenter)
+        # Ohne eigene Knoepfe (Review KN-5): Oeffnen war doppelt zu "Laden", "Neu" steht in der Leiste
         layout.addWidget(self._hint_box)
         self._hint_dismissed = False
 
@@ -606,8 +605,9 @@ class TestcaseTab(QWidget):
         layout.addWidget(self._table)
 
         run_row = QHBoxLayout()
-        self._run_button = IconButton("mdi.play", "", text=tr("Start"))
-        self._stop_button = IconButton("mdi.stop", "", text=tr("Stop"))
+        # Nur Symbol wie die uebrige Werkzeugleiste (Review KN-5 b)
+        self._run_button = IconButton("mdi.play", "")
+        self._stop_button = IconButton("mdi.stop", "")
         self._stop_button.setEnabled(False)
         self._run_button.clicked.connect(self.run_requested.emit)
         self._stop_button.clicked.connect(self._on_stop_clicked)
@@ -662,6 +662,7 @@ class TestcaseTab(QWidget):
         self._up_button.setToolTip(tr("Nach oben"))
         self._down_button.setToolTip(tr("Nach unten"))
         self._clear_all_button.setToolTip(tr("Alle Zeilen löschen"))
+        self._new_button.setToolTip(tr("Neuer Ablauf"))
         self._load_button.setToolTip(tr("Laden…"))
         self._save_button.setToolTip(tr("Speichern…"))
         self._block_save_button.setToolTip(tr("Baustein speichern…"))
@@ -676,14 +677,10 @@ class TestcaseTab(QWidget):
         self._action_add_inc_var.setText(tr("Variable erhöhen"))
         self._action_add_wait.setText(tr("Warten"))
         self._run_button.setToolTip(tr("Start"))
-        self._run_button.setText(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
-        self._stop_button.setText(tr("Stop"))
         self._report_button.setToolTip(tr("Report…"))
         self._action_report_html.setText(tr("Report öffnen (HTML)"))
         self._action_report_pdf.setText(tr("Als PDF exportieren…"))
-        self._hint_open.setText(tr("Ablauf öffnen …"))
-        self._hint_new.setText(tr("Neuen Ablauf beginnen"))
         self._refresh_hint()
         self._set_status(self._status_key, kind=self._status_kind, **self._status_key_kwargs)
         for row in range(self._table.rowCount()):
@@ -2309,7 +2306,26 @@ class TestcaseTab(QWidget):
         self._hint_dismissed = True
         self._hint_box.setVisible(False)
 
-    def _on_hint_new(self) -> None:
+    def _new_testcase(self) -> None:
+        """Knopf "Neuer Ablauf" (Review KN-5): Tabelle auf eine leere Startzeile, keine Datei mehr
+        zugeordnet (Speichern fragt nach einem neuen Namen). Mit Inhalt vorher nachfragen."""
+        has_content = self._current_path is not None or self._table.rowCount() > 1
+        if has_content and QMessageBox.question(
+                self, tr("Neuer Ablauf"),
+                tr("Den aktuellen Ablauf schließen und einen neuen beginnen? Nicht gespeicherte Änderungen gehen "
+                   "verloren.")) != QMessageBox.StandardButton.Yes:
+            return
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.blockSignals(False)
+        self._clear_block_groups()
+        self._clear_all_row_colors()
+        self._selected_row = -1   # sonst fuegt _add_row_clicked hinter der alten Auswahl ein (Zeile 1 leer)
+        self._current_path = None
+        self._file_digest = None
+        self._add_row_clicked()
+        self._revalidate_structure()
+        self._sync_run_view_test()
         self._dismiss_hint()
         if self._table.rowCount() > 0:
             self._table.selectRow(0)
@@ -2572,6 +2588,7 @@ class TestcaseTab(QWidget):
             self._remove_button,
             self._up_button,
             self._down_button,
+            self._new_button,
             self._load_button,
             self._save_button,
             self._block_save_button,

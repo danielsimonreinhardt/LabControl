@@ -680,5 +680,10 @@
   "Fernsteuerung für andere Rechner": "Remote control for other computers",
   "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner braucht das nicht.": "Time-limited, for programs on other computers. The paired link partner does not need it.",
   "Claude (MCP) darf steuern": "Claude (MCP) may control",
-  "Claude (MCP) darf nur lesen": "Claude (MCP) may only read"
+  "Claude (MCP) darf nur lesen": "Claude (MCP) may only read",
+  "Vollbild": "Full screen",
+  "Vollbild beenden": "Exit full screen",
+  "Interface hinzufügen": "Add interface",
+  "Neuer Ablauf": "New sequence",
+  "Den aktuellen Ablauf schließen und einen neuen beginnen? Nicht gespeicherte Änderungen gehen verloren.": "Close the current sequence and start a new one? Unsaved changes will be lost."
 }

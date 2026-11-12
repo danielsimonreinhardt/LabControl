@@ -6,8 +6,8 @@ interface: the dashboard, the pages "Control", "Testcase", "History" and
 "Settings" (navigation on the left) and the bar at the top with the device
 status and "ALL OFF".
 
-You can reopen this page at any time via the **Help** button in the
-"Settings" tab.
+You can reopen this page at any time via the question-mark button (**Help**)
+in "Settings".
 
 ---
 
@@ -139,10 +139,11 @@ The section shows:
 
 - **Status** (free, busy, test run, connected via MCP) plus model and
   serial number.
-- The **last acquisition** over network/MCP with the **“Plot”** button
-  (shows it as an image).
-- **“Open PicoScope 7”** and – while LabControl holds the device for
-  acquisitions – **“Disconnect”**.
+- The **last acquisition** over network/MCP with the **Plot** button (chart
+  icon, shows it as an image).
+- **“Open PicoScope 7”** (PC only, not in touch mode) and – while LabControl
+  holds the device for acquisitions – **Disconnect** (icon with a broken network
+  link).
 - As for the other devices: **rename** (pencil) and **panel colour** (colour
   wheel); both also apply to the dashboard tile.
 
@@ -223,9 +224,12 @@ the serial number. The SEGGER J-Link software (J-Link Commander) is required;
 LabControl finds it by itself.
 
 The tile shows the target, the target voltage, the last operation with its
-result and the last flashed file. **"Check"** connects to the target and reads
-target voltage and core (the core keeps running), plus **"Reset"**,
-**"Halt"**, **"Run"** and **"Flash…"** (choose a file, then reset and run). Test
+result and the last flashed file. Below are five icon buttons (name in the
+tooltip): **Check** (plug) connects to the target and reads target voltage and
+core (the core keeps running), **Reset** (circular arrow), **Halt** (pause),
+**Run** (play) and **Flash** (download arrow: choose a file, then reset and run).
+The file dialog starts at the last flashed file and shows HEX, SREC/S19/MOT and
+ELF/AXF/OUT; `.bin` is rejected because it carries no address. Test
 sequences offer the same operations; for flashing, choose the file (HEX, SREC
 or ELF) in the value column. A failed step aborts the sequence.
 
@@ -246,9 +250,10 @@ control element** (loop, condition, variable).
 
 As long as no sequence is loaded and nothing has been entered, the hint
 **"No test sequence yet"** is shown above the table, with the folder the
-sequences are stored in and the buttons **"Open sequence …"** and **"Start
-a new sequence"** (puts the cursor into the first row). It disappears as
-soon as a sequence is loaded or a step is edited.
+sequences are stored in. It disappears as soon as a sequence is loaded or a
+step is edited. On the right of the toolbar are **New sequence** (sheet with a
+plus: empties the table down to one start row and detaches it from the file,
+asking first if something is already loaded or entered), **Load** and **Save**.
 
 ### Toolbar
 
@@ -354,11 +359,11 @@ times — otherwise a check can fail incorrectly.
 
 ### Start, Stop, Report
 
-- **Start**: begins sequential execution of all active rows. While
+- **Start** (play icon): begins sequential execution of all active rows. While
   running, the table is locked, the current step is highlighted and
   shown in the status line (including the current loop/while iteration,
   if applicable).
-- **Stop**: aborts the run and immediately switches off all outputs
+- **Stop** (square): aborts the run and immediately switches off all outputs
   (safety shutdown).
 - **Report button** (enabled after every run): opens a post-run report
   as an HTML page in the browser, or exports it as PDF. The report
@@ -485,7 +490,7 @@ time-window-limited ring buffer of the live charts.
   Both buttons ask for confirmation and cannot be undone.
 - **Safety limits (watchdog)**: see section 6.
 - **Network sharing and remote control**: see below.
-- **Help**: opens this user manual.
+- **Help** (question mark): opens this user manual.
 
 ### “Network” sub-tab: sharing tiles on the local network
 

@@ -110,7 +110,7 @@ class PicoscopePanel(QGroupBox):
         status_layout.addWidget(self._variant_label)
         status_layout.addStretch()
         # Nur sichtbar, solange der ScopeService das Geraet haelt (status "mcp").
-        self._release_button = IconButton("mdi.lan-disconnect", "", text=tr("Trennen"))
+        self._release_button = IconButton("mdi.lan-disconnect", "")   # nur Symbol (Review KN-3 a)
         self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
         self._release_button.setVisible(False)
         status_layout.addWidget(self._release_button)
@@ -123,7 +123,7 @@ class PicoscopePanel(QGroupBox):
         capture_layout.setContentsMargins(0, 0, 0, 0)
         self._capture_label = QLabel()
         self._capture_label.setWordWrap(True)
-        self._plot_button = IconButton("mdi.chart-line", "", text=tr("Kurve"))
+        self._plot_button = IconButton("mdi.chart-line", "")
         self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
         capture_layout.addWidget(self._capture_label, 1)
         capture_layout.addWidget(self._plot_button)
@@ -144,7 +144,8 @@ class PicoscopePanel(QGroupBox):
         self._launch_button.set_color_override(current_palette().surface)
         self._launch_button.clicked.connect(self.launch_requested)
         outer.addWidget(self._launch_button)
-        self._launch_button.setVisible(with_launch)
+        # "PicoScope 7 öffnen" nur am PC (Review KN-3, Notiz): im Touch-Profil (Pi) gibt es das Programm nicht
+        self._launch_button.setVisible(with_launch and not ThemeManager.instance().touch)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
         Translator.instance().language_changed.connect(self._retranslate)
@@ -156,8 +157,6 @@ class PicoscopePanel(QGroupBox):
     def _retranslate(self) -> None:
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
         self._status_text.setText(tr(STATUS_TEXT.get(self._status, "Unbekannt")))
-        self._release_button.setText(tr("Trennen"))
-        self._plot_button.setText(tr("Kurve"))
         self._plot_button.setToolTip(tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen"))
         self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
 
@@ -168,6 +167,7 @@ class PicoscopePanel(QGroupBox):
         self._apply_status_icon(palette)
         self._apply_variant_style(palette)
         self._launch_button.set_color_override(palette.surface)
+        self._launch_button.setVisible(self._with_launch and not ThemeManager.instance().touch)
 
     def _apply_variant_style(self, palette: Palette) -> None:
         self._variant_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")

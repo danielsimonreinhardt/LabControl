@@ -80,6 +80,20 @@ class IconButton(_IconColorMixin, QPushButton):
         if not text:
             self.setFixedSize(ICON_ONLY_SIZE)
         self._init_icon_color(icon_name)
+        if not tooltip and icon_name == "mdi.check":
+            # ✓-Knoepfe hinter Sollwerten: Tooltip "Übernehmen", solange der Besitzer keinen eigenen setzt
+            # (Review KN-16, 12.11.2026); folgt dem Sprachwechsel
+            from i18n import Translator, tr
+            self._default_tip = tr("Übernehmen")
+            self.setToolTip(self._default_tip)
+            # gebundene Methode: Qt trennt die Verbindung, wenn der Knopf zerstoert wird
+            Translator.instance().language_changed.connect(self._retip)
+
+    def _retip(self, *_args) -> None:
+        from i18n import tr
+        if self.toolTip() == self._default_tip:
+            self._default_tip = tr("Übernehmen")
+            self.setToolTip(self._default_tip)
 
     def setMenu(self, menu) -> None:  # noqa: N802 (Qt override)
         super().setMenu(menu)

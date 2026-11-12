@@ -7,6 +7,26 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Knöpfe: Text oder Symbol (0.54.0, Review KN-1 bis KN-16 vom 12.11.2026).** Artefakt „Knöpfe: Text oder Symbol“,
+  alle 186 Knöpfe aus PC- und Touch-Ansicht geprüft.
+  - **Nur noch Symbol (Name im Tooltip):** J-Link Prüfen, Reset, Anhalten, Starten und Flashen (jetzt Download-Pfeil,
+    alle in einer Reihe, KN-2 b); Oszilloskop Trennen und Kurve (KN-3 a); am Pi Neu einlesen, Start und Stop der
+    Ausführen-Ansicht (Start/Stop bleiben breit, KN-4 b); im Editor Start und Stop (KN-5 b); Hilfe und Interface
+    hinzufügen (KN-7 a); am Pi auch CAN Senden/Je ID/Leeren (KN-8 b) sowie Pause, Aufnahme und Diagramm entfernen
+    im Verlauf (KN-9 a).
+  - **„PicoScope 7 öffnen“ nur am PC**, im Touch-Profil ausgeblendet (KN-3, Notiz).
+  - **Testablauf-Editor:** Der Hinweis „Noch kein Testablauf“ hat keine Knöpfe mehr („Ablauf öffnen …“ war doppelt
+    zu Laden). Neu in der Werkzeugleiste neben Laden: **Neuer Ablauf** (Blatt mit Plus) leert die Tabelle bis auf
+    eine Startzeile und löst die Verbindung zur Datei; mit geladenem oder eingetragenem Ablauf fragt er vorher nach
+    (KN-5, Notiz).
+  - **Symbol vor dem Text:** Handbedienung (Hand), FAIL zurücksetzen, die beiden Lösch-Knöpfe in den Geräte-
+    Einstellungen und Koppeln… (KN-12 a, KN-14 a).
+  - **Tooltips ergänzt:** alle ✓-Knöpfe ohne eigenen Tooltip zeigen „Übernehmen“ (in `IconButton`), Vollbild und
+    Ein/Aus in der Leiste oben (KN-16 a).
+  - Unverändert nach Review: Navigation mit Text, ALLE AUS/Quittieren, EIN/AUS, Presets und Zeitfenster, Export
+    CSV/MF4, Dialog-Knöpfe, Diagramm/Signal/Y-Achse/Leeren/Verwerfen am Pi mit Text.
+  - **Mock-verifiziert:** `check_testcase_hint` umgestellt (Neuer Ablauf mit und ohne Rückfrage, Start/Stop nur
+    Symbol), übrige Prüfungen, Bildschirmfotos PC und Touch.
 - **Knopf „Anordnen“ nur noch als Symbol (0.53.2, Nutzerwunsch 12.11.2026).** Verschiebe-Kreuz, im Modus Anordnen
   ein Haken auf Akzentfarbe; „Anordnen“ bzw. „Fertig“ stehen nur noch im Tooltip. Spart Platz für die Chips.
   **Mock-verifiziert** (`check_touch_ui`, `check_arrange_overlay`).

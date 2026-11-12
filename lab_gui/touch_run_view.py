@@ -36,7 +36,7 @@ from i18n import tr
 from icons import IconButton
 from theme import ThemeManager
 from theme import current as current_palette
-from touch_ui import enable_swipe
+from touch_ui import TOUCH_KEEP_WIDTH, enable_swipe
 
 ROW_HEIGHT = 52
 RUN_BUTTON_FONT_PX = 18   # Start/Stop zwei Stufen ueber der Grundschrift (14 px), GUI-Review UX-6
@@ -82,7 +82,7 @@ class TouchRunView(QWidget):
         self._empty_text = QLabel()
         self._empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_text.setWordWrap(True)
-        self._empty_refresh = IconButton("mdi.refresh", "", text=tr("Neu einlesen"))
+        self._empty_refresh = IconButton("mdi.refresh", "")   # nur Symbol (Review KN-4 b)
         self._empty_refresh.clicked.connect(self.refresh_requested)
         for widget in (self._empty_icon, self._empty_title, self._empty_text):
             empty.addWidget(widget)
@@ -129,12 +129,15 @@ class TouchRunView(QWidget):
         self._status_label.setMinimumHeight(48)
         right.addWidget(self._status_label)
         buttons = QHBoxLayout()
-        # Mit Text anlegen: ohne Text setzt IconButton eine feste Symbol-Knopf-Groesse
-        self._start_button = IconButton("mdi.play", "", text=tr("Start"))
-        self._stop_button = IconButton("mdi.stop", "", text=tr("Stop"))
+        # Nur Symbol (Review KN-4 b), aber breit: mit Text anlegen (ohne Text setzt IconButton eine feste
+        # Symbol-Knopf-Groesse), dann den Text leeren; TouchSizer laesst die Breite (TOUCH_KEEP_WIDTH)
+        self._start_button = IconButton("mdi.play", "", text="Start")
+        self._stop_button = IconButton("mdi.stop", "", text="Stop")
         for button in (self._start_button, self._stop_button):
-            button.setIconSize(QSize(26, 26))
+            button.setText("")
+            button.setIconSize(QSize(32, 32))
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            setattr(button, TOUCH_KEEP_WIDTH, True)
             buttons.addWidget(button, 1)
         self._start_button.clicked.connect(self.start_requested)
         self._stop_button.clicked.connect(self.stop_requested)
@@ -210,8 +213,8 @@ class TouchRunView(QWidget):
     def retranslate(self) -> None:
         self._list_title.setText(tr("Testabläufe"))
         self._refresh_button.setToolTip(tr("Liste neu einlesen"))
-        self._start_button.setText(tr("Start"))
-        self._stop_button.setText(tr("Stop"))
+        self._start_button.setToolTip(tr("Start"))
+        self._stop_button.setToolTip(tr("Stop"))
         empty = self._files.count() == 0
         self._files.setVisible(not empty)
         self._empty_box.setVisible(empty)
@@ -221,7 +224,7 @@ class TouchRunView(QWidget):
         # volle Breite (Fenster wurde breiter als 1024 px)
         breakable = re.sub(r"([\\/])", "\\1\u200b", str(self._folder or ""))
         self._empty_text.setText(breakable)   # nur der Ordner, ohne Erklaertext
-        self._empty_refresh.setText(tr("Neu einlesen"))
+        self._empty_refresh.setToolTip(tr("Liste neu einlesen"))
         self._folder_label.setText(str(self._folder or ""))
         self._restyle()
 

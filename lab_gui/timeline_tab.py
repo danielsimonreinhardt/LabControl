@@ -535,7 +535,7 @@ class _ChartRow(QGroupBox):
         outer.addLayout(header)
         touch_label(self._add_button, lambda: tr("Signal"))
         touch_label(self._yaxis_button, lambda: tr("Y-Achse"))
-        touch_label(self._remove_button, lambda: tr("Entfernen"))
+        # "Entfernen" am Pi nur Symbol (Review KN-9 a)
 
         self._legend_widget = no_own_background(QWidget())
         self._legend_layout = QHBoxLayout(self._legend_widget)
@@ -775,10 +775,9 @@ class TimelineTab(QWidget):
         self._add_chart_button.clicked.connect(self._on_add_chart_clicked)
         controls.addWidget(self._add_chart_button)
         # Touch-Profil: kurze Texte statt Tooltips (touch_ui.touch_label)
-        touch_label(self._pause_button, lambda: tr("Weiter") if self._pause_button.isChecked() else tr("Pause"))
+        # Pause und Aufnahme am Pi nur Symbol (Review KN-9 a)
         touch_label(self._view_clear_button, lambda: tr("Leeren"))
         touch_label(self._add_chart_button, lambda: tr("Diagramm"))
-        touch_label(self._recording_toggle_button, lambda: tr("Aufnahme"))
         touch_label(self._recording_clear_button, lambda: tr("Verwerfen"))
 
         controls.addStretch()

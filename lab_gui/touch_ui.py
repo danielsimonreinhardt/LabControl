@@ -100,6 +100,7 @@ def suggest_touch(screen) -> bool:
 TOUCH_H = 44            # einheitliche Hoehe aller Knoepfe und Eingabefelder (TouchSizer)
 _ORIGINAL_SIZE = "_touch_original_size"
 TOUCH_LABEL = "_touch_label"
+TOUCH_KEEP_WIDTH = "_touch_keep_width"   # Symbol-Knopf, der breit bleiben soll (Start/Stop am Pi): nur Hoehe anpassen
 SWIPE_ATTR = "_touch_swipe"            # am Viewport: Wischen eingeschaltet
 
 
@@ -245,7 +246,8 @@ class TouchSizer(QObject):
         elif name == "_DigitalOutToggle":         # LED-Knopf OUT1-8 (microHIL)
             self._fix(widget, width=TOUCH_H, height=TOUCH_H + 8)
         elif isinstance(widget, (QPushButton, QToolButton)):
-            icon_only = not widget.text() and not widget.icon().isNull()
+            icon_only = (not widget.text() and not widget.icon().isNull()
+                         and not getattr(widget, TOUCH_KEEP_WIDTH, False))
             self._fix(widget, width=TOUCH_H if icon_only else None, height=TOUCH_H)
         elif isinstance(widget, QLabel) and _is_form_label(widget):
             self._remember(widget)
@@ -635,6 +637,10 @@ class TopBar(QWidget):
         from i18n import tr
         self._arrange_button.setToolTip(tr("Fertig") if self._arrange_button.isChecked()
                                         else tr("Kacheln in Übersicht und Steuerung verschieben"))
+        # Review KN-16: Tooltips fuer die reinen Symbol-Knoepfe
+        self._fullscreen_button.setToolTip(tr("Vollbild beenden") if getattr(self, "_fullscreen", False)
+                                           else tr("Vollbild"))
+        self._power_button.setToolTip(tr("Ausschalten"))
 
     def set_touch(self, on: bool) -> None:
         """Am PC flacher und ohne "Anordnen" (dort zieht man Kacheln direkt mit der Maus)."""
@@ -655,6 +661,7 @@ class TopBar(QWidget):
     def set_fullscreen(self, on: bool) -> None:
         self._fullscreen = on
         self._recolor()
+        self.retranslate()
 
     def _recolor(self) -> None:
         pal = current_palette()
