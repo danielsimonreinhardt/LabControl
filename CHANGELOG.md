@@ -6,6 +6,11 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **0.50.1:** Ein beim Verbund-Partner nur eingetragener, aber nicht antwortender Batterie-Simulator (z. B. Vector-Adapter
+  nicht gesteckt) sperrte hier das Senden von 0x130 von Hand bzw. per CAN-Schritt. Es zählt jetzt nur ein Simulator,
+  der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
+
 ### Hinzugefügt
 - `tools/pi/netzlaufwerk_pi.sh`: hängt ein SMB-Netzlaufwerk am Pi per systemd-Automount ein (`nofail`, 15 s Frist,
   Zugangsdaten nur in `/etc/labcontrol/smb-credentials`, Passwort verdeckt abgefragt) und trägt `<mount>/LABCONTROL`

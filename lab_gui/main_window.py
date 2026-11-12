@@ -611,7 +611,9 @@ class MainWindow(QMainWindow):
         if snap.host != self._partner_host_name:
             self._partner_host_name = snap.host
             self.testcase_tab.set_verbund(app_logging.host_name(), snap.host, self._partner.enabled)
-        self._set_partner_battsim(any(t.get("kind") == "battsim" for t in snap.tiles))
+        # nur ein antwortender Simulator zaehlt -- ein eingetragener ohne Adapter sendet kein 0x130
+        self._set_partner_battsim(any(t.get("kind") == "battsim" and t.get("online", True) and not t.get("stale")
+                                      for t in snap.tiles))
         self._check_verbund_warnings(snap)
         name = self._partner.name()
         for tile in snap.tiles:

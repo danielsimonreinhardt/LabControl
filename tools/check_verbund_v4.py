@@ -293,6 +293,12 @@ def main() -> int:
 
     print("can -- nur B sendet 0x130")
     check("A weiss, dass B einen Batterie-Simulator fuehrt", spin(app, 2.0, lambda: window_a._worker._partner_has_battsim))
+    from partner_client import PartnerSnapshot
+    window_a._on_partner_snapshot(PartnerSnapshot(host=HOST_B, tiles=[
+        {"id": dw.SIM_BATTSIM_ID, "kind": "battsim", "online": False, "fields": []}]))
+    check("... ein nicht antwortender Simulator zaehlt nicht",
+          spin(app, 2.0, lambda: not window_a._worker._partner_has_battsim))
+    spin(app, 4.0, lambda: window_a._worker._partner_has_battsim)   # naechste echte Abfrage stellt alles wieder her
 
     print("lost -- Lebenszeichen fehlt")
     status, body = http_async(app, port_a, TOKEN_A, "POST", quoted + "/actions", {"action": "PSU_OUT_ON"})
