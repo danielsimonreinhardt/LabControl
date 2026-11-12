@@ -134,7 +134,7 @@ class PartnerTile(QGroupBox):
         if not online:
             state, tone = tr("getrennt"), "danger"
         elif not control:
-            state, tone = tr("verbunden · nur Anzeige (Steuern dort nicht freigegeben)"), "muted"
+            state, tone = tr("verbunden · nur Anzeige"), "muted"
         elif not available:
             state, tone = tr("verbunden · Bedienen gesperrt: {reason}", reason=tr(error_text(blocked))), "warning"
         else:

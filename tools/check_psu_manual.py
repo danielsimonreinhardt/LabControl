@@ -159,12 +159,11 @@ widgets = (
     group._output_on_button, group._output_off_button,
 )
 check("Umschalter ist nicht eingeschaltet", not group._manual_button.isChecked())
-check("Hinweis ist ausgeblendet", group._manual_hint.isHidden())
+check("kein Erklaertext mehr (0.51.0)", not hasattr(group, "_manual_hint"))
 group._manual_button.click()
 check("Klick meldet die Handbedienung", signals == [("manual", True)], str(signals))
 group.set_manual_state(True)
 check("In der Handbedienung sind alle Felder gesperrt", not any(w.isEnabled() for w in widgets))
-check("Hinweis ist sichtbar", not group._manual_hint.isHidden())
 check("Umschalter bleibt bedienbar", group._manual_button.isEnabled() and group._manual_button.isChecked())
 signals.clear()
 group.set_manual_state(False)

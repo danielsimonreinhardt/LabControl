@@ -108,7 +108,7 @@ def touch_label(button, text_fn: Callable[[], str]) -> None:
         button.toggled.connect(lambda _checked=False: sizer().relabel(button))
 # Eigene feste Groessen: Tastenfeld, Navigation/Leiste, Preset-Kachel (eigene Touch-Fassung);
 # das Dashboard ist reine Anzeige -- gestreckte Zeilen zerrissen dort die Kacheln.
-_SIZER_EXCLUDED = {"KeypadDialog", "NavBar", "TopBar", "_PresetSlotButton", "DashboardWidget"}
+_SIZER_EXCLUDED = {"KeypadDialog", "TextKeyboardDialog", "NavBar", "TopBar", "_PresetSlotButton", "DashboardWidget"}
 
 
 class TouchSizer(QObject):
@@ -162,6 +162,9 @@ class TouchSizer(QObject):
                 self._flush_timer.start()
         elif event.type() == QEvent.Type.Show and isinstance(obj, QDialog) and obj.isWindow():
             fit_to_screen(obj)
+        elif isinstance(obj, QLineEdit):
+            from touch_keyboard import handle_event   # lokal: touch_keyboard -> touch_keypad -> theme
+            return handle_event(obj, event)
         return False
 
     def _flush(self) -> None:

@@ -140,9 +140,7 @@ class PairingDialog(QDialog):
         session.finished.connect(self._on_finished)
 
     def _on_code(self, code: str, host: str) -> None:
-        self._intro.setText(tr("Am anderen Rechner{host} erscheint jetzt eine Anfrage mit diesem Code. "
-                               "Stimmt er überein, dort „Koppeln“ tippen.",
-                               host=f" ({host})" if host else ""))
+        self._intro.setText(tr("Am anderen Rechner{host} bestätigen", host=f" ({host})" if host else ""))
         self._code.setText(format_code(code))
         self._code.show()
         self._status.setText(tr("Warte auf die Bestätigung …"))
@@ -182,21 +180,16 @@ class PairConfirmDialog(QDialog):
         self.pair_id = pair_id
         self.setWindowTitle(tr("Kopplung anfragen"))
         layout = QVBoxLayout(self)
-        text = QLabel(tr("„{name}“ ({ip}) möchte sich mit diesem LabControl koppeln. Danach können beide "
-                         "Rechner die freigegebenen Geräte des anderen sehen und bedienen.",
-                         name=label, ip=client_ip))
+        text = QLabel(tr("„{name}“ ({ip}) möchte koppeln", name=label, ip=client_ip))
         text.setWordWrap(True)
         layout.addWidget(text)
         layout.addWidget(_code_label(code))
-        hint = QLabel(tr("Nur koppeln, wenn der andere Rechner denselben Code zeigt."))
-        hint.setWordWrap(True)
-        hint.setProperty("role", "hint")
-        layout.addWidget(hint)
         row = QHBoxLayout()
         row.addStretch(1)
         reject = QPushButton(tr("Ablehnen"))
         reject.clicked.connect(lambda: self._decide(False))
-        accept = QPushButton(tr("Koppeln"))
+        # Der Knopf sagt, worauf es ankommt (vorher ein eigener Hinweis): nur bei gleichem Code koppeln
+        accept = QPushButton(tr("Code gleich – koppeln"))
         accept.setDefault(True)
         accept.clicked.connect(lambda: self._decide(True))
         row.addWidget(reject)

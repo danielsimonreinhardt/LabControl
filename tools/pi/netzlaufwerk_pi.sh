@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Netzlaufwerk (SMB/CIFS) am Pi einhaengen und in LabControl eintragen.
 #
 #   bash ~/LabControl/tools/pi/netzlaufwerk_pi.sh [//server/freigabe] [unterordner] [benutzer]

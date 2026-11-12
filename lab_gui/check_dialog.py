@@ -106,11 +106,6 @@ class CheckDialog(QDialog):
             self._var_edit.setPlaceholderText(tr("Variablenname"))
             self._form.addRow(self._var_row_label, self._var_edit)
 
-        self._arb_hint = QLabel()
-        self._arb_hint.setWordWrap(True)
-        self._arb_hint.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
-        self._arb_hint.setVisible(is_arb)
-        layout.addWidget(self._arb_hint)
 
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
@@ -165,7 +160,6 @@ class CheckDialog(QDialog):
             self._var_edit.setToolTip(
                 tr("Optional -- der gelesene Wert wird zusätzlich in dieser Variable abgelegt, nutzbar als Bedingung in einem späteren Solange/Wenn-Baustein.")
             )
-        self._arb_hint.setText(tr("Bei Arbiträrsignal-Schritten wird nach dem Signalende gemessen."))
         self._update_state()
 
     def _load_params(self, params: dict) -> None:

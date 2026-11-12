@@ -2295,9 +2295,7 @@ class TestcaseTab(QWidget):
             return
         pal = current_palette()
         self._hint_title.setText(tr("Noch kein Testablauf"))
-        self._hint_text.setText(tr("Einen gespeicherten Ablauf öffnen oder unten den ersten Schritt eintragen. "
-                                   "Abläufe liegen in:\n{folder}",
-                                   folder=str(data_store.target_dir("testcases"))))
+        self._hint_text.setText(str(data_store.target_dir("testcases")))   # Ordner der Ablaeufe, ohne Erklaertext
         self._hint_icon.setPixmap(qta.icon("mdi.playlist-edit", color=pal.text_muted).pixmap(32, 32))
         self._hint_title.setStyleSheet("font-weight: bold;")
         self._hint_text.setStyleSheet(f"color: {pal.text_muted};")

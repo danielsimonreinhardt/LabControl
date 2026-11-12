@@ -236,9 +236,10 @@ def main() -> int:
                    "CAN-Nutzdaten": can_data is not None and wants_keyboard(can_data),
                    "normales Textfeld": plain_edit is not None and wants_keyboard(plain_edit)}
         spin.clearFocus()
-        check("keine Bildschirmtastatur fuer Felder mit Tastenfeld (Zahlenfeld, CAN-Nutzdaten), normale Textfelder schon",
+        # Seit PI-37 a (0.51.0) haben auch Textfelder ein eigenes Tastenfeld (touch_keyboard.py)
+        check("keine Bildschirmtastatur des Systems (Zahlenfeld, CAN-Nutzdaten, Textfeld haben eigene Tastatur)",
               answers == {"Zahlenfeld": False, "Zahlenfeld-Textfeld": False, "CAN-Nutzdaten": False,
-                          "normales Textfeld": True}, str(answers))
+                          "normales Textfeld": False}, str(answers))
 
     print("Uebersicht mehrzeilig, Batterie-Simulator 2 x 7, Zeitfenster-Tasten (Schritt 4.5)")
     w.tabs.setCurrentWidget(w._overview_page)

@@ -524,18 +524,23 @@ class MainWindow(QMainWindow):
         """Hinweise zum Verbund (Chip, Einstellungen, Log bei Wechsel): dasselbe LAN-Oszilloskop an
         beiden Rechnern eingetragen (PI-29 a), Uhren weichen ab (PI-33 a, NTP)."""
         warnings = []
+        kinds = []   # Art der Warnung: ins Log nur, wenn eine Art neu auftritt (nicht bei jedem neuen Messwert)
         both = sorted(set(lan_scope_hosts(self._settings.scpi_scopes)) & {s.lower() for s in snap.lan_scopes})
         if both:
             warnings.append(tr("LAN-Oszilloskop {hosts} ist auch bei {name} eingetragen – es gehört einem Rechner, "
                                "bitte an einem austragen", hosts=", ".join(both), name=self._partner.name()))
+            kinds.append(("scope", tuple(both)))
         offset = snap.clock_offset_s
         if offset is not None and abs(offset) > CLOCK_WARN_S:
             warnings.append(tr("Uhren weichen um {s} s ab – NTP an beiden Rechnern prüfen",
                                s=f"{offset:+.1f}"))
+            kinds.append(("clock",))
         if warnings != self._verbund_warnings:
-            for text in warnings:
-                if text not in self._verbund_warnings:
+            old_kinds = getattr(self, "_verbund_warning_kinds", [])
+            for kind, text in zip(kinds, warnings):
+                if kind not in old_kinds:
                     logger.warning("Verbund: %s", text)
+            self._verbund_warning_kinds = kinds
             self._verbund_warnings = warnings
             self._render_partner_chip()
 
@@ -1640,6 +1645,15 @@ class MainWindow(QMainWindow):
         self.control_tab.set_drag_allowed(allowed)
         touch_sizer().set_swipe_blocked(
             [self.control_tab.scroll_area(), self.dashboard.scroll_area(), self._overview_page], on)
+        # Herausgezoomtes Abbild aller Kacheln: im Anordnen-Modus laesst sich nicht wischen, Kacheln
+        # ausserhalb des sichtbaren Bereichs waren sonst nicht erreichbar (Nutzerfeedback 12.11.2026)
+        for overlay in getattr(self, "_arrange_overlays", []):
+            overlay.close_overlay()
+        self._arrange_overlays = []
+        if on and self._touch:
+            from arrange_overlay import ArrangeOverlay
+            self._arrange_overlays = [ArrangeOverlay(self.dashboard.scroll_area(), self.dashboard),
+                                      ArrangeOverlay(self.control_tab.scroll_area(), self.control_tab)]
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

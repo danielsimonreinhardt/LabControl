@@ -269,7 +269,7 @@ class SignalDialog(QDialog):
         )
         self._duration_label.setText(
             tr(
-                "Signal-Dauer: {duration:g} s (siehe Spalte „Dauer (s)“ in der Testschritt-Zeile)",
+                "Signal-Dauer: {duration:g} s",
                 duration=self._step_duration,
             )
         )

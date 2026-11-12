@@ -753,6 +753,19 @@ class DashboardWidget(QGroupBox):
     def scroll_area(self):
         return self._scroll_area
 
+    # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
+
+    def arrange_snapshot(self):
+        from arrange_overlay import tile_rects_in
+        container = self._scroll_area.widget()
+        return container.grab(), tile_rects_in(container, self._panels)
+
+    def arrange_drop(self, device_id: str, pos, _grab) -> None:
+        """Reihenfolge wie beim Loslassen an `pos` (Container-Koordinaten), speichern und neu anordnen."""
+        if device_id in self._panels:
+            self._drag_preview_order = None
+            self._persist_panel_order(self._order_with_dragged_at(device_id, pos))
+
     def set_multi_row(self, on: bool) -> None:
         """Touch-Profil (Reiter "Übersicht"): Kacheln brechen an der verfuegbaren Breite um und
         wachsen nach unten (die Seite scrollt senkrecht), statt in zwei Zeilen waagerecht zu

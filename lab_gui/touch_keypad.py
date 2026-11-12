@@ -8,7 +8,7 @@ derselben Zeile aus, sendet also wie bisher der ✓-Knopf.
 
 Fuer Hex-Felder (CAN-ID mit Anzeige zur Basis 16, CAN-Nutzdaten) gibt es die Tasten A-F;
 attach_hex_keypad() haengt das Hex-Feld an ein Textfeld (Nutzdaten "01 A2 FF").
-Texte (Namen, Dateinamen) bleiben bei der Bildschirmtastatur des Systems.
+Texte (Namen, Dateinamen, Adressen) bekommen die Texttastatur aus touch_keyboard.py (PI-37 a).
 """
 from __future__ import annotations
 
@@ -279,4 +279,5 @@ def attach_hex_keypad(edit: QLineEdit) -> None:
     global _HEX_FILTER
     if _HEX_FILTER is None:
         _HEX_FILTER = _HexLineFilter()
+    setattr(edit, "_touch_no_text_keyboard", True)   # touch_keyboard.NO_KEYBOARD: Hex-Feld statt Texttastatur
     edit.installEventFilter(_HEX_FILTER)

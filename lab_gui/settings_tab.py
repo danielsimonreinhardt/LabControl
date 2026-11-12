@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -225,11 +226,6 @@ class _DeviceInfoGroup(QGroupBox):
         self._firmware_value.setText(self._version if self._version else tr("unbekannt"))
 
 
-_CAN_TABLE_COLUMNS = (
-    "interface", "channel", "pick", "status", "bitrate", "serial_baudrate", "label", "dbc", "device", "remove",
-)
-
-
 class _DbcFileCell(QWidget):
     """Zelle fuer die optionale DBC-Datei eines CAN-Interfaces (siehe
     settings.py::can_configs, Schluessel "dbc_path") -- FEATURES.md Punkt 3.
@@ -306,65 +302,58 @@ class _DbcFileCell(QWidget):
         self.changed.emit()
 
 
-class _CanConfigTable(QTableWidget):
-    """Editierbare Liste konfigurierter CAN-Interfaces (siehe settings.py:
-    can_configs). Anders als Last/Netzteil keine Hotplug-Autodiscovery (siehe
-    can_bus/README.md) -- der Nutzer traegt Interface-Typ/Kanal/Bitrate hier
-    explizit ein, ein "..."-Button pro Zeile bietet ueber CanBus.
-    discover_configs() gefundene Kanaele als Auswahl an.
+class _CanConfigTable(QWidget):
+    """Liste konfigurierter CAN-Interfaces (settings.py: can_configs), eine Karte je Interface.
 
-    Die Spalte "Serial-Baudrate" ist nur fuer Interface-Typ "slcan" relevant
-    (Baudrate der seriellen/USB-Verbindung ZUM Adapter, siehe
-    can_bus/driver.py::DEFAULT_SLCAN_SERIAL_BAUDRATE) -- bei Vector/PCAN
-    bedeutungslos, daher fuer diese Zeilen deaktiviert statt versteckt (eine
-    verschwindende Spalte je Zeile waere verwirrender als ein blosses
-    deaktiviertes Feld). Optional laesst sich pro Zeile zusaetzlich eine
-    DBC-Datei hinterlegen (siehe _DbcFileCell), fuer die Signal-Decodierung
-    empfangener CAN-Frames in control_tab.CanControlGroup (FEATURES.md
-    Punkt 3).
+    Anders als Last/Netzteil keine Hotplug-Erkennung (can_bus/README.md): Interface-Typ, Kanal und
+    Bitrate traegt der Nutzer ein; die Lupe bietet die ueber CanBus.discover_configs() gefundenen
+    Kanaele zur Auswahl an. Bis 0.50 eine Tabelle mit zehn Spalten -- passte im Touch-Profil am Pi
+    (1024 px) nicht ins Fenster (Nutzerfeedback 12.11.2026). Jetzt zwei Zeilen je Karte:
+      oben:  Interface | Kanal (+ Lupe, Warnsymbol bei Verbindungsfehler) | Geraet am Bus | Entfernen
+      unten: Bitrate | Serial-Baudrate (nur slcan) | Bezeichnung | DBC-Datei
+    Schnittstelle wie vorher (changed, add_row, configs, set_configs, set/clear_connect_error).
+    Der Kanal haelt ein Token in der Property "_channel_token", wenn er den sprechenden Namen aus der
+    Auswahl zeigt (BUGS_GESCHLOSSEN.md #34); Tippen von Hand verwirft es (textEdited)."""
 
-    Spalte "Status": zeigt, wenn device_worker.DeviceWorker fuer diese Zeile
-    can_connect_error gemeldet hat, ein Warnsymbol mit dem Fehlertext als
-    Tooltip (siehe set_connect_error/clear_connect_error) -- vorher landete
-    ein gescheiterter Verbindungsversuch AUSSCHLIESSLICH im Log, die Zeile
-    sah unveraendert "normal konfiguriert" aus und das Interface tauchte
-    ohne jede erkennbare Ursache nirgends in der App auf (Nutzerfeedback,
-    genau das bereits aus den Vector-app_name-Bugs bekannte Muster, siehe
-    can_bus/driver.py::_vector_bus_kwargs-Docstring)."""
-
-    changed = Signal()  # irgendeine Zeile wurde hinzugefuegt/entfernt/bearbeitet
+    changed = Signal()  # irgendeine Karte wurde hinzugefuegt/entfernt/bearbeitet
 
     def __init__(self) -> None:
-        super().__init__(0, len(_CAN_TABLE_COLUMNS))
-        self.verticalHeader().setVisible(False)
-        for col in (1, 6, 7):
-            self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-        for col in (0, 2, 3, 4, 5, 8, 9):
-            self.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        # Ein interaktiv bearbeitetes Feld macht den zuletzt angezeigten
-        # Verbindungsfehler dieser Zeile ungueltig (neuer Verbindungsversuch
-        # steht unmittelbar bevor, siehe set_can_configs) -- blockSignals()
-        # in set_configs() unterdrueckt das beim reinen Neuladen aus
-        # settings.json (siehe dort), betrifft also wirklich nur echte
-        # Nutzer-Edits.
+        super().__init__()
+        self._rows: list[dict] = []
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        # Ein interaktiv bearbeitetes Feld macht den zuletzt angezeigten Verbindungsfehler ungueltig
+        # (neuer Verbindungsversuch steht bevor); set_configs blockiert Signale beim Neuladen.
         self.changed.connect(self._clear_all_connect_errors)
 
+    def rowCount(self) -> int:  # noqa: N802 (Qt-Namensstil wie vorher QTableWidget)
+        return len(self._rows)
+
     def retranslate(self) -> None:
-        self.setHorizontalHeaderLabels(
-            [
-                tr("Interface"), tr("Kanal"), "", "", tr("Bitrate"), tr("Serial-Baudrate"),
-                tr("Bezeichnung"), tr("DBC-Datei"), tr("Gerät am Bus"), "",
-            ]
-        )
-        for row in range(self.rowCount()):
-            dbc_cell: _DbcFileCell = self.cellWidget(row, 7)
-            dbc_cell.retranslate()
+        for row in self._rows:
+            for key, text in (("cap_interface", "Interface"), ("cap_channel", "Kanal"),
+                              ("cap_device", "Gerät am Bus"), ("cap_bitrate", "Bitrate"),
+                              ("cap_serial", "Serial-Baudrate"), ("cap_label", "Bezeichnung"),
+                              ("cap_dbc", "DBC-Datei")):
+                row[key].setText(tr(text))
+            row["dbc"].retranslate()
+
+    def _caption(self, text: str) -> QLabel:
+        label = QLabel(tr(text))
+        label.setProperty("role", "hint")   # gedaempfte Farbe (theme.stylesheet)
+        return label
 
     def add_row(self, cfg: dict | None = None) -> None:
         cfg = cfg or {}
-        row = self.rowCount()
-        self.insertRow(row)
+        card = QFrame()
+        card.setObjectName("canCard")
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(10, 6, 10, 8)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(2)
+        row: dict = {"card": card}
 
         interface_combo = QComboBox()
         for code in CAN_INTERFACE_LIST:
@@ -372,99 +361,104 @@ class _CanConfigTable(QTableWidget):
         index = interface_combo.findData(cfg.get("interface", CAN_INTERFACE_LIST[0]))
         interface_combo.setCurrentIndex(max(index, 0))
         interface_combo.currentIndexChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 0, interface_combo)
 
-        # editingFinished (Fokusverlust/Enter) statt textChanged: sonst wuerde
-        # jeder einzelne Tastendruck sofort einen Rekonfigurations-/Reconnect-
-        # Versuch im DeviceWorker anstossen (siehe set_can_configs), waehrend
-        # der Nutzer den Kanalnamen noch tippt.
+        # editingFinished statt textChanged: sonst stoesst jeder Tastendruck einen Reconnect an
         channel_edit = QLineEdit(str(cfg.get("channel", "")))
         channel_edit.editingFinished.connect(lambda: self.changed.emit())
-        # Property "_channel_token" (siehe _pick_channel/configs(), BUGS_
-        # GESCHLOSSEN.md #34): haelt das tatsaechliche Kanal-Token fest, wenn
-        # das Feld gerade den sprechenden Namen aus dem Auswahl-Popup zeigt
-        # statt des Tokens selbst. textEdited (nur bei TASTATUR-Eingabe, im
-        # Gegensatz zu textChanged/setText()) verwirft die Property wieder,
-        # sobald der Nutzer den Text von Hand aendert -- ab dann gilt wieder
-        # der reine Feldinhalt als Kanalwert, wie schon immer bei
-        # manuell eingetragenen Kanaelen (z.B. slcan-Portnamen ohne
-        # sprechenden Namen).
+
         def _clear_channel_token(_text=None, e=channel_edit) -> None:
             e.setProperty("_channel_token", None)
             e.setToolTip("")
 
         channel_edit.textEdited.connect(_clear_channel_token)
-        self.setCellWidget(row, 1, channel_edit)
-
         pick_button = IconButton("mdi.magnify", tr("Verfügbare Kanäle suchen…"))
         pick_button.clicked.connect(lambda _=None, r=row: self._pick_channel(r))
-        self.setCellWidget(row, 2, pick_button)
-
-        # Verbindungsfehler-Anzeige (siehe Klassendoc) -- leer/versteckt,
-        # solange kein can_connect_error fuer diese Zeile gemeldet wurde.
-        status_label = QLabel()
+        status_label = QLabel()     # Warnsymbol bei can_connect_error, Fehlertext als Tooltip
         status_label.hide()
-        self.setCellWidget(row, 3, status_label)
+        channel_box = QHBoxLayout()
+        channel_box.setSpacing(4)
+        channel_box.addWidget(channel_edit, 1)
+        channel_box.addWidget(status_label)
+        channel_box.addWidget(pick_button)
+
+        device_combo = QComboBox()
+        for code, label in CAN_NODE_DEVICES:
+            device_combo.addItem(tr(label), code)
+        index = device_combo.findData(cfg.get("device", ""))
+        device_combo.setCurrentIndex(max(index, 0))
+        device_combo.currentIndexChanged.connect(lambda _=None: self.changed.emit())
+
+        remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
+        remove_button.clicked.connect(lambda _=None, r=row: self._remove(r))
 
         bitrate_spin = SteppedSpinBox(small_step=1000, large_step=100_000)
         bitrate_spin.setRange(10_000, 1_000_000)
         bitrate_spin.setSuffix(" bit/s")
         bitrate_spin.setValue(int(cfg.get("bitrate", CAN_DEFAULT_BITRATE)))
         bitrate_spin.valueChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 4, bitrate_spin)
 
         serial_baud_spin = SteppedSpinBox(small_step=1200, large_step=57_600)
         serial_baud_spin.setRange(1200, 2_000_000)
         serial_baud_spin.setSuffix(" Bd")
         serial_baud_spin.setValue(int(cfg.get("serial_baudrate", CAN_DEFAULT_SLCAN_SERIAL_BAUDRATE)))
         serial_baud_spin.valueChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 5, serial_baud_spin)
-
-        def _update_serial_baud_enabled(_index=None, spin=serial_baud_spin, combo=interface_combo) -> None:
-            spin.setEnabled(combo.currentData() == "slcan")
-
-        interface_combo.currentIndexChanged.connect(_update_serial_baud_enabled)
-        _update_serial_baud_enabled()
 
         label_edit = QLineEdit(str(cfg.get("label", "")))
         label_edit.editingFinished.connect(lambda: self.changed.emit())
-        self.setCellWidget(row, 6, label_edit)
 
         dbc_cell = _DbcFileCell(str(cfg.get("dbc_path", "")))
         dbc_cell.changed.connect(lambda: self.changed.emit())
         dbc_cell.retranslate()
-        self.setCellWidget(row, 7, dbc_cell)
 
-        # Geraet, das UEBER dieses Interface spricht (seit 0.22.0, siehe
-        # can_bus/node.py). Die CAN-IDs eines Batterie-Simulators sind fest,
-        # mehr als einer je Bus geht also ohnehin nicht -- deshalb eine Spalte
-        # statt einer eigenen Geraeteliste.
-        device_combo = QComboBox()
-        for code, label in CAN_NODE_DEVICES:
-            device_combo.addItem(tr(label), code)
-        index = device_combo.findData(cfg.get("device", ""))
-        device_combo.setCurrentIndex(max(index, 0))
-        device_combo.setToolTip(tr(
-            "Gerät, das über dieses Interface gesteuert wird. Es erscheint als "
-            "eigene Kachel, sobald es antwortet."))
-        device_combo.currentIndexChanged.connect(lambda _=None: self.changed.emit())
-        self.setCellWidget(row, 8, device_combo)
+        caps = {key: self._caption(text) for key, text in (
+            ("cap_interface", "Interface"), ("cap_channel", "Kanal"), ("cap_device", "Gerät am Bus"),
+            ("cap_bitrate", "Bitrate"), ("cap_serial", "Serial-Baudrate"), ("cap_label", "Bezeichnung"),
+            ("cap_dbc", "DBC-Datei"))}
+        grid.addWidget(caps["cap_interface"], 0, 0)
+        grid.addWidget(caps["cap_channel"], 0, 1)
+        grid.addWidget(caps["cap_device"], 0, 2)
+        grid.addWidget(interface_combo, 1, 0)
+        grid.addLayout(channel_box, 1, 1)
+        grid.addWidget(device_combo, 1, 2)
+        grid.addWidget(remove_button, 1, 3, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(caps["cap_bitrate"], 2, 0)
+        grid.addWidget(caps["cap_label"], 2, 1)
+        grid.addWidget(caps["cap_dbc"], 2, 2, 1, 2)
+        grid.addWidget(bitrate_spin, 3, 0)
+        grid.addWidget(label_edit, 3, 1)
+        grid.addWidget(dbc_cell, 3, 2, 1, 2)
+        # Serial-Baudrate nur bei slcan (Baudrate der Verbindung ZUM Adapter): eigene Zeile, sonst verborgen
+        grid.addWidget(caps["cap_serial"], 4, 0)
+        grid.addWidget(serial_baud_spin, 5, 0)
+        for col, stretch in ((0, 0), (1, 1), (2, 1), (3, 0)):
+            grid.setColumnStretch(col, stretch)
 
-        remove_button = IconButton("mdi.trash-can-outline", tr("Entfernen"))
-        remove_button.clicked.connect(lambda _=None, w=remove_button: self._remove_row_of(w))
-        self.setCellWidget(row, 9, remove_button)
+        def _update_serial_baud(_index=None, spin=serial_baud_spin, cap=caps["cap_serial"],
+                                combo=interface_combo) -> None:
+            slcan = combo.currentData() == "slcan"
+            spin.setVisible(slcan)
+            cap.setVisible(slcan)
 
-    def _remove_row_of(self, widget: QWidget) -> None:
-        for row in range(self.rowCount()):
-            if self.cellWidget(row, 9) is widget:
-                self.removeRow(row)
-                self.changed.emit()
-                return
+        interface_combo.currentIndexChanged.connect(_update_serial_baud)
+        _update_serial_baud()
 
-    def _pick_channel(self, row: int) -> None:
-        interface_combo: QComboBox = self.cellWidget(row, 0)
-        channel_edit: QLineEdit = self.cellWidget(row, 1)
-        interface = interface_combo.currentData()
+        row.update(caps)
+        row.update(interface=interface_combo, channel=channel_edit, pick=pick_button, status=status_label,
+                   bitrate=bitrate_spin, serial=serial_baud_spin, label=label_edit, dbc=dbc_cell,
+                   device=device_combo, remove=remove_button)
+        self._rows.append(row)
+        self._layout.addWidget(card)
+
+    def _remove(self, row: dict) -> None:
+        if row in self._rows:
+            self._rows.remove(row)
+            row["card"].setParent(None)
+            row["card"].deleteLater()
+            self.changed.emit()
+
+    def _pick_channel(self, row: dict) -> None:
+        channel_edit: QLineEdit = row["channel"]
+        interface = row["interface"].currentData()
         errors: dict[str, str] = {}
         try:
             configs = CanBus.discover_configs(errors)
@@ -473,12 +467,8 @@ class _CanConfigTable(QTableWidget):
             errors[interface] = str(exc)
         matching = [c for c in configs if c.get("interface") == interface]
         if not matching:
-            # Den konkreten Grund mitliefern, falls es einen gibt: ein nicht
-            # ladbares Backend (z.B. fehlender Vendor-Treiber, oder ein Build
-            # ohne die dynamisch nachgeladenen python-can-Backends) sieht
-            # sonst exakt aus wie "Geraet nicht angeschlossen" -- genau diese
-            # Ununterscheidbarkeit hat die Ursachensuche lange blockiert,
-            # siehe can_bus/driver.py::backend_problem.
+            # Konkreten Grund mitliefern: ein nicht ladbares Backend sieht sonst aus wie
+            # "Geraet nicht angeschlossen" (can_bus/driver.py::backend_problem)
             reason = errors.get(interface, "")
             message = tr(
                 "Für Interface-Typ '{interface}' wurden keine Kanäle gefunden -- "
@@ -489,17 +479,10 @@ class _CanConfigTable(QTableWidget):
                 message += "\n\n" + tr("Grund: {reason}", reason=reason)
             QMessageBox.information(self, tr("Keine Kanäle gefunden"), message)
             return
-        # Angezeigt wird der sprechende Name (z.B. "VN1610 Channel 1
-        # (S/N 75816)"), gespeichert das eindeutige Kanal-Token aus
-        # discover_configs() -- die rohen Kanalnummern doppeln sich zwischen
-        # echter Hardware und den virtuellen Vector-Kanaelen und waeren als
-        # Auswahl nicht unterscheidbar (siehe can_bus/driver.py).
+        # Angezeigt wird der sprechende Name, gespeichert das eindeutige Kanal-Token
         by_name: dict[str, str] = {}
         for config in matching:
             name = str(config.get("display_name") or config["channel"])
-            # Gleichnamige Eintraege (theoretisch bei zwei baugleichen
-            # Geraeten ohne Seriennummer) bleiben durch das angehaengte Token
-            # unterscheidbar, statt sich gegenseitig zu ueberschreiben.
             if name in by_name:
                 name = f"{name} [{config['channel']}]"
             by_name[name] = str(config["channel"])
@@ -508,95 +491,68 @@ class _CanConfigTable(QTableWidget):
             list(by_name), editable=False,
         )
         if ok:
-            # Anzeige: sprechender Name wie im Popup (z.B. "CANcaseXL Ch1
-            # (S/N 59177)") statt des rohen Tokens (BUGS_GESCHLOSSEN.md
-            # #34) -- das tatsaechlich zu verwendende Token bleibt ueber die
-            # Property erhalten (siehe add_row/configs()), der Tooltip zeigt
-            # es zusaetzlich fuer alle, die z.B. beim Nachschauen in
-            # settings.json den rohen Wert sehen wollen.
             token = by_name[name]
             channel_edit.setText(name)
             channel_edit.setProperty("_channel_token", token)
             channel_edit.setToolTip(token)
             self.changed.emit()
 
+    @staticmethod
+    def _channel(row: dict) -> str:
+        token = row["channel"].property("_channel_token")
+        return str(token).strip() if token else row["channel"].text().strip()
+
     def configs(self) -> list[dict]:
         result = []
-        for row in range(self.rowCount()):
-            interface_combo: QComboBox = self.cellWidget(row, 0)
-            channel_edit: QLineEdit = self.cellWidget(row, 1)
-            bitrate_spin: QSpinBox = self.cellWidget(row, 4)
-            serial_baud_spin: QSpinBox = self.cellWidget(row, 5)
-            label_edit: QLineEdit = self.cellWidget(row, 6)
-            dbc_cell: _DbcFileCell = self.cellWidget(row, 7)
-            device_combo: QComboBox = self.cellWidget(row, 8)
-            # Zeigt das Feld gerade den sprechenden Namen aus dem
-            # Auswahl-Popup an (siehe _pick_channel/add_row, BUGS_
-            # GESCHLOSSEN.md #34), gilt weiterhin das dort hinterlegte
-            # tatsaechliche Kanal-Token -- NICHT der angezeigte Text.
-            token = channel_edit.property("_channel_token")
-            channel = str(token).strip() if token else channel_edit.text().strip()
+        for row in self._rows:
+            channel = self._channel(row)
             if not channel:
                 continue
-            interface = interface_combo.currentData()
+            interface = row["interface"].currentData()
             cfg = dict(
                 interface=interface,
                 channel=channel,
-                bitrate=bitrate_spin.value(),
-                label=label_edit.text().strip(),
-                dbc_path=dbc_cell.path(),
+                bitrate=row["bitrate"].value(),
+                label=row["label"].text().strip(),
+                dbc_path=row["dbc"].path(),
             )
-            if device_combo.currentData():
-                cfg["device"] = device_combo.currentData()
-            # serial_baudrate nur bei "slcan" mit abspeichern -- fuer
-            # vector/pcan bedeutungslos (siehe can_bus/README.md), wuerde
-            # settings.json sonst mit einem fuer diese Zeile irrelevanten
-            # Feld fuellen.
-            if interface == "slcan":
-                cfg["serial_baudrate"] = serial_baud_spin.value()
+            if row["device"].currentData():
+                cfg["device"] = row["device"].currentData()
+            if interface == "slcan":   # bei vector/pcan bedeutungslos
+                cfg["serial_baudrate"] = row["serial"].value()
             result.append(cfg)
         return result
 
-    def _row_device_id(self, row: int) -> str:
-        """Wie device_worker.can_device_id(cfg), aber direkt aus den
-        aktuellen Zelleninhalten einer Zeile -- fuer den Abgleich mit
-        can_connect_error/can_connected, die beide nur die device_id kennen,
-        nicht den Zeilenindex (Zeilen koennen sich beim Hinzufuegen/Entfernen
-        verschieben)."""
-        interface_combo: QComboBox = self.cellWidget(row, 0)
-        channel_edit: QLineEdit = self.cellWidget(row, 1)
-        token = channel_edit.property("_channel_token")
-        channel = str(token).strip() if token else channel_edit.text().strip()
-        return f"can:{interface_combo.currentData()}:{channel}"
+    def _row_device_id(self, row: dict) -> str:
+        """Wie device_worker.can_device_id(cfg), aber aus den aktuellen Feldern einer Karte."""
+        return f"can:{row['interface'].currentData()}:{self._channel(row)}"
 
     def set_connect_error(self, device_id: str, message: str) -> None:
-        for row in range(self.rowCount()):
+        for row in self._rows:
             if self._row_device_id(row) == device_id:
-                status_label: QLabel = self.cellWidget(row, 3)
+                status_label: QLabel = row["status"]
                 status_label.setToolTip(message)
                 status_label.setPixmap(
-                    qta.icon("mdi.alert-circle-outline", color=current_palette().danger)
-                    .pixmap(ICON_SIZE)
-                )
+                    qta.icon("mdi.alert-circle-outline", color=current_palette().danger).pixmap(ICON_SIZE))
                 status_label.show()
                 return
 
     def clear_connect_error(self, device_id: str) -> None:
-        for row in range(self.rowCount()):
+        for row in self._rows:
             if self._row_device_id(row) == device_id:
-                status_label: QLabel = self.cellWidget(row, 3)
-                status_label.hide()
-                status_label.setToolTip("")
+                row["status"].hide()
+                row["status"].setToolTip("")
                 return
 
     def _clear_all_connect_errors(self) -> None:
-        for row in range(self.rowCount()):
-            status_label: QLabel = self.cellWidget(row, 3)
-            if status_label is not None:
-                status_label.hide()
+        for row in self._rows:
+            row["status"].hide()
 
     def set_configs(self, configs: list[dict]) -> None:
-        self.setRowCount(0)
+        for row in self._rows:
+            row["card"].setParent(None)
+            row["card"].deleteLater()
+        self._rows = []
         for cfg in configs:
             self.add_row(cfg)
 
@@ -823,10 +779,6 @@ class SettingsTab(QWidget):
         self._sim_checkbox.toggled.connect(self.simulation_mode_toggled)
         layout.addWidget(self._sim_checkbox)
 
-        self._hint = QLabel()
-        self._hint.setWordWrap(True)
-        self._hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._hint)
 
         # Simulationsmodus nur im Dev-Betrieb anbieten, in Release-.exe
         # komplett ausgeblendet (nicht nur deaktiviert) -- siehe FEATURES.md
@@ -839,7 +791,6 @@ class SettingsTab(QWidget):
         self._sim_separator = _separator()
         if IS_FROZEN:
             self._sim_checkbox.setVisible(False)
-            self._hint.setVisible(False)
             self._sim_separator.setVisible(False)
         layout.addWidget(self._sim_separator)
 
@@ -934,10 +885,6 @@ class SettingsTab(QWidget):
         self._scpi_title = QLabel()
         self._scpi_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._scpi_title)
-        self._scpi_hint = QLabel()
-        self._scpi_hint.setWordWrap(True)
-        self._scpi_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._scpi_hint)
         self._scpi_edit = QLineEdit()
         self._scpi_edit.setPlaceholderText("192.168.1.50")
         self._scpi_edit.editingFinished.connect(self._on_scpi_edited)
@@ -948,10 +895,6 @@ class SettingsTab(QWidget):
         layout.addWidget(_separator())
 
         # -- Geraete-Info (aktuell nur microHIL-Firmwareversion) --------------
-        self._info_hint = QLabel()
-        self._info_hint.setWordWrap(True)
-        self._info_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._info_hint)
 
         self._info_sections_layout = QVBoxLayout()
         layout.addLayout(self._info_sections_layout)
@@ -967,10 +910,6 @@ class SettingsTab(QWidget):
         self._jlink_title = QLabel()
         self._jlink_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._jlink_title)
-        self._jlink_hint = QLabel()
-        self._jlink_hint.setWordWrap(True)
-        self._jlink_hint.setProperty("role", "hint")
-        layout.addWidget(self._jlink_hint)
         self._jlink_enabled = QCheckBox()
         self._jlink_enabled.toggled.connect(lambda _c: self._emit_jlink_config())
         layout.addWidget(self._jlink_enabled)
@@ -1009,19 +948,14 @@ class SettingsTab(QWidget):
         layout.addWidget(self._jlink_status)
 
     def _retranslate_jlink(self) -> None:
-        self._jlink_title.setText(tr("J-Link (Flashen und Reset im Testablauf)"))
-        self._jlink_hint.setText(tr(
-            "LabControl ruft für jeden Schritt den J-Link Commander auf und gibt den J-Link danach "
-            "wieder frei – der Debugger in der IDE bleibt nutzbar. Bei der EDU-Lizenz erscheint einmal "
-            "je 24 h ein Bestätigungsdialog von SEGGER; bis er weggeklickt ist, wartet der Schritt "
-            "(Zeitlimit 30 s, Flashen 180 s)."))
+        self._jlink_title.setText(tr("J-Link"))
         self._jlink_enabled.setText(tr("J-Link verwenden"))
         self._jlink_device_label.setText(tr("Zielbaustein:"))
         self._jlink_interface_label.setText(tr("Schnittstelle:"))
         self._jlink_speed_label.setText(tr("Takt:"))
-        self._jlink_serial_label.setText(tr("Seriennummer (optional):"))
+        self._jlink_serial_label.setText(tr("Seriennummer:"))
         self._jlink_serial.setPlaceholderText(tr("einziger angeschlossener J-Link"))
-        self._jlink_commander_label.setText(tr("J-Link Commander (optional):"))
+        self._jlink_commander_label.setText(tr("J-Link Commander:"))
         self._jlink_commander.setPlaceholderText(tr("automatisch suchen"))
 
     def _emit_jlink_config(self) -> None:
@@ -1051,8 +985,7 @@ class SettingsTab(QWidget):
             self._jlink_status.setText(tr("J-Link Commander: {path}", path=commander_found))
             set_tone(self._jlink_status, "muted")
         else:
-            self._jlink_status.setText(tr("J-Link Commander nicht gefunden – SEGGER J-Link Software "
-                                          "installieren oder den Pfad eintragen"))
+            self._jlink_status.setText(tr("J-Link Commander nicht gefunden"))
             set_tone(self._jlink_status, "warning")
 
     def set_scpi_scopes(self, addresses: list[str]) -> None:
@@ -1074,11 +1007,6 @@ class SettingsTab(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self._can_hint = QLabel()
-        self._can_hint.setWordWrap(True)
-        self._can_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._can_hint)
-
         self._can_table = _CanConfigTable()
         self._can_table.changed.connect(self._on_can_table_changed)
         layout.addWidget(self._can_table)
@@ -1086,6 +1014,7 @@ class SettingsTab(QWidget):
         self._can_add_button = IconButton("mdi.plus", "", text=tr("Interface hinzufügen"))
         self._can_add_button.clicked.connect(self._on_can_add_clicked)
         layout.addLayout(_button_row(self._can_add_button))
+        layout.addStretch(1)
 
         return page
 
@@ -1095,10 +1024,6 @@ class SettingsTab(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self._safety_hint = QLabel()
-        self._safety_hint.setWordWrap(True)
-        self._safety_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._safety_hint)
 
         # Ein eigenes Layout fuer die dynamisch je Geraet erzeugten
         # _DeviceSafetyGroup-Sektionen (siehe on_device_known), damit sie sich
@@ -1119,16 +1044,6 @@ class SettingsTab(QWidget):
         return page
 
     def _retranslate_network(self) -> None:
-        self._share_hint.setText(
-            tr(
-                "Stellt ausgewählte Kacheln im lokalen Netzwerk bereit: zum Anzeigen, z.B.\n"
-                "für ein ESP32-Display oder einen Browser auf dem Handy, und — nur wenn\n"
-                "ausdrücklich erlaubt — zum Fernsteuern. Es wird nichts freigegeben, solange\n"
-                "unten kein Haken bei „Lesen“ gesetzt ist. Der Zugriff ist unverschlüsselt\n"
-                "und nur für ein vertrauenswürdiges Heim- oder Labornetz gedacht — den Port\n"
-                "niemals aus dem Internet erreichbar machen (keine Portfreigabe, kein UPnP)."
-            )
-        )
         self._share_enabled_checkbox.setText(tr("Freigabe im lokalen Netzwerk aktivieren"))
         self._share_bind_label.setText(tr("Erreichbar für"))
         self._share_bind_combo.setItemText(0, tr("Nur diesen PC"))
@@ -1141,31 +1056,14 @@ class SettingsTab(QWidget):
         self._share_token_copy.setToolTip(tr("Token in die Zwischenablage kopieren"))
         self._share_read_token_checkbox.setText(tr("Lesezugriff ohne Token erlauben"))
         self._share_access_log_checkbox.setText(
-            tr("Zugriffe protokollieren (eigene Datei share_access.log)")
-        )
-        self._share_control_hint.setText(
-            tr(
-                "Fernsteuerung: Über das Netzwerk lassen sich Sollwerte setzen und Ausgänge\n"
-                "schalten (z.B. durch einen KI-Assistenten über den MCP-Server). Sie gilt nur\n"
-                "für Geräte mit Haken bei „Steuern“, nie während eines Testlaufs oder nach\n"
-                "einer Sicherheitsabschaltung und immer nur mit Token — von anderen Geräten\n"
-                "außerdem nur bei aktivem Hauptschalter. „ALLE AUS“ geht jederzeit."
-            )
+            tr("Zugriffe protokollieren")
         )
         self._share_control_checkbox.setText(tr("Fernsteuerung aktiv"))
-        self._share_local_bypass_checkbox.setText(
-            tr("Zugriffe von diesem PC brauchen den Hauptschalter nicht"))
+        self._share_local_bypass_checkbox.setText(tr("Dieser Rechner ohne Hauptschalter"))
         self._share_local_bypass_checkbox.setToolTip(
             tr("Gilt für Programme auf diesem Rechner, z.B. den MCP-Server. Token, "
                "„Steuern“ und die Sperren bei Testlauf und Sicherheitsabschaltung bleiben."))
         self._share_control_timeout_label.setText(tr("Schaltet sich ab nach"))
-        self._share_devices_hint.setText(
-            tr(
-                "Freigabe je Gerät: „Lesen“ zeigt die Kachel im Netzwerk, „Steuern“ erlaubt\n"
-                "zusätzlich, sie zu bedienen, „Messen“ erlaubt beim Oszilloskop Erfassungen\n"
-                "(z.B. durch den MCP-Server, ohne Hauptschalter). Beides setzt Lesen voraus."
-            )
-        )
         self._share_table.retranslate()
         self._retranslate_partner()
 
@@ -1176,10 +1074,6 @@ class SettingsTab(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self._share_hint = QLabel()
-        self._share_hint.setWordWrap(True)
-        self._share_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._share_hint)
 
         self._share_enabled_checkbox = QCheckBox()
         self._share_enabled_checkbox.toggled.connect(self.share_enabled_toggled)
@@ -1249,10 +1143,6 @@ class SettingsTab(QWidget):
         layout.addWidget(_separator())
 
         # -- Fernsteuerung: Hauptschalter mit Zeitlimit ----------------------
-        self._share_control_hint = QLabel()
-        self._share_control_hint.setWordWrap(True)
-        self._share_control_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._share_control_hint)
 
         # Nicht gespeichert: nach jedem App-Start ist die Fernsteuerung aus.
         # Wer sie einschaltet, gibt bewusst ein Zeitfenster her.
@@ -1281,10 +1171,6 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
-        self._share_devices_hint = QLabel()
-        self._share_devices_hint.setWordWrap(True)
-        self._share_devices_hint.setProperty("role", "hint")   # Farbe: theme.stylesheet, QLabel[role="hint"]
-        layout.addWidget(self._share_devices_hint)
 
         self._share_table = _ShareTable()
         self._share_table.share_changed.connect(self.share_device_changed)
@@ -1302,10 +1188,6 @@ class SettingsTab(QWidget):
         self._partner_title = QLabel()
         self._partner_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._partner_title)
-        self._partner_hint = QLabel()
-        self._partner_hint.setWordWrap(True)
-        self._partner_hint.setProperty("role", "hint")
-        layout.addWidget(self._partner_hint)
 
         self._partner_enabled_checkbox = QCheckBox()
         self._partner_enabled_checkbox.toggled.connect(lambda _c: self._emit_partner_config())
@@ -1349,22 +1231,15 @@ class SettingsTab(QWidget):
         layout.addWidget(self._partner_status)
 
     def _retranslate_partner(self) -> None:
-        self._partner_title.setText(tr("Verbund mit einem zweiten LabControl"))
-        self._partner_hint.setText(tr(
-            "Zeigt die freigegebenen Geräte eines zweiten Rechners (z. B. Raspberry Pi) im Reiter "
-            "„Verbund“ und bedient sie dort. ALLE AUS und die Sicherheitsabschaltung wirken dann auf "
-            "beide Rechner. Auf dem anderen Rechner: Freigabe für alle Geräte im lokalen Netzwerk, "
-            "Geräte zum Lesen und Steuern freigeben, zum Bedienen den Hauptschalter „Fernsteuerung“ "
-            "einschalten. Dann hier die Adresse eintragen und „Koppeln…“ drücken: Beide Rechner tauschen "
-            "ihre Token selbst aus (oder den Token von Hand eintragen)."))
+        self._partner_title.setText(tr("Verbund"))
         self._partner_enabled_checkbox.setText(tr("Verbund aktivieren"))
-        self._partner_address_label.setText(tr("Adresse des anderen Rechners:"))
+        self._partner_address_label.setText(tr("Partner-Adresse:"))
         self._partner_pair_button.setText(tr("Koppeln…"))
         self._partner_pair_button.setToolTip(tr(
             "Fragt beim anderen Rechner an. Beide zeigen denselben Code; dort „Koppeln“ tippen, dann "
             "tauschen beide ihre Token aus und schalten den Verbund ein."))
-        self._partner_token_label.setText(tr("Dessen Token:"))
-        self._partner_name_label.setText(tr("Anzeigename (optional):"))
+        self._partner_token_label.setText(tr("Partner-Token:"))
+        self._partner_name_label.setText(tr("Anzeigename:"))
         self._partner_name_edit.setPlaceholderText(tr("Rechnername"))
 
     def _emit_partner_config(self) -> None:
@@ -1446,24 +1321,17 @@ class SettingsTab(QWidget):
         self._share_url_edit.setText(url)
 
     def _retranslate(self) -> None:
-        self._sim_checkbox.setText(tr("Simulationsmodus (simulierte Geräte statt Hardware)"))
-        self._hint.setText(
-            tr(
-                "Im Simulationsmodus stehen ein virtuelles Labornetzteil und eine virtuelle\n"
-                "elektronische Last im Dashboard/Control-Tab zur Verfuegung, um die GUI ohne\n"
-                "angeschlossene Hardware zu testen."
-            )
-        )
-        self._dark_checkbox.setText(tr("Dark Mode (Slate Ops Dark statt Slate Ops Light)"))
-        touch_text = tr("Touch-Bedienung (große Bedienelemente, Navigation links, Übersicht als eigener Reiter)")
+        self._sim_checkbox.setText(tr("Simulationsmodus"))
+        self._dark_checkbox.setText(tr("Dark Mode"))
+        touch_text = tr("Touch-Bedienung")
         if self._touch_auto:
-            touch_text += " " + tr("– automatisch, kleiner Bildschirm")
+            touch_text += " " + tr("(automatisch)")
         self._touch_checkbox.setText(touch_text)
-        self._notify_checkbox.setText(tr("Desktop-Benachrichtigung bei Lauf-Ende/Fehler"))
-        self._panel_colors_checkbox.setText(tr("Individuelle Panel-Hintergrundfarben (Dashboard/Control)"))
+        self._notify_checkbox.setText(tr("Desktop-Benachrichtigungen"))
+        self._panel_colors_checkbox.setText(tr("Kachelfarben"))
         self._language_label.setText(tr("Sprache:"))
-        self._network_dir_label.setText(tr("Netzlaufwerk (Log und Daten):"))
-        self._network_dir_edit.setPlaceholderText(tr("leer = nur lokal, z. B. \\\\nas\\labor oder /mnt/labor"))
+        self._network_dir_label.setText(tr("Netzlaufwerk:"))
+        self._network_dir_edit.setPlaceholderText(tr("leer = nur lokal"))
         self._network_dir_edit.setToolTip(
             tr(
                 "LabControl legt Log, Oszilloskop-Erfassungen, Berichte und Aufzeichnungen in einem Unterordner "
@@ -1490,38 +1358,12 @@ class SettingsTab(QWidget):
                 "Panel-Farben und setzt sie auf die Standardwerte zurück."
             )
         )
-        self._info_hint.setText(tr("Geräte-Info -- z. B. die aktuell geflashte Firmware-Version."))
         self._scpi_title.setText(tr("Oszilloskope im Netzwerk (SCPI)"))
         self._retranslate_jlink()
-        self._scpi_hint.setText(
-            tr(
-                "IP-Adresse oder VISA-Adresse je Oszilloskop, mehrere durch Komma getrennt, z. B. "
-                "192.168.1.50 für ein UNI-T MSO1000HD (MSO1154HD-S) am LAN. Dem Gerät eine feste IP "
-                "geben, die Adresse ist zugleich seine Kennung in LabControl. USB geht nur mit "
-                "installiertem NI-VISA (Adresse USB0::...::INSTR)."
-            )
-        )
         for section in self._info_sections.values():
             section.retranslate()
-        self._safety_hint.setText(
-            tr(
-                "Grenzwerte (Sicherheitsabschaltung) je Gerät -- bei Überschreitung werden "
-                "alle Ausgänge sofort abgeschaltet (Netzteil: Strom auf 0 A)."
-            )
-        )
         for section in self._safety_sections.values():
             section.retranslate()
-        self._can_hint.setText(
-            tr(
-                "CAN-Interfaces (Vector, PEAK/PCAN, SLCAN -- z.B. der CAN1-Port des microHIL) "
-                "-- werden hier explizit konfiguriert, da anders als bei Last/Netzteil keine "
-                "automatische Erkennung möglich ist. \"Serial-Baudrate\" gilt nur für SLCAN "
-                "(Baudrate der seriellen/USB-Verbindung zum Adapter, nicht die CAN-Bitrate). "
-                "Optional lässt sich je Interface eine DBC-Datei hinterlegen: empfangene "
-                "Frames werden dann im Control-Tab zusätzlich zu den Rohdaten als benannte, "
-                "skalierte Signale angezeigt."
-            )
-        )
         self._can_table.retranslate()
         self._can_add_button.setText(tr("Interface hinzufügen"))
 

@@ -1313,9 +1313,16 @@ class DeviceWorker(QObject):
                     serial_baudrate=cfg.get("serial_baudrate"),
                 )
             except CanConnectionError as exc:
-                logger.warning("CAN-Interface %s nicht erreichbar: %s", device_id, exc)
+                # Nur beim ersten Mal bzw. bei neuem Grund ins Log -- vorher alle 3 s, stundenlang,
+                # solange der Adapter nicht steckte (PC-Log 12.11.2026)
+                reported = getattr(self, "_can_error_logged", {})
+                self._can_error_logged = reported
+                if reported.get(device_id) != str(exc):
+                    reported[device_id] = str(exc)
+                    logger.warning("CAN-Interface %s nicht erreichbar: %s (weitere Versuche ohne Log)", device_id, exc)
                 self.can_connect_error.emit(device_id, str(exc))
                 continue
+            getattr(self, "_can_error_logged", {}).pop(device_id, None)
             self._can_buses[device_id] = bus
             self._can_stats[device_id] = [0, 0]
             logger.info("CAN-Interface verbunden: %s", device_id)

@@ -171,8 +171,7 @@ class TouchRunView(QWidget):
             item = QListWidgetItem(f"{number}.  {text}")
             item.setSizeHint(QSize(0, 40))
             self._steps.addItem(item)
-        self._info_label.setText(tr("{n} Schritte", n=len(step_lines)) if name else
-                                 tr("Links einen Ablauf antippen. Bearbeitet und gespeichert wird am PC."))
+        self._info_label.setText(tr("{n} Schritte", n=len(step_lines)) if name else "")
         self._progress.setRange(0, max(1, len(step_lines)))
         self._progress.setValue(0)
         self._progress.setFormat("%v / %m" if name else "")
@@ -221,8 +220,7 @@ class TouchRunView(QWidget):
         # Umbruchstellen hinter den Pfadtrennern: ein langer Pfad ohne Leerzeichen erzwaenge sonst seine
         # volle Breite (Fenster wurde breiter als 1024 px)
         breakable = re.sub(r"([\\/])", "\\1\u200b", str(self._folder or ""))
-        self._empty_text.setText(tr("Abläufe am PC erstellen und in diesem Ordner speichern:\n{folder}",
-                                    folder=breakable))
+        self._empty_text.setText(breakable)   # nur der Ordner, ohne Erklaertext
         self._empty_refresh.setText(tr("Neu einlesen"))
         self._folder_label.setText(str(self._folder or ""))
         self._restyle()

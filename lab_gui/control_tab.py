@@ -692,11 +692,6 @@ class PsuControlGroup(QGroupBox):
         self._manual_button = QPushButton()
         self._manual_button.setCheckable(True)
         self._manual_button.toggled.connect(self._on_manual_toggled)
-        self._manual_hint = QLabel()
-        self._manual_hint.setWordWrap(True)
-        self._manual_hint.setStyleSheet(f"color: {current_palette().text_muted}; background: transparent;")
-        self._manual_hint.setVisible(False)
-        outer.addWidget(self._manual_hint)
 
         # Ausgang-Schalter ganz unten im Panel (siehe LoadControlGroup) -- der
         # Stretch drueckt sie an den unteren Rand, auch bei angeglichener
@@ -743,13 +738,6 @@ class PsuControlGroup(QGroupBox):
         self._manual_button.setToolTip(
             tr("Gibt das Netzteil zur Bedienung am Gerät frei: LabControl spricht es dann nicht mehr an.")
         )
-        self._manual_hint.setText(
-            tr(
-                "Handbedienung: Das Gerät ist freigegeben (1 V, 0 A, Ausgang EIN) und wird von "
-                "LabControl nicht abgefragt. Spannung und Strom am Gerät einstellen; zum Zurückschalten "
-                "den Schalter „Handbedienung“ wieder lösen."
-            )
-        )
         self._update_limit_warning()
 
     def _on_manual_toggled(self, checked: bool) -> None:
@@ -762,7 +750,6 @@ class PsuControlGroup(QGroupBox):
         self._manual_button.blockSignals(True)
         self._manual_button.setChecked(manual)
         self._manual_button.blockSignals(False)
-        self._manual_hint.setVisible(manual)
         for widget in (
             self._voltage_spin, self._voltage_button, self._current_spin, self._current_button,
             self._ovp_spin, self._ovp_button, self._ocp_spin, self._ocp_button,
@@ -838,7 +825,6 @@ class PsuControlGroup(QGroupBox):
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
-        self._manual_hint.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
         for row in (self._voltage_row, self._current_row, self._ovp_row, self._ocp_row):
             row.setStyleSheet(_row_stylesheet(palette))
@@ -2948,6 +2934,21 @@ class ControlTab(QWidget):
     def scroll_area(self) -> QScrollArea:
         return self._scroll_area
 
+    # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
+
+    def arrange_snapshot(self):
+        from arrange_overlay import tile_rects_in
+        container = self._scroll_area.widget()
+        return container.grab(), tile_rects_in(container, self._sections)
+
+    def arrange_drop(self, device_id: str, pos, grab) -> None:
+        """Wie ein Drop beim Ziehen: Zielzelle aus der Ecke des Abbilds (Zeiger minus Griffpunkt)."""
+        if device_id not in self._sections:
+            return
+        self._drag_preview_cells = None
+        self._drag_hotspot = grab
+        self._drop_tile(device_id, pos)
+
     def set_tile_order(self, order: list[str]) -> None:
         """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
         Settings.control_tile_order) -- von MainWindow einmalig beim Start
@@ -3211,6 +3212,13 @@ class ControlTab(QWidget):
         for device_id, (row, col) in positions.items():
             col_span, row_span = self._tile_span(device_id)
             col_span = min(col_span, self._max_cols)
+            if self._touch_layout:
+                # Touch: Zeilen in natuerlicher Hoehe -> echte Rastergrenzen statt Vielfache der Basiszelle
+                # (sonst landete eine Kachel ab der zweiten Zeile daneben, gemessen 12.11.2026)
+                self._grid.activate()
+                rects[device_id] = self._grid.cellRect(row, col).united(
+                    self._grid.cellRect(row + row_span - 1, col + col_span - 1))
+                continue
             rects[device_id] = QRect(
                 margin.left() + col * step_x, margin.top() + row * step_y,
                 col_span * step_x - self._grid_spacing, row_span * step_y - self._grid_spacing,
@@ -3231,11 +3239,31 @@ class ControlTab(QWidget):
         corner_x = pos.x() - (hotspot.x() if hotspot is not None else 0)
         corner_y = pos.y() - (hotspot.y() if hotspot is not None else 0)
         col_span = min(self._tile_span(dragged_id)[0], self._max_cols)
-        col = round((corner_x - margin.left()) / step_x) if step_x > 0 else 0
-        row = round((corner_y - margin.top()) / step_y) if step_y > 0 else 0
+        if self._touch_layout:
+            row, col = self._nearest_grid_cell(corner_x, corner_y)
+        else:
+            col = round((corner_x - margin.left()) / step_x) if step_x > 0 else 0
+            row = round((corner_y - margin.top()) / step_y) if step_y > 0 else 0
         bottoms = [r + self._tile_span(d)[1] for d, (r, _c) in base.items() if d != dragged_id]
         max_row = max(bottoms, default=0)
         return (max(0, min(row, max_row)), max(0, min(col, self._max_cols - col_span)))
+
+    def _nearest_grid_cell(self, x: float, y: float) -> tuple[int, int]:
+        """Touch-Profil: Zeile/Spalte, deren obere linke Ecke (aus dem echten Raster) am naechsten an
+        (x, y) liegt. Unter der letzten Zeile geht es in Schritten der Basiszelle weiter."""
+        self._grid.activate()
+        rows = max(1, self._grid.rowCount())
+        cols = max(1, self._grid.columnCount())
+        tops = [self._grid.cellRect(r, 0).top() for r in range(rows)]
+        lefts = [self._grid.cellRect(0, c).left() for c in range(cols)]
+        last = self._grid.cellRect(rows - 1, 0)
+        step_y = max(1, self._cell_height + self._grid_spacing)
+        tops.append(last.bottom() + 1 + self._grid_spacing)
+        row = min(range(len(tops)), key=lambda r: (abs(tops[r] - y), r))
+        if y > tops[-1]:
+            row = len(tops) - 1 + round((y - tops[-1]) / step_y)
+        col = min(range(len(lefts)), key=lambda c: (abs(lefts[c] - x), c))
+        return row, col
 
     def _cells_with_dragged_at(self, dragged_id: str, pos) -> dict[str, tuple[int, int]]:
         """Zellen aller platzierten Kacheln, WENN die gezogene jetzt bei `pos`

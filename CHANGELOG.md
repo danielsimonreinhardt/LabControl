@@ -6,7 +6,34 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Geändert
+- **Touch-Oberfläche nach dem ersten Verbund-Test am Pi (0.51.0, Nutzerfeedback und PI-37 a, 12.11.2026).**
+  - **Texttastatur:** Im Kiosk am Pi öffnete ein Textfeld (Partner-Adresse, Namen, Dateinamen) keine Tastatur;
+    squeekboard läuft zwar, wird ohne Taskleiste aber nie eingeblendet. Im Touch-Profil öffnet jetzt jedes Textfeld
+    eine eigene Tastatur im Stil des Zahlenfelds (`lab_gui/touch_keyboard.py`): QWERTZ mit Umlauten, Umschalten für
+    einen Buchstaben, Zeichenebene, `. : - _ / @`, Leerzeichen, Löschen, Rücktaste; Validator und Höchstlänge des
+    Felds gelten, „Übernehmen“ meldet den Text wie eine Eingabe von Hand. Zahlen- und Hex-Felder behalten ihr
+    Tastenfeld. PI-6 a gilt damit für Texte nicht mehr.
+  - **Anordnen mit Übersicht:** Im Modus „Anordnen“ ließ sich nicht wischen, Kacheln außerhalb des Bildes waren nicht
+    erreichbar. Jetzt liegt über Übersicht und Steuerung ein auf die Fensterfläche verkleinertes Abbild aller Kacheln
+    (`lab_gui/arrange_overlay.py`); Kachel greifen, ablegen, die Ansicht ordnet um. Dabei gefunden: In der Steuerung
+    rechnete die Zielzelle im Touch-Profil mit gleich hohen Zeilen, die Kacheln haben dort aber ihre natürliche Höhe --
+    ab der zweiten Zeile landete eine Kachel daneben. Die Rechnung nimmt jetzt die echten Rastergrenzen.
+  - **CAN-Bus-Einstellungen:** Statt einer Tabelle mit zehn Spalten (passte bei 1024 px nicht) eine Karte je Interface
+    in zwei Zeilen: Interface, Kanal (Lupe, Warnsymbol), Gerät am Bus, Entfernen / Bitrate, Bezeichnung, DBC-Datei;
+    die Serial-Baudrate erscheint nur bei SLCAN.
+  - **Erklärtexte entfernt** (Nutzervorgabe: Erklärtexte nur als letztes Mittel, wieder hinzufügen nur, wo Feedback
+    zeigt, dass etwas nicht selbsterklärend ist): alle Hinweisabsätze in den Einstellungen (Simulation, CAN, SCPI,
+    J-Link, Sicherheit, Netzwerk-Freigabe, Fernsteuerung, Freigabe je Gerät, Verbund, Geräte-Info), der Hinweis zur
+    Handbedienung des Netzteils, der Arbiträrsignal-Hinweis im Prüfschritt; Klammerzusätze an Häkchen und Feldern
+    gekürzt („Simulationsmodus“, „Dark Mode“, „Touch-Bedienung“, „Kachelfarben“, „Partner-Adresse“ …). Leere
+    Testablauf-Liste und Ablaufliste am Pi zeigen nur noch Titel, Knöpfe und den Ordner. Kopplung bestätigen: kurze
+    Frage, Knopf „Code gleich – koppeln“ statt Hinweistext. Tooltips bleiben.
+
 ### Behoben
+- **0.51.0:** PC-Log: Ein nicht gesteckter CAN-Adapter schrieb alle 3 s „CAN-Interface … nicht erreichbar“, stundenlang;
+  jetzt nur beim ersten Mal und bei neuem Grund. Die Verbund-Warnung „Uhren weichen um … ab“ kam bei jeder kleinen
+  Änderung des Messwerts erneut ins Log, jetzt nur, wenn sie neu auftritt.
 - **0.50.2:** Netzteil HCS-34xx: Kam auf die Messwert-Abfrage `GETD` nur ein leeres „OK“ (am Pi am 12.11.2026, vermutlich
   das verspätete OK eines Sollwert-Befehls), warf der Treiber einen `ValueError`. Der Worker trennte das Netzteil als
   „unerwarteter Fehler“ und setzte es beim Wiederverbinden auf 0 A. Jetzt fragt der Treiber bei einer unklaren
