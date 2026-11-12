@@ -19,7 +19,9 @@ Slots referenziert wird.
 from __future__ import annotations
 
 import logging
+import queue
 import sys
+import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -212,6 +214,58 @@ PICOSCOPE_SETTLE_S = 2.0
 # holte der Poll danach je Lauf nur 32 Frames ab und der Rueckstand wuchs
 # (BUGS_OFFEN #38). Ein Zeitbudget skaliert mit der tatsaechlichen Rechenzeit.
 CAN_DRAIN_BUDGET_S = 0.05
+
+# Eigener Lese-Thread je CAN-Interface (CanReader, seit 0.57.1): Abfrageabstand, wenn gerade nichts anliegt.
+# Kurz und ohne blockierendes Warten -- CanBus.recv haelt dieselbe Sperre wie send, ein Warten darin wuerde
+# die zyklische Botschaft 0x130 an den Batterie-Simulator verzoegern.
+CAN_READER_IDLE_S = 0.005
+
+
+class CanReader(threading.Thread):
+    """Liest EIN CAN-Interface fortlaufend, unabhaengig vom Poll-Zyklus (Nutzerfeedback 12.11.2026: am Pi
+    kamen die Botschaften stossweise -- der Zyklus fragt erst Last und Netzteile ueber die serielle
+    Schnittstelle ab, bis zu 700 ms, und erst danach CAN; der Kernel verwarf dabei auch Botschaften).
+
+    Anzeige (Rohframe, DBC-Signale) und Empfangszaehler gehen sofort raus (Qt-Signale sind aus jedem Thread
+    erlaubt, die GUI bekommt sie in ihrer Ereignisschleife). Die Auswertung fuer CAN-Knoten (Batterie-
+    Simulator) bleibt im Worker-Thread: der holt die Frames im Poll-Zyklus aus `frames` (Reihenfolge bleibt).
+    Ein CanError landet als Ausnahme in `frames`, der Worker trennt dann wie bisher."""
+
+    def __init__(self, device_id: str, bus, on_frame: Callable, name: str = "") -> None:
+        super().__init__(name=name or f"CanReader-{device_id}", daemon=True)
+        self.device_id = device_id
+        self._bus = bus
+        self._on_frame = on_frame
+        self.frames: "queue.SimpleQueue" = queue.SimpleQueue()
+        self.rx_count = 0
+        self._halt = threading.Event()
+
+    def run(self) -> None:
+        while not self._halt.is_set():
+            try:
+                frame = self._bus.recv(timeout=0.0)
+            except CanError as exc:
+                self.frames.put(exc)
+                return
+            except Exception as exc:  # noqa: BLE001 -- der Lese-Thread darf nie still sterben
+                logger.exception("CAN-Lese-Thread %s: unerwarteter Fehler", self.device_id)
+                self.frames.put(CanError(str(exc)))
+                return
+            if frame is None:
+                self._halt.wait(CAN_READER_IDLE_S)
+                continue
+            self.rx_count += 1
+            self.frames.put(frame)
+            try:
+                self._on_frame(self.device_id, frame)
+            except Exception:  # noqa: BLE001
+                logger.exception("CAN-Lese-Thread %s: Anzeige fehlgeschlagen", self.device_id)
+
+    def stop(self) -> None:
+        """Anhalten und kurz warten -- VOR bus.close() aufrufen."""
+        self._halt.set()
+        if self.is_alive() and threading.current_thread() is not self:
+            self.join(timeout=1.0)
 
 # Dauer (s), ab der ein einzelner _poll()-Lauf als zu langsam geloggt wird
 # (mit der Dauer je Geraet), hoechstens alle POLL_SLOW_LOG_EVERY_S Sekunden.
@@ -485,6 +539,7 @@ class DeviceWorker(QObject):
         # Zuletzt bekannte Sollwerte je Netzteil [V, A] (_note_setpoint, PI-43 b)
         self._psu_setpoints: dict[str, list[float]] = {}
         self._can_buses: dict[str, CanBus] = {}
+        self._can_readers: dict[str, CanReader] = {}   # eigener Lese-Thread je Interface (0.57.1)
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
         # device_id -> geladene cantools-Datenbank, nur fuer Interfaces mit
@@ -611,6 +666,8 @@ class DeviceWorker(QObject):
         (am Pi im Dienst-Log, 11.11.2026)."""
         for timer in self.findChildren(QTimer):
             timer.stop()
+        for can_id in list(self._can_readers):
+            self._stop_can_reader(can_id)
         for can_id, bus in list(self._can_buses.items()):
             try:
                 bus.close()
@@ -899,12 +956,37 @@ class DeviceWorker(QObject):
         bus.attach_peer(self._sim_battsim)
         self._can_buses[SIM_CAN_ID] = bus
         self._can_stats[SIM_CAN_ID] = [0, 0]
+        self._start_can_reader(SIM_CAN_ID, bus)
         self.device_added.emit("can", SIM_CAN_ID)
         self.can_connected.emit(SIM_CAN_ID, True)
         self._sync_can_nodes(SIM_CAN_ID)
 
+    # -- CAN-Lese-Thread (CanReader, 0.57.1) -----------------------------------
+
+    def _start_can_reader(self, device_id: str, bus) -> None:
+        self._stop_can_reader(device_id)
+        reader = CanReader(device_id, bus, self._emit_can_frame)
+        self._can_readers[device_id] = reader
+        reader.start()
+
+    def _stop_can_reader(self, device_id: str) -> None:
+        reader = self._can_readers.pop(device_id, None)
+        if reader is not None:
+            reader.stop()
+
+    def _emit_can_frame(self, device_id: str, frame) -> None:
+        """Aus dem CanReader-Thread: Rohframe und (mit DBC) Signale sofort an die Anzeige."""
+        self.can_frame_received.emit(device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
+                                     frame.extended, frame.timestamp)
+        db = self._can_dbcs.get(device_id)
+        if db is not None:
+            decoded = decode_frame(db, frame)
+            if decoded is not None:
+                self.can_signals_decoded.emit(device_id, frame.arbitration_id, decoded)
+
     def _close_can(self, device_id: str) -> None:
         self._detach_can_nodes(device_id, send_shutdown=True)
+        self._stop_can_reader(device_id)
         bus = self._can_buses.pop(device_id, None)
         self._can_stats.pop(device_id, None)
         if bus is not None:
@@ -1329,6 +1411,7 @@ class DeviceWorker(QObject):
             getattr(self, "_can_error_logged", {}).pop(device_id, None)
             self._can_buses[device_id] = bus
             self._can_stats[device_id] = [0, 0]
+            self._start_can_reader(device_id, bus)
             logger.info("CAN-Interface verbunden: %s", device_id)
             self.device_added.emit("can", device_id)
             self.can_connected.emit(device_id, True)
@@ -1644,28 +1727,30 @@ class DeviceWorker(QObject):
         for device_id, bus in list(self._can_buses.items()):
             t0 = time.monotonic()
             nodes = self._nodes_for(device_id)
+            reader = self._can_readers.get(device_id)
+            if reader is None or not reader.is_alive() and reader.frames.empty():
+                self._start_can_reader(device_id, bus)   # jeder Bus hat einen Lese-Thread (auch nachtraeglich)
+                reader = self._can_readers[device_id]
             try:
+                # Gelesen und angezeigt hat der CanReader schon (eigener Thread, 0.57.1); hier nur noch die
+                # Knoten (Batterie-Simulator) mit allen seither empfangenen Frames fuettern
                 drain_until = time.monotonic() + CAN_DRAIN_BUDGET_S
-                while time.monotonic() < drain_until:
-                    frame = bus.recv(timeout=0.0)
-                    if frame is None:
+                while reader is not None and time.monotonic() < drain_until:
+                    try:
+                        frame = reader.frames.get_nowait()
+                    except queue.Empty:
                         break
-                    self._can_stats[device_id][1] += 1
+                    if isinstance(frame, Exception):
+                        raise frame
                     for node in nodes:
                         if frame.arbitration_id in node.rx_ids:
                             node.on_frame(frame)
-                    self.can_frame_received.emit(
-                        device_id, frame.arbitration_id, frame.data.hex(" ").upper(),
-                        frame.extended, frame.timestamp,
-                    )
-                    db = self._can_dbcs.get(device_id)
-                    if db is not None:
-                        decoded = decode_frame(db, frame)
-                        if decoded is not None:
-                            self.can_signals_decoded.emit(device_id, frame.arbitration_id, decoded)
+                if reader is not None:
+                    self._can_stats[device_id][1] = reader.rx_count
             except CanError as exc:
                 logger.warning("CAN-Interface %s getrennt: %s", device_id, exc)
                 self._detach_can_nodes(device_id, send_shutdown=False)
+                self._stop_can_reader(device_id)
                 bus.close()
                 del self._can_buses[device_id]
                 self._can_stats.pop(device_id, None)
@@ -1784,6 +1869,7 @@ class DeviceWorker(QObject):
             return True, ""
         except CanError as exc:
             self._detach_can_nodes(device_id, send_shutdown=False)
+            self._stop_can_reader(device_id)
             bus.close()
             del self._can_buses[device_id]
             self._can_stats.pop(device_id, None)

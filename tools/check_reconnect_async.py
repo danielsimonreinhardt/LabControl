@@ -154,7 +154,7 @@ worker._reconnect_fgs()
 spin(0.2)
 check("Innerhalb der Sperrfrist kein zweiter Probe", FakeFg.probes == ["COM_CH340"], str(FakeFg.probes))
 
-print("CAN-Abruf mit Zeitbudget")
+print("CAN-Abruf: eigener Lese-Thread (seit 0.57.1), der Zyklus fuettert nur noch die Knoten")
 
 
 class FakeBus:
@@ -169,13 +169,17 @@ class FakeBus:
 worker2 = dw.DeviceWorker()
 worker2._can_buses["can:fake"] = FakeBus(1000)
 worker2._can_stats["can:fake"] = [0, 0]
+worker2._poll()   # startet den Lese-Thread fuer den nachtraeglich eingesetzten Bus
+reader = worker2._can_readers.get("can:fake")
+check("Zyklus startet einen Lese-Thread fuer einen Bus ohne", reader is not None)
+spin(2.0, until=lambda: reader is not None and reader.rx_count == 1000)
+check("Lese-Thread holt 1000 aufgestaute Frames ohne Zyklus ab", reader is not None and reader.rx_count == 1000,
+      str(reader.rx_count if reader else None))
 worker2._poll()
-rx = worker2._can_stats["can:fake"][1]
-check("Ein Zyklus holt mehr als die frueheren 32 Frames ab", rx > 32, f"{rx} von 1000")
 worker2._poll()
-worker2._poll()
-check("Rueckstand wird in wenigen Zyklen abgebaut", worker2._can_stats["can:fake"][1] == 1000,
-      str(worker2._can_stats["can:fake"][1]))
+check("Zyklus uebernimmt den Zaehler und leert die Knoten-Warteschlange",
+      worker2._can_stats["can:fake"][1] == 1000 and reader.frames.empty(), str(worker2._can_stats["can:fake"][1]))
+worker2._stop_can_reader("can:fake")
 
 print("Warnung bei langsamem Poll-Zyklus")
 worker3 = dw.DeviceWorker()

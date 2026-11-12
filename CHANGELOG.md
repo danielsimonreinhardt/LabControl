@@ -6,6 +6,17 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **CAN-Botschaften kamen am Pi stoßweise an (0.57.1, Nutzerfeedback 12.11.2026).** Gemessen am Pi (nur lesend,
+  eigener Socket auf can0): alle 8 Botschaften des Batterie-Simulators kommen exakt alle 100,0 ms, der Bus ist
+  sauber. LabControl las CAN aber nur einmal je Poll-Zyklus, nach Last (~320 ms) und Netzteilen (je ~100–140 ms) —
+  am Pi bis ~700 ms je Zyklus; dazwischen stauten sich die Frames, der Kernel verwarf einzelne (`RX dropped 10`).
+  Jetzt liest je CAN-Interface ein eigener Thread (`device_worker.CanReader`) fortlaufend und gibt Rohframes und
+  DBC-Signale sofort an die Anzeige; die CAN-Knoten (Batterie-Simulator) bekommen die Frames weiter im Worker, in
+  Reihenfolge. Der Lese-Thread wartet nie blockierend (CanBus.recv teilt die Sperre mit send), damit die zyklische
+  Botschaft 0x130 nicht verzögert wird. **Mock-verifiziert:** neue Prüfung `tools/check_can_reader.py` (gleichmäßig
+  trotz blockiertem Worker, Reihenfolge, Zähler, Fehler, Senden unverzögert, Simulation); am Pi noch nicht im Dienst.
+
 ### Geändert
 - **Programme koppeln statt Hauptschalter mit Zeitfenster (0.57.0, PI-41 c / PI-44 b, 12.11.2026).**
   - Den Schalter „Fernsteuerung für andere Rechner“ mit Zeitfenster, seine Restzeit-Anzeige in der Leiste oben und das

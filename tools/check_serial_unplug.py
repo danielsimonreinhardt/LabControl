@@ -181,8 +181,15 @@ def check_worker() -> None:
               "psu:TOT" not in worker._psus and ("psu", "psu:TOT") in removed, str(removed))
         check("Last mit unerwartetem Fehler gilt als getrennt",
               "load:TOT" not in worker._loads and ("load", "load:TOT") in removed, str(removed))
-        check("CAN wird im selben Zyklus trotzdem abgefragt", worker._can_stats["can:fake"][1] == 1,
+        # Seit 0.57.1 liest ein eigener Thread (CanReader); der Zyklus uebernimmt den Zaehler beim naechsten Mal
+        import time as _time
+        end = _time.monotonic() + 2.0
+        while _time.monotonic() < end and worker._can_readers["can:fake"].rx_count < 1:
+            _time.sleep(0.01)
+        worker._poll()
+        check("CAN laeuft trotz der Fehler weiter", worker._can_stats["can:fake"][1] == 1,
               str(worker._can_stats["can:fake"]))
+        worker._stop_can_reader("can:fake")
         check("steht im Log", any("psu:TOT" in m and "unerwartet" in m for m in messages)
               and any("load:TOT" in m for m in messages), str(messages))
     finally:
