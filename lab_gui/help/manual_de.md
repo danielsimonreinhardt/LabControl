@@ -522,8 +522,8 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
 Damit lassen sich **einzelne Dashboard-Kacheln** für andere Geräte im
 lokalen Netzwerk sichtbar machen — etwa für ein kleines ESP32-Display im
 Labor oder für einen Browser auf dem Handy. Zum **Anzeigen** genügt die
-Freigabe „Lesen“; zum **Fernsteuern** braucht es zusätzlich „Steuern“ und
-den Hauptschalter (siehe „Fernsteuerung“ weiter unten).
+Freigabe „Lesen“; zum **Fernsteuern** braucht es zusätzlich „Steuern“, und
+der Aufrufer muss steuern dürfen (siehe „Fernsteuerung“ weiter unten).
 
 Im Auslieferungszustand ist alles aus: der Server läuft nicht, es ist
 keine Kachel freigegeben, und ein Zugangstoken wird verlangt.
@@ -594,13 +594,14 @@ erfüllt sein:
    Möglich ist das für Last, Netzteil, microHIL, Funktionsgenerator und
    Batterie-Simulator; CAN und
    Oszilloskop lassen sich nicht fernsteuern (zum Oszilloskop siehe „Messen“ unten).
-3. Der Hauptschalter **„Fernsteuerung für andere Rechner“** ist eingeschaltet.
-   Nicht nötig sind er für Zugriffe vom selben Rechner (Schalter „Claude (MCP)
-   darf steuern“, siehe unten) und für den gekoppelten Verbund-Partner. Er ist
-   nach jedem Programmstart aus und schaltet sich nach dem eingestellten
-   Zeitlimit (Standard 60 Minuten) von selbst wieder aus. Solange er an ist,
-   steht in der Leiste oben ein orangefarbener Hinweis mit der Restzeit. Beim
-   Ablauf bleiben die Geräte in ihrem Zustand — sie werden nicht abgeschaltet.
+3. Der Aufrufer **darf steuern**. Das sind genau drei:
+   - der gekoppelte Verbund-Partner (siehe „Verbund“),
+   - Programme am selben Rechner, solange „Claude (MCP) darf steuern“ angehakt ist,
+   - **gekoppelte Programme** mit ihrem eigenen Schlüssel (siehe unten).
+
+   Wer nur den allgemeinen Token hat (etwa ein ESP32-Display), darf lesen, aber
+   nicht steuern. Den früheren Hauptschalter mit Zeitfenster gibt es seit 0.57.0
+   nicht mehr.
 4. Es läuft **kein Testablauf** und die **Sicherheitsabschaltung** hat nicht
    ausgelöst. Sonst wird jeder Steuerbefehl abgewiesen (Lesen bleibt möglich).
 5. Aktion, Wert und Kanal sind gültig — die Wertebereiche entsprechen denen im
@@ -608,19 +609,36 @@ erfüllt sein:
    Sicherheits-Grenzwert** dieses Geräts (Abschnitt 6).
 
 **Claude (MCP) darf steuern.** Programme auf demselben Rechner wie LabControl —
-etwa der MCP-Server — brauchen den Hauptschalter nicht, solange **„Claude (MCP)
+etwa der MCP-Server — dürfen steuern, solange **„Claude (MCP)
 darf steuern“** angehakt ist (Voreinstellung, direkt unter „Freigabe im lokalen
-Netzwerk aktivieren“). Es gibt dann kein Zeitfenster; Token, „Steuern“ beim
+Netzwerk aktivieren“). Token, „Steuern“ beim
 Gerät, Wertebereiche, Grenzwerte und die Sperren bei Testlauf und
-Sicherheitsabschaltung gelten weiter. Ohne Haken darf Claude nur lesen, außer
-der Hauptschalter ist an. Der Chip **„MCP“** in der Leiste oben zeigt den Stand:
+Sicherheitsabschaltung gelten weiter. Ohne Haken darf Claude nur lesen. Der Chip **„MCP“** in der Leiste oben zeigt den Stand:
 grün = Claude darf steuern, grau = nur lesen. „Lokal“ wird an der Verbindung
 erkannt (Loopback oder die eigene Adresse des Rechners), nicht an Angaben des
 Aufrufers.
 
+**Programme koppeln.** Ein Skript oder ein MCP-Server auf einem anderen Rechner
+koppelt sich wie der Verbund-Partner. Das geht mit
+`python tools/labcontrol_pair.py ADRESSE "Name des Programms"`:
+1. Das Skript zeigt einen 6-stelligen Code.
+2. LabControl fragt „Programm „Name“ (Adresse) möchte koppeln und steuern“ mit
+   demselben Code.
+3. Bei gleichem Code tippt man **„Code gleich – koppeln“**.
+
+Danach bekommt das Programm einmal seinen **eigenen Schlüssel**. Den benutzt es wie
+den Token, aber nur als Kopfzeile `Authorization: Bearer …`. LabControl
+speichert davon nur einen Fingerabdruck. Mit dem Schlüssel darf das Programm
+lesen und steuern; die Freigabeliste („Lesen“, „Steuern“) und alle Sperren
+gelten weiter. Jeder Befehl steht mit dem Programmnamen im Protokoll.
+
+Unter **Einstellungen → Netzwerk → „Gekoppelte Programme“** stehen alle Programme
+mit Adresse und Datum. Der Papierkorb hebt eine Kopplung auf, der Schlüssel gilt
+dann sofort nicht mehr.
+
 **Notaus.** Die Aktion „Alle Ausgänge aus“ ist die einzige Ausnahme: sie
-verlangt nur den Token und geht immer — auch bei ausgeschaltetem Hauptschalter,
-laufendem Testablauf und nach einer Sicherheitsabschaltung. Sie wirkt wie der
+verlangt nur den Token und geht immer — auch für Aufrufer, die nicht steuern dürfen,
+bei laufendem Testablauf und nach einer Sicherheitsabschaltung. Sie wirkt wie der
 „ALLE AUS“-Button.
 
 Zusätzlich sind höchstens zwei Befehle gleichzeitig unterwegs, und schnelle
@@ -637,9 +655,9 @@ eines Testablaufs (Eingänge, Zellspannungen) erscheinen nicht.
 
 Am Netzteil HCS-34xx schalten `PSU_OUT_ON`/`PSU_OUT_OFF` den Ausgang wirklich;
 Spannung und Strombegrenzung bleiben dabei unverändert. `PSU_CURR` setzt nur die
-Strombegrenzung und schaltet nichts. Der EIN/AUS-Schalter im Reiter „Steuerung“
-folgt einer Fernsteuer-Aktion; die Sollwertfelder dort bleiben unverändert, die
-tatsächlichen Werte zeigt das Dashboard.
+Strombegrenzung und schaltet nichts. Der EIN/AUS-Schalter und die Sollwertfelder
+im Reiter „Steuerung“ folgen einer Fernsteuer-Aktion (seit 0.56.0 auch die
+Sollwerte), ein Feld, in dem gerade jemand tippt, ausgenommen.
 
 Befehle sind `POST`-Anfragen mit JSON-Rumpf, z.B. (`TOKEN` und `ADRESSE`
 einsetzen; die erlaubten Aktionen je Gerät nennt `ADRESSE/api/v1/tiles/<ID>`):
@@ -659,14 +677,15 @@ Server, der diese Schnittstelle als Werkzeuge für Claude Code & Co. bereitstell
 (Status lesen, Geräte auflisten, Werte lesen, Aktion ausführen, Notaus, dazu
 mit dem Oszilloskop messen). Einrichtung und Sicherheitsmodell stehen in
 `labcontrol_mcp/README.md`. Er läuft als eigener Prozess und kann nicht mehr, als
-die Schnittstelle oben erlaubt — insbesondere kann er den Hauptschalter nicht
-selbst einschalten.
+die Schnittstelle oben erlaubt — insbesondere kann er sich das Steuern nicht
+selbst erlauben. Läuft er auf einem anderen Rechner, koppelt man ihn als Programm
+(siehe oben) und trägt dessen Schlüssel als Token ein.
 
 **Messen mit dem Oszilloskop über das Netzwerk.** Mit dem Haken **„Messen“** beim
 Oszilloskop darf ein Assistent über den MCP-Server Erfassungen einstellen und
 auswerten (Kanäle, Bereich, Zeitbasis, Trigger; Kennwerte wie Frequenz,
-Tastgrad, Anstiegszeit). Weil dabei nichts geschaltet wird, braucht „Messen“ den
-Hauptschalter nicht, wohl aber den Token und „Lesen“. Solange eine Erfassung
+Tastgrad, Anstiegszeit). Weil dabei nichts geschaltet wird, braucht „Messen“ kein
+Steuerrecht, wohl aber den Token und „Lesen“. Solange eine Erfassung
 läuft oder kürzlich lief, hält LabControl das Oszilloskop geöffnet — die Kachel
 zeigt dann **„Verbunden (MCP)“**. 60 Sekunden nach der letzten Erfassung wird
 von selbst getrennt; **„Trennen“** auf der Kachel oder **„PicoScope 7 öffnen“**
@@ -699,7 +718,7 @@ Testablauf bedient wurde; ein Feld, in dem gerade jemand tippt, bleibt
 unangetastet. Name und Kachelfarbe gehören dem Rechner, an dem das Gerät steckt.
 Umbenennen oder Umfärben in einer Partnerkachel ändert sie dort, und beide Rechner
 zeigen das Ergebnis. Die Anordnung der Kacheln hat jeder Rechner für sich. Der
-gekoppelte Partner braucht dort keinen Hauptschalter:
+gekoppelte Partner darf dort immer steuern:
 Die Kopplung, bei der an beiden Rechnern derselbe Code bestätigt wird, ist die
 Freigabe. Erkannt wird er an der Verbund-Kennung **und** an der eingetragenen
 Partner-Adresse. Bedienen geht, solange am Partner weder ein Testablauf läuft
@@ -758,8 +777,8 @@ Oszilloskop zuständig.
 **Claude (MCP) im Verbund.** Der MCP-Server bleibt auf den PC eingestellt. Die
 Freigabe des PCs zeigt Claude zusätzlich die Partnergeräte als
 `@raspberrypi/psu:0001` und reicht Befehle daran an den Partner weiter. Dafür
-muss am PC „Claude (MCP) darf steuern“ angehakt (oder der Hauptschalter an) sein;
-am Partner braucht es keinen Hauptschalter. Vor dem ersten Befehl belegt der PC das Gerät beim
+muss am PC „Claude (MCP) darf steuern“ angehakt sein; am Partner braucht es
+nichts weiter. Vor dem ersten Befehl belegt der PC das Gerät beim
 Partner („belegt durch PC · Claude (MCP)“) und meldet sich jede Sekunde; fehlt
 das 3 Sekunden, schaltet der Partner das Gerät ab. Die Belegung endet nach
 10 Minuten ohne Befehl von Claude, bei ALLE AUS, einer Sicherheitsabschaltung,

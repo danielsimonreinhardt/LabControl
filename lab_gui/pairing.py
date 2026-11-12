@@ -51,6 +51,10 @@ class PairRequest:
     token_delivered: bool = False
     peer_token: str = ""         # Token von A, nach complete
     applied: bool = False        # Verbund-Einstellungen uebernommen (GUI-Thread)
+    # Programm statt Verbund-Partner (PI-44 b): bekommt nach der Bestaetigung einmal einen eigenen Schluessel
+    # (program_token, vom GUI-Thread erzeugt und gespeichert); ein Gegen-Token gibt es nicht
+    kind: str = "partner"
+    program_token: str = ""
 
     def label(self) -> str:
         return self.name or self.host or self.client_ip
@@ -78,7 +82,7 @@ class PairingTable:
 
     # -- Server-Thread (share_api) ---------------------------------------------
 
-    def request(self, client_ip: str, host: str, name: str, port: int) -> PairRequest:
+    def request(self, client_ip: str, host: str, name: str, port: int, kind: str = "partner") -> PairRequest:
         now = self._clock()
         with self._lock:
             self._expire(now)
@@ -89,11 +93,12 @@ class PairingTable:
                 pair_id=secrets.token_urlsafe(16),
                 code=f"{secrets.randbelow(10 ** CODE_DIGITS):0{CODE_DIGITS}d}",
                 client_ip=str(client_ip), host=str(host)[:64], name=str(name)[:MAX_NAME],
-                port=int(port), created=now)
+                port=int(port), created=now, kind="program" if kind == "program" else "partner")
             return self._copy(self._current)
 
     def status(self, pair_id: str) -> PairRequest | None:
-        """Stand der Anfrage fuer A; None = unbekannte ID. Nach der Bestaetigung einmal mit Token."""
+        """Stand der Anfrage fuer A; None = unbekannte ID. Nach der Bestaetigung einmal mit Token bzw.
+        (Programm) einmal mit dem eigenen Schluessel -- danach ist die Programm-Kopplung abgeschlossen."""
         with self._lock:
             self._expire(self._clock())
             req = self._match(pair_id)
@@ -102,6 +107,10 @@ class PairingTable:
             copy = self._copy(req)
             if req.status == "accepted":
                 req.token_delivered = True
+                if req.kind == "program":
+                    req.status = "done"
+                    req.applied = True        # gespeichert hat der GUI-Thread schon beim Bestaetigen
+                    req.program_token = ""    # nur einmal ausliefern
             return copy
 
     def complete(self, pair_id: str, token: str) -> bool:
@@ -140,12 +149,17 @@ class PairingTable:
             self._expire(self._clock())
             return self._copy(self._current) if self._current is not None else None
 
-    def decide(self, pair_id: str, accept: bool) -> bool:
+    def decide(self, pair_id: str, accept: bool, program_token: str = "") -> bool:
+        """program_token: bei einer Programm-Kopplung der neue eigene Schluessel (Pflicht beim Annehmen)."""
         with self._lock:
             self._expire(self._clock())
             req = self._match(pair_id)
             if req is None or req.status != "pending":
                 return False
+            if accept and req.kind == "program":
+                if not program_token:
+                    return False
+                req.program_token = program_token
             req.status = "accepted" if accept else "rejected"
             if not accept:
                 self._blocked_until = self._clock() + REJECT_COOLDOWN_S

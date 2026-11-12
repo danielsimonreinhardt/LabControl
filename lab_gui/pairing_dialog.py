@@ -175,12 +175,15 @@ class PairConfirmDialog(QDialog):
 
     decided = Signal(str, bool)   # Anfrage-ID, angenommen?
 
-    def __init__(self, pair_id: str, label: str, client_ip: str, code: str, parent: QWidget | None = None) -> None:
+    def __init__(self, pair_id: str, label: str, client_ip: str, code: str, parent: QWidget | None = None,
+                 program: bool = False) -> None:
         super().__init__(parent)
         self.pair_id = pair_id
         self.setWindowTitle(tr("Kopplung anfragen"))
         layout = QVBoxLayout(self)
-        text = QLabel(tr("„{name}“ ({ip}) möchte koppeln", name=label, ip=client_ip))
+        # program: ein Programm (Skript, MCP-Server auf einem anderen Rechner) statt eines Verbund-Partners (PI-44 b)
+        text = QLabel(tr("Programm „{name}“ ({ip}) möchte koppeln und steuern", name=label, ip=client_ip) if program
+                      else tr("„{name}“ ({ip}) möchte koppeln", name=label, ip=client_ip))
         text.setWordWrap(True)
         layout.addWidget(text)
         layout.addWidget(_code_label(code))

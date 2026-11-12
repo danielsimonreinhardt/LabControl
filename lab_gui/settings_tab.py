@@ -57,8 +57,6 @@ from safety import SAFETY_LIMIT_FIELDS
 from settings import (
     SHARE_BIND_LAN,
     SHARE_BIND_LOCAL,
-    SHARE_CONTROL_TIMEOUT_MAX,
-    SHARE_CONTROL_TIMEOUT_MIN,
     SHARE_PORT_MAX,
     SHARE_PORT_MIN,
 )
@@ -742,9 +740,8 @@ class SettingsTab(QWidget):
     share_read_token_toggled = Signal(bool)
     share_access_log_toggled = Signal(bool)
     share_device_changed = Signal(str, bool, bool, bool)  # device_id, read, control, measure
-    share_control_toggled = Signal(bool)            # Hauptschalter Fernsteuerung
-    share_local_bypass_toggled = Signal(bool)       # lokal ohne Hauptschalter
-    share_control_timeout_changed = Signal(int)     # Minuten
+    share_local_bypass_toggled = Signal(bool)       # "Claude (MCP) darf steuern"
+    program_remove_requested = Signal(str)          # Kopplung eines Programms aufheben: key_sha256 (PI-44 b)
     # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
     partner_config_edited = Signal(dict)
     # Kopplung starten (pairing.py): eingetragene Adresse
@@ -1059,15 +1056,12 @@ class SettingsTab(QWidget):
         self._share_access_log_checkbox.setText(
             tr("Zugriffe protokollieren")
         )
-        self._share_control_checkbox.setText(tr("Fernsteuerung für andere Rechner"))
-        self._share_control_checkbox.setToolTip(tr(
-            "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner "
-            "braucht das nicht."))
+        self._programs_title.setText(tr("Gekoppelte Programme"))
+        self._programs_empty.setText(tr("keine"))
         self._share_local_bypass_checkbox.setText(tr("Claude (MCP) darf steuern"))
         self._share_local_bypass_checkbox.setToolTip(
             tr("Gilt für Programme auf diesem Rechner, z.B. den MCP-Server. Token, "
                "„Steuern“ und die Sperren bei Testlauf und Sicherheitsabschaltung bleiben."))
-        self._share_control_timeout_label.setText(tr("Schaltet sich ab nach"))
         self._share_table.retranslate()
         self._retranslate_partner()
 
@@ -1152,26 +1146,18 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
-        # -- Fernsteuerung: Hauptschalter mit Zeitlimit ----------------------
-
-        # Nicht gespeichert: nach jedem App-Start ist die Fernsteuerung aus.
-        # Wer sie einschaltet, gibt bewusst ein Zeitfenster her.
-        self._share_control_checkbox = QCheckBox()
-        self._share_control_checkbox.toggled.connect(self.share_control_toggled)
-        layout.addWidget(self._share_control_checkbox)
-
-        control_form = QFormLayout()
-        control_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        self._share_control_timeout_spin = SteppedSpinBox()
-        self._share_control_timeout_spin.setRange(SHARE_CONTROL_TIMEOUT_MIN, SHARE_CONTROL_TIMEOUT_MAX)
-        self._share_control_timeout_spin.setSuffix(" min")
-        self._share_control_timeout_spin.valueChanged.connect(self.share_control_timeout_changed)
-        self._share_control_timeout_label = QLabel()
-        control_form.addRow(self._share_control_timeout_label, self._share_control_timeout_spin)
-        layout.addLayout(control_form)
-
-        self._share_control_status = QLabel()
-        layout.addWidget(self._share_control_status)
+        # -- Gekoppelte Programme (PI-41 c / PI-44 b) -------------------------
+        # Ersetzt seit 0.57.0 den Hauptschalter "Fernsteuerung fuer andere Rechner" mit Zeitfenster: ein
+        # Programm koppelt sich wie der Verbund-Partner (Code bestaetigen) und bekommt einen eigenen Schluessel.
+        self._programs_title = QLabel()
+        self._programs_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self._programs_title)
+        self._programs_box = QVBoxLayout()
+        self._programs_box.setSpacing(4)
+        layout.addLayout(self._programs_box)
+        self._programs_empty = QLabel()
+        set_tone(self._programs_empty, "muted")
+        layout.addWidget(self._programs_empty)
 
         layout.addWidget(_separator())
 
@@ -1285,8 +1271,7 @@ class SettingsTab(QWidget):
         """
         for widget in (self._share_enabled_checkbox, self._share_bind_combo,
                        self._share_port_spin, self._share_read_token_checkbox,
-                       self._share_access_log_checkbox, self._share_control_timeout_spin,
-                       self._share_local_bypass_checkbox):
+                       self._share_access_log_checkbox, self._share_local_bypass_checkbox):
             widget.blockSignals(True)
         self._share_enabled_checkbox.setChecked(bool(config.get("enabled")))
         index = self._share_bind_combo.findData(config.get("bind", SHARE_BIND_LOCAL))
@@ -1295,31 +1280,37 @@ class SettingsTab(QWidget):
         self._share_port_spin.setValue(int(config.get("port", SHARE_PORT_MIN)))
         self._share_read_token_checkbox.setChecked(not config.get("read_requires_token", True))
         self._share_access_log_checkbox.setChecked(bool(config.get("access_log")))
-        self._share_control_timeout_spin.setValue(
-            int(config.get("control_timeout_min", SHARE_CONTROL_TIMEOUT_MIN)))
         self._share_local_bypass_checkbox.setChecked(bool(config.get("local_bypass", True)))
         for widget in (self._share_enabled_checkbox, self._share_bind_combo,
                        self._share_port_spin, self._share_read_token_checkbox,
-                       self._share_access_log_checkbox, self._share_control_timeout_spin,
-                       self._share_local_bypass_checkbox):
+                       self._share_access_log_checkbox, self._share_local_bypass_checkbox):
             widget.blockSignals(False)
         self._share_token_edit.setText(config.get("token", ""))
         self._share_table.set_share(config.get("devices", {}))
+        self._render_programs(config.get("programs", []))
+
+    def _render_programs(self, programs: list) -> None:
+        """Liste der gekoppelten Programme: Name · Adresse · Datum, Papierkorb widerruft den Schluessel."""
+        while self._programs_box.count():
+            item = self._programs_box.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        for program in programs:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            text = QLabel(" · ".join(part for part in (program.get("name"), program.get("ip"),
+                                                       program.get("created")) if part))
+            row_layout.addWidget(text, 1)
+            remove = IconButton("mdi.delete-outline", tr("Kopplung aufheben"))
+            remove.clicked.connect(lambda _c=False, key=program["key_sha256"]: self.program_remove_requested.emit(key))
+            row_layout.addWidget(remove)
+            self._programs_box.addWidget(row)
+        self._programs_empty.setVisible(not programs)
 
     def set_share_status(self, text: str, is_error: bool) -> None:
         self._share_status.setText(text)
         set_tone(self._share_status, "danger" if is_error else "muted")
-
-    def set_share_control_state(self, active: bool, text: str) -> None:
-        """Zeigt den Zustand des Hauptschalters an (von MainWindow, sekuendlich
-        waehrend er an ist). Setzt den Haken ohne Signal -- die Anzeige folgt
-        dem Zustand, sie loest ihn nicht aus. Nach einem Ablauf steht der Haken
-        so wieder auf aus."""
-        self._share_control_checkbox.blockSignals(True)
-        self._share_control_checkbox.setChecked(active)
-        self._share_control_checkbox.blockSignals(False)
-        set_tone(self._share_control_status, "warning" if active else "muted", strong=active)
-        self._share_control_status.setText(text)
 
     def set_share_url(self, url: str) -> None:
         self._share_url_edit.setText(url)

@@ -198,7 +198,7 @@ def main() -> int:
     server_b._app_info = {**server_b._app_info, "host": HOST_B}
     if server_b._server is not None:
         server_b._server.share_app_info = server_b._app_info
-    window_b._on_share_control_toggled(True)
+    window_b._live_state.set_remote_control(True, 3600.0)
     window_a = make_window({"partner_enabled": True, "partner_address": f"127.0.0.1:{port_b}",
                             "partner_token": TOKEN_B, "partner_name": "Pi",
                             "share_enabled": True, "share_bind": "127.0.0.1", "share_port": port_a,
@@ -218,7 +218,7 @@ def main() -> int:
     check("A listet die Geraete von B als '@pi-sim/...'", partner_psu in ids, str(ids))
     status, body = http_async(app, port_a, TOKEN_A, "POST", quoted + "/actions", {"action": "PSU_VOLT", "value": 4.0})
     check("ohne Hauptschalter an A -> 403 (at=local)", status == 403 and body.get("at") == "local", f"{status} {body}")
-    window_a._on_share_control_toggled(True)
+    window_a._live_state.set_remote_control(True, 3600.0)
     status, body = http_async(app, port_a, TOKEN_A, "POST", quoted + "/actions", {"action": "PSU_VOLT", "value": 4.0})
     check("PSU_VOLT 4 V ueber A -> ok", status == 200 and body.get("ok") is True, f"{status} {body}")
     check("Sollwert bei B angekommen", mock_b is not None and mock_b.get_setpoint()[0] == 4.0,

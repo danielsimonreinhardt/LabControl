@@ -60,6 +60,7 @@ Partner selbst -- wird nichts durchgereicht, sonst kaemen seine Geraete ueber ih
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -266,12 +267,14 @@ def remote_effective(snapshot: dict) -> bool:
 
     - der gekoppelte Verbund-Partner (snapshot["verbund"], PI-39 b): immer -- die Kopplung mit
       Code-Bestaetigung an beiden Rechnern ist die Freigabe
+    - ein gekoppeltes Programm mit eigenem Schluessel (snapshot["program"], PI-41 c / PI-44 b)
     - Aufrufe vom selben Rechner (snapshot["local"], z. B. der MCP-Server), wenn der Schalter
       "Claude (MCP) darf steuern" (share.local_bypass) an ist
-    - alle anderen nur, solange der Hauptschalter mit Zeitfenster an ist
+    - alle anderen nie (bis 0.56: solange der Hauptschalter mit Zeitfenster an war; die App schaltet
+      snapshot["remote"] seit 0.57.0 nicht mehr ein, die Pruefskripte nutzen es noch als "erlaubt")
     Token, Steuern-Freigabe, Sperrzustand, Wert- und Grenzwertpruefung gelten fuer jeden.
     """
-    if snapshot.get("remote", {}).get("active") or snapshot.get("verbund"):
+    if snapshot.get("remote", {}).get("active") or snapshot.get("verbund") or snapshot.get("program"):
         return True
     return bool(snapshot.get("local")) and bool(snapshot.get("share", {}).get("local_bypass"))
 
@@ -307,15 +310,35 @@ def _presented_token(header_get, query: dict) -> str:
     return values[0] if values else ""
 
 
+def program_key_hash(key: str) -> str:
+    """Fingerabdruck eines Programm-Schluessels (gespeichert wird nur er, PI-44 b)."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def program_of(snapshot: dict, header_get) -> str:
+    """Name des gekoppelten Programms, dessen eigener Schluessel im Authorization-Header steht, sonst ""
+    (PI-41 c / PI-44 b). Nur der Header, nie ?token= -- Programme duerfen steuern."""
+    auth = header_get("Authorization") or ""
+    presented = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not presented:
+        return ""
+    digest = program_key_hash(presented)
+    for program in snapshot.get("share", {}).get("programs", []):
+        if isinstance(program, dict) and hmac.compare_digest(str(program.get("key_sha256", "")), digest):
+            return str(program.get("name") or "?")
+    return ""
+
+
 def check_auth(snapshot: dict, header_get, query: dict) -> Response | None:
     """None = erlaubt, sonst die abweisende Antwort.
 
     Gilt fuer alle LESENDEN Routen. Schreibende Routen gehen stattdessen
     durch check_write_auth: dass Lesen tokenfrei sein darf, ist eine
     Einstellung, dass Schreiben es nie ist, gehoert nicht zur Konfiguration.
+    Ein gekoppeltes Programm (eigener Schluessel, snapshot["program"]) darf immer.
     """
     share = snapshot.get("share", {})
-    if not share.get("read_requires_token"):
+    if not share.get("read_requires_token") or snapshot.get("program"):
         return None
     token = share.get("token") or ""
     if not token:
@@ -454,6 +477,7 @@ def _status(snapshot: dict, app_info: dict) -> Response:
             "local": bool(snapshot.get("local")),
             "local_bypass": bool(snapshot.get("share", {}).get("local_bypass")),
             "verbund": bool(snapshot.get("verbund")),
+            "program": snapshot.get("program") or "",
         },
         "auth": {
             "read_token_required": bool(share.get("read_requires_token")),
@@ -525,6 +549,8 @@ def check_write_auth(snapshot: dict, header_get) -> Response | None:
     Ein Header erzwingt ausserdem bei jeder Webseite, die es per Browser
     versucht, einen CORS-Preflight, den dieser Server nie beantwortet.
     """
+    if snapshot.get("program"):
+        return None   # gekoppeltes Programm mit eigenem Schluessel (program_of)
     token = snapshot.get("share", {}).get("token") or ""
     if not token:
         return _error(503, "token_not_configured")
@@ -617,7 +643,8 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
         return _error(400, "exceeds_safety_limit", limit_field=field, limit=limit, unit=definition.unit)
 
     result = executor.submit_action(device_id, kind, action, value, channel, client,
-                                    bool(snapshot.get("local")), verbund=bool(snapshot.get("verbund")))
+                                    bool(snapshot.get("local")), verbund=bool(snapshot.get("verbund")),
+                                    program=bool(snapshot.get("program")))
     return _result_response(result, {"device": device_id, "action": action,
                                      **({"value": value} if definition.needs_value else {}),
                                      **({"channel": channel} if definition.channels else {}),
@@ -1042,13 +1069,20 @@ def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: 
         payload = _parse_body(body)
         if payload is None:
             return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+        program = payload.get("kind") == "program"   # Programm statt Verbund-Partner (PI-44 b)
         port = payload.get("port")
-        if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        if program:
+            port = 0
+        elif isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
             return _error(400, "invalid_value", field="port")
         host = payload.get("host") if isinstance(payload.get("host"), str) else ""
         name = payload.get("name") if isinstance(payload.get("name"), str) else ""
+        name = "".join(c for c in name if ord(c) >= 32).strip()
+        if program and not name:
+            return _error(400, "invalid_value", field="name")
         try:
-            req = pairing.request(client.split(" ")[0] or "?", host, name, port)
+            req = pairing.request(client.split(" ")[0] or "?", host, name, port,
+                                  kind="program" if program else "partner")
         except PairBusy:
             return _error(409, "pair_busy")
         logger.warning("Kopplung: Anfrage von %s (%s), Code %s", req.client_ip, req.label(), req.code)
@@ -1061,7 +1095,10 @@ def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: 
         if req is None:
             return _error(404, "unknown_pair")
         result = {"v": API_VERSION, "status": req.status}
-        if req.status == "accepted":
+        if req.status == "accepted" and req.kind == "program":
+            # eigener Schluessel des Programms, genau einmal (PairingTable.status schliesst danach ab)
+            result.update(status="done", key=req.program_token, host=app_info.get("host", ""))
+        elif req.status == "accepted":
             result.update(token=share.get("token", ""), port=share.get("port"), host=app_info.get("host", ""))
         return _json(200, result)
     if method != "POST" or verb == "":
@@ -1104,6 +1141,10 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
     snapshot = state.snapshot()
     snapshot["local"] = bool(local)
     snapshot["verbund"] = is_partner_caller(snapshot, client)
+    snapshot["program"] = program_of(snapshot, header_get)
+    if snapshot["program"]:
+        # Protokoll und Executor nennen das Programm (Name auf harmlose Zeichen gekuerzt wie client_label)
+        client = f"{client} Programm:{''.join(c for c in snapshot['program'] if c.isalnum() or c in '-_.')[:40]}"
 
     if path == f"{API_PREFIX}/pair" or path.startswith(f"{API_PREFIX}/pair/"):
         # Kopplung (pairing.py): ohne Token -- den gibt es erst danach

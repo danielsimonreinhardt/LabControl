@@ -7,6 +7,22 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Programme koppeln statt Hauptschalter mit Zeitfenster (0.57.0, PI-41 c / PI-44 b, 12.11.2026).**
+  - Den Schalter „Fernsteuerung für andere Rechner“ mit Zeitfenster, seine Restzeit-Anzeige in der Leiste oben und das
+    Zeitlimit gibt es nicht mehr. Steuern dürfen nur noch der gekoppelte Verbund-Partner, Programme am eigenen Rechner
+    („Claude (MCP) darf steuern“) und **gekoppelte Programme**. Wer nur den allgemeinen Token hat, darf lesen.
+  - **Koppeln wie der Partner:** `tools/labcontrol_pair.py ADRESSE NAME` fragt an (`POST /api/v1/pair` mit
+    `"kind": "program"`) und zeigt einen Code; LabControl fragt „Programm „Name“ (Adresse) möchte koppeln und
+    steuern“, „Code gleich – koppeln“ erzeugt einen eigenen Schlüssel, speichert nur seinen SHA-256-Fingerabdruck
+    (`share_programs`) und gibt ihn dem Programm genau einmal. Der Schlüssel gilt nur als `Authorization`-Kopfzeile;
+    die Freigabeliste und alle Sperren gelten weiter, das Protokoll nennt das Programm (`Programm:<Name>`), der
+    Status meldet `remote_control.program`.
+  - **Einstellungen → Netzwerk → „Gekoppelte Programme“:** Liste mit Name, Adresse, Datum; der Papierkorb hebt die
+    Kopplung auf, der Schlüssel gilt sofort nicht mehr.
+  - MCP-Server: Hinweise und Anleitung umgestellt (Kopplung als Programm, wenn er auf einem anderen Rechner läuft).
+  - **Mock-verifiziert:** neue Prüfung `tools/check_program_pairing.py` (Ende-zu-Ende mit echtem Server und dem
+    Kopplungs-Skript: Dialog, Schlüssel einmal, Steuern ohne Hauptschalter, Freigabeliste, nur Kopfzeile, Ablehnen,
+    Aufheben); bestehende Prüfungen auf den entfallenen Schalter umgestellt. Am Gerät noch nicht ausprobiert.
 - **Steuer-Kacheln synchron, Name und Farbe vom Besitzer (0.56.0, PI-43 b, 12.11.2026).**
   - **Felder folgen dem Gerät:** Der Worker meldet nach jeder erfolgreich gesetzten Netzteil-Spannung/-Strombegrenzung
     die Sollwerte (`psu_setpoints`, vorher nur beim Verbinden und nach der Handbedienung) und nach jedem Last-Sollwert

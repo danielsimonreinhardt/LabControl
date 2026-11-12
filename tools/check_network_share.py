@@ -214,7 +214,7 @@ class _Executor:
         self.all_off_calls: list = []
         self.next_result = share_api.RemoteResult("ok")
 
-    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False):
+    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False, program=False):
         self.calls.append((device_id, kind, action, value, channel, client))
         self.locals.append(local)
         return self.next_result
@@ -504,7 +504,7 @@ def section_remote() -> None:
     st_remote = get("/api/v1/status", off, local=False)["remote_control"]
     check("Status: 'effective' unterscheidet lokal und fremd",
           st_local == {"active": False, "remaining_s": 0.0, "effective": True, "local": True, "local_bypass": True,
-                       "verbund": False}
+                       "verbund": False, "program": ""}
           and st_remote["effective"] is False and st_remote["local"] is False, f"{st_local} {st_remote}")
     check("Status: Hauptschalter an -> effective auch fuer fremde",
           get("/api/v1/status", _snap_rw(remote=True), local=False)["remote_control"]["effective"] is True)
@@ -1392,14 +1392,11 @@ def section_app() -> None:
         query_status, _ = call("POST", act + f"?token={token}", {"action": "PSU_VOLT", "value": 5.0}, auth=False)
         check("Token in der URL -> 401", query_status == 401)
 
-        # Hauptschalter wie ein Nutzer: ueber den Haken im Netzwerk-Reiter
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(True))
+        # Seit 0.57.0 kein Hauptschalter mehr in der GUI (PI-41 c); LiveState kann es intern noch -- als Ersatz
+        gui(lambda: window._live_state.set_remote_control(True, 3600.0))
         st = get("/api/v1/status", auth=False)[1]["remote_control"]
         check("Hauptschalter an: Status meldet Restzeit",
               st["active"] is True and 3500 < st["remaining_s"] <= 3600, str(st))
-        check("Statusleiste zeigt die Fernsteuerung",
-              gui(lambda: window._remote_status_label.isVisible()
-                  and "Fernsteuerung" in window._remote_status_label.text()))
         check("Kachel: jetzt verfuegbar",
               get("/api/v1/tiles/psu:SIM")[1]["control_available"] is True)
 
@@ -1551,7 +1548,6 @@ def section_app() -> None:
               "Fernsteuerung von 127.0.0.1 (lokal): psu:SIM PSU_VOLT" in joined)
         check("Abweisungen stehen im Protokoll", "Fernsteuerung abgewiesen von 127.0.0.1" in joined)
         check("ALLE AUS steht im Protokoll", "ALLE AUS" in joined)
-        check("Hauptschalter im Protokoll", "Fernsteuerung freigegeben fuer 60 min" in joined)
 
         # -- MCP-Server (echter stdio-Kindprozess) ----------------------------------------------------------
         mcp_venv = ROOT / "labcontrol_mcp" / ".venv"
@@ -1694,29 +1690,26 @@ def section_app() -> None:
         time.sleep(2.2)
         check("nach Ablauf -> 403 (ohne dass die GUI etwas tun musste)",
               post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)
-        check("Haken im Reiter springt zurueck, Statusleiste versteckt",
-              wait_for(lambda: gui(lambda: not window.settings_tab._share_control_checkbox.isChecked()
-                                   and not window._remote_status_label.isVisible())))
 
         # -- Von Hand ausschalten -----------------------------------------------------------------------------------------
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(True))
+        gui(lambda: window._live_state.set_remote_control(True, 3600.0))
         time.sleep(1.2)   # Drosselung abklingen lassen
         check("wieder an: Aktion geht", post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 200)
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(False))
+        gui(lambda: window._live_state.set_remote_control(False))
         check("von Hand aus: Aktion -> 403", post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)
 
         # -- Steuern-Haken entziehen -----------------------------------------------------------------------------------------------
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(True))
+        gui(lambda: window._live_state.set_remote_control(True, 3600.0))
         gui(lambda: table._box("psu:SIM", table.COL_CONTROL).setChecked(False))
         time.sleep(1.0)
         check("Steuern in der Tabelle abgewaehlt: Aktion -> 403, Lesen bleibt",
               post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403
               and get("/api/v1/tiles/psu:SIM", auth=False)[0] == 200)
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(False))
+        gui(lambda: window._live_state.set_remote_control(False))
 
         # -- Lokaler Zugriff ohne Hauptschalter --------------------------------------------------------
         gui(lambda: table._box("psu:SIM", table.COL_CONTROL).setChecked(True))   # oben abgewaehlt
-        gui(lambda: window.settings_tab._share_control_checkbox.setChecked(False))
+        gui(lambda: window._live_state.set_remote_control(False))
         time.sleep(1.2)
         check("Ausnahme aus, Hauptschalter aus: lokaler Zugriff -> 403",
               post(act, {"action": "PSU_VOLT", "value": 5.0})[0] == 403)

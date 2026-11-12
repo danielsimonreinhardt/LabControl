@@ -59,10 +59,10 @@ async def main() -> int:
         remote = info.get("remote_control", {})
         print(f"\nLabControl {info.get('version')} | Sperre: {info.get('lock')} | "
               f"Watchdog: {info.get('safety')}")
-        print(f"Hauptschalter:      {'AKTIV, noch %.0f s' % remote.get('remaining_s', 0) if remote.get('active') else 'aus'}")
         print(f"Steuern fuer dich:  {'ja' if remote.get('effective') else 'NEIN'}"
               f"  (Zugriff vom selben Rechner: {'ja' if remote.get('local') else 'nein'}, "
-              f"Ausnahme ohne Hauptschalter: {'an' if remote.get('local_bypass') else 'aus'})")
+              f"'Claude (MCP) darf steuern': {'an' if remote.get('local_bypass') else 'aus'}, "
+              f"gekoppelt als: {remote.get('program') or '-'})")
         print(f"Freigegebene Geraete: {info.get('tiles')}")
 
         devices = await client.call_tool("list_devices", {})
@@ -77,9 +77,9 @@ async def main() -> int:
     if not info.get("tiles"):
         problems.append("Keine Kachel freigegeben (Einstellungen -> Netzwerk -> 'Lesen').")
     if not remote.get("effective"):
-        problems.append("Steuern ist gesperrt -- den Hauptschalter in LabControl einschalten oder unter "
-                        "Einstellungen -> Netzwerk 'Zugriffe von diesem PC brauchen den Hauptschalter "
-                        "nicht' anhaken.")
+        problems.append("Steuern ist gesperrt -- am selben Rechner unter Einstellungen -> Netzwerk "
+                        "'Claude (MCP) darf steuern' anhaken, auf einem anderen Rechner diesen Zugang mit "
+                        "tools/labcontrol_pair.py als Programm koppeln.")
     print()
     if problems:
         print("Hinweise:")

@@ -135,7 +135,6 @@ def main() -> int:
     check("Sicherheits-Chip bleibt beim Wischen sichtbar", w._safety_status_label.isVisible()
           and w._safety_status_label.geometry().left() >= 0)
     area.horizontalScrollBar().setValue(0)
-    check("Fernsteuerungs-Hinweis bleibt verborgen", w._remote_status_label.isHidden())
     check("ALLE AUS mindestens 96 x 44 px", w._all_off_button.width() >= 96 and w._all_off_button.height() >= 44,
           f"{w._all_off_button.width()} x {w._all_off_button.height()}")
     check("Schrift groesser", abs(app.font().pointSizeF() - base_font * touch_ui.FONT_SCALE) < 0.01,

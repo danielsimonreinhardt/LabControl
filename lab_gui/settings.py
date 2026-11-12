@@ -436,6 +436,13 @@ class Settings(QObject):
         token = self._data.get("share_token")
         if isinstance(token, str):
             cfg["token"] = token
+        programs = self._data.get("share_programs")
+        if isinstance(programs, list):
+            cfg["programs"] = [
+                {"name": str(p.get("name", ""))[:40], "ip": str(p.get("ip", ""))[:64],
+                 "created": str(p.get("created", ""))[:32], "key_sha256": p["key_sha256"]}
+                for p in programs
+                if isinstance(p, dict) and isinstance(p.get("key_sha256"), str) and len(p["key_sha256"]) == 64]
         stored = self._data.get("share_devices")
         if isinstance(stored, dict):
             for device_id, entry in stored.items():
@@ -506,6 +513,22 @@ class Settings(QObject):
         if bool(enabled) == self.share_config["access_log"]:
             return
         self._data["share_access_log"] = bool(enabled)
+        self._save()
+        self._emit_share_config()
+
+    def add_share_program(self, name: str, ip: str, key_sha256: str, created: str) -> None:
+        """Gekoppeltes Programm eintragen (PI-44 b); gespeichert wird nur der Fingerabdruck des Schluessels."""
+        programs = [p for p in self.share_config["programs"] if p["key_sha256"] != key_sha256]
+        programs.append({"name": name, "ip": ip, "created": created, "key_sha256": key_sha256})
+        self._data["share_programs"] = programs
+        self._save()
+        self._emit_share_config()
+
+    def remove_share_program(self, key_sha256: str) -> None:
+        programs = [p for p in self.share_config["programs"] if p["key_sha256"] != key_sha256]
+        if len(programs) == len(self.share_config["programs"]):
+            return
+        self._data["share_programs"] = programs
         self._save()
         self._emit_share_config()
 

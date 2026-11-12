@@ -63,7 +63,7 @@ class StubExecutor:
         self.meta.append((device_id, dict(meta)))
         return share_api.RemoteResult("ok")
 
-    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False):
+    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False, program=False):
         import share_api
         self.actions.append((device_id, action, value, channel, client, verbund))
         return share_api.RemoteResult("ok")

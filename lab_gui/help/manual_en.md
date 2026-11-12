@@ -497,8 +497,8 @@ time-window-limited ring buffer of the live charts.
 This makes **individual dashboard tiles** visible to other devices on the
 local network — for example a small ESP32 display in the lab, or a browser
 on your phone. For **display**, the “Read” share is enough; **remote
-control** additionally needs “Control” and the master switch (see “Remote
-control” below).
+control** additionally needs “Control”, and the caller must be allowed to control
+(see “Remote control” below).
 
 Everything is off by default: the server is not running, no tile is
 shared, and an access token is required.
@@ -564,13 +564,14 @@ following must hold:
    is possible for load, power supply, microHIL, function generator and battery
    simulator; CAN and
    oscilloscope cannot be remote-controlled (for the oscilloscope see “Measure” below).
-3. The master switch **“Remote control for other computers”** is on. It is not
-   needed for access from the same computer (switch “Claude (MCP) may control”,
-   see below) or for the paired link partner. It is off after every program
-   start and switches itself off after the configured time limit (default
-   60 minutes). While it is on, an orange notice with the remaining time is
-   shown in the bar at the top. On expiry the devices stay in their state —
-   they are not switched off.
+3. The caller **may control**. There are exactly three:
+   - the paired link partner (see “Link”),
+   - programs on the same computer, as long as “Claude (MCP) may control” is ticked,
+   - **paired programs** with their own key (see below).
+
+   Anyone with just the general token (e.g. an ESP32 display) may read but not
+   control. The former master switch with a time window no longer exists since
+   0.57.0.
 4. **No test sequence** is running and the **safety trip** has not fired.
    Otherwise every control command is rejected (reading stays possible).
 5. Action, value and channel are valid — the value ranges are those of the
@@ -578,17 +579,27 @@ following must hold:
    this device (section 6).
 
 **Claude (MCP) may control.** Programs on the same computer as LabControl —
-such as the MCP server — do not need the master switch as long as **“Claude
-(MCP) may control”** is ticked (default, directly below “Enable sharing on the
-local network”). There is then no time window; the token, “Control” for the
-device, value ranges, limits and the locks during a test run and after a safety
-trip still apply. Without the tick Claude may only read, unless the master
-switch is on. The **“MCP”** chip in the bar at the top shows the state: green =
-Claude may control, grey = read only. “Local” is detected from the connection
-(loopback or the computer's own address), not from anything the caller states.
+such as the MCP server — may control as long as **“Claude (MCP) may control”**
+is ticked (default, directly below “Enable sharing on the local network”). The
+token, “Control” for the device, value ranges, limits and the locks during a test
+run and after a safety trip still apply. Without the tick Claude may only read.
+The **“MCP”** chip in the bar at the top shows the state: green = Claude may
+control, grey = read only. “Local” is detected from the connection (loopback or
+the computer's own address), not from anything the caller states.
+
+**Pairing programs.** A script or an MCP server on another computer pairs like the
+link partner: `python tools/labcontrol_pair.py ADDRESS "Program name"` shows a
+six-digit code, LabControl asks “Program “Name” (address) wants to pair and
+control” with the same code, and if the codes match you tap **“Codes match –
+pair”**. The program then receives its **own key** once; it uses it like the token
+(header `Authorization: Bearer …` only), LabControl stores only a fingerprint. With
+the key the program may read and control; the share list (“Read”, “Control”) and
+all locks still apply, and every command is logged with the program name.
+**Settings → Network → “Paired programs”** lists all programs with address and
+date; the bin button removes a pairing, the key stops working immediately.
 
 **Emergency stop.** The action “All outputs off” is the only exception: it
-requires only the token and always works — even with the master switch off,
+requires only the token and always works — even for callers that may not control,
 during a test sequence and after a safety trip. It acts like the “ALL OFF”
 button.
 
@@ -608,8 +619,8 @@ sequence (inputs, cell voltages) are not logged.
 On the HCS-34xx power supply, `PSU_OUT_ON`/`PSU_OUT_OFF` really switch the
 output; voltage and current limit stay unchanged. `PSU_CURR` only sets the
 current limit and switches nothing. The ON/OFF switch on the
-“Control” tab follows a remote action; the setpoint fields there stay
-unchanged, the dashboard shows the actual values.
+“Control” tab and (since 0.56.0) its setpoint fields follow a remote action,
+except a field someone is typing in.
 
 Commands are `POST` requests with a JSON body, e.g. (insert `TOKEN` and
 `ADDRESS`; the allowed actions per device are listed at
@@ -630,14 +641,15 @@ server that exposes this interface as tools for Claude Code and similar
 (read status, list devices, read values, perform an action, emergency stop, and
 measure with the oscilloscope). Setup and security model are in
 `labcontrol_mcp/README.md`. It runs as a separate process and can do no more than
-the interface above allows — in particular it cannot switch the master switch on
-by itself.
+the interface above allows — in particular it cannot grant itself control. If it
+runs on another computer, pair it as a program (see above) and use its key as the
+token.
 
 **Measuring with the oscilloscope over the network.** With **“Measure”** ticked
 for the oscilloscope, an assistant may set up and evaluate acquisitions through
 the MCP server (channels, range, timebase, trigger; readings such as frequency,
-duty cycle, rise time). Since nothing is switched, “Measure” does not need the
-master switch, but it does need the token and “Read”. While an acquisition runs
+duty cycle, rise time). Since nothing is switched, “Measure” needs no control
+permission, but it does need the token and “Read”. While an acquisition runs
 or ran recently, LabControl keeps the oscilloscope open — the tile then shows
 **“Connected (MCP)”**. It disconnects by itself 60 seconds after the last
 acquisition; **“Disconnect”** on the tile or **“Open PicoScope 7”** release it
@@ -670,7 +682,7 @@ operated; a field someone is typing in is left alone. Name and tile colour belon
 to the computer the device is plugged into. Renaming or recolouring a partner
 tile changes them there, and both computers show the result. Each computer keeps
 its own tile arrangement.
-The paired partner needs no master switch there: pairing, with the same code
+The paired partner may always control there: pairing, with the same code
 confirmed on both computers, is the permission. It is recognised by the link
 header **and** the configured partner address. Operating works as long as no
 test run or safety shutdown is active at the partner; otherwise the tile
@@ -726,8 +738,7 @@ and a hint. Fast events belong to the oscilloscope.
 **Claude (MCP) in a link.** The MCP server stays pointed at the PC. The PC's
 share additionally shows Claude the partner devices as `@raspberrypi/psu:0001`
 and forwards commands for them to the partner. This needs “Claude (MCP) may
-control” ticked (or the master switch on) at the PC; the partner needs no
-master switch.
+control” ticked at the PC; the partner needs nothing else.
 Before the first command the PC reserves the device at the partner ("reserved
 by PC · Claude (MCP)") and reports every second; if that stops for 3 seconds,
 the partner switches the device off. The reservation ends after 10 minutes

@@ -74,6 +74,9 @@ DEFAULT_SHARE_CONFIG: dict = {
     # bleibt, wenn die Fernsteuerung (Phase 2) dazukommt. "measure" (seit
     # 0.16.0): Erfassungen ueber Netzwerk/MCP, nur fuer Oszilloskope.
     "devices": {},
+    # Gekoppelte Programme (PI-41 c / PI-44 b): [{"name", "ip", "created", "key_sha256"}] -- eigener
+    # Schluessel je Programm, gespeichert nur als SHA-256; damit darf das Programm steuern (Freigabeliste gilt)
+    "programs": [],
 }
 
 DEFAULT_DEVICE_SHARE: dict = {"read": False, "control": False, "measure": False}

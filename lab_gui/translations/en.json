@@ -688,5 +688,9 @@
   "Den aktuellen Ablauf schließen und einen neuen beginnen? Nicht gespeicherte Änderungen gehen verloren.": "Close the current sequence and start a new one? Unsaved changes will be lost.",
   "nur für den gekoppelten Partner": "paired partner only",
   "ungültiger Wert": "invalid value",
-  "Sollwert-Modus": "Setpoint mode"
+  "Sollwert-Modus": "Setpoint mode",
+  "Gekoppelte Programme": "Paired programs",
+  "keine": "none",
+  "Kopplung aufheben": "Remove pairing",
+  "Programm „{name}“ ({ip}) möchte koppeln und steuern": "Program “{name}” ({ip}) wants to pair and control"
 }

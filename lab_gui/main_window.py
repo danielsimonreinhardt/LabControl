@@ -51,7 +51,7 @@ from safety import SafetyMonitor
 from scope_service import ScopeService
 from settings import Settings
 from settings_tab import SettingsTab
-from share_api import new_token
+from share_api import new_token, program_key_hash
 from jlink.driver import find_commander as find_jlink_commander
 from jlink_service import JLinkService
 from pairing_dialog import PairConfirmDialog, PairingDialog, PairingSession
@@ -283,14 +283,6 @@ class MainWindow(QMainWindow):
         self._last_scope_capture: dict[str, str] = {}
         self._share_server = ShareServer(self._live_state, self._share_bridge, self,
                                          scopes=self._scope_service)
-        # Sekundentakt nur, solange der Hauptschalter der Fernsteuerung an ist:
-        # aktualisiert die Restzeit-Anzeige und bemerkt den Ablauf. Die
-        # Freigabe selbst endet unabhaengig davon (LiveState vergleicht bei
-        # jeder Anfrage gegen die Uhr).
-        self._remote_timer = QTimer(self)
-        self._remote_timer.setInterval(1000)
-        self._remote_timer.timeout.connect(self._refresh_remote_status)
-
         self._setup_worker()
         self._wire_safety()
         self._wire_registry()
@@ -309,11 +301,8 @@ class MainWindow(QMainWindow):
         self._wire_share()
         self._replay_known_devices()
 
-        # Sichtbarer Hinweis, solange die Fernsteuerung freigegeben ist -- in der Leiste oben, damit man
-        # ihn auf jedem Reiter sieht. Vor dem ALLE-AUS-Knopf, der ganz rechts bleibt (TopBar.adopt in
-        # _wire_touch).
-        self._remote_status_label = QLabel()
-        self._remote_status_label.hide()
+        # ALLE AUS ganz rechts in der Leiste oben (TopBar.adopt in _wire_touch). Den Hinweis "Fernsteuerung
+        # aktiv – noch mm:ss" gibt es seit 0.57.0 nicht mehr (Hauptschalter entfallen, PI-41 c).
         self._all_off_button = QPushButton()
         self._all_off_button.clicked.connect(
             lambda: self._safe_stop("manual all-off", propagate=True, stop_run=True))
@@ -877,7 +866,8 @@ class MainWindow(QMainWindow):
             if self._pair_confirm is not None:
                 self._pair_confirm.done(0)
             logger.warning("Kopplung: Anfrage von %s (%s), Code %s", req.label(), req.client_ip, req.code)
-            dialog = PairConfirmDialog(req.pair_id, req.label(), req.client_ip, req.code, self)
+            dialog = PairConfirmDialog(req.pair_id, req.label(), req.client_ip, req.code, self,
+                                       program=req.kind == "program")
             dialog.decided.connect(self._on_pair_decided)
             self._pair_confirm = dialog
             dialog.open()
@@ -898,7 +888,22 @@ class MainWindow(QMainWindow):
             self._pairing_share_hint(done.label())
 
     def _on_pair_decided(self, pair_id: str, accept: bool) -> None:
-        if self._live_state.pairing.decide(pair_id, accept):
+        table = self._live_state.pairing
+        req = table.current()
+        if accept and req is not None and req.pair_id == pair_id and req.kind == "program":
+            # Programm (PI-44 b): eigener Schluessel, gespeichert nur als Fingerabdruck; das Programm holt ihn
+            # einmal ab. Erst eintragen, dann freigeben -- sonst koennte es ihn vor dem Eintrag benutzen.
+            key = new_token()
+            if not self._settings.share_config["token"]:
+                self._settings.set_share_token(new_token())
+            self._settings.add_share_program(req.label(), req.client_ip, program_key_hash(key),
+                                             time.strftime("%d.%m.%Y %H:%M"))
+            if table.decide(pair_id, True, program_token=key):
+                logger.warning("Kopplung mit Programm %s (%s) bestätigt", req.label(), req.client_ip)
+            else:
+                self._settings.remove_share_program(program_key_hash(key))   # inzwischen abgelaufen
+            return
+        if table.decide(pair_id, accept):
             logger.warning("Kopplung %s", "bestätigt" if accept else "abgelehnt")
 
     def _check_leases(self) -> None:
@@ -934,7 +939,7 @@ class MainWindow(QMainWindow):
             chip.hide()
             return
         pal = ThemeManager.instance().palette
-        allowed = bool(config.get("local_bypass")) or self._live_state.remote_active()
+        allowed = bool(config.get("local_bypass"))
         color = pal.success if allowed else pal.text_muted
         size = self._chip_icon_size()
         icon = touch_icon_path("mdi.robot-outline" if allowed else "mdi.robot-off-outline", color, size)
@@ -1483,10 +1488,8 @@ class MainWindow(QMainWindow):
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
-        self.settings_tab.share_control_toggled.connect(self._on_share_control_toggled)
         self.settings_tab.share_local_bypass_toggled.connect(self._settings.set_share_local_bypass)
-        self.settings_tab.share_control_timeout_changed.connect(
-            self._settings.set_share_control_timeout_min)
+        self.settings_tab.program_remove_requested.connect(self._on_program_remove)
         # Grenzwerte fuer die Sollwert-Pruefung der Fernsteuerung.
         self._settings.safety_limits_changed.connect(self._live_state.set_safety_limits)
         self._live_state.set_safety_limits(self._settings.safety_limits)
@@ -1514,7 +1517,8 @@ class MainWindow(QMainWindow):
         self._share_server.apply(self._settings.share_config)
 
     def _on_share_action(self, request_id: int, device_id: str, kind: str, action: str,
-                         value: float, channel: int, local: bool, verbund: bool = False) -> None:
+                         value: float, channel: int, local: bool, verbund: bool = False,
+                         program: bool = False) -> None:
         """Letzte Station im GUI-Thread, bevor eine Fernsteuer-Aktion den Worker
         erreicht.
 
@@ -1527,11 +1531,13 @@ class MainWindow(QMainWindow):
         if self._safety.is_tripped() or self._test_runner.is_running():
             self._share_bridge.complete(request_id, False, "locked", "", 0.0)
             return
-        # Dieselbe Regel wie share_api.remote_effective: Hauptschalter an, gekoppelter Partner (PI-39 b,
-        # Verbund noch eingeschaltet) ODER lokaler Aufruf mit Schalter "Claude (MCP) darf steuern". Hier
-        # frisch gelesen -- der Server-Thread hat mit einem Schnappschuss gearbeitet.
+        # Dieselbe Regel wie share_api.remote_effective: gekoppelter Partner (PI-39 b, Verbund noch
+        # eingeschaltet), gekoppeltes Programm (PI-44 b, Schluessel im Server-Thread geprueft) ODER lokaler
+        # Aufruf mit Schalter "Claude (MCP) darf steuern". Hier frisch gelesen -- der Server-Thread hat mit
+        # einem Schnappschuss gearbeitet.
         if not (self._live_state.remote_active()
                 or (verbund and self._partner.enabled)
+                or program
                 or (local and self._settings.share_config["local_bypass"])):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
@@ -1561,40 +1567,12 @@ class MainWindow(QMainWindow):
         # selbst ausgeloest); von MCP oder einem anderen Client schon (PI-27 a).
         self._safe_stop(f"remote all-off ({client})", propagate=not is_verbund_client(client), stop_run=True)
 
-    def _on_share_control_toggled(self, active: bool) -> None:
-        """Hauptschalter "Fernsteuerung aktiv" im Netzwerk-Reiter."""
-        if active:
-            minutes = self._settings.share_config["control_timeout_min"]
-            self._live_state.set_remote_control(True, minutes * 60.0)
-            self._remote_timer.start()
-            logger.warning("Fernsteuerung freigegeben fuer %d min", minutes)
-        else:
-            self._remote_timer.stop()
-            self._live_state.set_remote_control(False)
-            logger.warning("Fernsteuerung ausgeschaltet")
-        self._refresh_remote_status()
-
-    def _refresh_remote_status(self) -> None:
-        self._render_mcp_chip()
-        remaining = self._live_state.remote_remaining_s()
-        if remaining <= 0.0:
-            if self._remote_timer.isActive():
-                # Zeitfenster abgelaufen (und nicht von Hand ausgeschaltet).
-                self._remote_timer.stop()
-                logger.warning("Fernsteuerung abgelaufen")
-                self.statusBar().showMessage(tr("Fernsteuerung abgelaufen"), 10000)
-            self._remote_status_label.hide()
-            self.settings_tab.set_share_control_state(False, tr("Fernsteuerung aus"))
-            return
-        total = int(remaining)
-        text = tr("Fernsteuerung aktiv – noch {time}",
-                  time=f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
-                  if total >= 3600 else f"{total // 60}:{total % 60:02d}")
-        pal = ThemeManager.instance().palette
-        self._remote_status_label.setStyleSheet(f"color: {pal.warning}; font-weight: bold;")
-        self._remote_status_label.setText(text)
-        self._remote_status_label.show()
-        self.settings_tab.set_share_control_state(True, text)
+    def _on_program_remove(self, key_sha256: str) -> None:
+        """Kopplung eines Programms aufheben (PI-44 b): sein Schluessel gilt ab sofort nicht mehr."""
+        name = next((p["name"] for p in self._settings.share_config["programs"]
+                     if p["key_sha256"] == key_sha256), "?")
+        self._settings.remove_share_program(key_sha256)
+        logger.warning("Kopplung mit Programm %s aufgehoben", name)
 
     def _ensure_share_token(self, config: dict) -> None:
         if config.get("enabled") and not config.get("token"):
@@ -1691,13 +1669,11 @@ class MainWindow(QMainWindow):
         self._top_bar.arrange_toggled.connect(self._on_arrange_toggled)
         self._top_bar.set_power_available(system_power.available())
         # Rahmen fuer PC und Touch gleich (0.53.0): Reiterleiste und Statusleiste verborgen, Geraetezustand,
-        # Fernsteuerungs-Hinweis und ALLE AUS in der Leiste oben
+        # ALLE AUS in der Leiste oben
         self.tabs.tabBar().hide()
         self.statusBar().hide()
-        self._top_bar.adopt(self._status_container, [self._remote_status_label, self._all_off_button],
-                            leading=self._safety_status_label)
-        # QScrollArea.setWidget zeigt das Widget nicht von selbst; der Fernsteuerungs-Hinweis bleibt verborgen,
-        # bis der Hauptschalter an ist (_refresh_remote_status)
+        self._top_bar.adopt(self._status_container, [self._all_off_button], leading=self._safety_status_label)
+        # QScrollArea.setWidget zeigt das Widget nicht von selbst
         self._status_container.show()
         self._all_off_button.show()
         self._nav.set_touch(False)

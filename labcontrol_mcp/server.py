@@ -6,12 +6,14 @@ Netzwerk-Schnittstelle an (siehe lab_gui/share_api.py). Alle Sicherheits-
 entscheidungen fallen dort, nicht hier: dieser Server ist nur ein Uebersetzer
 von Werkzeugaufrufen in HTTP-Anfragen. Er kann nichts, was die HTTP-Schnittstelle
 nicht ohnehin erlaubt -- und diese verlangt den Token, die Freigabe "Steuern"
-je Geraet und den Hauptschalter "Fernsteuerung aktiv" in LabControl (Zugriffe vom
-selben Rechner brauchen ihn nicht, solange die Ausnahme dafuer angehakt ist).
+je Geraet und ein Steuerrecht: am selben Rechner den Schalter "Claude (MCP) darf
+steuern", auf einem anderen Rechner eine Kopplung als Programm (tools/labcontrol_pair.py,
+seit 0.57.0; der eigene Schluessel ersetzt dann den Token).
 
 Konfiguration ueber Umgebungsvariablen:
   LABCONTROL_URL    Basisadresse, Standard http://127.0.0.1:8420
-  LABCONTROL_TOKEN  Zugangstoken (LabControl -> Einstellungen -> Netzwerk)
+  LABCONTROL_TOKEN  Zugangstoken (LabControl -> Einstellungen -> Netzwerk) bzw. Schluessel des gekoppelten
+                    Programms
 
 Nur Standardbibliothek plus das Paket "mcp" (siehe requirements.txt).
 """
@@ -44,10 +46,10 @@ HINTS = {
                     "Netzwerk ablesen und LABCONTROL_TOKEN in der MCP-Konfiguration anpassen.",
     "token_not_configured": "In LabControl ist noch kein Token erzeugt. Freigabe aktivieren oder "
                             "unter Einstellungen -> Netzwerk 'Neu erzeugen' druecken.",
-    "remote_control_inactive": "Der Hauptschalter 'Fernsteuerung aktiv' (Einstellungen -> Netzwerk) ist "
-                               "aus oder abgelaufen, und die Ausnahme 'Zugriffe von diesem PC brauchen den "
-                               "Hauptschalter nicht' ist ebenfalls aus (oder LabControl laeuft auf einem "
-                               "anderen Rechner). NUR DER NUTZER kann das aendern -- bitte darum bitten, "
+    "remote_control_inactive": "Steuern ist fuer diesen Zugang nicht erlaubt: am selben Rechner ist "
+                               "'Claude (MCP) darf steuern' (Einstellungen -> Netzwerk) aus, oder LabControl "
+                               "laeuft auf einem anderen Rechner und dieser MCP-Server ist dort nicht als "
+                               "Programm gekoppelt. NUR DER NUTZER kann das aendern -- bitte darum bitten, "
                                "nicht versuchen zu umgehen.",
     "control_not_permitted": "Fuer dieses Geraet ist 'Steuern' in LabControl nicht angehakt.",
     "unknown_tile": "Unbekanntes oder nicht freigegebenes Geraet. list_devices zeigt, was freigegeben ist.",
@@ -89,9 +91,9 @@ beschaedigen.
 
 Vorgehen:
 - Zuerst get_status und list_devices lesen. Steuern geht nur, wenn 'remote_control.effective' true
-  ist UND das Geraet control_available=true meldet. ('effective' ist wahr, wenn der Hauptschalter an
-  ist ODER dieser Rechner ohne Hauptschalter steuern darf.) Ist es falsch, den Nutzer bitten, den
-  Hauptschalter einzuschalten -- nicht umgehen.
+  ist UND das Geraet control_available=true meldet. ('effective' ist wahr, wenn am selben Rechner
+  'Claude (MCP) darf steuern' an ist oder dieser Zugang als Programm gekoppelt ist.) Ist es falsch,
+  den Nutzer bitten, das in LabControl einzuschalten -- nicht umgehen.
 - Nur das tun, worum der Nutzer gebeten hat. Ausgaenge nicht von dir aus einschalten.
 - Nach jedem Schreiben den Zustand mit read_device gegenpruefen (Messwert, nicht nur 'ok').
 - Bei Auffaelligkeiten (unerwartete Werte, Fehlermeldungen) sofort all_off und den Nutzer informieren.
@@ -111,14 +113,14 @@ Vorgehen:
   sind diese Felder leer.
 - Verbund (zweite LabControl-Instanz, z. B. Raspberry Pi): deren Geraete erscheinen hier mit der Kennung
   '@<rechner>/<id>' (z. B. '@raspberrypi/psu:0001') und 'partner' im Eintrag. Sie werden genauso bedient;
-  der Befehl geht ueber diesen Rechner an den Besitzer, der Grenzwerte, Handbedienung und SEINEN
-  Hauptschalter prueft ('control_blocked' nennt den Grund, 'at' bei remote_control_inactive den Rechner).
+  der Befehl geht ueber diesen Rechner an den Besitzer, der Grenzwerte, Handbedienung und Sperren
+  prueft ('control_blocked' nennt den Grund, 'at' bei remote_control_inactive den Rechner).
   Das Geraet ist dort dann fuer Claude belegt; faellt die Verbindung 3 s aus, schaltet der Besitzer es ab.
   all_off wirkt auf beide Rechner.
 
 Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,
 release_scope):
-- Messen schaltet nichts, braucht aber das Haekchen 'Messen' je Oszilloskop (nicht den Hauptschalter).
+- Messen schaltet nichts, braucht aber das Haekchen 'Messen' je Oszilloskop (kein Steuerrecht).
 - Vor der ersten Messung an einem neuen Messpunkt den Nutzer nach Tastkopf (1:1/10:1) und erwartetem
   Pegel fragen und den Bereich (range_v) passend waehlen -- das Oszilloskop kann die Verdrahtung nicht pruefen.
 - Alles in V, s, Hz. acquire liefert Kennwerte, Warnungen und eine Huellkurve, keine Rohdaten; Details
@@ -208,8 +210,8 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHin
 def get_status() -> dict:
     """Zustand von LabControl: Version, Sperrzustand ('lock': free / test_running /
     safety_tripped), Sicherheits-Watchdog ('safety') und ob die Fernsteuerung fuer DICH gerade freigegeben
-    ist ('remote_control.effective'; 'active'/'remaining_s' betreffen den Hauptschalter, 'local' sagt, ob
-    der Aufruf vom selben Rechner kommt). Zuerst aufrufen."""
+    ist ('remote_control.effective'; 'local' sagt, ob der Aufruf vom selben Rechner kommt, 'program' nennt
+    das gekoppelte Programm, als das dieser Zugang gilt). Zuerst aufrufen."""
     return _checked("GET", "/api/v1/status")
 
 
@@ -255,7 +257,7 @@ def control_device(device_id: str, action: str, value: float | None = None,
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def all_off() -> dict:
     """NOTAUS: schaltet ALLE Ausgaenge aller Geraete ab (Last-Eingang, Netzteil-Strom auf 0 A,
-    microHIL-Ausgaenge). Geht immer -- auch bei ausgeschaltetem Hauptschalter, laufendem Testablauf und
+    microHIL-Ausgaenge). Geht immer -- auch ohne Steuerrecht, bei laufendem Testablauf und
     nach einer Sicherheitsabschaltung. Bei Zweifeln oder Auffaelligkeiten sofort aufrufen."""
     return _checked("POST", "/api/v1/all-off", {})
 

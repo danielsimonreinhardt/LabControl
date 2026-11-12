@@ -134,7 +134,7 @@ def main() -> int:
     server_b._app_info = {**server_b._app_info, "host": HOST_B}
     if server_b._server is not None:
         server_b._server.share_app_info = server_b._app_info
-    window_b._on_share_control_toggled(True)   # Hauptschalter "Fernsteuerung" an
+    window_b._live_state.set_remote_control(True, 3600.0)   # Hauptschalter "Fernsteuerung" an
     window_a = make_window({"partner_enabled": True, "partner_address": f"127.0.0.1:{port}",
                             "partner_token": TOKEN_B, "partner_name": "Pi"})
     partner_psu = verbund_ids.qualify(HOST_B, dw.SIM_PSU_ID)
