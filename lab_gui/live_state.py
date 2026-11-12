@@ -194,6 +194,19 @@ class LiveState(QObject):
         self._write(device_id, voltage=voltage, current=current,
                     mode="CC" if constant_current else "CV")
 
+    # Zustand und Sollwerte (seit 0.52.0): der Verbund-Partner zeigt damit eine vollwertige Kachel
+    @Slot(str, bool)
+    def on_psu_output_state(self, device_id: str, on: bool) -> None:
+        self._write(device_id, output=int(bool(on)))
+
+    @Slot(str, float, float)
+    def on_psu_setpoints(self, device_id: str, voltage: float, current: float) -> None:
+        self._write(device_id, set_voltage=voltage, set_current=current)
+
+    @Slot(str, bool)
+    def on_load_input_state(self, device_id: str, on: bool) -> None:
+        self._write(device_id, input=int(bool(on)))
+
     @Slot(str, float, float)
     def on_psu_ratings(self, device_id: str, max_voltage: float, max_current: float) -> None:
         """Nennwerte (GMAX) des Netzteils -- die Fernsteuerung prueft Sollwerte

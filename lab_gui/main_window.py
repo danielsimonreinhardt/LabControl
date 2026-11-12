@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSystemTrayIcon,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -56,7 +57,7 @@ from pairing_dialog import PairConfirmDialog, PairingDialog, PairingSession
 from partner_client import normalize_url
 from partner_link import PartnerLink
 from partner_passthrough import PartnerPassthrough
-from partner_tab import PartnerTab
+from partner_devices import PartnerDevices
 from share_remote import RemoteBridge
 from share_server import ShareServer, is_verbund_client
 from testcase_model import TestStep, kind_label
@@ -198,14 +199,13 @@ class MainWindow(QMainWindow):
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
         self.settings_tab = SettingsTab()
-        # Verbund Pi + PC (PI-23 a): Verbindung zur Partner-Instanz und ihr Reiter. Der Reiter ist nur
-        # sichtbar, solange ein Partner eingetragen ist (_on_partner_config).
+        # Verbund Pi + PC (PI-23 a): Verbindung zur Partner-Instanz. Seit 0.52.0 ohne eigenen Reiter: die
+        # Partnergeraete stehen in Uebersicht und Steuerung wie eigene, mit Symbol (partner_devices.py).
         self._partner = PartnerLink(app_logging.host_name(), self)
-        self.partner_tab = PartnerTab(self._partner)
+        self._partner_devices = PartnerDevices(self._partner, self)
         self.tabs.addTab(self.control_tab, "")
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
-        self.tabs.addTab(self.partner_tab, "")
         self.tabs.addTab(self.settings_tab, "")
         # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
         # nie an Dashboard oder Sicherheitsbanner darueber.
@@ -318,8 +318,7 @@ class MainWindow(QMainWindow):
 
     def _retranslate(self) -> None:
         for page, text in ((self.control_tab, tr("Steuerung")), (self.testcase_tab, tr("Testablauf")),
-                           (self.timeline_tab, tr("Verlauf")), (self.partner_tab, tr("Verbund")),
-                           (self.settings_tab, tr("Einstellungen"))):
+                           (self.timeline_tab, tr("Verlauf")), (self.settings_tab, tr("Einstellungen"))):
             self.tabs.setTabText(self.tabs.indexOf(page), text)
         self._render_partner_chip()
         if self.tabs.indexOf(self._overview_page) >= 0:
@@ -399,6 +398,9 @@ class MainWindow(QMainWindow):
         self._worker.load_measurement.connect(self._live_state.on_load_measurement)
         self._worker.psu_measurement.connect(self._live_state.on_psu_measurement)
         self._worker.load_function_state.connect(self._live_state.on_load_function_state)
+        self._worker.load_input_state.connect(self._live_state.on_load_input_state)
+        self._worker.psu_output_state.connect(self._live_state.on_psu_output_state)
+        self._worker.psu_setpoints.connect(self._live_state.on_psu_setpoints)
         self._worker.can_stats.connect(self._live_state.on_can_stats)
         self._worker.hil_digital_state.connect(self._live_state.on_hil_digital_state)
         self._worker.hil_relay_state.connect(self._live_state.on_hil_relay_state)
@@ -492,7 +494,59 @@ class MainWindow(QMainWindow):
         self._lease_timer.setInterval(250)
         self._lease_timer.timeout.connect(self._check_leases)
         self._lease_timer.start()
+        self._wire_partner_devices()
         self._on_partner_config(self._settings.partner_config)
+
+    def _wire_partner_devices(self) -> None:
+        """Partnergeraete in Uebersicht und Steuerung (0.52.0): dieselben Slots wie fuer eigene Geraete."""
+        pd = self._partner_devices
+        dash, ctrl = self.dashboard, self.control_tab
+        pd.device_known.connect(self._on_partner_device_known)
+        pd.device_forgotten.connect(lambda _kind, rid: (dash.forget_device(rid), ctrl.forget_device(rid)))
+        pd.online_changed.connect(self._on_partner_device_online)
+        pd.control_changed.connect(ctrl.set_remote_controllable)
+        for signal, slots in (
+                (pd.psu_measurement, (dash.update_psu,)),
+                (pd.psu_output_state, (ctrl.set_psu_output_state,)),
+                (pd.psu_setpoints, (ctrl.set_psu_setpoints,)),
+                (pd.psu_ratings, (ctrl.set_psu_ratings,)),
+                (pd.load_measurement, (dash.update_load,)),
+                (pd.load_function_state, (dash.set_load_mode,)),
+                (pd.load_input_state, (ctrl.set_load_input_state,)),
+                (pd.can_stats, (dash.update_can,)),
+                (pd.battsim_state, (dash.update_battsim, ctrl.set_battsim_state)),
+                (pd.fg_state, (dash.update_fg, ctrl.set_fg_state)),
+                (pd.hil_digital_state, (dash.update_hil_digital, ctrl.set_hil_digital_state)),
+                (pd.hil_relay_state, (dash.update_hil_relays, ctrl.set_hil_relay_state)),
+                (pd.hil_analog_input, (dash.update_hil_analog_in,))):
+            for slot in slots:
+                signal.connect(slot)
+        pd.action_failed.connect(self._on_partner_tile_action_failed)
+
+    def _on_partner_device_known(self, kind: str, rid: str, label: str) -> None:
+        host, _tile_id = verbund_ids.split(rid)
+        self.dashboard.on_device_known(kind, rid, label)
+        self.dashboard.set_remote(rid, host or "")
+        if kind != "can":   # CAN des Partners: nur Zaehler in der Uebersicht, Senden geht nicht ueber den Verbund
+            self.control_tab.on_device_known(kind, rid, label)   # section_created -> _on_control_section_created
+            self.control_tab.set_remote(rid, host or "")
+
+    def _on_partner_device_online(self, kind: str, rid: str, online: bool) -> None:
+        for view in (self.dashboard, self.control_tab):
+            setter = getattr(view, f"set_{kind}_online", None)
+            if setter is not None:
+                setter(rid, online)
+
+    def _on_partner_tile_action_failed(self, rid: str, action: str, message: str) -> None:
+        """Bedienung einer Partnerkachel abgelehnt: kurz an der Kachel zeigen (Touch hat keine Statusleiste)."""
+        from partner_link import error_text
+        text = f"✕ {action}: {tr(error_text(message))}"
+        logger.warning("Verbund: %s %s abgelehnt: %s", rid, action, message)
+        section = self.control_tab.section(rid)
+        if section is not None and section.isVisible():
+            QToolTip.showText(section.mapToGlobal(section.rect().center()), text, section, section.rect(), 6000)
+        else:
+            self.statusBar().showMessage(text, 8000)
 
     def _release_run_lease(self) -> None:
         if self._run_has_lease:
@@ -513,11 +567,10 @@ class MainWindow(QMainWindow):
         self._passthrough.release("Verbund umgestellt")
         self._partner.apply(config)
         visible = self._partner.enabled
-        self.tabs.setTabVisible(self.tabs.indexOf(self.partner_tab), visible)
-        self._partner_nav_button.setVisible(visible)
         self.testcase_tab.set_verbund(app_logging.host_name(), self._partner_host_name, visible)
         if not visible:
             self._set_partner_battsim(False)
+            self._partner_devices.forget_all()
         self._render_partner_chip()
 
     def _check_verbund_warnings(self, snap) -> None:
@@ -848,10 +901,15 @@ class MainWindow(QMainWindow):
             snap = link.snapshot()
             count = len(snap.tiles) if snap is not None else 0
             warnings = self._verbund_warnings
+            # Seit 0.52.0 ohne Verbund-Reiter: ob die Partnergeraete bedienbar sind, zeigt der Chip
+            locked = snap is not None and not (snap.remote_effective and snap.lock == "free")
+            notes = [tr("Fernsteuerung dort aus") if snap is not None and not snap.remote_effective else "",
+                     tr("dort gesperrt (Testlauf oder Sicherheitsabschaltung)")
+                     if snap is not None and snap.lock != "free" else ""]
             chip.setText(f"⇄ {name}" + (" ⚠" if warnings else ""))
             chip.setToolTip("\n".join([tr("Verbund: verbunden mit {name} ({n} Geräte)", name=name, n=count),
-                                       *warnings]))
-            self._style_chip(chip, pal.warning if warnings else pal.success)
+                                       *[n for n in notes if n], *warnings]))
+            self._style_chip(chip, pal.warning if warnings or locked else pal.success)
             self.settings_tab.set_partner_status(
                 "\n".join([tr("Verbunden mit {name}, LabControl {version}, {n} Geräte freigegeben", name=name,
                               version=snap.version if snap else "?", n=count), *warnings]),
@@ -1032,6 +1090,9 @@ class MainWindow(QMainWindow):
         self.control_tab.section_created.connect(self._on_control_section_created)
 
     def _on_control_section_created(self, kind: str, device_id: str, section) -> None:
+        if self._partner_devices.is_remote(device_id):
+            self._partner_devices.wire_section(kind, device_id, section)   # Bedienung geht an den Partner
+            return
         if kind == "load":
             section.apply_function.connect(self._worker.set_load_function)
             # Direkt verbunden (wie bei der PSU-Sektion unten) statt ueber eine
@@ -1545,7 +1606,6 @@ class MainWindow(QMainWindow):
         self._nav.add_page(self.control_tab, "mdi.tune-variant", lambda: tr("Steuerung"))
         self._nav.add_page(self.testcase_tab, "mdi.playlist-play", lambda: tr("Testablauf"))
         self._nav.add_page(self.timeline_tab, "mdi.chart-line", lambda: tr("Verlauf"))
-        self._partner_nav_button = self._nav.add_page(self.partner_tab, "mdi.lan-connect", lambda: tr("Verbund"))
         self._nav.add_page(self.settings_tab, "mdi.cog-outline", lambda: tr("Einstellungen"))
         self._nav.selected.connect(self.tabs.setCurrentWidget)
         self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))
@@ -1652,7 +1712,9 @@ class MainWindow(QMainWindow):
         self._arrange_overlays = []
         if on and self._touch:
             from arrange_overlay import ArrangeOverlay
-            self._arrange_overlays = [ArrangeOverlay(self.dashboard.scroll_area(), self.dashboard),
+            # Uebersicht: im Touch-Profil scrollt die Seite um das Dashboard (_overview_page), nicht dessen
+            # eigene Flaeche -- das Abbild muss ueber dem sichtbaren Ausschnitt liegen
+            self._arrange_overlays = [ArrangeOverlay(self._overview_page, self.dashboard),
                                       ArrangeOverlay(self.control_tab.scroll_area(), self.control_tab)]
 
     def _toggle_fullscreen(self) -> None:

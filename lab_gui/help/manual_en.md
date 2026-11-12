@@ -639,17 +639,22 @@ ends. Every acquisition is also saved as a CSV file in the `captures` folder nex
 to the program.
 
 **Link with a second LabControl (e.g. Raspberry Pi and PC).** At the bottom of
-the "Network" sub-tab, under **"Link with a second LabControl"**, enter the
-other computer's address (e.g. `192.168.178.181:8420`) and its token and tick
-**"Enable link"**. On the other computer the share must run for **all devices
-on the local network**, and the devices you want must be shared there for
-**reading** (and for **control** to operate them). The **"Link"** tab then
-shows one tile per shared partner device, e.g. "Pi · Power supply 1", with its
-values and the operations allowed there (buttons such as "Output ON", a row
-"action – value – send" and, where needed, the channel). The tile reports the
-result of every operation (✓ or ✕ with the reason). Operating only works while
-the "remote control" master switch is on at the partner; the tab header says
-so if it is not. Every device belongs to the computer it is plugged into:
+the "Network" sub-tab, under **"Linked setup"**, enter the partner address
+(e.g. `192.168.178.181:8420`) and the partner token and tick **"Enable link"**.
+On the other computer the share must run for **all devices on the local
+network**, and the devices you want must be shared there for **reading** (and
+for **control** to operate them). The partner's devices then appear in the
+**overview and control view** with the same tiles as your own devices and the
+name they have at the partner; the only difference is the network icon behind
+the tile title (tooltip: computer name). What does not work over the link
+(manual mode, OVP/OCP and memory slots of the power supply, PWM and 12 V outputs
+of the microHIL, the battery simulator's limit, sending CAN frames) is missing
+from the partner tile; the partner's CAN bus is shown in the overview only.
+Operating only works while the "remote control" master switch is on at the
+partner and no test run or safety shutdown is active there; otherwise the tile
+is locked (greyed out), the link chip at the top turns yellow and its tooltip
+gives the reason. If the partner rejects an operation, the reason briefly
+appears at the tile. Every device belongs to the computer it is plugged into:
 limits, manual control and the safety shutdown are always checked there.
 
 **Pair instead of typing tokens.** The easiest way is to enter only the other

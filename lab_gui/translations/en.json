@@ -672,5 +672,9 @@
   "DBC-Datei": "DBC file",
   "Am anderen Rechner{host} bestätigen": "Confirm on the other computer{host}",
   "Signal-Dauer: {duration:g} s": "Signal duration: {duration:g} s",
-  "J-Link Commander nicht gefunden": "J-Link Commander not found"
+  "J-Link Commander nicht gefunden": "J-Link Commander not found",
+  "Gerät am Rechner {host}": "Device on computer {host}",
+  "Eingang": "Input",
+  "Sollspannung": "Set voltage",
+  "Strombegrenzung": "Current limit"
 }

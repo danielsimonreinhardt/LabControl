@@ -484,5 +484,10 @@
   "DBC-Datei": "DBC-Datei",
   "Am anderen Rechner{host} bestätigen": "Am anderen Rechner{host} bestätigen",
   "Signal-Dauer: {duration:g} s": "Signal-Dauer: {duration:g} s",
-  "J-Link Commander nicht gefunden": "J-Link Commander nicht gefunden"
+  "J-Link Commander nicht gefunden": "J-Link Commander nicht gefunden",
+  "Gerät am Rechner {host}": "Gerät am Rechner {host}",
+  "Fernsteuerung dort aus": "Fernsteuerung dort aus",
+  "Eingang": "Eingang",
+  "Sollspannung": "Sollspannung",
+  "Strombegrenzung": "Strombegrenzung"
 }

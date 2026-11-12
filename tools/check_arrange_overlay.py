@@ -75,14 +75,18 @@ def main() -> int:
     pump(app)
     overlays = [o for o in w.findChildren(ArrangeOverlay) if o.isVisible()]
     check("Abbild ueber Uebersicht und Steuerung", len(w._arrange_overlays) == 2, str(len(w._arrange_overlays)))
-    dash_overlay = next(o for o in w._arrange_overlays if o.parent() is w.dashboard.scroll_area())
+    # Touch: die Seite um das Dashboard scrollt -- das Abbild muss ueber ihrem sichtbaren Ausschnitt liegen
+    dash_overlay = next(o for o in w._arrange_overlays if o.parent() is w._overview_page)
     dash_overlay.refresh()
     rects = dash_overlay._rects
     check("Abbild zeigt alle sichtbaren Kacheln der Uebersicht", len(rects) >= 3
           and set(rects) == {d for d, p in w.dashboard._panels.items() if p.isVisible()}, str(sorted(rects)))
     inside = all(dash_overlay.rect().contains(dash_overlay._to_overlay(r).toAlignedRect()) for r in rects.values())
-    check("alle Kacheln ganz im Bild (herausgezoomt)", inside and dash_overlay.scale() <= 1.0,
-          f"Massstab {dash_overlay.scale():.2f}")
+    on_screen = dash_overlay.height() <= w.height() and dash_overlay.width() <= w.width()
+    content_h = w.dashboard.scroll_area().widget().height()
+    check("alle Kacheln ganz im Bild (herausgezoomt)", inside and on_screen
+          and (dash_overlay.scale() < 1.0 or content_h <= dash_overlay.height()),
+          f"Massstab {dash_overlay.scale():.2f}, Abbild {dash_overlay.height()} px, Inhalt {content_h} px")
     check("Abbild ist sichtbar", dash_overlay in overlays)
 
     order_before = w.dashboard._current_order()
@@ -111,7 +115,8 @@ def main() -> int:
     check("Abbild zeigt alle Kacheln der Steuerung", set(crects) == {d for d, s in w.control_tab._sections.items()
                                                                       if s.isVisible()}, str(sorted(crects)))
     inside = all(ctrl_overlay.rect().contains(ctrl_overlay._to_overlay(r).toAlignedRect()) for r in crects.values())
-    check("Steuerung: alle Kacheln ganz im Bild", inside, f"Massstab {ctrl_overlay.scale():.2f}")
+    check("Steuerung: alle Kacheln ganz im Bild", inside and ctrl_overlay.height() <= w.height(),
+          f"Massstab {ctrl_overlay.scale():.2f}, Abbild {ctrl_overlay.height()} px")
     cells_before = dict(w.control_tab._positions(w.control_tab._placed_ids()))
     ids = sorted(crects, key=lambda d: (crects[d].y(), crects[d].x()))
     a, b = ids[0], ids[-1]

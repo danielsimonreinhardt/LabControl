@@ -753,6 +753,13 @@ class DashboardWidget(QGroupBox):
     def scroll_area(self):
         return self._scroll_area
 
+    def set_remote(self, device_id: str, host: str) -> None:
+        """Kachel eines Partnergeraets (Verbund, 0.52.0): einziges Merkmal ist das Symbol hinter dem Titel."""
+        panel = self._panels.get(device_id)
+        if panel is not None:
+            from remote_badge import attach
+            attach(panel, host)
+
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 
     def arrange_snapshot(self):

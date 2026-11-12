@@ -7,6 +7,28 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Verbund ohne eigenen Reiter: Partnergeräte in Übersicht und Steuerung (0.52.0, Nutzerwunsch 12.11.2026).**
+  - Der Reiter „Verbund“ mit seinen allgemeinen Partnerkacheln ist weg. Die freigegebenen Geräte des anderen Rechners
+    stehen in Übersicht und Steuerung mit denselben Kacheln wie eigene Geräte (Netzteil, Last, Batterie-Simulator,
+    Funktionsgenerator, microHIL; CAN nur in der Übersicht), unter dem Namen, den sie am Partner haben. Einziges
+    Merkmal ist ein Netzwerk-Symbol hinter dem Kacheltitel (`lab_gui/remote_badge.py`, Tooltip: Rechnername).
+  - `lab_gui/partner_devices.py` übersetzt den Schnappschuss des Partners in dieselben Signale wie der DeviceWorker
+    (Kennung `@<rechner>/<id>`) und die Bedienung einer Partnerkachel in Partner-Aktionen (dieselben Codes wie
+    Freigabe und MCP). „Ausgang EIN“ am Netzteil schickt wie bei eigenen Geräten erst Spannung und Strom, dann den
+    Ausgang. Was der Partner nicht fernsteuern lässt (Handbedienung, OVP/OCP, Speicherplätze, PWM, 12-V-Ausgänge,
+    Grenzwert des Batterie-Simulators, Umbenennen), ist in der Partnerkachel ausgeblendet.
+  - Bedienbar nur mit Freigabe „Steuern“, eingeschaltetem Hauptschalter am Partner, ohne Testablauf/Sicherheits-
+    abschaltung dort und mit frischen Werten; sonst ist die Kachel gesperrt. Der Verbund-Chip färbt sich dann gelb
+    und nennt den Grund im Tooltip (vorher im Kopf des Reiters). Eine abgelehnte Bedienung zeigt ihren Grund kurz an
+    der Kachel.
+  - Damit die Partnerkachel Ausgangszustand und Sollwerte zeigen kann, meldet die Freigabe jetzt beim Netzteil auch
+    `output`, `set_voltage`, `set_current` und bei der Last `input`.
+  - Anordnen: Das Abbild der Übersicht lag im Touch-Profil über der Dashboard-Fläche statt über dem sichtbaren
+    Ausschnitt der Seite und war deshalb nicht herausgezoomt; jetzt liegt es über der Seite.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_partner_devices.py` (Rundlauf Zustand → Freigabe → Partnerkachel,
+    Bedienbarkeit, jede Bedienung → richtiger Aktionscode), `check_partner_link` auf die neue Darstellung umgestellt
+    (Partnerkachel in Übersicht und Steuerung, Bedienen kommt beim Partner an, Sperre bei Hauptschalter aus,
+    Verbindungsverlust). Zwischen PC und Pi noch nicht ausprobiert.
 - **Touch-Oberfläche nach dem ersten Verbund-Test am Pi (0.51.0, Nutzerfeedback und PI-37 a, 12.11.2026).**
   - **Texttastatur:** Im Kiosk am Pi öffnete ein Textfeld (Partner-Adresse, Namen, Dateinamen) keine Tastatur;
     squeekboard läuft zwar, wird ohne Taskleiste aber nie eingeblendet. Im Touch-Profil öffnet jetzt jedes Textfeld

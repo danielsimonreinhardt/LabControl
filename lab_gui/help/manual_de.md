@@ -667,19 +667,24 @@ keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
 `captures` neben dem Programm.
 
 **Verbund mit einem zweiten LabControl (z. B. Raspberry Pi und PC).** Ganz unten
-im Unterreiter „Netzwerk“ trägt man unter **„Verbund mit einem zweiten
-LabControl“** die Adresse des anderen Rechners (z. B. `192.168.178.181:8420`)
-und dessen Token ein und hakt **„Verbund aktivieren“** an. Auf dem anderen
-Rechner muss die Freigabe für **alle Geräte im lokalen Netzwerk** laufen, und
-die gewünschten Geräte müssen dort zum **Lesen** (und zum Bedienen zum
-**Steuern**) freigegeben sein. Dann erscheint der Reiter **„Verbund“**: je
-freigegebenem Gerät des Partners eine Kachel „Pi · Netzteil 1“ mit seinen
-Werten und den dort erlaubten Bedienungen (Knöpfe wie „Ausgang EIN“, dazu eine
-Zeile „Aktion – Wert – Senden“ und bei Bedarf der Kanal). Die Kachel meldet
-das Ergebnis jeder Bedienung (✓ oder ✕ mit Grund). Bedienen geht nur, solange
-am Partner der Hauptschalter „Fernsteuerung“ an ist; der Kopf des Reiters
-sagt, wenn nicht. Jedes Gerät gehört dem Rechner, an dem es steckt: Grenzwerte,
-Handbedienung und Sicherheitsabschaltung prüft immer dieser.
+im Unterreiter „Netzwerk“ trägt man unter **„Verbund“** die Partner-Adresse
+(z. B. `192.168.178.181:8420`) und den Partner-Token ein und hakt **„Verbund
+aktivieren“** an. Auf dem anderen Rechner muss die Freigabe für **alle Geräte
+im lokalen Netzwerk** laufen, und die gewünschten Geräte müssen dort zum
+**Lesen** (und zum Bedienen zum **Steuern**) freigegeben sein. Die Geräte des
+Partners erscheinen dann in **Übersicht und Steuerung** mit denselben Kacheln
+wie eigene Geräte und dem Namen, den sie am Partner haben; einziges Merkmal ist
+das Netzwerk-Symbol hinter dem Kacheltitel (Tooltip: Rechnername). Was über den
+Verbund nicht geht (Handbedienung, OVP/OCP und Speicherplätze des Netzteils,
+PWM und 12-V-Ausgänge des microHIL, der Grenzwert des Batterie-Simulators,
+CAN-Frames senden), fehlt in der Partnerkachel; der CAN-Bus des Partners steht
+nur in der Übersicht. Bedienen geht nur, solange am Partner der Hauptschalter
+„Fernsteuerung“ an ist und dort weder ein Testablauf läuft noch eine
+Sicherheitsabschaltung anliegt; sonst ist die Kachel gesperrt (ausgegraut) und
+der Verbund-Chip oben färbt sich gelb, sein Tooltip nennt den Grund. Lehnt der
+Partner eine Bedienung ab, erscheint der Grund kurz an der Kachel. Jedes Gerät
+gehört dem Rechner, an dem es steckt: Grenzwerte, Handbedienung und
+Sicherheitsabschaltung prüft immer dieser.
 
 **Koppeln statt Token abtippen.** Am einfachsten trägt man nur die Adresse des
 anderen Rechners ein und drückt **„Koppeln…“**. Beide Rechner zeigen dann

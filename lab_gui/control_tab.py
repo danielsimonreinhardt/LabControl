@@ -204,6 +204,24 @@ def _row(*widgets: QWidget) -> QWidget:
     return container
 
 
+def _hide_form_row(widget: QWidget) -> None:
+    """Widget samt Formular-Beschriftung ausblenden (Partnerkachel, ControlTab.set_remote); steht es nicht in
+    einem QFormLayout, nur das Widget."""
+    parent = widget.parentWidget()
+    node = parent.layout() if parent is not None else None
+    stack = [node] if node is not None else []
+    while stack:
+        layout = stack.pop()
+        if isinstance(layout, QFormLayout) and layout.indexOf(widget) >= 0:
+            layout.setRowVisible(widget, False)
+            return
+        for i in range(layout.count()):
+            child = layout.itemAt(i).layout()
+            if child is not None:
+                stack.append(child)
+    widget.hide()
+
+
 def _detint_label(form: QFormLayout, field: QWidget | QHBoxLayout) -> None:
     """Laesst die von QFormLayout automatisch erzeugte Zeilen-Beschriftung
     (z.B. "Sollwert:") die individuelle Panel-Faerbung durchscheinen, statt
@@ -2933,6 +2951,40 @@ class ControlTab(QWidget):
 
     def scroll_area(self) -> QScrollArea:
         return self._scroll_area
+
+    # -- Partnergeraete (Verbund, partner_devices.py, 0.52.0) ------------------------------
+
+    # Was der Partner nicht fernsteuern laesst (remote_actions.py): in dessen Kachel ausgeblendet
+    _REMOTE_HIDDEN = {
+        "psu": ("_manual_button", "_ovp_row", "_ocp_row", "_limit_warning"),
+        "battsim": ("_limit_row",),
+        "hil": ("_pwm_rows", "_pwr12_rows"),
+    }
+
+    def section(self, device_id: str):
+        return self._sections.get(device_id)
+
+    def set_remote(self, device_id: str, host: str) -> None:
+        """Kachel eines Partnergeraets: Symbol hinter dem Titel, Umbenennen (lokal) und nicht fernsteuerbare
+        Bedienelemente ausgeblendet. Sonst dieselbe Kachel wie fuer ein eigenes Geraet."""
+        section = self._sections.get(device_id)
+        if section is None:
+            return
+        from remote_badge import attach
+        attach(section, host)
+        names = ("_rename_button",) + self._REMOTE_HIDDEN.get(self._section_kind.get(device_id, ""), ())
+        for name in names:
+            found = getattr(section, name, None)
+            for widget in (found if isinstance(found, list) else [found]):
+                if isinstance(widget, QWidget):
+                    _hide_form_row(widget)
+        self._relayout_grid()
+
+    def set_remote_controllable(self, device_id: str, allowed: bool) -> None:
+        """Bedienbar nur, wenn der Partner es erlaubt (Freigabe "Steuern", Fernsteuerung dort an, frei)."""
+        section = self._sections.get(device_id)
+        if section is not None:
+            section.setEnabled(allowed)
 
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 

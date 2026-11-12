@@ -54,8 +54,10 @@ KIND_FIELDS = {"load": LOAD_SIGNAL_FIELDS, "psu": PSU_SIGNAL_FIELDS, "hil": HIL_
 # Zustandsfelder, die es NUR ueber die Netzwerk-Freigabe und im Dashboard
 # gibt, nicht im Verlauf-Tab (siehe KIND_FIELDS oben): Textwerte bzw.
 # monoton steigende Zaehler, die als Kurve nichts hergeben.
-LOAD_STATE_FIELDS = {"mode": ("Modus", "")}
-PSU_STATE_FIELDS = {"mode": ("Modus", "")}
+LOAD_STATE_FIELDS = {"mode": ("Modus", ""), "input": ("Eingang", "")}
+# output/set_* seit 0.52.0: der Verbund-Partner zeigt damit Ausgangszustand und Sollwerte in seiner Kachel
+PSU_STATE_FIELDS = {"mode": ("Modus", ""), "output": ("Ausgang", ""),
+                    "set_voltage": ("Sollspannung", "V"), "set_current": ("Strombegrenzung", "A")}
 CAN_STATE_FIELDS = {
     "tx_count": ("Gesendet", ""),
     "rx_count": ("Empfangen", ""),
@@ -119,8 +121,8 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
 # dieselbe Reihenfolge wie die Dashboard-Kacheln (dashboard.LOAD_FIELD_KEYS
 # etc.), damit ein externes Display und die Kachel daneben gleich aussehen.
 KIND_FIELD_ORDER: dict[str, list[str]] = {
-    "load": ["voltage", "current", "power", "mode"],
-    "psu": ["voltage", "current", "mode"],
+    "load": ["voltage", "current", "power", "mode", "input"],
+    "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current"],
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
     "picoscope": ["status"],

@@ -29,7 +29,7 @@ os.environ["LABCONTROL_DATA_DIR"] = str(DATA)
 os.environ.pop("LABCONTROL_NETWORK_DIR", None)
 (DATA / "settings.json").write_text(json.dumps({"simulation_mode": True}), encoding="utf-8")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # "⇄" auch in einer cp1252-Konsole
@@ -77,6 +77,15 @@ def start_partner(app):
     state.on_device_known("load", "load:B1", "Last 1")
     state.on_load_measurement("load:B1", 11.9, 1.25, 14.875)
     state.on_device_known("fg", "fg:B1", "Funktionsgenerator 1")
+    for device_id in ("psu:B1", "load:B1", "fg:B1"):
+        state.set_online(device_id, True)   # wie der Worker beim Verbinden
+    # Wie der Worker: Messwerte laufend auffrischen, sonst gelten sie beim Partner als veraltet (stale)
+    from PySide6.QtCore import QTimer
+    refresh = QTimer(app)
+    refresh.setInterval(300)
+    refresh.timeout.connect(lambda: (state.on_psu_measurement("psu:B1", 12.003, 0.512, False),
+                                     state.on_load_measurement("load:B1", 11.9, 1.25, 14.875)))
+    refresh.start()
     port = free_port()
     cfg = {"enabled": True, "bind": "127.0.0.1", "port": port, "token": TOKEN_B,
            "read_requires_token": True, "access_log": False, "local_bypass": False,
@@ -166,52 +175,78 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     window.resize(1280, 800)
     window.show()
     app.processEvents()
-    index = window.tabs.indexOf(window.partner_tab)
-    check("ohne Partner: Reiter, Navigation und Chip verborgen",
-          not window.tabs.isTabVisible(index) and window._partner_nav_button.isHidden()
-          and window._partner_chip.isHidden())
+    # Seit 0.52.0 kein Verbund-Reiter mehr: Partnergeraete stehen in Uebersicht und Steuerung
+    check("kein Verbund-Reiter", not hasattr(window, "partner_tab")
+          and "Verbund" not in [window.tabs.tabText(i) for i in range(window.tabs.count())])
+    check("ohne Partner: Chip verborgen", window._partner_chip.isHidden())
 
     window.settings_tab.set_partner_config({"enabled": True, "address": f"127.0.0.1:{port}",
                                             "token": TOKEN_B, "name": "Pi"})
     window.settings_tab._emit_partner_config()
     check("Einstellung gespeichert", window._settings.partner_config["address"] == f"127.0.0.1:{port}")
-    check("Reiter sichtbar", window.tabs.isTabVisible(index))
-    connected = spin(app, 6.0, lambda: window._partner.is_connected() and window.partner_tab.tile("psu:B1"))
-    check("verbunden, Partnerkachel da", connected)
-    tile = window.partner_tab.tile("psu:B1")
-    if tile is None:
+    pd = window._partner_devices
+
+    def rid_of(tile_id: str) -> str:
+        return next((r for r in pd.known() if r.endswith("/" + tile_id)), "")
+
+    connected = spin(app, 6.0, lambda: window._partner.is_connected() and window.control_tab.section(rid_of("psu:B1")))
+    check("verbunden, Partnergeraete in Uebersicht und Steuerung", bool(connected))
+    psu_id, load_id = rid_of("psu:B1"), rid_of("load:B1")
+    section = window.control_tab.section(psu_id)
+    if section is None:
         window.close()
         return
+    from control_tab import PsuControlGroup
+    from remote_badge import RemoteBadge
+    panel = window.dashboard._panels.get(psu_id)
+    check("Kennung mit Rechnername", psu_id.startswith("@") and psu_id.endswith("/psu:B1"), psu_id)
     check("Chip '⇄ Pi' sichtbar", window._partner_chip.isVisible() and window._partner_chip.text() == "⇄ Pi",
           window._partner_chip.text())
-    check("Kachel-Titel mit Partnername", tile.title() == "Pi · Netzteil 1", tile.title())
-    check("Last-Kachel ohne Bedienung", window.partner_tab.tile("load:B1") is not None
-          and not window.partner_tab.tile("load:B1")._switch_buttons)
-    check("Schaltknoepfe und Wertzeile", {b.text() for b in tile._switch_buttons} >= {"Ausgang EIN", "Ausgang AUS"}
-          and tile._value_row.isVisibleTo(tile) and tile._send_button.isEnabled())
+    check("Uebersicht: normale Netzteil-Kachel mit Partnernamen, Symbol als einziges Merkmal",
+          panel is not None and panel.title() == "Netzteil 1" and panel.findChild(RemoteBadge) is not None,
+          panel.title() if panel else "-")
+    check("Steuerung: dieselbe Netzteil-Kachel wie fuer eigene Geraete, mit Symbol",
+          isinstance(section, PsuControlGroup) and section.title() == "Netzteil 1"
+          and section.findChild(RemoteBadge) is not None)
+    check("nicht fernsteuerbar ausgeblendet (Handbedienung, OVP, Umbenennen)",
+          section._manual_button.isHidden() and not section._ovp_row.isVisible()
+          and section._rename_button.isHidden())
+    spin(app, 2.0, lambda: "12.0" in panel._values["voltage"].text() if hasattr(panel, "_values") else True)
+    check("Messwert des Partners in der Uebersicht", any("12" in lbl.text() for lbl in panel.findChildren(QLabel)),
+          str([lbl.text() for lbl in panel.findChildren(QLabel)][:8]))
+    load_section = window.control_tab.section(load_id)
+    check("Last ohne Steuern-Freigabe: Kachel da, nicht bedienbar",
+          load_section is not None and not load_section.isEnabled())
+    check("Netzteil bedienbar", section.isEnabled())
     check("Status in den Einstellungen", "Verbunden mit Pi" in window.settings_tab._partner_status.text(),
           window.settings_tab._partner_status.text())
 
     before = len(executor.actions)
-    next(b for b in tile._switch_buttons if b.text() == "Ausgang EIN").click()
-    spin(app, 4.0, lambda: len(executor.actions) > before and "✓" in tile._result.text())
-    check("Knopf 'Ausgang EIN' kommt bei B an", executor.actions[-1][1] == "PSU_OUT_ON", str(executor.actions[-1:]))
-    check("Ergebnis in der Kachel", tile._result.text().startswith("✓ PSU_OUT_ON"), tile._result.text())
-    tile._action_combo.setCurrentIndex(tile._action_combo.findData("PSU_VOLT"))
-    check("Wertebereich vom Partner", tile._value_spin.minimum() == 1.0 and tile._value_spin.maximum() == 60.0,
-          f"{tile._value_spin.minimum()}..{tile._value_spin.maximum()}")
-    tile._value_spin.setValue(7.5)
-    before = len(executor.actions)
-    tile._send_button.click()
+    section._voltage_spin.setValue(7.5)
+    section._voltage_button.click()
     spin(app, 4.0, lambda: len(executor.actions) > before)
-    check("Wert 7,5 V kommt bei B an", executor.actions[-1][1:3] == ("PSU_VOLT", 7.5), str(executor.actions[-1:]))
+    check("Spannung 7,5 V aus der Kachel kommt bei B an", executor.actions[-1][:3] == ("psu:B1", "PSU_VOLT", 7.5),
+          str(executor.actions[-1:]))
+    before = len(executor.actions)
+    section._output_on_button.click()
+    spin(app, 4.0, lambda: len(executor.actions) >= before + 3)
+    check("Ausgang EIN: erst Sollwerte, dann Ausgang (in dieser Reihenfolge)",
+          [a[1] for a in executor.actions[before:before + 3]] == ["PSU_VOLT", "PSU_CURR", "PSU_OUT_ON"],
+          str(executor.actions[before:]))
 
     state.set_remote_control(False)
-    spin(app, 3.0, lambda: not tile._send_button.isEnabled() and not tile._value_row.isEnabled())
-    check("Hauptschalter dort aus: Bedienung gesperrt, Grund genannt",
-          not tile._value_row.isEnabled() and "Fernsteuerung dort aus" in tile._state.text(), tile._state.text())
-    check("Kopf nennt den Hauptschalter", "Fernsteuerung dort aus" in window.partner_tab._detail.text())
+    spin(app, 3.0, lambda: not section.isEnabled())
+    check("Hauptschalter dort aus: Kachel gesperrt", not section.isEnabled())
+    check("Chip nennt den Hauptschalter", "Fernsteuerung dort aus" in window._partner_chip.toolTip(),
+          window._partner_chip.toolTip())
+    failed: list = []
+    pd.action_failed.connect(lambda *args: failed.append(args))
+    section.set_output.emit(psu_id, True)   # wie ein Tipp, falls die Kachel noch nicht gesperrt war
+    check("Bedienen bei gesperrter Kachel wird abgelehnt, nicht gesendet",
+          failed and failed[-1][2] == "remote_control_inactive", str(failed))
     state.set_remote_control(True, 600.0)
+    spin(app, 3.0, lambda: section.isEnabled())
+    check("Hauptschalter wieder an: bedienbar", section.isEnabled())
 
     def all_off_count_after(action) -> int:
         before = len(executor.all_off)
@@ -236,23 +271,24 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     server.stop()
     lost = spin(app, 8.0, lambda: not window._partner.is_connected())
     check("Partner weg: getrennt erkannt", lost)
-    check("Chip zeigt ✕", window._partner_chip.text().startswith("✕"), window._partner_chip.text())
-    check("Kacheln weg, Kopf nennt den Grund", window.partner_tab.tile("psu:B1") is None
-          and "nicht erreichbar" in window.partner_tab._detail.text(), window.partner_tab._detail.text())
+    check("Chip zeigt ✕, Grund im Tooltip", window._partner_chip.text().startswith("✕")
+          and "nicht erreichbar" in window._partner_chip.toolTip(), window._partner_chip.toolTip())
+    check("Partnerkacheln getrennt (Steuerung verborgen, Uebersicht getrennt)",
+          spin(app, 2.0, lambda: not section.isVisible()), f"sichtbar={section.isVisible()}")
     server.apply(cfg)
-    check("Partner wieder da: neu verbunden",
-          spin(app, 8.0, lambda: window._partner.is_connected() and window.partner_tab.tile("psu:B1") is not None))
+    check("Partner wieder da: neu verbunden, Kachel wieder da",
+          spin(app, 8.0, lambda: window._partner.is_connected() and section.isVisible()))
 
     window.settings_tab._partner_token_edit.setText("falsch")
     window.settings_tab._emit_partner_config()
-    check("falscher Token: Grund im Kopf",
-          spin(app, 6.0, lambda: "Token falsch" in window.partner_tab._detail.text()), window.partner_tab._detail.text())
+    check("falscher Token: Grund in den Einstellungen",
+          spin(app, 6.0, lambda: "Token falsch" in window.settings_tab._partner_status.text()),
+          window.settings_tab._partner_status.text())
 
     window.settings_tab._partner_enabled_checkbox.setChecked(False)
     app.processEvents()
-    check("Verbund aus: Reiter, Navigation, Chip verborgen",
-          not window.tabs.isTabVisible(index) and window._partner_nav_button.isHidden()
-          and window._partner_chip.isHidden())
+    check("Verbund aus: Chip verborgen, Partnerkacheln weg", window._partner_chip.isHidden()
+          and psu_id not in window.dashboard._panels and window.control_tab.section(psu_id) is None)
     before = len(executor.all_off)
     window._all_off_button.click()
     spin(app, 1.0)
