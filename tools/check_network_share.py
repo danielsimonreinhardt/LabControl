@@ -214,7 +214,7 @@ class _Executor:
         self.all_off_calls: list = []
         self.next_result = share_api.RemoteResult("ok")
 
-    def submit_action(self, device_id, kind, action, value, channel, client, local=False):
+    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False):
         self.calls.append((device_id, kind, action, value, channel, client))
         self.locals.append(local)
         return self.next_result
@@ -503,7 +503,8 @@ def section_remote() -> None:
     st_local = get("/api/v1/status", off, local=True)["remote_control"]
     st_remote = get("/api/v1/status", off, local=False)["remote_control"]
     check("Status: 'effective' unterscheidet lokal und fremd",
-          st_local == {"active": False, "remaining_s": 0.0, "effective": True, "local": True, "local_bypass": True}
+          st_local == {"active": False, "remaining_s": 0.0, "effective": True, "local": True, "local_bypass": True,
+                       "verbund": False}
           and st_remote["effective"] is False and st_remote["local"] is False, f"{st_local} {st_remote}")
     check("Status: Hauptschalter an -> effective auch fuer fremde",
           get("/api/v1/status", _snap_rw(remote=True), local=False)["remote_control"]["effective"] is True)
@@ -916,7 +917,7 @@ def section_server() -> None:
         def __init__(self):
             self.calls = []
 
-        def submit_action(self, *args):
+        def submit_action(self, *args, **_kwargs):
             self.calls.append(args)
             return share_api.RemoteResult("ok")
 

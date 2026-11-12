@@ -78,8 +78,9 @@ class RemoteBridge(QObject):
     """Lebt im GUI-Thread. submit_*() sind fuer den Server-Thread gedacht und
     blockieren dort; alle Slots laufen im GUI-Thread."""
 
-    # id, device_id, kind, action, value, channel, local (Aufruf vom selben Rechner)
-    action_requested = Signal(int, str, str, str, float, int, bool)
+    # id, device_id, kind, action, value, channel, local (Aufruf vom selben Rechner),
+    # verbund (gekoppelter Partner, PI-39 b)
+    action_requested = Signal(int, str, str, str, float, int, bool, bool)
     all_off_requested = Signal(int, str)                       # id, client
     # Verbund (PI-32 a): id, ID beim Partner, qualifizierte ID, kind, action, value, channel, client
     partner_action_requested = Signal(int, str, str, str, str, float, int, str)
@@ -107,14 +108,14 @@ class RemoteBridge(QObject):
             return True
 
     def submit_action(self, device_id: str, kind: str, action: str, value: float,
-                      channel: int, client: str, local: bool = False) -> RemoteResult:
+                      channel: int, client: str, local: bool = False, verbund: bool = False) -> RemoteResult:
         if not self._take_token():
             result = RemoteResult("error", "rate_limited")
         elif not self._write_slots.acquire(blocking=False):
             result = RemoteResult("error", "busy")
         else:
             try:
-                result = self._run_action(device_id, kind, action, value, channel, local)
+                result = self._run_action(device_id, kind, action, value, channel, local, verbund)
             finally:
                 self._write_slots.release()
         self._audit(client + (" (lokal)" if local else ""), f"{device_id} {action}"
@@ -144,9 +145,10 @@ class RemoteBridge(QObject):
         return result
 
     def _run_action(self, device_id: str, kind: str, action: str, value: float, channel: int,
-                    local: bool) -> RemoteResult:
+                    local: bool, verbund: bool = False) -> RemoteResult:
         return self._wait(
-            lambda req_id: self.action_requested.emit(req_id, device_id, kind, action, value, channel, local),
+            lambda req_id: self.action_requested.emit(req_id, device_id, kind, action, value, channel, local,
+                                                      verbund),
             REMOTE_TIMEOUT_S)
 
     def _wait(self, emit, timeout_s: float) -> RemoteResult:

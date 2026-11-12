@@ -7,6 +7,25 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **PC-Oberfläche nach dem Touch-Konzept, Verbund ohne Hauptschalter (0.53.0, Nutzerwunsch und PI-39 b,
+  12.11.2026).**
+  - **Rahmen wie im Touch-Profil auch am PC:** Navigation links (Symbol + Text, schmaler als am Pi) statt
+    Reiterleiste, Leiste oben mit Sicherheits-, Verbund-, MCP- und Geräte-Chips, Vollbild-Knopf und ALLE AUS statt
+    der Statusleiste unten. Meldungen erscheinen als kurzer Hinweis am unteren Fensterrand (vorher Statusleiste; im
+    Touch-Profil waren sie bisher gar nicht zu sehen). Was am großen Bildschirm sinnvoll ist, bleibt: das Dashboard
+    als Streifen über allen Seiten (abdockbar), Kacheln direkt mit der Maus ziehen (kein „Anordnen“), normale
+    Schrift- und Feldgrößen, Tooltips, Tippen in Zahlenfelder. Die Rahmen-Regeln stehen dafür in
+    `touch_ui.shell_qss()` (immer aktiv), `touch_qss()` enthält nur noch die Touch-Größen.
+  - **PI-39 b – gekoppelter Partner ohne Hauptschalter:** Eine Anfrage mit Verbund-Kennung von der eingetragenen
+    Partner-Adresse darf ohne Hauptschalter bedienen und belegen (`share_api.is_partner_caller`, LiveState kennt die
+    aufgelöste Partner-IP). Die Kopplung mit Code-Bestätigung an beiden Rechnern ist die Freigabe. Der Hauptschalter
+    mit Zeitfenster heißt jetzt „Fernsteuerung für andere Rechner“ und gilt nur noch für Fremde.
+  - **MCP-Schalter und -Chip:** Die Ausnahme „Dieser Rechner ohne Hauptschalter“ heißt jetzt „Claude (MCP) darf
+    steuern“ und steht direkt unter „Freigabe aktivieren“. Der Chip „MCP“ in der Leiste oben ist grün, wenn Claude
+    steuern darf, sonst grau (nur lesen). Claude bedient Partnergeräte nach der Regel des eigenen Rechners.
+  - **Mock-verifiziert:** `check_partner_link` (Partner bedient ohne Hauptschalter; ohne Verbund-Kennung oder von
+    fremder Adresse weiter abgewiesen), `check_touch_ui` (PC-Rahmen, Wechsel PC ↔ Touch, Hinweis für Meldungen),
+    alle übrigen Prüfungen. Zwischen PC und Pi noch nicht ausprobiert.
 - **Verbund ohne eigenen Reiter: Partnergeräte in Übersicht und Steuerung (0.52.0, Nutzerwunsch 12.11.2026).**
   - Der Reiter „Verbund“ mit seinen allgemeinen Partnerkacheln ist weg. Die freigegebenen Geräte des anderen Rechners
     stehen in Übersicht und Steuerung mit denselben Kacheln wie eigene Geräte (Netzteil, Last, Batterie-Simulator,

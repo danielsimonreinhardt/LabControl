@@ -1,13 +1,16 @@
 """Touch-Profil fuer kleine Touch-Displays (Pi-Plan Phase 4, Entscheidung PI-5 a, 10.11.2026).
 
-Gleiche Widgets wie am PC, nur anders angeordnet und groesser (Raspberry Pi, 1024 x 600):
+Gleiche Widgets wie am PC, nur groesser (Raspberry Pi, 1024 x 600):
 
 - touch_qss(): Bedienelemente mindestens TOUCH_MIN px hoch, breitere Spin-Pfeile, grosse
   Haekchen und Scrollbalken -- kommt zusaetzlich zum Theme-Stylesheet (theme.ThemeManager.set_touch)
-- NavBar: Reiter als grosse Schaltflaechen links (Symbol + Text) statt der Reiterleiste oben;
-  die Uebersicht (Dashboard) ist dort ein eigener Reiter statt eines festen Streifens
+- NavBar: Reiter als Schaltflaechen links (Symbol + Text) statt der Reiterleiste oben; im Touch-Profil
+  ist die Uebersicht (Dashboard) dort ein eigener Reiter statt eines festen Streifens
 - TopBar: Leiste oben mit Geraetezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf und
   ALLE AUS -- ersetzt die Statusleiste, die mit vielen Geraeten breiter als 1024 px wird
+
+NavBar und TopBar (shell_qss) gelten seit 0.53.0 auch am PC, dort kleiner und mit dem Dashboard als
+festem Streifen ueber dem Inhalt (Nutzerwunsch 12.11.2026).
 
 Eingeschaltet wird es in den Einstellungen; solange es nie gewaehlt wurde, schlaegt suggest_touch()
 es bei Bildschirmen bis 1024 x 600 vor (MainWindow._wire_touch).
@@ -431,6 +434,13 @@ def touch_qss(pal: Palette) -> str:
     QScrollBar::add-page, QScrollBar::sub-page {{
         background: transparent;
     }}
+    """
+
+
+def shell_qss(pal: Palette) -> str:
+    """Rahmen der App (Navigation links, Leiste oben) -- am PC und im Touch-Profil gleich (seit 0.53.0,
+    Nutzerwunsch 12.11.2026: das Touch-Konzept auch am PC)."""
+    return f"""
     /* Haupt-Reiter: die Navigation ersetzt die Reiterleiste, der Rahmen um den Inhalt wirkte mit den
        Kacheln darin wie Rahmen im Rahmen (Nutzerhinweis 11.11.2026) */
     QTabWidget#mainTabs::pane {{
@@ -447,6 +457,9 @@ def touch_qss(pal: Palette) -> str:
         border-radius: {METRICS.radius_md}px;
         padding: 6px 2px;
     }}
+    QWidget#touchNav QToolButton:hover {{
+        color: {pal.text};
+    }}
     QWidget#touchNav QToolButton:checked {{
         background-color: {pal.selection};
         color: {pal.text};
@@ -455,6 +468,13 @@ def touch_qss(pal: Palette) -> str:
     QWidget#touchTopBar {{
         background-color: {pal.surface};
         border-bottom: 1px solid {pal.border};
+    }}
+    QLabel#statusToast {{
+        background-color: {pal.surface_alt};
+        color: {pal.text};
+        border: 1px solid {pal.border_strong};
+        border-radius: {METRICS.radius_md}px;
+        padding: 8px 14px;
     }}
     """
 
@@ -466,8 +486,14 @@ def enable_swipe(area: QScrollArea) -> None:
     setattr(area.viewport(), SWIPE_ATTR, True)
 
 
+NAV_WIDTH_PC = 104
+NAV_ICON_PC = QSize(24, 24)
+TOP_BAR_HEIGHT_PC = 42
+
+
 class NavBar(QWidget):
-    """Grosse Reiter-Knoepfe links; steuert ein QTabWidget mit verborgener Reiterleiste."""
+    """Reiter-Knoepfe links (Symbol + Text); steuert ein QTabWidget mit verborgener Reiterleiste.
+    Am PC schmaler (set_touch(False)), im Touch-Profil fingergross."""
 
     selected = Signal(QWidget)
 
@@ -475,6 +501,7 @@ class NavBar(QWidget):
         super().__init__(parent)
         self.setObjectName("touchNav")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._touch = True
         self.setFixedWidth(NAV_WIDTH)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 6, 6, 6)
@@ -483,13 +510,27 @@ class NavBar(QWidget):
         self._buttons: dict[int, tuple[QToolButton, QWidget, str, Callable[[], str]]] = {}
         ThemeManager.instance().changed.connect(lambda _pal: self._recolor())
 
+    def set_touch(self, on: bool) -> None:
+        self._touch = on
+        self.setFixedWidth(NAV_WIDTH if on else NAV_WIDTH_PC)
+        for button, *_rest in self._buttons.values():
+            self._size_button(button)
+
+    def _size_button(self, button: QToolButton) -> None:
+        button.setIconSize(NAV_ICON if self._touch else NAV_ICON_PC)
+        button.setMinimumHeight(76 if self._touch else 60)
+
+    def set_page_visible(self, page: QWidget, visible: bool) -> None:
+        entry = self._buttons.get(id(page))
+        if entry is not None:
+            entry[0].setVisible(visible)
+
     def add_page(self, page: QWidget, icon_name: str, text: Callable[[], str]) -> QToolButton:
         button = QToolButton()
         button.setCheckable(True)
         button.setAutoExclusive(True)
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        button.setIconSize(NAV_ICON)
-        button.setMinimumHeight(76)
+        self._size_button(button)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         button.clicked.connect(lambda: self.selected.emit(page))
         self._layout.insertWidget(self._layout.count() - 1, button)
@@ -590,6 +631,19 @@ class TopBar(QWidget):
         from i18n import tr
         self._arrange_button.setText(tr("Fertig") if self._arrange_button.isChecked() else tr("Anordnen"))
         self._arrange_button.setToolTip(tr("Kacheln in Übersicht und Steuerung verschieben"))
+
+    def set_touch(self, on: bool) -> None:
+        """Am PC flacher und ohne "Anordnen" (dort zieht man Kacheln direkt mit der Maus)."""
+        self.setFixedHeight(TOP_BAR_HEIGHT if on else TOP_BAR_HEIGHT_PC)
+        margin = 4 if on else 3
+        self._layout.setContentsMargins(8, margin, 8, margin)
+        if not on:
+            self._arrange_button.setChecked(False)
+        self._arrange_button.setVisible(on)
+        icon = QSize(26, 26) if on else QSize(20, 20)
+        for button in (self._fullscreen_button, self._power_button):
+            button.setIconSize(icon)
+            button.setMinimumSize(48 if on else 34, 44 if on else 30)
 
     def set_power_available(self, on: bool) -> None:
         self._power_button.setVisible(on)

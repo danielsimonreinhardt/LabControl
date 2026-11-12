@@ -124,6 +124,13 @@ class LiveState(QObject):
         # Verbund-Partner (PI-32 a): seine Kacheln, wie sie der Abfrage-Thread zuletzt geliefert hat --
         # share_api reicht sie an Aufrufer auf DIESEM Rechner (MCP) durch. {} = kein Partner verbunden.
         self._partner: dict = {}
+        # IP-Adresse des gekoppelten Partners (PI-39 b): Anfragen mit Verbund-Kopf von dieser Adresse
+        # brauchen keinen Hauptschalter (share_api.is_partner_caller). "" = kein Verbund.
+        self._partner_ip = ""
+
+    def set_partner_ip(self, ip: str) -> None:
+        with self._lock:
+            self._partner_ip = ip or ""
 
     @Slot(object)
     def set_partner(self, partner: dict | None) -> None:
@@ -394,6 +401,7 @@ class LiveState(QObject):
             remaining = max(0.0, self._remote_until - now)
             safety_limits = copy.deepcopy(self._safety_limits)
             partner = copy.deepcopy(self._partner)
+            partner_ip = self._partner_ip
         if partner:
             partner["age_s"] = round(now - partner.pop("received", now), 3)
         # Ausserhalb des Locks: reine Rechnung auf der bereits geloesten Kopie.
@@ -415,6 +423,7 @@ class LiveState(QObject):
                        for device_id, lease in self.leases.snapshot().items()},
             # Verbund-Partner (PI-32 a), {} ohne Verbindung
             "partner": partner,
+            "partner_ip": partner_ip,
         }
 
     def share_config(self) -> dict:

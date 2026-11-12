@@ -57,9 +57,9 @@ class StubExecutor:
         self.actions: list[tuple] = []
         self.all_off: list[str] = []
 
-    def submit_action(self, device_id, kind, action, value, channel, client, local=False):
+    def submit_action(self, device_id, kind, action, value, channel, client, local=False, verbund=False):
         import share_api
-        self.actions.append((device_id, action, value, channel, client))
+        self.actions.append((device_id, action, value, channel, client, verbund))
         return share_api.RemoteResult("ok")
 
     def submit_all_off(self, client):
@@ -144,8 +144,22 @@ def section_client(app, state, executor, port) -> None:
     check("nicht freigegebenes Geraet -> unknown_tile", error_of(lambda: client.action("fg:B1", "FG_OUT_ON", channel=1))
           == "unknown_tile")
     state.set_remote_control(False)
-    check("Hauptschalter dort aus -> remote_control_inactive",
+    check("Hauptschalter dort aus, nicht gekoppelt -> remote_control_inactive",
           error_of(lambda: client.action("psu:B1", "PSU_OUT_ON")) == "remote_control_inactive")
+    # PI-39 b: der gekoppelte Partner (Verbund-Kopf UND eingetragene Adresse) braucht keinen Hauptschalter
+    state.set_partner_ip("127.0.0.1")
+    reply = client.action("psu:B1", "PSU_OUT_ON")
+    last = executor.actions[-1] if executor.actions else ()
+    check("PI-39 b: gekoppelter Partner bedient ohne Hauptschalter",
+          reply.get("ok") is True and last[:2] == ("psu:B1", "PSU_OUT_ON") and last[5] is True, str(last))
+    check("PI-39 b: Status meldet 'effective' fuer den Partner", client.snapshot().remote_effective)
+    stranger = PartnerClient(f"http://127.0.0.1:{port}", TOKEN_B, "")
+    check("PI-39 b: ohne Verbund-Kopf weiter Hauptschalter noetig",
+          error_of(lambda: stranger.action("psu:B1", "PSU_OUT_ON")) == "remote_control_inactive")
+    state.set_partner_ip("192.168.99.99")
+    check("PI-39 b: Verbund-Kopf von fremder Adresse -> remote_control_inactive",
+          error_of(lambda: client.action("psu:B1", "PSU_OUT_ON")) == "remote_control_inactive")
+    state.set_partner_ip("")
     state.set_remote_control(True, 600.0)
     check("Partner aus -> unreachable",
           error_of(lambda: PartnerClient(f"http://127.0.0.1:{free_port()}", TOKEN_B, "x").snapshot()) == "unreachable")

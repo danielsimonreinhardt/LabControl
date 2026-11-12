@@ -229,16 +229,28 @@ def _measure_permitted(snapshot: dict, device_id: str) -> bool:
     return bool(flags.get("measure")) and entry.get("kind") in remote_actions.SCOPE_KINDS
 
 
+def is_partner_caller(snapshot: dict, client: str) -> bool:
+    """Kommt die Anfrage vom gekoppelten Verbund-Partner (PI-39 b)? Verbund-Kopf (client_label) UND
+    Absenderadresse = eingetragene Partner-Adresse (snapshot["partner_ip"], LiveState.set_partner_address).
+    Der Kopf allein reicht nicht: jeder mit dem Token koennte ihn setzen."""
+    partner_ip = snapshot.get("partner_ip") or ""
+    # " Verbund:<name>" wie share_server.VERBUND_TAG (dort importiert dieses Modul, nicht umgekehrt)
+    if not partner_ip or " Verbund:" not in (client or ""):
+        return False
+    return client.split(" ", 1)[0] == partner_ip
+
+
 def remote_effective(snapshot: dict) -> bool:
     """Ist die Fernsteuerung FUER DIESEN AUFRUFER freigegeben?
 
-    Entweder der Hauptschalter ist an -- oder der Aufruf kommt vom selben Rechner
-    (snapshot["local"], gesetzt in dispatch) und die Einstellung "Zugriffe von
-    diesem PC brauchen den Hauptschalter nicht" ist an. Nur diese eine Sperre
-    entfaellt fuer lokale Aufrufer; Token, Steuern-Freigabe, Sperrzustand, Wert-
-    und Grenzwertpruefung gelten fuer jeden.
+    - der gekoppelte Verbund-Partner (snapshot["verbund"], PI-39 b): immer -- die Kopplung mit
+      Code-Bestaetigung an beiden Rechnern ist die Freigabe
+    - Aufrufe vom selben Rechner (snapshot["local"], z. B. der MCP-Server), wenn der Schalter
+      "Claude (MCP) darf steuern" (share.local_bypass) an ist
+    - alle anderen nur, solange der Hauptschalter mit Zeitfenster an ist
+    Token, Steuern-Freigabe, Sperrzustand, Wert- und Grenzwertpruefung gelten fuer jeden.
     """
-    if snapshot.get("remote", {}).get("active"):
+    if snapshot.get("remote", {}).get("active") or snapshot.get("verbund"):
         return True
     return bool(snapshot.get("local")) and bool(snapshot.get("share", {}).get("local_bypass"))
 
@@ -415,6 +427,7 @@ def _status(snapshot: dict, app_info: dict) -> Response:
             "effective": remote_effective(snapshot),
             "local": bool(snapshot.get("local")),
             "local_bypass": bool(snapshot.get("share", {}).get("local_bypass")),
+            "verbund": bool(snapshot.get("verbund")),
         },
         "auth": {
             "read_token_required": bool(share.get("read_requires_token")),
@@ -576,7 +589,7 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
         return _error(400, "exceeds_safety_limit", limit_field=field, limit=limit, unit=definition.unit)
 
     result = executor.submit_action(device_id, kind, action, value, channel, client,
-                                    bool(snapshot.get("local")))
+                                    bool(snapshot.get("local")), verbund=bool(snapshot.get("verbund")))
     return _result_response(result, {"device": device_id, "action": action,
                                      **({"value": value} if definition.needs_value else {}),
                                      **({"channel": channel} if definition.channels else {}),
@@ -1025,6 +1038,7 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
 
     snapshot = state.snapshot()
     snapshot["local"] = bool(local)
+    snapshot["verbund"] = is_partner_caller(snapshot, client)
 
     if path == f"{API_PREFIX}/pair" or path.startswith(f"{API_PREFIX}/pair/"):
         # Kopplung (pairing.py): ohne Token -- den gibt es erst danach

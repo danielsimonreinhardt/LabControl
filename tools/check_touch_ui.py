@@ -26,7 +26,7 @@ os.environ["LABCONTROL_DATA_DIR"] = str(DATA)
 (DATA / "settings.json").write_text(json.dumps({"simulation_mode": True}), encoding="utf-8")
 
 from PySide6.QtCore import QSize, Qt, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QToolButton  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -88,9 +88,23 @@ def main() -> int:
     real = [d for group in (worker._loads, worker._psus, worker._hils, worker._fgs) for d in group if "SIM" not in d]
     check("nur simulierte Geraete verbunden (keine echte Hardware angefasst)", not real, str(real))
     base_font = app.font().pointSizeF()
-    check("Statusleiste sichtbar, Leiste oben/Navigation verborgen",
-          w.statusBar().isVisible() and not w._top_bar.isVisible() and not w._nav.isVisible())
-    check("vier Reiter (Verbund ohne Partner verborgen), Dashboard ueber den Reitern", visible_tabs(w) == 4 and w.dashboard.parent() is w.centralWidget())
+    # Seit 0.53.0 auch am PC: Leiste oben mit ALLE AUS, Navigation links (schmal), keine Statusleiste
+    check("PC: Leiste oben mit ALLE AUS, schmale Navigation, keine Statusleiste/Reiterleiste",
+          not w.statusBar().isVisible() and w._top_bar.isVisible() and w._top_bar.isAncestorOf(w._all_off_button)
+          and w._all_off_button.isVisible() and w._nav.isVisible() and w._nav.width() < 124
+          and not w.tabs.tabBar().isVisible())
+    check("PC: ohne 'Anordnen' (Kacheln direkt ziehen), Navigation ohne 'Übersicht'",
+          not w._top_bar._arrange_button.isVisible()
+          and [b.text() for b in w._nav.findChildren(QToolButton) if b.isVisible()]
+          == ["Steuerung", "Testablauf", "Verlauf", "Einstellungen"])
+    check("vier Seiten, Dashboard als Streifen ueber den Seiten", visible_tabs(w) == 4
+          and w.dashboard.parent() is w.tabs.parent() and w.dashboard.isVisible())
+    w.statusBar().showMessage("Testmeldung", 2000)
+    app.processEvents()
+    check("PC: Meldungen erscheinen als Hinweis unten", w._toast.isVisible() and w._toast.text() == "Testmeldung")
+    w.statusBar().clearMessage()
+    app.processEvents()
+    check("Hinweis verschwindet mit der Meldung", not w._toast.isVisible())
     check("Einstellung zeigt 'aus', nicht automatisch", not w.settings_tab._touch_checkbox.isChecked()
           and not w.settings_tab._touch_auto)
     # Linux mit logind (WSL, Linux-PC): der Ein/Aus-Knopf wurde ohne Touch-Profil ein eigenes kleines Fenster
@@ -433,13 +447,16 @@ def main() -> int:
     print("Touch aus")
     w.settings_tab._touch_checkbox.setChecked(False)
     app.processEvents()
-    check("Statusleiste mit ALLE AUS zurueck", w.statusBar().isVisible() and w._all_off_button.isVisible()
-          and w.statusBar().isAncestorOf(w._all_off_button) and not w._top_bar.isVisible())
-    check("Dashboard wieder ueber den Reitern, vier Reiter, Reiterleiste da",
-          w.dashboard.parent() is w.centralWidget() and visible_tabs(w) == 4 and w.tabs.tabBar().isVisible()
-          and not w._nav.isVisible() and w.dashboard.isVisible())
+    check("Leiste oben bleibt (PC-Hoehe), ALLE AUS darin, ohne 'Anordnen'",
+          w._top_bar.isVisible() and w._top_bar.isAncestorOf(w._all_off_button) and w._all_off_button.isVisible()
+          and w._top_bar.height() < 52 and not w._top_bar._arrange_button.isVisible()
+          and not w.statusBar().isVisible())
+    check("Dashboard wieder als Streifen ueber den Seiten, vier Seiten, Navigation schmal",
+          w.dashboard.parent() is w.tabs.parent() and visible_tabs(w) == 4 and not w.tabs.tabBar().isVisible()
+          and w._nav.isVisible() and w._nav.width() < 124 and w.dashboard.isVisible())
     check("Schrift wie vorher", abs(app.font().pointSizeF() - base_font) < 0.01)
-    check("Stylesheet ohne Touch-Regeln", not ThemeManager.instance().touch and "touchNav" not in app.styleSheet())
+    check("Stylesheet ohne Touch-Regeln", not ThemeManager.instance().touch and "SPIN" not in app.styleSheet()
+          and "padding-left: 44px" not in app.styleSheet())
     for _ in range(5):
         app.processEvents()
     if psu is not None:

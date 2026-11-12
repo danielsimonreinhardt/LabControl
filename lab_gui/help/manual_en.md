@@ -2,8 +2,9 @@
 
 LabControl controls an electronic load (Korad KEL102) and a lab power
 supply (HCS-34xx) over USB. This manual describes every part of the
-interface: the dashboard, the three tabs "Control", "Testcase",
-"History" and "Settings", and the status bar.
+interface: the dashboard, the pages "Control", "Testcase", "History" and
+"Settings" (navigation on the left) and the bar at the top with the device
+status and "ALL OFF".
 
 You can reopen this page at any time via the **Help** button in the
 "Settings" tab.
@@ -12,7 +13,7 @@ You can reopen this page at any time via the **Help** button in the
 
 ## 1. Dashboard (always visible)
 
-The dashboard sits at the top of the window, above the tabs, and shows
+The dashboard sits at the top of the window, above every page, and shows
 one tile per known device with its current readings (load:
 voltage/current/power/mode; power supply: voltage/current/mode). The
 display refreshes automatically about every 500 ms.
@@ -409,11 +410,11 @@ time-window-limited ring buffer of the live charts.
 - **Dark mode**: switches between the light "Modern Light" and the dark
   "Amber Industrial" color scheme, without restarting.
 - **Touch operation**: for small touch displays such as on the Raspberry Pi
-  (1024 × 600). Larger text and controls, the tabs as large buttons on the
-  left, the overview (dashboard) as its own tab instead of a fixed strip,
-  and a bar at the top with the device status (swipeable) and **ALL OFF**.
-  The button next to it toggles full screen; on the Raspberry Pi LabControl
-  starts in full screen. On Linux there is also a power button: after a
+  (1024 × 600). Larger text and controls, larger buttons in the navigation
+  on the left, the overview (dashboard) as its own page instead of a fixed
+  strip, a swipeable device status at the top and the **Arrange** button.
+  The full-screen button at the top exists on the PC too; on the Raspberry
+  Pi LabControl starts in full screen. On Linux there is also a power button: after a
   confirmation it shuts the computer down or restarts it, LabControl
   releases the power supplies first. Number fields in the tiles have large
   −/+ keys on the left and right; tapping the value opens a keypad showing
@@ -557,24 +558,27 @@ following must hold:
    is possible for load, power supply, microHIL, function generator and battery
    simulator; CAN and
    oscilloscope cannot be remote-controlled (for the oscilloscope see “Measure” below).
-3. The master switch **“Remote control active”** is on (not needed for access from
-   the same computer, see “Exception for this PC”). It is off after every
-   program start and switches itself off after the configured time limit
-   (default 60 minutes). While it is on, an orange notice with the remaining
-   time is shown in the status bar. On expiry the devices stay in their state
-   — they are not switched off.
+3. The master switch **“Remote control for other computers”** is on. It is not
+   needed for access from the same computer (switch “Claude (MCP) may control”,
+   see below) or for the paired link partner. It is off after every program
+   start and switches itself off after the configured time limit (default
+   60 minutes). While it is on, an orange notice with the remaining time is
+   shown in the bar at the top. On expiry the devices stay in their state —
+   they are not switched off.
 4. **No test sequence** is running and the **safety trip** has not fired.
    Otherwise every control command is rejected (reading stays possible).
 5. Action, value and channel are valid — the value ranges are those of the
    test editor — and the setpoint is **not above an active safety limit** of
    this device (section 6).
 
-**Exception for this PC.** Programs on the same computer as LabControl — such as
-the MCP server — do not need the master switch as long as “Access from this PC
-does not need the master switch” is ticked (default). There is then no time
-window; the token, “Control” for the device, value ranges, limits and the locks
-during a test run and after a safety trip still apply. Unticking it restores the
-time window for local access too. “Local” is detected from the connection
+**Claude (MCP) may control.** Programs on the same computer as LabControl —
+such as the MCP server — do not need the master switch as long as **“Claude
+(MCP) may control”** is ticked (default, directly below “Enable sharing on the
+local network”). There is then no time window; the token, “Control” for the
+device, value ranges, limits and the locks during a test run and after a safety
+trip still apply. Without the tick Claude may only read, unless the master
+switch is on. The **“MCP”** chip in the bar at the top shows the state: green =
+Claude may control, grey = read only. “Local” is detected from the connection
 (loopback or the computer's own address), not from anything the caller states.
 
 **Emergency stop.** The action “All outputs off” is the only exception: it
@@ -650,8 +654,10 @@ the tile title (tooltip: computer name). What does not work over the link
 (manual mode, OVP/OCP and memory slots of the power supply, PWM and 12 V outputs
 of the microHIL, the battery simulator's limit, sending CAN frames) is missing
 from the partner tile; the partner's CAN bus is shown in the overview only.
-Operating only works while the "remote control" master switch is on at the
-partner and no test run or safety shutdown is active there; otherwise the tile
+The paired partner needs no master switch there: pairing, with the same code
+confirmed on both computers, is the permission. It is recognised by the link
+header **and** the configured partner address. Operating works as long as no
+test run or safety shutdown is active at the partner; otherwise the tile
 is locked (greyed out), the link chip at the top turns yellow and its tooltip
 gives the reason. If the partner rejects an operation, the reason briefly
 appears at the tile. Every device belongs to the computer it is plugged into:
@@ -665,14 +671,14 @@ as partner and switch the link on; nothing has to be typed on the Pi. The
 request is valid for 60 seconds. "Decline" or "Cancel" discard it and nothing
 changes. Requirement: the share for all devices on the local network runs on the
 computer that is asked. So that the partner can also reach the asking computer
-(ALL OFF in both directions), it needs the network share as well – otherwise the
-status bar reminds you. Which devices may be read and controlled is still set by
+(ALL OFF in both directions), it needs the network share as well – otherwise a
+notice reminds you. Which devices may be read and controlled is still set by
 each computer in its own share list.
 
 **In a link, ALL OFF acts on both computers**: the button, ALL OFF via MCP or
 the network and a safety shutdown also switch everything off at the partner.
 Stopping a test sequence or a failed step only affects the own computer. The
-status bar shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
+bar at the top shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
 (disconnected). Closing the app switches nothing off at the partner. ALL OFF
 also aborts a running test sequence, so that its next step does not switch the
 outputs back on.
@@ -703,8 +709,9 @@ and a hint. Fast events belong to the oscilloscope.
 
 **Claude (MCP) in a link.** The MCP server stays pointed at the PC. The PC's
 share additionally shows Claude the partner devices as `@raspberrypi/psu:0001`
-and forwards commands for them to the partner. This needs the master switch
-(or the exception for this PC) on the PC and the partner's own master switch.
+and forwards commands for them to the partner. This needs “Claude (MCP) may
+control” ticked (or the master switch on) at the PC; the partner needs no
+master switch.
 Before the first command the PC reserves the device at the partner ("reserved
 by PC · Claude (MCP)") and reports every second; if that stops for 3 seconds,
 the partner switches the device off. The reservation ends after 10 minutes
@@ -737,14 +744,14 @@ whether a testcase is currently running.
   **Acknowledge** button in the red banner at the top of the window —
   so an unattended run doesn't silently keep sitting in the "triggered"
   state.
-- The safety status in the status bar (chip with shield icon) shows **OFF** (no limits active),
+- The safety status in the bar at the top (chip with shield icon) shows **OFF** (no limits active),
   **ARMED** (monitored, everything within range), or **TRIGGERED**
   (limit exceeded, outputs switched off).
 - During a testcase run, the watchdog additionally monitors the
   connection of the involved devices — if the connection drops or a
   device fails to deliver a fresh measurement for too long, it also
   shuts down immediately.
-- The **"ALL OFF" button** at the far right of the status bar manually
+- The **"ALL OFF" button** at the far right of the bar at the top manually
   switches off all outputs immediately at any time, independent of the
   watchdog state.
 - Remote-control commands over the network (section 5) are rejected while
@@ -753,15 +760,18 @@ whether a testcase is currently running.
 
 ---
 
-## 7. Status bar
+## 7. Bar at the top
 
-At the bottom of the window, the safety status comes first as a chip
-with a shield icon (see section 6), followed by one chip per known
+In the bar at the top of the window, the safety status comes first as a
+chip with a shield icon (see section 6), then the link chip and the "MCP"
+chip (section 5), followed by one chip per known
 device with icon and short name: ✓ connected (green), ✕ disconnected
 (red), Ⓗ manual control (orange), e.g. "✓ PSU1". The full name is in the
 tooltip; clicking the chips opens "Device status" with all devices. The
 connection is retried automatically every 3 seconds as long as a device
-is unreachable. The "ALL OFF" button is at the far right.
+is unreachable. The full-screen button and the "ALL OFF" button follow on
+the right. App messages appear briefly as a notice at the bottom of the
+window.
 
 ---
 

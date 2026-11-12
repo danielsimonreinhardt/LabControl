@@ -489,5 +489,9 @@
   "Fernsteuerung dort aus": "Fernsteuerung dort aus",
   "Eingang": "Eingang",
   "Sollspannung": "Sollspannung",
-  "Strombegrenzung": "Strombegrenzung"
+  "Strombegrenzung": "Strombegrenzung",
+  "Fernsteuerung für andere Rechner": "Fernsteuerung für andere Rechner",
+  "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner braucht das nicht.": "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner braucht das nicht.",
+  "Claude (MCP) darf steuern": "Claude (MCP) darf steuern",
+  "Claude (MCP) darf nur lesen": "Claude (MCP) darf nur lesen"
 }

@@ -2,8 +2,9 @@
 
 LabControl steuert eine elektronische Last (Korad KEL102) und ein
 Labornetzteil (HCS-34xx) über USB. Dieses Handbuch beschreibt alle
-Bereiche der Oberfläche: das Dashboard, die drei Reiter „Steuerung“,
-„Testablauf“, „Verlauf“ und „Einstellungen“, sowie die Statuszeile.
+Bereiche der Oberfläche: das Dashboard, die Seiten „Steuerung“,
+„Testablauf“, „Verlauf“ und „Einstellungen“ (Navigation links) und die
+Leiste oben mit dem Gerätezustand und „ALLE AUS“.
 
 Diese Seite lässt sich jederzeit über den Button **Hilfe** im Reiter
 „Einstellungen“ erneut öffnen.
@@ -12,7 +13,7 @@ Diese Seite lässt sich jederzeit über den Button **Hilfe** im Reiter
 
 ## 1. Dashboard (immer sichtbar)
 
-Das Dashboard sitzt oben im Fenster, oberhalb der Reiter, und zeigt für
+Das Dashboard sitzt oben im Fenster, über jeder Seite, und zeigt für
 jedes bekannte Gerät eine eigene Kachel mit den aktuellen Messwerten
 (Last: Spannung/Strom/Leistung/Modus; Netzteil: Spannung/Strom/Modus).
 Die Anzeige aktualisiert sich automatisch etwa alle 500 ms.
@@ -429,11 +430,11 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
 - **Dark Mode**: wechselt zwischen dem hellen „Modern Light“- und dem
   dunklen „Amber Industrial“-Farbschema, ohne Neustart.
 - **Touch-Bedienung**: für kleine Touch-Displays wie am Raspberry Pi
-  (1024 × 600). Größere Schrift und Bedienelemente, die Reiter als große
-  Schaltflächen links, die Übersicht (Dashboard) als eigener Reiter statt
-  eines festen Streifens, und oben eine Leiste mit dem Gerätezustand (zum
-  Wischen) und **ALLE AUS**. Der Knopf daneben schaltet Vollbild ein und
-  aus; am Raspberry Pi startet LabControl im Vollbild. Unter Linux gibt es
+  (1024 × 600). Größere Schrift und Bedienelemente, größere Schaltflächen in
+  der Navigation links, die Übersicht (Dashboard) als eigene Seite statt
+  eines festen Streifens, der Gerätezustand oben zum Wischen und der Knopf
+  **Anordnen**. Den Vollbild-Knopf oben gibt es auch am PC; am Raspberry Pi
+  startet LabControl im Vollbild. Unter Linux gibt es
   dort zusätzlich einen Ein/Aus-Knopf: Er fährt den Rechner nach einer
   Rückfrage herunter oder startet ihn neu, LabControl gibt vorher die
   Netzteile frei. Zahlenfelder in den Kacheln haben große −/+-Tasten links
@@ -586,26 +587,29 @@ erfüllt sein:
    Möglich ist das für Last, Netzteil, microHIL, Funktionsgenerator und
    Batterie-Simulator; CAN und
    Oszilloskop lassen sich nicht fernsteuern (zum Oszilloskop siehe „Messen“ unten).
-3. Der Hauptschalter **„Fernsteuerung aktiv“** ist eingeschaltet (nicht nötig für
-   Zugriffe vom selben Rechner, siehe „Ausnahme für diesen PC“). Er ist nach
-   jedem Programmstart aus und schaltet sich nach dem eingestellten Zeitlimit
-   (Standard 60 Minuten) von selbst wieder aus. Solange er an ist, steht in
-   der Statuszeile ein orangefarbener Hinweis mit der Restzeit. Beim Ablauf
-   bleiben die Geräte in ihrem Zustand — sie werden nicht abgeschaltet.
+3. Der Hauptschalter **„Fernsteuerung für andere Rechner“** ist eingeschaltet.
+   Nicht nötig sind er für Zugriffe vom selben Rechner (Schalter „Claude (MCP)
+   darf steuern“, siehe unten) und für den gekoppelten Verbund-Partner. Er ist
+   nach jedem Programmstart aus und schaltet sich nach dem eingestellten
+   Zeitlimit (Standard 60 Minuten) von selbst wieder aus. Solange er an ist,
+   steht in der Leiste oben ein orangefarbener Hinweis mit der Restzeit. Beim
+   Ablauf bleiben die Geräte in ihrem Zustand — sie werden nicht abgeschaltet.
 4. Es läuft **kein Testablauf** und die **Sicherheitsabschaltung** hat nicht
    ausgelöst. Sonst wird jeder Steuerbefehl abgewiesen (Lesen bleibt möglich).
 5. Aktion, Wert und Kanal sind gültig — die Wertebereiche entsprechen denen im
    Testeditor — und der Sollwert liegt **nicht über einem aktiven
    Sicherheits-Grenzwert** dieses Geräts (Abschnitt 6).
 
-**Ausnahme für diesen PC.** Programme auf demselben Rechner wie LabControl —
-etwa der MCP-Server — brauchen den Hauptschalter nicht, solange „Zugriffe von
-diesem PC brauchen den Hauptschalter nicht“ angehakt ist (Voreinstellung). Es gibt
-dann kein Zeitfenster; Token, „Steuern“ beim Gerät, Wertebereiche, Grenzwerte und
-die Sperren bei Testlauf und Sicherheitsabschaltung gelten weiter. Herausnehmen
-des Hakens stellt das Zeitfenster auch für lokale Zugriffe wieder her. „Lokal“
-wird an der Verbindung erkannt (Loopback oder die eigene Adresse des Rechners),
-nicht an Angaben des Aufrufers.
+**Claude (MCP) darf steuern.** Programme auf demselben Rechner wie LabControl —
+etwa der MCP-Server — brauchen den Hauptschalter nicht, solange **„Claude (MCP)
+darf steuern“** angehakt ist (Voreinstellung, direkt unter „Freigabe im lokalen
+Netzwerk aktivieren“). Es gibt dann kein Zeitfenster; Token, „Steuern“ beim
+Gerät, Wertebereiche, Grenzwerte und die Sperren bei Testlauf und
+Sicherheitsabschaltung gelten weiter. Ohne Haken darf Claude nur lesen, außer
+der Hauptschalter ist an. Der Chip **„MCP“** in der Leiste oben zeigt den Stand:
+grün = Claude darf steuern, grau = nur lesen. „Lokal“ wird an der Verbindung
+erkannt (Loopback oder die eigene Adresse des Rechners), nicht an Angaben des
+Aufrufers.
 
 **Notaus.** Die Aktion „Alle Ausgänge aus“ ist die einzige Ausnahme: sie
 verlangt nur den Token und geht immer — auch bei ausgeschaltetem Hauptschalter,
@@ -678,9 +682,11 @@ das Netzwerk-Symbol hinter dem Kacheltitel (Tooltip: Rechnername). Was über den
 Verbund nicht geht (Handbedienung, OVP/OCP und Speicherplätze des Netzteils,
 PWM und 12-V-Ausgänge des microHIL, der Grenzwert des Batterie-Simulators,
 CAN-Frames senden), fehlt in der Partnerkachel; der CAN-Bus des Partners steht
-nur in der Übersicht. Bedienen geht nur, solange am Partner der Hauptschalter
-„Fernsteuerung“ an ist und dort weder ein Testablauf läuft noch eine
-Sicherheitsabschaltung anliegt; sonst ist die Kachel gesperrt (ausgegraut) und
+nur in der Übersicht. Der gekoppelte Partner braucht dort keinen Hauptschalter:
+Die Kopplung, bei der an beiden Rechnern derselbe Code bestätigt wird, ist die
+Freigabe. Erkannt wird er an der Verbund-Kennung **und** an der eingetragenen
+Partner-Adresse. Bedienen geht, solange am Partner weder ein Testablauf läuft
+noch eine Sicherheitsabschaltung anliegt; sonst ist die Kachel gesperrt (ausgegraut) und
 der Verbund-Chip oben färbt sich gelb, sein Tooltip nennt den Grund. Lehnt der
 Partner eine Bedienung ab, erscheint der Grund kurz an der Kachel. Jedes Gerät
 gehört dem Rechner, an dem es steckt: Grenzwerte, Handbedienung und
@@ -696,13 +702,13 @@ Verbund ein; am Pi muss man so nichts abtippen. Die Anfrage gilt 60 Sekunden.
 Voraussetzung: Am angefragten Rechner läuft die Freigabe für alle Geräte im
 lokalen Netzwerk. Damit der Partner auch den fragenden Rechner erreicht (ALLE AUS
 in beide Richtungen), braucht dieser ebenfalls die Freigabe im lokalen Netzwerk –
-sonst erinnert die Statuszeile daran. Welche Geräte gelesen und gesteuert werden
+sonst erinnert ein Hinweis daran. Welche Geräte gelesen und gesteuert werden
 dürfen, legt weiterhin jeder Rechner in seiner Freigabeliste fest.
 
 **ALLE AUS wirkt im Verbund auf beide Rechner**: der Knopf, ALLE AUS über MCP
 oder das Netzwerk und eine Sicherheitsabschaltung schalten auch beim Partner
 alles ab. Stop oder Fehler eines Testablaufs betreffen nur den eigenen Rechner.
-Die Statuszeile zeigt den Verbund als Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“
+Die Leiste oben zeigt den Verbund als Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“
 (getrennt). Beim Beenden der App wird am Partner nichts abgeschaltet.
 ALLE AUS bricht außerdem einen laufenden Testablauf ab, damit dessen nächster
 Schritt die Ausgänge nicht wieder einschaltet.
@@ -735,8 +741,8 @@ Oszilloskop zuständig.
 **Claude (MCP) im Verbund.** Der MCP-Server bleibt auf den PC eingestellt. Die
 Freigabe des PCs zeigt Claude zusätzlich die Partnergeräte als
 `@raspberrypi/psu:0001` und reicht Befehle daran an den Partner weiter. Dafür
-müssen am PC der Hauptschalter (oder die Ausnahme für diesen PC) und am Partner
-dessen Hauptschalter an sein. Vor dem ersten Befehl belegt der PC das Gerät beim
+muss am PC „Claude (MCP) darf steuern“ angehakt (oder der Hauptschalter an) sein;
+am Partner braucht es keinen Hauptschalter. Vor dem ersten Befehl belegt der PC das Gerät beim
 Partner („belegt durch PC · Claude (MCP)“) und meldet sich jede Sekunde; fehlt
 das 3 Sekunden, schaltet der Partner das Gerät ab. Die Belegung endet nach
 10 Minuten ohne Befehl von Claude, bei ALLE AUS, einer Sicherheitsabschaltung,
@@ -769,14 +775,14 @@ läuft.
   den **Quittieren**-Button im roten Banner am oberen Fensterrand
   bestätigt wird – so bleibt ein unbeaufsichtigter Lauf nicht unbemerkt
   auf „ausgelöst“ stehen.
-- Der Sicherheitsstatus in der Statuszeile (Chip mit Schild-Symbol) zeigt **AUS** (keine
+- Der Sicherheitsstatus in der Leiste oben (Chip mit Schild-Symbol) zeigt **AUS** (keine
   Grenzwerte aktiv), **AKTIV** (überwacht, alles im grünen Bereich) oder
   **AUSGELÖST** (Grenzwert überschritten, Ausgänge abgeschaltet).
 - Während eines Testlaufs überwacht der Watchdog zusätzlich die
   Verbindung der beteiligten Geräte – bricht die Verbindung ab oder
   liefert ein Gerät zu lange keine aktuelle Messung, schaltet ebenfalls
   sofort ab.
-- Der **„ALLE AUS“-Button** ganz rechts in der Statuszeile schaltet
+- Der **„ALLE AUS“-Button** ganz rechts in der Leiste oben schaltet
   jederzeit manuell und sofort alle Ausgänge ab, unabhängig vom
   Watchdog-Status.
 - Fernsteuer-Befehle über das Netzwerk (Abschnitt 5) werden abgewiesen,
@@ -786,16 +792,18 @@ läuft.
 
 ---
 
-## 7. Statuszeile
+## 7. Leiste oben
 
-Am unteren Fensterrand steht zuerst der Sicherheitsstatus als Chip mit
-Schild-Symbol (siehe Abschnitt 6), danach je ein Chip pro bekanntem Gerät
+In der Leiste am oberen Fensterrand steht zuerst der Sicherheitsstatus als
+Chip mit Schild-Symbol (siehe Abschnitt 6), dann der Verbund-Chip und der
+Chip „MCP“ (Abschnitt 5), danach je ein Chip pro bekanntem Gerät
 mit Symbol und Kurzname: ✓ verbunden (grün), ✕ getrennt (rot),
 Ⓗ Handbedienung (orange), z. B. „✓ NT1“. Der volle Name steht im
 Tooltip; ein Klick auf die Chips öffnet „Gerätezustand“ mit allen
 Geräten. Die Verbindung wird automatisch alle 3 Sekunden neu versucht,
-solange ein Gerät nicht erreichbar ist. Ganz rechts steht der
-„ALLE AUS“-Button.
+solange ein Gerät nicht erreichbar ist. Rechts folgen der Vollbild-Knopf und
+der „ALLE AUS“-Button. Meldungen der App erscheinen kurz als Hinweis am
+unteren Fensterrand.
 
 ---
 

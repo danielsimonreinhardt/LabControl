@@ -80,6 +80,26 @@ def normalize_url(address: str) -> str:
     return f"{scheme}://{host}:{int(port)}"
 
 
+def resolve_partner_ip(address: str) -> str:
+    """IPv4-Adresse des Partners aus der eingetragenen Adresse ('' wenn leer/unaufloesbar). Rechnernamen
+    werden per DNS aufgeloest -- das kann dauern, deshalb nicht im GUI-Thread aufrufen (PI-39 b)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    url = normalize_url(address)
+    host = urlsplit(url).hostname if url else ""
+    if not host:
+        return ""
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return ""
+
+
 class PartnerClient:
     def __init__(self, base_url: str, token: str, own_name: str) -> None:
         self.base_url = base_url

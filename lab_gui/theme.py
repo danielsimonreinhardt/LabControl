@@ -601,9 +601,9 @@ class ThemeManager(QObject):
         app = QApplication.instance()
         if app is None:
             return
-        qss = stylesheet(self._palette)
+        from touch_ui import shell_qss, touch_qss   # lokal: touch_ui importiert theme
+        qss = stylesheet(self._palette) + shell_qss(self._palette)
         if self._touch:
-            from touch_ui import touch_qss   # lokal: touch_ui importiert theme
             qss += touch_qss(self._palette)
         app.setStyleSheet(qss)
         want_hover = not self._touch

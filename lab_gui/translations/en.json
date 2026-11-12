@@ -676,5 +676,9 @@
   "Gerät am Rechner {host}": "Device on computer {host}",
   "Eingang": "Input",
   "Sollspannung": "Set voltage",
-  "Strombegrenzung": "Current limit"
+  "Strombegrenzung": "Current limit",
+  "Fernsteuerung für andere Rechner": "Remote control for other computers",
+  "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner braucht das nicht.": "Time-limited, for programs on other computers. The paired link partner does not need it.",
+  "Claude (MCP) darf steuern": "Claude (MCP) may control",
+  "Claude (MCP) darf nur lesen": "Claude (MCP) may only read"
 }

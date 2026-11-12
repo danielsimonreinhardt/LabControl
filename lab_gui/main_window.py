@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import re
+import threading
 import time
 
 import qtawesome as qta
@@ -54,7 +55,7 @@ from share_api import new_token
 from jlink.driver import find_commander as find_jlink_commander
 from jlink_service import JLinkService
 from pairing_dialog import PairConfirmDialog, PairingDialog, PairingSession
-from partner_client import normalize_url
+from partner_client import normalize_url, resolve_partner_ip
 from partner_link import PartnerLink
 from partner_passthrough import PartnerPassthrough
 from partner_devices import PartnerDevices
@@ -145,13 +146,16 @@ class MainWindow(QMainWindow):
         self.resize(1000, 700)
 
         central = QWidget()
-        layout = QVBoxLayout(central)
-        # Touch-Profil (touch_ui.py): Leiste oben statt Statusleiste, Navigation links statt Reiterleiste
+        outer = QVBoxLayout(central)
+        # Rahmen wie im Touch-Profil (touch_ui.py), seit 0.53.0 auch am PC: Leiste oben statt Statusleiste,
+        # Navigation links statt Reiterleiste. Rechts daneben Sicherheitsbanner, Dashboard und Seiten.
         self._touch = False
         self._base_font = None
         self._top_bar = TopBar()
-        self._top_bar.hide()
-        layout.addWidget(self._top_bar)
+        outer.addWidget(self._top_bar)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self._safety_banner = QWidget()
         self._safety_banner.setObjectName("safetyBanner")
@@ -209,15 +213,23 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.settings_tab, "")
         # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
         # nie an Dashboard oder Sicherheitsbanner darueber.
+        layout.addWidget(self.tabs, 1)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         self._nav = NavBar()
-        self._nav.hide()
         body.addWidget(self._nav)
-        body.addWidget(self.tabs, 1)
-        layout.addLayout(body, 1)
+        body.addWidget(content, 1)
+        outer.addLayout(body, 1)
 
         self.setCentralWidget(central)
+        # Meldungen (statusBar().showMessage) als kurz eingeblendeter Hinweis unten -- die Statusleiste
+        # selbst ist verborgen, ihren Platz hat die Leiste oben (_show_toast)
+        self._toast = QLabel(central)
+        self._toast.setObjectName("statusToast")
+        self._toast.setWordWrap(True)
+        self._toast.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._toast.hide()
+        self.statusBar().messageChanged.connect(self._show_toast)
 
         self._status_container = no_own_background(QWidget())
         self._status_layout = QHBoxLayout(self._status_container)
@@ -229,7 +241,10 @@ class MainWindow(QMainWindow):
         self._partner_chip = QLabel()
         self._partner_chip.hide()
         self._status_layout.addWidget(self._partner_chip)
-        self.statusBar().addPermanentWidget(self._status_container)
+        # MCP-Chip (PI-39 b): darf Claude (MCP) an diesem Rechner steuern? Nur mit Netzwerk-Freigabe sichtbar
+        self._mcp_chip = QLabel()
+        self._mcp_chip.hide()
+        self._status_layout.addWidget(self._mcp_chip)
         self._status_container.installEventFilter(self)   # Tipp/Klick -> Liste (_show_status_details)
         self._status_container.setCursor(Qt.CursorShape.PointingHandCursor)   # am PC: klickbar (PI-17 a)
         self._status_layout.setSpacing(6)
@@ -292,20 +307,14 @@ class MainWindow(QMainWindow):
         self._wire_share()
         self._replay_known_devices()
 
-        # Als letztes permanentes Statusleisten-Widget hinzugefuegt -> steht
-        # garantiert ganz rechts, auch wenn weitere Wire-Methoden oben noch
-        # eigene Permanent-Widgets ergaenzen (addPermanentWidget ordnet in
-        # Aufrufreihenfolge von links nach rechts an).
-        # Sichtbarer Hinweis, solange die Fernsteuerung freigegeben ist -- in
-        # der Statusleiste, damit man ihn auf jedem Reiter sieht. Vor dem ALLE-
-        # AUS-Knopf, der ganz rechts bleiben soll.
+        # Sichtbarer Hinweis, solange die Fernsteuerung freigegeben ist -- in der Leiste oben, damit man
+        # ihn auf jedem Reiter sieht. Vor dem ALLE-AUS-Knopf, der ganz rechts bleibt (TopBar.adopt in
+        # _wire_touch).
         self._remote_status_label = QLabel()
         self._remote_status_label.hide()
-        self.statusBar().addPermanentWidget(self._remote_status_label)
         self._all_off_button = QPushButton()
         self._all_off_button.clicked.connect(
             lambda: self._safe_stop("manual all-off", propagate=True, stop_run=True))
-        self.statusBar().addPermanentWidget(self._all_off_button)
         self._style_all_off_button()
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -321,6 +330,7 @@ class MainWindow(QMainWindow):
                            (self.timeline_tab, tr("Verlauf")), (self.settings_tab, tr("Einstellungen"))):
             self.tabs.setTabText(self.tabs.indexOf(page), text)
         self._render_partner_chip()
+        self._render_mcp_chip()
         if self.tabs.indexOf(self._overview_page) >= 0:
             self.tabs.setTabText(self.tabs.indexOf(self._overview_page), tr("Übersicht"))
         self._nav.retranslate()
@@ -562,11 +572,27 @@ class MainWindow(QMainWindow):
             return "inactive"
         return ""
 
+    def _resolve_partner_ip(self, address: str) -> None:
+        """PI-39 b: Partner-Adresse -> IP fuer share_api.is_partner_caller. Rechnernamen loest ein kurzer
+        Hintergrund-Thread auf (DNS kann haengen); bis dahin gilt die alte Adresse nicht mehr."""
+        self._live_state.set_partner_ip("")
+        if not address:
+            return
+        live_state = self._live_state
+        generation = self._partner_ip_gen = getattr(self, "_partner_ip_gen", 0) + 1
+
+        def work() -> None:
+            ip = resolve_partner_ip(address)
+            if generation == self._partner_ip_gen:
+                live_state.set_partner_ip(ip)
+        threading.Thread(target=work, name="PartnerIp", daemon=True).start()
+
     def _on_partner_config(self, config: dict) -> None:
         self.settings_tab.set_partner_config(config)
         self._passthrough.release("Verbund umgestellt")
         self._partner.apply(config)
         visible = self._partner.enabled
+        self._resolve_partner_ip(config.get("address", "") if visible else "")
         self.testcase_tab.set_verbund(app_logging.host_name(), self._partner_host_name, visible)
         if not visible:
             self._set_partner_battsim(False)
@@ -887,6 +913,26 @@ class MainWindow(QMainWindow):
         for device_id, text in view.items():
             self.control_tab.set_lease(device_id, text)
         self._lease_view = view
+
+    def _render_mcp_chip(self, *_args) -> None:
+        """PI-39 b: Chip "MCP" -- grün, wenn Claude (MCP) an diesem Rechner steuern darf (Schalter in den
+        Einstellungen oder Hauptschalter an), sonst grau (nur lesen). Ohne Netzwerk-Freigabe verborgen."""
+        chip = getattr(self, "_mcp_chip", None)
+        if chip is None:
+            return
+        config = self._settings.share_config
+        if not config.get("enabled"):
+            chip.hide()
+            return
+        pal = ThemeManager.instance().palette
+        allowed = bool(config.get("local_bypass")) or self._live_state.remote_active()
+        color = pal.success if allowed else pal.text_muted
+        size = self._chip_icon_size()
+        icon = touch_icon_path("mdi.robot-outline" if allowed else "mdi.robot-off-outline", color, size)
+        chip.setText(f'<img src="{icon}" width="{size}" height="{size}" style="vertical-align: middle"> MCP')
+        chip.setToolTip(tr("Claude (MCP) darf steuern") if allowed else tr("Claude (MCP) darf nur lesen"))
+        self._style_chip(chip, color)
+        chip.show()
 
     def _render_partner_chip(self) -> None:
         chip = self._partner_chip
@@ -1415,6 +1461,7 @@ class MainWindow(QMainWindow):
         # Beispiel-URL nachfuehren, wenn sich die Freigabe aendert -- das
         # passiert ohne Serverneustart, also feuert started nicht erneut.
         self._settings.share_config_changed.connect(self._refresh_share_url)
+        self._settings.share_config_changed.connect(self._render_mcp_chip)
 
         # -- Fernsteuerung ------------------------------------------------
         # Explizit QueuedConnection: submit_*() emittieren aus dem Server-
@@ -1457,7 +1504,7 @@ class MainWindow(QMainWindow):
         self._share_server.apply(self._settings.share_config)
 
     def _on_share_action(self, request_id: int, device_id: str, kind: str, action: str,
-                         value: float, channel: int, local: bool) -> None:
+                         value: float, channel: int, local: bool, verbund: bool = False) -> None:
         """Letzte Station im GUI-Thread, bevor eine Fernsteuer-Aktion den Worker
         erreicht.
 
@@ -1470,10 +1517,11 @@ class MainWindow(QMainWindow):
         if self._safety.is_tripped() or self._test_runner.is_running():
             self._share_bridge.complete(request_id, False, "locked", "", 0.0)
             return
-        # Dieselbe Regel wie share_api.remote_effective: Hauptschalter an ODER lokaler
-        # Aufruf mit aktiver Ausnahme. Hier frisch aus den Einstellungen gelesen -- der
-        # Server-Thread hat mit einem Schnappschuss gearbeitet.
+        # Dieselbe Regel wie share_api.remote_effective: Hauptschalter an, gekoppelter Partner (PI-39 b,
+        # Verbund noch eingeschaltet) ODER lokaler Aufruf mit Schalter "Claude (MCP) darf steuern". Hier
+        # frisch gelesen -- der Server-Thread hat mit einem Schnappschuss gearbeitet.
         if not (self._live_state.remote_active()
+                or (verbund and self._partner.enabled)
                 or (local and self._settings.share_config["local_bypass"])):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
@@ -1499,6 +1547,7 @@ class MainWindow(QMainWindow):
         self._refresh_remote_status()
 
     def _refresh_remote_status(self) -> None:
+        self._render_mcp_chip()
         remaining = self._live_state.remote_remaining_s()
         if remaining <= 0.0:
             if self._remote_timer.isActive():
@@ -1613,6 +1662,19 @@ class MainWindow(QMainWindow):
         self._top_bar.power_requested.connect(self._on_power_requested)
         self._top_bar.arrange_toggled.connect(self._on_arrange_toggled)
         self._top_bar.set_power_available(system_power.available())
+        # Rahmen fuer PC und Touch gleich (0.53.0): Reiterleiste und Statusleiste verborgen, Geraetezustand,
+        # Fernsteuerungs-Hinweis und ALLE AUS in der Leiste oben
+        self.tabs.tabBar().hide()
+        self.statusBar().hide()
+        self._top_bar.adopt(self._status_container, [self._remote_status_label, self._all_off_button])
+        # QScrollArea.setWidget zeigt das Widget nicht von selbst; der Fernsteuerungs-Hinweis bleibt verborgen,
+        # bis der Hauptschalter an ist (_refresh_remote_status)
+        self._status_container.show()
+        self._all_off_button.show()
+        self._nav.set_touch(False)
+        self._top_bar.set_touch(False)
+        self._nav.set_page_visible(self._overview_page, False)
+        self._nav.set_current(self.tabs.currentWidget())
         chosen = self._settings.touch_mode
         on = suggest_touch(self.screen()) if chosen is None else chosen
         self.settings_tab.set_touch_mode(on, automatic=chosen is None and on)
@@ -1642,34 +1704,21 @@ class MainWindow(QMainWindow):
         ThemeManager.instance().set_touch(on)
         self._repolish_top_down()
         touch_sizer().set_active(on)
-        trailing = [self._remote_status_label, self._all_off_button]
-        visible = {w: not w.isHidden() for w in [self._status_container, *trailing]}
+        # Am PC steht das Dashboard als Streifen ueber allen Seiten (hohe Aufloesung, abdockbar), im
+        # Touch-Profil ist es die eigene Seite "Uebersicht"
         if on:
             self._central_layout.removeWidget(self.dashboard)
             self._overview_layout.insertWidget(0, self.dashboard)
             self.tabs.addTab(self._overview_page, tr("Übersicht"))
-            self.tabs.tabBar().hide()
-            self._nav.show()
-            for widget in [self._status_container, *trailing]:
-                self.statusBar().removeWidget(widget)   # versteckt das Widget
-            self._top_bar.adopt(self._status_container, trailing)
-            self.statusBar().hide()
-            self._top_bar.show()
             self.tabs.setCurrentWidget(self._overview_page)
         else:
             self.tabs.removeTab(self.tabs.indexOf(self._overview_page))
             self._overview_layout.removeWidget(self.dashboard)
             self._central_layout.insertWidget(self._central_layout.indexOf(self._safety_banner) + 1, self.dashboard)
-            self.tabs.tabBar().show()
-            self._nav.hide()
-            self._top_bar.release()
-            self._top_bar.hide()
-            for widget in [self._status_container, *trailing]:
-                self.statusBar().addPermanentWidget(widget)
-            self.statusBar().show()
             self.tabs.setCurrentIndex(0)
-        for widget, was_visible in visible.items():
-            widget.setVisible(was_visible)
+        self._nav.set_page_visible(self._overview_page, on)
+        self._nav.set_touch(on)
+        self._top_bar.set_touch(on)
         self.dashboard.set_detach_available(not on)
         self.dashboard.set_multi_row(on)   # Uebersicht: Kacheln umbrechen statt waagerecht scrollen
         # Touch: Ziehen ist Wischen; Kacheln verschieben nur im Modus "Anordnen" (_on_arrange_toggled)
@@ -1681,6 +1730,8 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:   # Chips (Touch) bzw. "Name: Zustand" (PC)
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_partner_chip()
+        self._render_mcp_chip()
         logger.info("Touch-Bedienung %s", "an" if on else "aus")
 
     def _repolish_top_down(self) -> None:
@@ -1716,6 +1767,22 @@ class MainWindow(QMainWindow):
             # eigene Flaeche -- das Abbild muss ueber dem sichtbaren Ausschnitt liegen
             self._arrange_overlays = [ArrangeOverlay(self._overview_page, self.dashboard),
                                       ArrangeOverlay(self.control_tab.scroll_area(), self.control_tab)]
+
+    def _show_toast(self, message: str) -> None:
+        """statusBar().showMessage(...) ohne sichtbare Statusleiste: unten mittig einblenden, solange die
+        Meldung gilt (QStatusBar raeumt sie nach ihrer Zeit ab -> messageChanged(""))."""
+        toast = self._toast
+        if not message:
+            toast.hide()
+            return
+        parent = toast.parentWidget()
+        toast.setText(message)
+        width = min(parent.width() - 40, max(240, toast.fontMetrics().horizontalAdvance(message) + 40))
+        toast.setFixedWidth(max(120, width))
+        toast.adjustSize()
+        toast.move((parent.width() - toast.width()) // 2, parent.height() - toast.height() - 16)
+        toast.raise_()
+        toast.show()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -2255,6 +2322,10 @@ class MainWindow(QMainWindow):
             partner = QLabel(self._partner_chip.toolTip())
             partner.setStyleSheet("font-weight: bold;")
             layout.addWidget(partner)
+        if not self._mcp_chip.isHidden():
+            mcp = QLabel(self._mcp_chip.toolTip())
+            mcp.setStyleSheet("font-weight: bold;")
+            layout.addWidget(mcp)
         for device_id in self._status_labels:
             symbol, state, color = self._status_state(device_id)
             row = QLabel(f"{symbol}  {self._device_labels.get(device_id, device_id)} – {state}")
@@ -2285,6 +2356,7 @@ class MainWindow(QMainWindow):
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
         self._render_partner_chip()
+        self._render_mcp_chip()
         self._style_safety_banner()
         self._style_all_off_button()
 

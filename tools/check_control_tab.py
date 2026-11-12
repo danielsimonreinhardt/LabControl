@@ -67,6 +67,7 @@ def main() -> int:
     dw.picoscope_usb_present = lambda: False  # echtes Oszilloskop nicht anfassen
 
     from control_tab import PicoscopeControlGroup
+    from touch_ui import NAV_WIDTH_PC
     from main_window import MainWindow
 
     def wait_for(predicate, seconds=10.0):
@@ -79,7 +80,7 @@ def main() -> int:
         return False
 
     window = MainWindow(settings_mod.Settings())
-    window.resize(1400, 900)
+    window.resize(1400 + NAV_WIDTH_PC, 900)   # seit 0.53.0 Navigation links: Steuerung so breit wie vorher
     window.show()
     tab = window.control_tab
     sections = tab._sections
@@ -270,7 +271,7 @@ def main() -> int:
     window.close()
     app.processEvents()
     window = MainWindow(settings_mod.Settings())
-    window.resize(1400, 900)
+    window.resize(1400 + NAV_WIDTH_PC, 900)   # seit 0.53.0 Navigation links: Steuerung so breit wie vorher
     window.show()
     tab = window.control_tab
     sections = tab._sections

@@ -1058,8 +1058,11 @@ class SettingsTab(QWidget):
         self._share_access_log_checkbox.setText(
             tr("Zugriffe protokollieren")
         )
-        self._share_control_checkbox.setText(tr("Fernsteuerung aktiv"))
-        self._share_local_bypass_checkbox.setText(tr("Dieser Rechner ohne Hauptschalter"))
+        self._share_control_checkbox.setText(tr("Fernsteuerung für andere Rechner"))
+        self._share_control_checkbox.setToolTip(tr(
+            "Zeitlich begrenzt, für Programme auf anderen Rechnern. Der gekoppelte Verbund-Partner "
+            "braucht das nicht."))
+        self._share_local_bypass_checkbox.setText(tr("Claude (MCP) darf steuern"))
         self._share_local_bypass_checkbox.setToolTip(
             tr("Gilt für Programme auf diesem Rechner, z.B. den MCP-Server. Token, "
                "„Steuern“ und die Sperren bei Testlauf und Sicherheitsabschaltung bleiben."))
@@ -1078,6 +1081,12 @@ class SettingsTab(QWidget):
         self._share_enabled_checkbox = QCheckBox()
         self._share_enabled_checkbox.toggled.connect(self.share_enabled_toggled)
         layout.addWidget(self._share_enabled_checkbox)
+
+        # Schalter fuer Claude (MCP) und andere Programme auf DIESEM Rechner (PI-39 b, Einstellung
+        # local_bypass): ohne Hauptschalter steuern. Token, "Steuern" und die Sperren bleiben.
+        self._share_local_bypass_checkbox = QCheckBox()
+        self._share_local_bypass_checkbox.toggled.connect(self.share_local_bypass_toggled)
+        layout.addWidget(self._share_local_bypass_checkbox)
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
@@ -1149,12 +1158,6 @@ class SettingsTab(QWidget):
         self._share_control_checkbox = QCheckBox()
         self._share_control_checkbox.toggled.connect(self.share_control_toggled)
         layout.addWidget(self._share_control_checkbox)
-
-        # Ausnahme fuer Programme auf DIESEM Rechner (z.B. den MCP-Server): sie
-        # brauchen den Hauptschalter nicht. Token, "Steuern" und die Sperren bleiben.
-        self._share_local_bypass_checkbox = QCheckBox()
-        self._share_local_bypass_checkbox.toggled.connect(self.share_local_bypass_toggled)
-        layout.addWidget(self._share_local_bypass_checkbox)
 
         control_form = QFormLayout()
         control_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
