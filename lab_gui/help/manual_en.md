@@ -412,7 +412,7 @@ time-window-limited ring buffer of the live charts.
 - **Touch operation**: for small touch displays such as on the Raspberry Pi
   (1024 × 600). Larger text and controls, larger buttons in the navigation
   on the left, the overview (dashboard) as its own page instead of a fixed
-  strip, a swipeable device status at the top and the **Arrange** button.
+  strip, a swipeable device status at the top and the **Arrange** button (move cross).
   The full-screen button at the top exists on the PC too; on the Raspberry
   Pi LabControl starts in full screen. On Linux there is also a power button: after a
   confirmation it shuts the computer down or restarts it, LabControl
@@ -426,7 +426,8 @@ time-window-limited ring buffer of the live charts.
   and Stop buttons on the right. Editing and saving is done on the PC; runs
   work exactly as in the editor (same checks, a step error is acknowledged
   with Stop). Lists, tables and pages can be swiped with a finger; tiles are
-  moved only in **Arrange** mode (button in the top bar, "Done" ends it).
+  moved only in **Arrange** mode (button with the move cross in the top bar; while
+  arranging it shows a check mark, tapping it ends the mode).
   Buttons that only show an icon with a tooltip on the PC (timeline, CAN)
   carry a short text in touch mode. The overview wraps at the screen width
   and grows downwards instead of scrolling sideways; there it is always compact

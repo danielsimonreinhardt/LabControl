@@ -7,6 +7,9 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Geändert
+- **Knopf „Anordnen“ nur noch als Symbol (0.53.2, Nutzerwunsch 12.11.2026).** Verschiebe-Kreuz, im Modus Anordnen
+  ein Haken auf Akzentfarbe; „Anordnen“ bzw. „Fertig“ stehen nur noch im Tooltip. Spart Platz für die Chips.
+  **Mock-verifiziert** (`check_touch_ui`, `check_arrange_overlay`).
 - **Sicherheits-Chip fest links in der Leiste oben (0.53.1, Nutzerwunsch 12.11.2026).** Er stand bisher im
   wischbaren Bereich und verschwand, wenn man die Geräte-Chips zur Seite wischte. Jetzt steht er vor diesem Bereich
   (`TopBar.adopt(..., leading=...)`), am PC und im Touch-Profil; ein Klick darauf öffnet wie bei den anderen Chips

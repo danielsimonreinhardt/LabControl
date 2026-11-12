@@ -585,9 +585,10 @@ class TopBar(QWidget):
         # kleinen Fenster -- auch ohne Touch-Profil, unter Linux mit logind (WSL, Linux-PC; 11.11.2026).
         self._arrange_button = QToolButton(self)
         self._arrange_button.setCheckable(True)
-        self._arrange_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._arrange_button.setIconSize(QSize(22, 22))
-        self._arrange_button.setFixedHeight(TOUCH_H)
+        # Nur Symbol (Nutzerwunsch 12.11.2026): Verschiebe-Kreuz, im Modus "Anordnen" Haken auf Akzentfarbe
+        self._arrange_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._arrange_button.setIconSize(QSize(26, 26))
+        self._arrange_button.setMinimumSize(48, TOUCH_H)
         self._arrange_button.toggled.connect(self.arrange_toggled)
         self._arrange_button.toggled.connect(lambda _on: (self._recolor(), self.retranslate()))
         self._fullscreen_button = QToolButton(self)
@@ -632,8 +633,8 @@ class TopBar(QWidget):
 
     def retranslate(self) -> None:
         from i18n import tr
-        self._arrange_button.setText(tr("Fertig") if self._arrange_button.isChecked() else tr("Anordnen"))
-        self._arrange_button.setToolTip(tr("Kacheln in Übersicht und Steuerung verschieben"))
+        self._arrange_button.setToolTip(tr("Fertig") if self._arrange_button.isChecked()
+                                        else tr("Kacheln in Übersicht und Steuerung verschieben"))
 
     def set_touch(self, on: bool) -> None:
         """Am PC flacher und ohne "Anordnen" (dort zieht man Kacheln direkt mit der Maus)."""

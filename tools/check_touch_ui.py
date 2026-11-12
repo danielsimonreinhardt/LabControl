@@ -184,7 +184,10 @@ def main() -> int:
     app.processEvents()
     check("Anordnen: Ziehen erlaubt, kein Wischen dort", w.control_tab._drag_allowed and w.dashboard._drag_allowed
           and not swipe(ct_area) and not swipe(dash_area))
-    check("Anordnen-Knopf heisst 'Fertig'", w._top_bar._arrange_button.text() == "Fertig")
+    arrange = w._top_bar._arrange_button
+    check("Anordnen-Knopf nur Symbol (Nutzerwunsch 12.11.2026), Tooltip 'Fertig'",
+          not arrange.text() and arrange.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
+          and arrange.toolTip() == "Fertig" and arrange.width() <= 60, f"{arrange.text()!r} w={arrange.width()}")
     w._top_bar._arrange_button.setChecked(False)
     app.processEvents()
     check("Anordnen beendet: wieder Wischen", swipe(ct_area) and not w.control_tab._drag_allowed)

@@ -433,7 +433,7 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   (1024 × 600). Größere Schrift und Bedienelemente, größere Schaltflächen in
   der Navigation links, die Übersicht (Dashboard) als eigene Seite statt
   eines festen Streifens, der Gerätezustand oben zum Wischen und der Knopf
-  **Anordnen**. Den Vollbild-Knopf oben gibt es auch am PC; am Raspberry Pi
+  zum **Anordnen** (Verschiebe-Kreuz). Den Vollbild-Knopf oben gibt es auch am PC; am Raspberry Pi
   startet LabControl im Vollbild. Unter Linux gibt es
   dort zusätzlich einen Ein/Aus-Knopf: Er fährt den Rechner nach einer
   Rückfrage herunter oder startet ihn neu, LabControl gibt vorher die
@@ -448,7 +448,8 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   gespeichert wird am PC; ausgeführt wird genauso wie im Editor (gleiche
   Prüfungen, ein Schrittfehler wird mit Stop quittiert). Listen, Tabellen
   und Seiten lassen sich mit dem Finger wischen; Kacheln verschiebt man nur
-  im Modus **Anordnen** (Knopf in der Leiste oben, „Fertig“ beendet ihn).
+  im Modus **Anordnen** (Knopf mit dem Verschiebe-Kreuz in der Leiste oben; während des
+  Anordnens zeigt er einen Haken, ein Tipp darauf beendet den Modus).
   Knöpfe, die am PC nur ein Symbol mit Tooltip zeigen (Verlauf, CAN), tragen
   im Touch-Profil einen kurzen Text. Die Übersicht bricht an der
   Bildschirmbreite um und wird nach unten länger, statt waagerecht zu
