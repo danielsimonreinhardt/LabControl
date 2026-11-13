@@ -209,7 +209,13 @@ Semantic Versioning (`lab_gui/version.py`).
   - **Mock-verifiziert:** neue Prüfung `tools/check_headless_run.py` (Format v3 inkl. Editor, Verriegelung,
     Kommandozeile mit allen Exit-Codes, JUnit, JSON, Bericht, zweite Instanz; SIGTERM nur unter Linux) und alle
     46 Prüfungen unter Windows und Linux (WSL Ubuntu). `check_device_portability` erwartet jetzt Format 2 für
-    Dateien ohne v3-Inhalte. Hardware-Lauf (Nachtlauf, echtes Netzteil/Last-Paar) steht aus.
+    Dateien ohne v3-Inhalte.
+  - **Hardware-verifiziert am Pi (13.11.2026, 08:55, 0.58.1):** Kommandozeile bei laufendem Kiosk → Exit 3;
+    Dienst gestoppt, `devices` listet Last, HCS60, CAN und Batterie-Simulator; Gut-Lauf mit HCS60 auf 1 V / 0 A
+    (Ausgang kurz EIN, Prüfung 0,12 V im Bereich) → Exit 0 mit JUnit, JSON und Bericht; mit Paar HCS60/Last lehnt
+    der Ablauf „Last EIN“ bei eingeschaltetem Netzteil ab → Exit 2, ALLE AUS, die Last war nie eingeschaltet.
+    Danach jeweils Freigabe der Netzteile wie beim Beenden. Quelle/Senke nur mock-verifiziert (nicht am
+    parallel verdrahteten Paar ausprobiert).
 - `tools/pi/netzlaufwerk_pi.sh`: hängt ein SMB-Netzlaufwerk am Pi per systemd-Automount ein (`nofail`, 15 s Frist,
   Zugangsdaten nur in `/etc/labcontrol/smb-credentials`, Passwort verdeckt abgefragt) und trägt `<mount>/LABCONTROL`
   als Netzlaufwerk in LabControl ein (12.11.2026). Am PC ist das Netzlaufwerk `\\192.168.178.1\data_exchange\LABCONTROL`
