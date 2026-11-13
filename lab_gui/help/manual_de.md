@@ -227,6 +227,17 @@ Bedienung in der Sektion:
 *Bisher nur gegen einen nachgebildeten Simulator getestet, die Prüfung am
 Gerät steht aus.*
 
+### Fehlerbox (microHIL)
+
+Sind in den Einstellungen Fehler eingetragen (Abschnitt 5), zeigt die Kachel
+**„Fehlerbox“** je Fehler eine Taste; ein Tipp setzt den Fehler, ein Tipp auf
+den aktiven hebt ihn auf, ebenso **„Aufheben“**. Es ist immer höchstens ein
+Fehler aktiv: solange einer gesetzt ist, lässt sich an der Kachel kein
+anderer setzen. Die microHIL-Kanäle des aktiven Fehlers sind in der
+microHIL-Kachel gesperrt (ausgegraut) und auch über das Netzwerk nicht
+bedienbar. ALLE AUS hebt den Fehler auf. Während eines Testlaufs ist die
+Kachel gesperrt.
+
 ### Prüfling (UDS)
 
 Ist in den Einstellungen ein Prüfling eingetragen (Abschnitt 5), erscheint
@@ -325,6 +336,15 @@ ist), **Laden** und **Speichern**.
 - **Prüfung**: optionale Pass/Fail-Grenzwerte (siehe unten).
 - **Aktiv**: Häkchen zum vorübergehenden Deaktivieren einer Zeile, ohne
   sie zu löschen.
+
+### Fehlerbox-Schritte
+
+Mit dem Gerät **„Fehlerbox“** setzt ein Ablauf einen der eingetragenen
+Fehler („Fehler setzen“, Name in der Wert-Spalte), hebt ihn auf oder hebt
+alle auf. Ist schon ein anderer Fehler aktiv, hebt „Fehler setzen“ ihn erst
+auf, wartet die eingestellte Zeit und setzt dann den neuen. Ein Schritt, der
+einen Kanal des aktiven Fehlers direkt schalten will, bricht den Lauf ab.
+Ein vom Ablauf gesetzter Fehler wird am Ende des Laufs aufgehoben.
 
 ### UDS-Schritte (Prüfling)
 
@@ -549,6 +569,13 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Prüfung lief und alle bestanden; ohne gelaufene Prüfung „nicht geprüft“.
   `python lab_gui/main.py coverage --csv abdeckung.csv` fasst alle Läufe
   zusammen (je Anforderung das Urteil des jüngsten Laufs).
+- **Fehlerbox** (Reiter „Geräte“): Fehler als Tabelle mit Name, Schaltfolge,
+  Wartezeit und Beschreibung. Die Schaltfolge ist eine Kurzschrift:
+  `R1=1` Relais 1 ein, `O3=1` Digitalausgang 3 ein, `A1=1500` Analogausgang 1
+  auf 1500 mV, mehrere mit Komma. Gesetzt wird in dieser Reihenfolge,
+  aufgehoben umgekehrt (Relais/Ausgänge aus, Analogausgang 0 mV). Die
+  Wartezeit gilt beim Wechsel im Testablauf zwischen Aufheben und Setzen.
+  Häkchen-Knopf: prüfen und speichern (`faultbox.json` im gemeinsamen Ordner).
 - **Prüfling (UDS)** (Reiter „Geräte“): das Steuergerät, mit dem LabControl
   über UDS spricht. **ODX/PDX** ist der Export der neXtBSW
   (`python -m tools.diaggen pdx <projekt> -o <datei>.pdx`); daraus kommen

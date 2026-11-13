@@ -1168,6 +1168,22 @@ class TestcaseTab(QWidget):
         uds_button.clicked.connect(open_uds_dialog)
         uds_page._refresh = refresh_uds_label
 
+        # Fehlerbox (FT-9): Name des Fehlers aus faultbox.json, in step.params["fault"]
+        fault_combo = _NoWheelComboBox()
+        fault_combo.setEditable(True)
+        current_fault = str(step.params.get("fault", "")) if step.device_kind == "fault" else ""
+
+        def fill_fault_names() -> None:
+            text = fault_combo.currentText() or current_fault
+            fault_combo.blockSignals(True)
+            fault_combo.clear()
+            fault_combo.addItems(self._fault_names())
+            fault_combo.setEditText(text)
+            fault_combo.blockSignals(False)
+
+        fill_fault_names()
+        fault_combo._refill = fill_fault_names
+
         value_stack = QStackedWidget()
         value_stack.addWidget(value_spin)       # Index 0: normaler Zahlenwert
         value_stack.addWidget(arb_page)         # Index 1: Arbiträrsignal-Zusammenfassung + Button
@@ -1176,6 +1192,7 @@ class TestcaseTab(QWidget):
         value_stack.addWidget(picoscope_page)   # Index 4: PicoScope Kanal + Bereich
         value_stack.addWidget(file_page)        # Index 5: J-Link-Firmware-Datei
         value_stack.addWidget(uds_page)         # Index 6: UDS-Parameter (FT-1)
+        value_stack.addWidget(fault_combo)      # Index 7: Fehlerbox-Fehler (FT-9)
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -1398,6 +1415,10 @@ class TestcaseTab(QWidget):
             elif kind == "uds":
                 refresh_uds_label()
                 value_stack.setCurrentIndex(6)
+            elif kind == "fault":
+                fill_fault_names()
+                fault_combo.setEnabled(code != "FAULT_CLEAR_ALL")
+                value_stack.setCurrentIndex(7)
             else:
                 value_stack.setCurrentIndex(0)
             # Pass/Fail-Pruefung setzt eine Messung voraus, die der Runner
@@ -2083,6 +2104,10 @@ class TestcaseTab(QWidget):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
             step.params = dict(getattr(uds_page, "_params", {}))
+        if step_type == STEP_TYPE_ACTION and step.device_kind == "fault":
+            # Fehlerbox (FT-9): Name aus der Auswahl der Zeile
+            name = self._table.cellWidget(row, COL_VALUE).widget(7).currentText().strip()
+            step.params = {"fault": name} if name and step.action != "FAULT_CLEAR_ALL" else {}
         if step_type == STEP_TYPE_ACTION:
             # Anforderungen pflegt der Pruefungsdialog (FT-3); er ist fuer Aktionszeilen massgeblich
             check_page = self._table.cellWidget(row, COL_CHECK)
@@ -2090,6 +2115,14 @@ class TestcaseTab(QWidget):
             if "requirements" in params:
                 step.requirements = list(params["requirements"])
         return step
+
+    def set_fault_names_provider(self, provider) -> None:
+        """Von MainWindow: () -> Namen der Fehler in faultbox.json (FT-9)."""
+        self._fault_names_provider = provider
+
+    def _fault_names(self) -> list[str]:
+        provider = getattr(self, "_fault_names_provider", None)
+        return list(provider()) if provider is not None else []
 
     def set_uds_odx_provider(self, provider) -> None:
         """Von MainWindow: () -> ODX des eingestellten Pruefings (uds_odx.OdxDiag) oder None."""
@@ -2798,6 +2831,8 @@ class TestcaseTab(QWidget):
         elif step.device_kind == "uds":
             import uds_steps
             detail = uds_steps.summary(step.action, step.params) or "–"
+        elif step.device_kind == "fault":
+            detail = str(step.params.get("fault", "")) or "–"
         else:
             detail = f"{step.value}"
         self._set_status(

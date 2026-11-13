@@ -2506,6 +2506,18 @@ class HilControlGroup(QGroupBox):
                 # das auch bei blockierten Signalen sicher.
                 button.update()
 
+    def set_locked_channels(self, channels, reason: str = "") -> None:
+        """Fehlerbox (FT-9, FP-27 a): Kanaele eines aktiven Fehlers sperren -- {("O"|"R"|"A", n)}; PWM n liegt
+        auf OUT n und wird mit gesperrt. Leere Menge = alles frei."""
+        channels = set(channels or ())
+        tooltip = tr("Gesperrt: gehört zum Fehler „{name}“", name=reason) if reason else ""
+        groups = (("O", self._out_buttons), ("O", self._pwm_rows), ("R", self._relay_buttons), ("A", self._aout_rows))
+        for kind, widgets in groups:
+            for ch, widget in enumerate(widgets, start=1):
+                locked = (kind, ch) in channels
+                widget.setEnabled(not locked)
+                widget.setToolTip(tooltip if locked else "")
+
     def set_output_states(self, states: list[bool]) -> None:
         self._sync_toggles(self._out_buttons, states, _style_digital_out_toggle)
 
@@ -2802,6 +2814,8 @@ class ControlTab(QWidget):
     jlink_action_requested = Signal(str, str, str)
     # Pruefling-Kachel (FT-1): Befehl, Argumente -> MainWindow -> UdsService
     uds_command_requested = Signal(str, object)
+    # Fehlerbox-Kachel (FT-9): "set" + Name | "clear" + "" -> MainWindow -> FaultService
+    fault_requested = Signal(str, str)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
     # device_ids) -- MainWindow verdrahtet das mit Settings.
     # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
@@ -2948,6 +2962,10 @@ class ControlTab(QWidget):
         elif kind == "jlink":
             section = JLinkControlGroup(device_id, label)
             section.action_requested.connect(self.jlink_action_requested)
+        elif kind == "fault":
+            from faultbox_tile import FaultBoxControlGroup   # Fehlerbox (FT-9, 0.61.0)
+            section = FaultBoxControlGroup(device_id, label)
+            section.fault_requested.connect(self.fault_requested)
         elif kind == "uds":
             from uds_tile import UdsControlGroup   # Pruefling (FT-1, 0.60.2)
             section = UdsControlGroup(device_id, label)
@@ -3543,6 +3561,25 @@ class ControlTab(QWidget):
             section.set_state(state)
 
     def set_battsim_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_fault_locks(self, locked: dict, reason: str) -> None:
+        """Fehlerbox (FT-9): {hil_id: [(art, kanal)]} -> Sperre in den microHIL-Kacheln."""
+        for device_id, section in self._sections.items():
+            if isinstance(section, HilControlGroup):
+                section.set_locked_channels({tuple(c) for c in locked.get(device_id, [])}, reason)
+
+    def set_fault_list(self, device_id: str, faults: list) -> None:
+        section = self._sections.get(device_id)
+        if section is not None and hasattr(section, "set_faults"):
+            section.set_faults(faults)
+
+    def set_fault_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if section is not None and hasattr(section, "set_faults"):
+            section.set_state(state)
+
+    def set_fault_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
     def set_uds_odx(self, odx) -> None:

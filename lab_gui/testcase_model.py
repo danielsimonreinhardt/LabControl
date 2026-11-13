@@ -181,6 +181,14 @@ UDS_ACTIONS = {
     "UDS_RAW": "Rohe Anfrage",
 }
 UDS_READ_ACTIONS = {"UDS_READ_DID"}
+
+# Fehlerbox (FT-9, 0.61.0, faultbox.py): params {"fault": Name}; FAULT_SET hebt einen anderen aktiven Fehler
+# vorher auf (FP-26 c), FAULT_CLEAR hebt den genannten auf (wenn er aktiv ist), FAULT_CLEAR_ALL jeden.
+FAULT_ACTIONS = {
+    "FAULT_SET": "Fehler setzen",
+    "FAULT_CLEAR": "Fehler aufheben",
+    "FAULT_CLEAR_ALL": "Alle Fehler aufheben",
+}
 UDS_CHECK_FIELD_LABELS = {"uds_value": "Wert"}
 UDS_READ_CHECK_FIELD = {"UDS_READ_DID": "uds_value"}
 
@@ -231,6 +239,7 @@ DEVICE_ACTIONS = {
     "battsim": BATTSIM_ACTIONS,
     "jlink": JLINK_ACTIONS,
     "uds": UDS_ACTIONS,
+    "fault": FAULT_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -244,6 +253,7 @@ DEVICE_KIND_LABELS = {
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
     "uds": "Prüfling (UDS)",
+    "fault": "Fehlerbox",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -295,6 +305,7 @@ VALUELESS_ACTIONS = {
     "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
     *JLINK_ACTIONS,
     *UDS_ACTIONS,
+    *FAULT_ACTIONS,
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -356,6 +367,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
                                       "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ")},
     **{code: ("", 0, 0) for code in JLINK_ACTIONS},
     **{code: ("", 0, 0) for code in UDS_ACTIONS},
+    **{code: ("", 0, 0) for code in FAULT_ACTIONS},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen

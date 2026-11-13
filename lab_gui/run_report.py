@@ -149,6 +149,8 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     elif step.device_kind == "uds":
         import uds_steps
         detail = uds_steps.summary(step.action, step.params) or "–"
+    elif step.device_kind == "fault":
+        detail = str(step.params.get("fault", "")) or "–"   # Fehler im Zeitverlauf (FT-9)
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)

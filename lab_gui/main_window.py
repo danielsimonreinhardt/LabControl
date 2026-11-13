@@ -44,6 +44,8 @@ from device_worker import (
     REASON_WINDOW_CLOSE, SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id,
 )
 from i18n import Translator, tr
+import faultbox
+from faultbox_service import FaultService
 from instruments import Instruments
 from live_state import LiveState
 from uds_service import UdsService
@@ -77,9 +79,11 @@ logger = logging.getLogger(__name__)
 
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
-                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL", "uds": "ECU"}
+                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL", "uds": "ECU", "fault": "FB"}
 # Pruefling (FT-1): ein festes Geraet fuer Kachel, Uebersicht und Statusleiste
 UDS_DEVICE_ID = "uds:dut"
+# Fehlerbox (FT-9): ebenso
+FAULT_DEVICE_ID = "fault:box"
 STATUS_CHIP_HEIGHT = 28      # Touch-Profil
 STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
@@ -294,6 +298,7 @@ class MainWindow(QMainWindow):
         self._wire_partner()
         self._wire_jlink()
         self._wire_uds_tile()
+        self._wire_faultbox_tile()
         self._style_safety_banner()
         self._retranslate()
         self.testcase_tab.mark_clean()   # leerer Startzustand gilt als gespeichert (Laeufe ueber REST)
@@ -412,6 +417,10 @@ class MainWindow(QMainWindow):
         # Messmittel (FT-8): vor dem Start verbinden, sonst fehlen die Kennungen der ersten Geraete
         self._instruments = Instruments(lambda: data_store.store().shared_file(instruments.FILE_NAME))
         instruments.connect_worker(self._worker, self._instruments)
+        # Fehlerbox (FT-9): Schaltfolgen am microHIL, ALLE AUS hebt den aktiven Fehler auf
+        self._faultbox = FaultService(self._worker, lambda: data_store.store().shared_file(faultbox.FILE_NAME),
+                                      lambda hil: self._directory.resolve("hil", hil), self)
+        self._worker.all_off_finished.connect(self._faultbox.on_all_off)
         # UDS am Pruefling (FT-1): eigener Thread, Bus ueber CanTap des Workers
         self._uds = UdsService(self._worker, lambda: data_store.store().shared_file("x").parent, self)
         self._worker.can_connected.connect(self._uds.on_can_connected)
@@ -621,6 +630,56 @@ class MainWindow(QMainWindow):
             logger.info("Verbund: Partner %s Batterie-Simulator%s", "führt einen" if present else "ohne",
                         " - 0x130 wird hier nicht gesendet" if present else "")
             self._request_partner_battsim.emit(present)
+
+    # -- Fehlerbox (FT-9): Kachel, Uebersicht, Sperre der HIL-Kanaele ---------------------
+
+    def _wire_faultbox_tile(self) -> None:
+        self._fault_known = False
+        self._fault_names: list[str] = []
+        self._fault_tile_requests: set[int] = set()
+        self._faultbox.state_changed.connect(self._on_faultbox_state)
+        self._faultbox.finished.connect(self._on_faultbox_finished)
+        self.control_tab.fault_requested.connect(self._on_fault_tile_request)
+        self._on_faultbox_state(self._faultbox.state())
+
+    def _update_faultbox_presence(self) -> None:
+        faults = self._faultbox.faults()
+        if not faults and not self._fault_known:
+            return
+        if not self._fault_known:
+            self._fault_known = True
+            self._registry.on_device_added("fault", FAULT_DEVICE_ID)
+        online = bool(faults) and bool(self._online_devices.get("hil", set()))
+        self._set_online("fault", FAULT_DEVICE_ID, online)
+        self.dashboard.set_fault_online(FAULT_DEVICE_ID, online)
+        self.control_tab.set_fault_online(FAULT_DEVICE_ID, online)
+
+    def _on_faultbox_state(self, state: dict) -> None:
+        names = list(state.get("faults", []))
+        if names != self._fault_names:
+            self._fault_names = names
+            self.control_tab.set_fault_list(FAULT_DEVICE_ID, self._faultbox.faults())
+        self._update_faultbox_presence()
+        self.control_tab.set_fault_state(FAULT_DEVICE_ID, state)
+        self.dashboard.update_faultbox(FAULT_DEVICE_ID, state)
+        # FP-27 a: Kanaele des aktiven (oder gerade gesetzten) Fehlers in der microHIL-Kachel sperren
+        self.control_tab.set_fault_locks(state.get("locked", {}), state.get("active") or "")
+
+    def _on_fault_tile_request(self, command: str, name: str) -> None:
+        if self._test_runner.is_running():
+            self.statusBar().showMessage(tr("Fehlerbox von Hand ist während eines Testlaufs gesperrt"), 5000)
+            return
+        if command == "set":
+            request = self._faultbox.set_fault(name, replace=False)   # FP-26 c: an der Kachel kein Wechsel
+        else:
+            request = self._faultbox.clear(None)
+        self._fault_tile_requests.add(request)
+
+    def _on_faultbox_finished(self, request_id: int, ok: bool, message: str) -> None:
+        if request_id in self._fault_tile_requests:
+            self._fault_tile_requests.discard(request_id)
+            if not ok and message:
+                self.statusBar().showMessage(message, 6000)
 
     # -- Pruefling (UDS, FT-1): Kachel, Uebersicht, Statusleiste ----------------------
 
@@ -1210,6 +1269,10 @@ class MainWindow(QMainWindow):
                 self._set_online("uds", device_id, False)
                 self.dashboard.set_uds_online(device_id, False)
                 self.control_tab.set_uds_online(device_id, False)
+            elif kind == "fault":
+                self._set_online("fault", device_id, False)
+                self.dashboard.set_fault_online(device_id, False)
+                self.control_tab.set_fault_online(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -1256,6 +1319,10 @@ class MainWindow(QMainWindow):
             # stehen (siehe dashboard.set_hil_analog_out()-Docstring).
             section.set_analog_output.connect(self.dashboard.set_hil_analog_out)
             section.set_relay.connect(self._worker.set_hil_relay)
+            # Fehlerbox (FT-9, FP-27 a): Kanaele eines schon aktiven Fehlers gleich sperren
+            fault_state = self._faultbox.state()
+            section.set_locked_channels({tuple(c) for c in fault_state["locked"].get(device_id, [])},
+                                        fault_state.get("active") or "")
             section.set_pwm.connect(self._worker.set_hil_pwm)
             section.set_pwr12.connect(self._worker.set_hil_pwr12)
             section.set_current_limit.connect(self._worker.set_hil_current_limit)
@@ -1294,6 +1361,10 @@ class MainWindow(QMainWindow):
             # Geraete (vor _wire_uds_tile) gibt es noch keinen Stand
             if hasattr(self, "_uds_state"):
                 self._push_uds_state()
+        elif kind == "fault":
+            # Tasten ueber control_tab.fault_requested (_wire_faultbox_tile)
+            section.set_faults(self._faultbox.faults())
+            section.set_state(self._faultbox.state())
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -1613,6 +1684,12 @@ class MainWindow(QMainWindow):
         if self._safety.is_tripped() or self._test_runner.is_running():
             self._share_bridge.complete(request_id, False, "locked", "", 0.0)
             return
+        if kind == "hil":
+            owner = self._faultbox.blocked(device_id, action, channel)
+            if owner:   # FP-27 a: Kanal gehoert zum aktiven Fehler der Fehlerbox
+                self._share_bridge.complete(request_id, False, "locked",
+                                            tr("Kanal gehört zum aktiven Fehler '{name}'", name=owner), 0.0)
+                return
         # Dieselbe Regel wie share_api.remote_effective: gekoppelter Partner (PI-39 b, Verbund noch
         # eingeschaltet), gekoppeltes Programm (PI-44 b, Schluessel im Server-Thread geprueft) ODER lokaler
         # Aufruf mit Schalter "Claude (MCP) darf steuern". Hier frisch gelesen -- der Server-Thread hat mit
@@ -2053,6 +2130,9 @@ class MainWindow(QMainWindow):
         self._run_session.instruments = self._instruments
         self._run_session.set_uds(self._uds)   # UDS-Schritte (FT-1)
         self.testcase_tab.set_uds_odx_provider(self._uds.odx)
+        self._run_session.set_faultbox(self._faultbox)   # Fehlerbox-Schritte (FT-9)
+        self.testcase_tab.set_fault_names_provider(lambda: [f.name for f in self._faultbox.faults()])
+        self.settings_tab.faultbox_editor.attach(self._faultbox)
         self.settings_tab.instruments_editor.attach(self._instruments)
         # Anforderungsregister (FT-3): Titel fuer Bericht, IDs fuer die Vervollstaendigung im Pruefungsdialog
         self._requirement_cache: tuple = ((), {})
@@ -2256,7 +2336,8 @@ class MainWindow(QMainWindow):
         steps = self.testcase_tab.steps()
         partner_host = self._partner_host_name
         missing = self._directory.missing(
-            steps, skip=lambda d: verbund_ids.partner_device(d, partner_host) is not None)
+            steps, skip=lambda d: verbund_ids.partner_device(d, partner_host) is not None,
+            fault_hil=lambda name: (self._faultbox.fault(name).hil if self._faultbox.fault(name) else ""))
         if missing:
             answer(False, "devices_missing", "; ".join(missing))
             return
@@ -2364,6 +2445,8 @@ class MainWindow(QMainWindow):
         self._set_online("hil", device_id, online)
         self.dashboard.set_hil_online(device_id, online)
         self.control_tab.set_hil_online(device_id, online)
+        if hasattr(self, "_fault_names"):   # Fehlerbox haengt am microHIL (FT-9, _wire_faultbox_tile)
+            self._update_faultbox_presence()
 
     @Slot(str, bool)
     def _on_fg_connected(self, device_id: str, online: bool) -> None:

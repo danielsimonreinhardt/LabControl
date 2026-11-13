@@ -52,6 +52,7 @@ from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import ICON_SIZE, IconButton
 from dut_editor import DutEditor
+from faultbox_editor import FaultBoxEditor
 from instruments_editor import InstrumentsEditor
 from interlock_editor import InterlockEditor
 from paths import IS_FROZEN
@@ -945,6 +946,10 @@ class SettingsTab(QWidget):
         self.instruments_editor = InstrumentsEditor()
         layout.addWidget(self.instruments_editor)
 
+        # Fehlerbox (FT-9, 0.61.0)
+        self.faultbox_editor = FaultBoxEditor()
+        layout.addWidget(self.faultbox_editor)
+
         # Pruefling fuer UDS (FT-1, 0.60.0)
         self.dut_editor = DutEditor()
         dut_row = QHBoxLayout()
@@ -1379,6 +1384,7 @@ class SettingsTab(QWidget):
         self.interlock_editor.retranslate()
         self.instruments_editor.retranslate()
         self.dut_editor.retranslate()
+        self.faultbox_editor.retranslate()
         self._requirements_label.setText(tr("Anforderungsregister:"))
         self._requirements_edit.setToolTip(tr("StrictDoc (.sdoc), CSV oder Markdown; mehrere mit ; trennen"))
         self._requirements_browse.setToolTip(tr("Datei hinzufügen…"))

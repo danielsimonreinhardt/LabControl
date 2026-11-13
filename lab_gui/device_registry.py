@@ -28,6 +28,7 @@ KIND_DISPLAY = {
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
     "uds": "Prüfling",
+    "fault": "Fehlerbox",
 }
 
 

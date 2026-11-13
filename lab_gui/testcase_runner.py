@@ -118,6 +118,8 @@ class TestRunner(QObject):
     execute_jlink = Signal(str, str, str)
     # Schrittindex, TestStep -- UDS am Pruefling (FT-1), ausgefuehrt von RunSession/UdsService
     execute_uds = Signal(int, object)
+    # Schrittindex, TestStep -- Fehlerbox (FT-9), ausgefuehrt von RunSession/FaultService
+    execute_fault = Signal(int, object)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -495,6 +497,9 @@ class TestRunner(QObject):
                 elif step.device_kind == "uds":
                     # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
                     self.execute_uds.emit(self._index, step)
+                elif step.device_kind == "fault":
+                    # Fehlerbox (FT-9): Ergebnis ueber on_action_completed
+                    self.execute_fault.emit(self._index, step)
                 else:
                     self.execute_action.emit(
                         step.device_id, step.device_kind, step.action, step.value, step.hil_channel
