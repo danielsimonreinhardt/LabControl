@@ -1952,6 +1952,13 @@ class MainWindow(QMainWindow):
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
         self.settings_tab.instruments_editor.attach(self._instruments)
+        # Anforderungsregister (FT-3): Titel fuer Bericht, IDs fuer die Vervollstaendigung im Pruefungsdialog
+        self._requirement_cache: tuple = ((), {})
+        self._run_session.requirement_register = self._requirement_register
+        self.testcase_tab.set_requirement_provider(lambda: sorted(self._requirement_register()))
+        self.settings_tab.requirement_registers_edited.connect(self._settings.set_requirement_registers)
+        self._settings.requirement_registers_changed.connect(lambda _paths: self._show_requirement_registers())
+        self._show_requirement_registers()
         self._test_runner = self._run_session.runner
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
         self._test_runner.step_result.connect(self.testcase_tab.on_step_result)
@@ -2038,6 +2045,29 @@ class MainWindow(QMainWindow):
         self._pending_run_id = None
         variables, self._run_source, self._run_vars = self._run_vars, "gui", {}
         self._run_session.start(steps, name, self.testcase_tab.meta(), variables)
+
+    # -- Anforderungsregister (FT-3) ------------------------------------------------------
+
+    def _requirement_register(self) -> dict:
+        """Register aus den eingestellten Dateien; neu gelesen nur, wenn sich Liste oder Datei aendern."""
+        import os
+
+        import requirements
+
+        paths = tuple(self._settings.requirement_registers)
+        key = []
+        for path in paths:
+            try:
+                key.append((path, os.path.getmtime(os.path.expanduser(path))))
+            except OSError:
+                key.append((path, None))
+        if tuple(key) != self._requirement_cache[0]:
+            self._requirement_cache = (tuple(key), requirements.load_register(paths))
+        return self._requirement_cache[1]
+
+    def _show_requirement_registers(self) -> None:
+        self.settings_tab.set_requirement_registers(self._settings.requirement_registers,
+                                                    len(self._requirement_register()))
 
     # -- Laeufe ueber REST/MCP/Kommandozeile (0.59.0) ---------------------------------
 

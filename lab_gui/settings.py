@@ -83,6 +83,8 @@ class Settings(QObject):
     jlink_config_changed = Signal(dict)
     # Verriegelung Netzteil/Last im Testablauf (FP-7 b): Liste der Gruppen
     interlock_groups_changed = Signal(list)
+    # Anforderungsregister (FT-3): Liste der Dateien (.sdoc, .csv, .md)
+    requirement_registers_changed = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -605,6 +607,22 @@ class Settings(QObject):
             return
         self._save()
         self.interlock_groups_changed.emit(self.interlock_groups)
+
+    # -- Anforderungsregister (FT-3, requirements.py) ---------------------------
+
+    @property
+    def requirement_registers(self) -> list[str]:
+        """Dateien mit Anforderungen (StrictDoc .sdoc, CSV, Markdown) fuer Vervollstaendigung und Bericht."""
+        stored = self._data.get("requirement_registers")
+        return [str(p).strip() for p in stored if str(p).strip()] if isinstance(stored, list) else []
+
+    def set_requirement_registers(self, paths: list) -> None:
+        clean = [str(p).strip() for p in paths if str(p).strip()]
+        if clean == self.requirement_registers:
+            return
+        self._data["requirement_registers"] = clean
+        self._save()
+        self.requirement_registers_changed.emit(clean)
 
     # -- Verbund-Partner (PI-23 a, siehe partner_link.py) ---------------------
 

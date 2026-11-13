@@ -493,6 +493,14 @@ time-window-limited ring buffer of the live charts.
   panel colors and network sharing for all devices to their defaults;
   connected devices get new default names, disconnected ones disappear.
   Both buttons ask for confirmation and cannot be undone.
+- **Requirements register**: files with requirements, several separated by
+  `;` – StrictDoc (`.sdoc`, e.g. neXtBSW's `ssr.sdoc`) or a CSV/Markdown
+  table (columns ID and title). The "Requirements" field of the check dialog
+  completes from it; the report shows the titles and a verdict per
+  requirement: passed only if at least one check ran and all passed;
+  without a check that ran, "not tested". `python lab_gui/main.py coverage
+  --csv coverage.csv` summarises all runs (per requirement the verdict of the
+  latest run).
 - **Measuring instruments** ("Devices" tab): per device the type, serial
   number and firmware as reported when connecting (the HCS power supply has
   no firmware query), plus inventory number, calibration date and due date to

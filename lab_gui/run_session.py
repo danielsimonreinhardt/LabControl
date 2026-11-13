@@ -190,6 +190,8 @@ class RunSession(QObject):
         self.partner_router: Callable[[str, str, str, float, int], bool] | None = None
         # Messmittel (instruments.Instruments, FT-8); None = nicht erfassen
         self.instruments = None
+        # Anforderungsregister (FT-3): () -> {id: {"title", ...}}; None = ohne Titel
+        self.requirement_register: Callable[[], dict] | None = None
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
@@ -258,6 +260,16 @@ class RunSession(QObject):
             logger.warning("Testablauf %s: Verriegelung Netzteil/Last aufgehoben (Quelle/Senke)", testcase_name)
         self._active = True
         step_device_ids = self.directory.step_device_ids(steps)
+        if self.requirement_register is not None and record is not None:
+            # Anforderungen (FT-3): Titel der genannten IDs aus dem Register festhalten
+            ids = {r for step in steps for r in step.requirements} | set(self.meta.get("requirements", []))
+            if ids:
+                try:
+                    register = self.requirement_register()
+                except Exception:  # noqa: BLE001 -- ein kaputtes Register darf keinen Lauf verhindern
+                    logger.exception("Anforderungsregister nicht lesbar")
+                    register = {}
+                record.requirement_register = {i: register[i] for i in ids if i in register}
         if self.instruments is not None and record is not None:
             # Messmittel (FT-8): Kennung und Kalibrierung der eigenen Geraete dieses Laufs festhalten
             self.instruments.reload()

@@ -189,6 +189,20 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **Anforderungen (0.59.3, FT-3, FP-22 d / FP-23 a / FP-24 a, 13.11.2026).**
+  - Register: Einstellungen → Allgemein → „Anforderungsregister“, StrictDoc-Dateien direkt (z. B. neXtBSW
+    `doc/requirements/safety/ssr.sdoc`, SSR und Klauseln) sowie CSV/Markdown-Tabellen für andere Projekte.
+  - Prüfungsdialog: Feld „Anforderungen“ mit Vervollständigung aus dem Register; die Zeile zeigt sie hinter
+    der Prüfung. Anforderungen des ganzen Ablaufs weiter unter „Eigenschaften des Ablaufs…“.
+  - Urteil je Anforderung: bestanden nur, wenn mindestens eine Prüfung lief und alle bestanden; eine verletzte
+    → nicht bestanden; ohne gelaufene Prüfung → nicht geprüft. Anforderungen des ganzen Ablaufs gelten für alle
+    Prüfungen und sind nur bei vollständig durchgelaufenem Ablauf bestanden. Bericht (Abschnitt
+    „Anforderungen“), `run-result.json` (`requirements`) und JUnit (`requirement.<ID>`) nennen es.
+  - `labcontrol coverage [--results ORDNER] [--register DATEI] [--csv x.csv] [--md x.md]`: Abdeckung über alle
+    `run_*.json` (Standard: Berichtsordner aller Rechner auf dem Netzlaufwerk); je ID das Urteil des jüngsten
+    Laufs, Zahl der Läufe, Registereinträge ohne Lauf als „nicht geprüft“.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_requirements.py` (Parser auch gegen das echte `ssr.sdoc`,
+    Urteile, Abdeckung, Editor, Lauf mit Register und `coverage`).
 - **Messmittel (0.59.1, FT-8, FP-20 a / FP-21 a, 13.11.2026).** Beim Verbinden meldet jedes Gerät Typ,
   Seriennummer und Firmware (Last, Funktionsgenerator, microHIL per Kennungsabfrage; Netzteil: Typ aus den
   Nennwerten, USB-Seriennummer, keine Firmware-Abfrage; Oszilloskope und Batterie-Simulator aus ihren Meldungen).

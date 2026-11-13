@@ -728,5 +728,20 @@
   "Datum als JJJJ-MM-TT": "Date as YYYY-MM-DD",
   "Kalibrierung abgelaufen: {devices}": "Calibration expired: {devices}",
   "Im Editor gibt es ungespeicherte Änderungen": "The editor has unsaved changes",
-  "Laden fehlgeschlagen": "Loading failed"
+  "Laden fehlgeschlagen": "Loading failed",
+  "Anforderung": "Requirement",
+  "Titel": "Title",
+  "Urteil": "Verdict",
+  "Prüfungen": "Checks",
+  "Schritte": "Steps",
+  "ganzer Ablauf": "whole sequence",
+  "{n} gelaufen, {failed} verletzt": "{n} run, {failed} violated",
+  "nicht bestanden": "failed",
+  "nicht geprüft": "not tested",
+  "Anforderungsregister:": "Requirements register:",
+  "Anforderungsregister": "Requirements register",
+  "StrictDoc (.sdoc), CSV oder Markdown; mehrere mit ; trennen": "StrictDoc (.sdoc), CSV or Markdown; separate several with ;",
+  "Datei hinzufügen…": "Add file…",
+  "{n} Anforderungen": "{n} requirements",
+  "Anforderungen (*.sdoc *.csv *.md);;Alle Dateien (*)": "Requirements (*.sdoc *.csv *.md);;All files (*)"
 }

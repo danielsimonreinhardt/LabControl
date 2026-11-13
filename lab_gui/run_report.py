@@ -19,6 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QBuffer, QIODevice, QSizeF, QUrl
 from PySide6.QtGui import QImage, QPageSize, QPdfWriter, QTextDocument
 
+import requirements
 from i18n import tr
 from paths import app_dir
 from report_chart import fmt_elapsed, render_field_chart
@@ -282,6 +283,24 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
             parts.append('<tr>' + td(row.get("label") or row["device_id"]) + td(row.get("model") or "–")
                          + td(row.get("serial") or "–") + td(row.get("firmware") or "–")
                          + td(row.get("inventory") or "–") + td(row.get("calibrated") or "–") + due_cell + '</tr>')
+        parts.append('</table>')
+
+    req_rows = requirements.verdicts(record, record.requirement_register)
+    if req_rows:
+        parts.append('<h2>' + html.escape(tr("Anforderungen")) + '</h2>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th(tr("Anforderung")) + th(tr("Titel")) + th(tr("Urteil")) + th(tr("Prüfungen"))
+                     + th(tr("Schritte")) + '</tr>')
+        backgrounds = {requirements.PASSED: _BG_PASS, requirements.FAILED: _BG_FAIL}
+        for item in req_rows:
+            style = (f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
+                     f' background:{backgrounds.get(item["verdict"], "transparent")};')
+            verdict = tr(requirements.VERDICT_DE[item["verdict"]])
+            checks = tr("{n} gelaufen, {failed} verletzt", n=item["executions"], failed=item["failed"])
+            steps = ", ".join(str(s) for s in item["steps"]) or tr("ganzer Ablauf")
+            parts.append(''.join(f'<td style="{style}">{html.escape(str(v))}</td>'
+                                 for v in (item["id"], item["title"] or "–", verdict, checks, steps)).join(
+                ('<tr>', '</tr>')))
         parts.append('</table>')
 
     step_rows = _step_result_rows(record)

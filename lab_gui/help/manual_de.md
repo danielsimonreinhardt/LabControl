@@ -518,6 +518,14 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Geräte auf die Standardwerte zurück; verbundene Geräte bekommen neue
   Standardnamen, nicht verbundene verschwinden.
   Beide Knöpfe fragen vorher nach und lassen sich nicht rückgängig machen.
+- **Anforderungsregister**: Dateien mit Anforderungen, mehrere mit `;`
+  getrennt – StrictDoc (`.sdoc`, z. B. `ssr.sdoc` der neXtBSW) oder eine
+  Tabelle als CSV/Markdown (Spalten ID und Titel). Im Prüfungsdialog
+  vervollständigt das Feld „Anforderungen“ daraus; der Report zeigt die
+  Titel und je Anforderung das Urteil: bestanden nur, wenn mindestens eine
+  Prüfung lief und alle bestanden; ohne gelaufene Prüfung „nicht geprüft“.
+  `python lab_gui/main.py coverage --csv abdeckung.csv` fasst alle Läufe
+  zusammen (je Anforderung das Urteil des jüngsten Laufs).
 - **Messmittel** (Reiter „Geräte“): je Gerät Typ, Seriennummer und Firmware,
   wie das Gerät sie beim Verbinden meldet (das HCS-Netzteil kennt keine
   Firmware-Abfrage), dazu Inventarnummer, Kalibrierdatum und Fälligkeit zum

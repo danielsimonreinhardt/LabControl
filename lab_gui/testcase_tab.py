@@ -1178,6 +1178,8 @@ class TestcaseTab(QWidget):
             max=step.check_max,
             abort=step.check_abort,
             store_var=step.store_var,
+            # Anforderungen dieses Schritts (FT-3) -- fuer Aktionszeilen die massgebliche Quelle, siehe _row_to_step
+            requirements=list(step.requirements),
         )
 
         def refresh_check_summary() -> None:
@@ -1191,6 +1193,8 @@ class TestcaseTab(QWidget):
                     summary = f"{summary} {tr('(Abbruch)')}"
             if store_var:
                 summary = f"{summary} → {store_var}"
+            if params.get("requirements"):
+                summary = f"{summary} · {', '.join(params['requirements'])}"
             check_summary_label.setText(summary)
 
         check_page._refresh_summary = refresh_check_summary
@@ -1221,6 +1225,7 @@ class TestcaseTab(QWidget):
                 field_choices=field_choices,
                 var_store_supported=var_store_supported,
                 parent=self,
+                requirement_ids=self._requirement_ids(),
             )
             if dialog.exec() == CheckDialog.DialogCode.Accepted:
                 check_page._check_params = dialog.params()
@@ -2041,7 +2046,27 @@ class TestcaseTab(QWidget):
         else:
             step = self._control_row_to_step(row, step_type)
         carried = number_item.data(ROLE_V3_FIELDS)
-        return carry_v3_fields(step, carried) if isinstance(carried, TestStep) else step
+        if isinstance(carried, TestStep):
+            step = carry_v3_fields(step, carried)
+        if step_type == STEP_TYPE_ACTION:
+            # Anforderungen pflegt der Pruefungsdialog (FT-3); er ist fuer Aktionszeilen massgeblich
+            check_page = self._table.cellWidget(row, COL_CHECK)
+            params = getattr(check_page, "_check_params", {})
+            if "requirements" in params:
+                step.requirements = list(params["requirements"])
+        return step
+
+    def set_requirement_provider(self, provider) -> None:
+        """Von MainWindow: () -> Liste der Anforderungs-IDs aus dem Register (Vervollstaendigung)."""
+        self._requirement_provider = provider
+
+    def _requirement_ids(self) -> list[str]:
+        provider = getattr(self, "_requirement_provider", None)
+        try:
+            return list(provider()) if provider is not None else []
+        except Exception:  # noqa: BLE001 -- ein kaputtes Register darf den Dialog nicht verhindern
+            logger.exception("Anforderungsregister nicht lesbar")
+            return []
 
     def _action_row_to_step(self, row: int) -> TestStep:
         device_combo: QComboBox = self._table.cellWidget(row, COL_DEVICE)

@@ -750,6 +750,7 @@ class SettingsTab(QWidget):
     partner_pair_requested = Signal(str)
     # J-Link (PI-31 a): {"enabled", "device", "interface", "speed", "serial", "commander"}
     jlink_config_edited = Signal(dict)
+    requirement_registers_edited = Signal(list)   # Dateien des Anforderungsregisters (FT-3)
 
     def __init__(self) -> None:
         super().__init__()
@@ -853,6 +854,24 @@ class SettingsTab(QWidget):
 
         layout.addWidget(_separator())
 
+        # -- Anforderungsregister (FT-3, requirements.py) ----------------------
+        req_row = QHBoxLayout()
+        self._requirements_label = QLabel()
+        req_row.addWidget(self._requirements_label)
+        self._requirements_edit = QLineEdit()
+        self._requirements_edit.setMinimumWidth(320)
+        self._requirements_edit.setPlaceholderText("…/doc/requirements/safety/ssr.sdoc; anforderungen.csv")
+        self._requirements_edit.editingFinished.connect(self._emit_requirement_registers)
+        req_row.addWidget(self._requirements_edit, 1)
+        self._requirements_browse = IconButton("mdi.file-plus-outline", "")
+        self._requirements_browse.clicked.connect(self._browse_requirement_register)
+        req_row.addWidget(self._requirements_browse)
+        layout.addLayout(req_row)
+        self._requirements_status = QLabel()
+        layout.addWidget(self._requirements_status)
+
+        layout.addWidget(_separator())
+
         # -- Hilfe -------------------------------------------------------------
         self._help_button = IconButton("mdi.help-circle-outline", "")   # nur Symbol (Review KN-7 a)
         self._help_button.clicked.connect(self._on_help_clicked)
@@ -860,6 +879,26 @@ class SettingsTab(QWidget):
 
         layout.addStretch()
         return page
+
+    # -- Anforderungsregister (FT-3) -------------------------------------------------
+
+    def set_requirement_registers(self, paths: list[str], count: int | None = None) -> None:
+        """Von MainWindow: eingetragene Dateien und Zahl der gelesenen Anforderungen."""
+        self._requirements_edit.setText("; ".join(paths))
+        self._requirements_status.setText(
+            tr("{n} Anforderungen", n=count) if count is not None and paths else "")
+
+    def _emit_requirement_registers(self) -> None:
+        paths = [p.strip() for p in self._requirements_edit.text().split(";") if p.strip()]
+        self.requirement_registers_edited.emit(paths)
+
+    def _browse_requirement_register(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("Anforderungsregister"), "", tr("Anforderungen (*.sdoc *.csv *.md);;Alle Dateien (*)"))
+        if path:
+            text = self._requirements_edit.text().strip()
+            self._requirements_edit.setText(f"{text}; {path}" if text else path)
+            self._emit_requirement_registers()
 
     def _build_devices_page(self) -> QWidget:
         """Reiter "Geräte": Geraeteverwaltung (Reset) und Geraete-Info
@@ -1331,6 +1370,9 @@ class SettingsTab(QWidget):
     def _retranslate(self) -> None:
         self.interlock_editor.retranslate()
         self.instruments_editor.retranslate()
+        self._requirements_label.setText(tr("Anforderungsregister:"))
+        self._requirements_edit.setToolTip(tr("StrictDoc (.sdoc), CSV oder Markdown; mehrere mit ; trennen"))
+        self._requirements_browse.setToolTip(tr("Datei hinzufügen…"))
         self._sim_checkbox.setText(tr("Simulationsmodus"))
         self._dark_checkbox.setText(tr("Dark Mode"))
         touch_text = tr("Touch-Bedienung")

@@ -15,9 +15,13 @@ zu uebernehmen.
 """
 from __future__ import annotations
 
+import re
+
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -29,6 +33,7 @@ from PySide6.QtWidgets import (
 from i18n import Translator, tr
 from step_spinbox import SteppedDoubleSpinBox
 from testcase_model import COND_FIELD_LABELS, COND_FIELD_UNITS, TestStep, check_summary
+from testcase_properties import split_requirements
 from theme import current as current_palette
 
 
@@ -51,6 +56,7 @@ class CheckDialog(QDialog):
         field_choices: dict[str, tuple[str, str]] | None = None,
         var_store_supported: bool = False,
         parent=None,
+        requirement_ids: list[str] | None = None,
     ) -> None:
         """params: dict mit enabled/field/min/max/abort/store_var (siehe
         testcase_tab._build_action_row). is_arb steuert nur den Hinweis, dass
@@ -106,6 +112,13 @@ class CheckDialog(QDialog):
             self._var_edit.setPlaceholderText(tr("Variablenname"))
             self._form.addRow(self._var_row_label, self._var_edit)
 
+        # Anforderungen, die diese Pruefung nachweist (FT-3), mit Vervollstaendigung aus dem Register
+        self._req_edit = QLineEdit()
+        self._req_edit.setPlaceholderText("SSR-012(a), SYS-150")
+        if requirement_ids:
+            self._req_edit.setCompleter(_ListCompleter(sorted(requirement_ids), self._req_edit))
+        self._req_row_label = QLabel()
+        self._form.addRow(self._req_row_label, self._req_edit)
 
         self._summary_label = QLabel()
         self._summary_label.setWordWrap(True)
@@ -155,6 +168,7 @@ class CheckDialog(QDialog):
         self._form.labelForField(self._field_combo).setText(tr("Messgröße:"))
         self._form.labelForField(self._min_spin).setText(tr("Minimum:"))
         self._form.labelForField(self._max_spin).setText(tr("Maximum:"))
+        self._req_row_label.setText(tr("Anforderungen:"))
         if self._var_store_supported:
             self._var_row_label.setText(tr("In Variable speichern:"))
             self._var_edit.setToolTip(
@@ -171,6 +185,7 @@ class CheckDialog(QDialog):
         self._max_spin.setValue(params.get("max", 0.0))
         self._abort_check.setChecked(bool(params.get("abort", False)))
         self._var_edit.setText(params.get("store_var", ""))
+        self._req_edit.setText(", ".join(params.get("requirements", [])))
 
     def _on_field_changed(self) -> None:
         unit = self._field_choices.get(self._field_combo.currentData(), ("", ""))[1]
@@ -208,4 +223,23 @@ class CheckDialog(QDialog):
             max=self._max_spin.value(),
             abort=self._abort_check.isChecked(),
             store_var=self._var_edit.text().strip() if self._var_store_supported else "",
+            requirements=split_requirements(self._req_edit.text()),
         )
+
+
+class _ListCompleter(QCompleter):
+    """Vervollstaendigt nur das letzte Element einer durch Komma/Semikolon getrennten Liste."""
+
+    def __init__(self, items: list[str], edit: QLineEdit) -> None:
+        super().__init__(items, edit)
+        self._edit = edit
+        self.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.setFilterMode(Qt.MatchFlag.MatchContains)
+
+    def splitPath(self, path: str) -> list[str]:  # noqa: N802 (Qt override)
+        return [re.split(r"[,;]\s*", path)[-1].strip()]
+
+    def pathFromIndex(self, index) -> str:  # noqa: N802 (Qt override)
+        head = re.split(r"([,;]\s*)", self._edit.text())
+        prefix = "".join(head[:-1])
+        return prefix + super().pathFromIndex(index)

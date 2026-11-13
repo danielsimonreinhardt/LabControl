@@ -26,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = ("run", "devices")
+COMMANDS = ("run", "devices", "coverage")
 DEFAULT_WAIT_DEVICES_S = 15.0
 REASON_CLI_END = "cli: Lauf beendet"
 
@@ -53,6 +53,13 @@ def _parser() -> argparse.ArgumentParser:
     devices = sub.add_parser("devices", help="verbundene Geräte auflisten")
     devices.add_argument("--simulation", action="store_true")
     devices.add_argument("--wait", type=float, default=5.0, metavar="S", help="Suchdauer (Standard 5 s)")
+    coverage = sub.add_parser("coverage", help="Anforderungs-Abdeckung aus den Laufergebnissen (FT-3)")
+    coverage.add_argument("--results", action="append", default=[], metavar="ORDNER",
+                          help="Ordner mit run_*.json (mehrfach); Standard: Berichtsordner aller Rechner")
+    coverage.add_argument("--register", action="append", default=[], metavar="DATEI",
+                          help="Anforderungsregister (.sdoc/.csv/.md); Standard: aus den Einstellungen")
+    coverage.add_argument("--csv", help="als CSV schreiben")
+    coverage.add_argument("--md", help="als Markdown schreiben")
     return parser
 
 
@@ -116,6 +123,8 @@ class _Rig:
         self.instruments = instruments.Instruments(lambda: data_store.store().shared_file(instruments.FILE_NAME))
         instruments.connect_worker(self.worker, self.instruments)
         self.session.instruments = self.instruments
+        import requirements
+        self.session.requirement_register = lambda: requirements.load_register(settings.requirement_registers)
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 
@@ -291,6 +300,34 @@ def _write_outputs(args, record, interrupted: bool) -> None:
             _say(f"Konnte {option} nicht schreiben: {exc}")
 
 
+def _cmd_coverage(args, settings) -> int:
+    """Abdeckung der Anforderungen ueber alle Laufergebnisse (FP-24 a: CSV/Markdown)."""
+    import app_logging
+    import data_store
+    import requirements
+
+    folders = [Path(f) for f in args.results]
+    if not folders:
+        network = app_logging.effective_network_dir(settings.network_dir)
+        if network and Path(network).is_dir():
+            folders += sorted(p for p in Path(network).glob("*/reports") if p.is_dir())
+        folders.append(data_store.store().local_dir("reports"))
+    register = requirements.load_register(args.register or settings.requirement_registers)
+    results = requirements.collect_results(folders)
+    rows = requirements.coverage(results, register)
+    for option, render in ((args.csv, requirements.coverage_csv), (args.md, requirements.coverage_markdown)):
+        if option:
+            Path(option).parent.mkdir(parents=True, exist_ok=True)
+            Path(option).write_text(render(rows), encoding="utf-8")
+            _say(f"Geschrieben: {option}")
+    if not (args.csv or args.md):
+        _say(requirements.coverage_markdown(rows))
+    counts = {v: sum(1 for r in rows if r.get("verdict") == v) for v in requirements.VERDICT_DE}
+    _say(f"{len(rows)} Anforderungen aus {len(results)} Läufen: "
+         + ", ".join(f"{counts[v]} {requirements.VERDICT_DE[v]}" for v in requirements.VERDICT_DE))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     import app_logging
     import data_store
@@ -307,6 +344,12 @@ def main(argv: list[str]) -> int:
     app_logging.setup_logging(settings.network_dir)
     data_store.setup(app_logging.effective_network_dir(settings.network_dir))
     logger.info("LAB CONTROL v%s Kommandozeile: %s", __version__, " ".join(argv[1:]))
+    if args.command == "coverage":   # liest nur Dateien, braucht weder Geraete noch Sperre
+        try:
+            return _cmd_coverage(args, settings)
+        finally:
+            data_store.store().stop()
+            app_logging.shutdown()
     lock = InstanceLock()
     if not lock.acquire():
         # LabControl laeuft schon (Kiosk am Pi): ueber dessen REST-Schnittstelle (FP-2 c, 0.59.0)

@@ -13,6 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import requirements
 from run_record import RunRecord
 from run_session import exit_code
 from testcase_model import COND_FIELD_UNITS, action_label, check_summary
@@ -79,6 +80,7 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
         "interlock": {"groups": record.interlock_groups,
                       "released": bool(record.meta.get("source_sink"))},
         "instruments": list(record.instruments),
+        "requirements": requirements.verdicts(record, record.requirement_register),
         "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
                      for r in record.instruments if r.get("expired")],
     }
@@ -108,6 +110,8 @@ def junit_tree(record: RunRecord, interrupted: bool = False) -> ET.ElementTree:
     ET.SubElement(props, "property", name="labcontrol.version", value=__version__)
     for req in record.meta.get("requirements", []):
         ET.SubElement(props, "property", name="requirement", value=req)
+    for item in requirements.verdicts(record, record.requirement_register):   # Urteil je Anforderung (FT-3)
+        ET.SubElement(props, "property", name=f"requirement.{item['id']}", value=item["verdict"])
     if record.meta.get("source_sink"):
         ET.SubElement(props, "property", name="interlock", value="released")
     for row in record.instruments:   # Messmittel (FT-8)
