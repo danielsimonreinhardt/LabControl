@@ -24,7 +24,7 @@ from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
 
-DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds", "fault")
+DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds")
 
 # Aktionen, die einen Ausgang/Eingang EINschalten (Verriegelung FP-7 b)
 SWITCH_ON_ACTIONS = {"load": {"OUT_ON"}, "psu": {"PSU_OUT_ON"}}
@@ -80,8 +80,7 @@ class DeviceDirectory:
         fehlen -- der Runner scheitert an solchen Schritten ohnehin sofort."""
         device_ids: set[str] = set()
         for step in steps:
-            # UDS/Fehlerbox: kein eigenes Geraet (RunSession.refusal bzw. FaultService prueft)
-            if not step.enabled or step.device_kind in ("uds", "fault"):
+            if not step.enabled or step.device_kind == "uds":   # UDS: Pruefling, kein Geraet (RunSession.refusal)
                 continue
             if step.step_type == "action":
                 resolved, _ = self.resolve(step.device_kind, step.device_id)
@@ -93,20 +92,14 @@ class DeviceDirectory:
                 device_ids.add(resolved)
         return device_ids
 
-    def missing(self, steps: list[TestStep], skip: Callable[[str], bool] | None = None,
-                fault_hil: Callable[[str], str] | None = None) -> list[str]:
+    def missing(self, steps: list[TestStep], skip: Callable[[str], bool] | None = None) -> list[str]:
         """Fehlermeldungen fuer Schritte, deren Geraet (noch) nicht aufloesbar ist -- fuer das Warten
-        auf Geraete vor einem Lauf ohne Fenster. `skip(device_id)` nimmt z. B. Partnergeraete aus.
-        `fault_hil(name)` nennt den microHIL eines Fehlers der Fehlerbox ("" = der einzige)."""
+        auf Geraete vor einem Lauf ohne Fenster. `skip(device_id)` nimmt z. B. Partnergeraete aus."""
         problems: list[str] = []
         for step in steps:
             if not step.enabled or (step.step_type == "action" and step.device_kind == "uds"):
                 continue
-            if step.step_type == "action" and step.device_kind == "fault":
-                if step.action == "FAULT_CLEAR_ALL" or fault_hil is None:
-                    continue
-                kind, device_id = "hil", fault_hil(str(step.params.get("fault", "")))
-            elif step.step_type == "action":
+            if step.step_type == "action":
                 kind, device_id = step.device_kind, step.device_id
             elif step.step_type in ("while", "if") and step.cond_source == "measurement":
                 kind, device_id = step.cond_device_kind, step.cond_device_id
@@ -202,10 +195,6 @@ class RunSession(QObject):
         # UDS am Pruefling (FT-1): uds_service.UdsService, siehe set_uds
         self.uds = None
         self._uds_pending: tuple[int, TestStep] | None = None
-        # Fehlerbox (FT-9): faultbox_service.FaultService, siehe set_faultbox
-        self.faultbox = None
-        self._fault_pending = 0
-        self._fault_set_in_run = False
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
@@ -215,7 +204,6 @@ class RunSession(QObject):
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
         runner.execute_uds.connect(self._on_execute_uds)
-        runner.execute_fault.connect(self._on_execute_fault)
         self.dispatch_action.connect(worker.execute_action)
         self.dispatch_can_send.connect(worker.execute_can_send)
         worker.action_completed.connect(self._on_action_completed)
@@ -263,41 +251,7 @@ class RunSession(QObject):
         if any(s.enabled and s.step_type == "action" and s.device_kind == "uds" for s in steps) and (
                 self.uds is None or not self.uds.configured()):
             return tr("Kein Prüfling (UDS) eingestellt")
-        for step in steps:
-            if step.enabled and step.step_type == "action" and step.device_kind == "fault" \
-                    and step.action != "FAULT_CLEAR_ALL":
-                name = str(step.params.get("fault", ""))
-                if self.faultbox is None or self.faultbox.fault(name) is None:
-                    return tr("Unbekannter Fehler '{name}' in der Fehlerbox", name=name)
         return ""
-
-    # -- Fehlerbox (FT-9) --------------------------------------------------------------
-
-    def set_faultbox(self, faultbox) -> None:
-        self.faultbox = faultbox
-        faultbox.finished.connect(self._on_fault_finished)
-
-    @Slot(int, object)
-    def _on_execute_fault(self, _index: int, step: TestStep) -> None:
-        self._fault_pending = 0
-        if self.faultbox is None:
-            self.runner.on_action_completed(False, tr("Keine Fehlerbox"), 0.0)
-            return
-        name = str(step.params.get("fault", ""))
-        if step.action == "FAULT_SET":
-            self._fault_set_in_run = True
-            self._fault_pending = self.faultbox.set_fault(name, replace=True)   # FP-26 c: im Ablauf automatisch
-        elif step.action == "FAULT_CLEAR":
-            self._fault_pending = self.faultbox.clear(name)
-        else:
-            self._fault_pending = self.faultbox.clear(None)
-
-    @Slot(int, bool, str)
-    def _on_fault_finished(self, request_id: int, ok: bool, message: str) -> None:
-        if not self._fault_pending or request_id != self._fault_pending:
-            return
-        self._fault_pending = 0
-        self.runner.on_action_completed(ok, message, 0.0)
 
     # -- UDS (FT-1) ------------------------------------------------------------------
 
@@ -399,12 +353,6 @@ class RunSession(QObject):
         if resolved_id is None:
             self.runner.on_action_completed(False, error, 0.0)
             return
-        if kind == "hil" and self.faultbox is not None:
-            owner = self.faultbox.blocked(resolved_id, action, channel)
-            if owner:   # FP-27 a: Kanaele eines aktiven Fehlers nicht direkt bedienen
-                self.runner.on_action_completed(
-                    False, tr("Kanal gehört zum aktiven Fehler '{name}'", name=owner), 0.0)
-                return
         if not self.meta.get("source_sink"):
             refusal = self.interlock.check(resolved_id, kind, action)
             if refusal:
@@ -445,12 +393,6 @@ class RunSession(QObject):
         self.close_picoscope_sessions.emit()
         if self._scope_service is not None:
             self._scope_service.end_test()
-        if self._fault_set_in_run and self.faultbox is not None and self.faultbox.active():
-            # Ein vom Ablauf gesetzter Fehler bleibt nicht am Pruefling haengen
-            logger.info("Laufende: Fehler '%s' wird aufgehoben", self.faultbox.active())
-            self.faultbox.clear(None)
-        self._fault_set_in_run = False
-        self._fault_pending = 0
         record = self.recorder.record()
         self.run_ended.emit(record.outcome if record is not None else "error")
 

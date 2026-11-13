@@ -152,8 +152,6 @@ FIELD_DEFS: dict[str, tuple[str, str]] = {
     "ud_session": ("Session", ""),
     "ud_dtcs": ("DTCs", ""),
     "ud_last": ("Zuletzt", ""),
-    "fb_active": ("Aktiver Fehler", ""),
-    "fb_count": ("Fehler", ""),
 }
 LOAD_FIELD_KEYS = ["voltage", "current", "power", "mode"]
 PSU_FIELD_KEYS = ["voltage", "current", "mode"]
@@ -162,16 +160,15 @@ FG_FIELD_KEYS = ["fg_ch1", "fg_ch2"]
 BATTSIM_FIELD_KEYS = ["bs_state", "bs_output", "bs_stack", "bs_cell_min", "bs_cell_max", "bs_fail", "bs_controller"]
 JLINK_FIELD_KEYS = ["jl_target", "jl_vtref", "jl_last"]
 UDS_FIELD_KEYS = ["ud_session", "ud_dtcs", "ud_last"]
-FAULT_FIELD_KEYS = ["fb_active", "fb_count"]
 KIND_TITLE = {"load": "Elektronische Last", "psu": "Labornetzteil", "can": "CAN-Bus",
               "fg": "Funktionsgenerator", "battsim": "Batterie-Simulator", "jlink": "J-Link",
-              "uds": "Prüfling (UDS)", "fault": "Fehlerbox"}
+              "uds": "Prüfling (UDS)"}
 # Ersetzt die bisherige Geraeteart-Textzeile im Normal-Panel: platzsparendes
 # Icon unten rechts im Panel statt einer eigenen Zeile, voller Name als
 # Tooltip (siehe KIND_TITLE) weiterhin erreichbar.
 KIND_ICON = {"load": "mdi.resistor", "psu": "mdi.power-plug-outline", "can": "mdi.chip",
              "fg": "mdi.sine-wave", "battsim": "mdi.battery-charging-outline", "jlink": "mdi.chip",
-             "uds": "mdi.car-connected", "fault": "mdi.flash-alert-outline"}
+             "uds": "mdi.car-connected"}
 
 # "Verbindung getrennt"-Kennzeichnung oben rechts im Panel: no_device_tile.OfflineBadge (Symbol
 # mdi.close-network-outline + "getrennt", Theme-Farben); Position per resizeEvent nachgefuehrt, da die
@@ -201,8 +198,6 @@ FIELD_ICONS: dict[str, str] = {
     "ud_session": "mdi.swap-horizontal",
     "ud_dtcs": "mdi.alert-circle-outline",
     "ud_last": "mdi.history",
-    "fb_active": "mdi.flash-alert-outline",
-    "fb_count": "mdi.format-list-numbered",
 }
 
 
@@ -1487,7 +1482,7 @@ class DashboardWidget(QGroupBox):
             else:
                 field_keys = {"load": LOAD_FIELD_KEYS, "psu": PSU_FIELD_KEYS, "fg": FG_FIELD_KEYS,
                               "battsim": BATTSIM_FIELD_KEYS, "jlink": JLINK_FIELD_KEYS,
-                              "uds": UDS_FIELD_KEYS, "fault": FAULT_FIELD_KEYS}.get(
+                              "uds": UDS_FIELD_KEYS}.get(
                     kind, CAN_FIELD_KEYS
                 )
                 panel = _DevicePanel(kind, device_id, label, field_keys)
@@ -1596,17 +1591,6 @@ class DashboardWidget(QGroupBox):
         else:
             last = "--"
         panel.set_value("jl_last", last)
-
-    def set_fault_online(self, device_id: str, online: bool) -> None:
-        self._set_online(device_id, online)
-
-    def update_faultbox(self, device_id: str, state: dict) -> None:
-        """Fehlerbox (FT-9): aktiver Fehler und Zahl der Fehler."""
-        panel = self._panels.get(device_id)
-        if panel is None:
-            return
-        panel.set_value("fb_active", "…" if state.get("busy") else (state.get("active") or "--"))
-        panel.set_value("fb_count", str(len(state.get("faults", []))))
 
     def set_uds_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)

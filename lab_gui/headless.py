@@ -131,20 +131,8 @@ class _Rig:
         self.worker.can_connected.connect(self.uds.on_can_connected)
         self.uds.configure(settings.dut_config, simulation)
         self.session.set_uds(self.uds)
-        # Fehlerbox (FT-9): wie im Fenster
-        import faultbox
-        from faultbox_service import FaultService
-        self.faultbox = FaultService(self.worker, lambda: data_store.store().shared_file(faultbox.FILE_NAME),
-                                     lambda hil: self.directory.resolve("hil", hil))
-        self.worker.all_off_finished.connect(self.faultbox.on_all_off)
-        self.session.set_faultbox(self.faultbox)
         self.thread.started.connect(self.worker.start)
         self.thread.start()
-
-    def fault_hil(self, name: str) -> str:
-        """microHIL eines Fehlers der Fehlerbox ("" = der einzige) -- fuer das Warten auf Geraete."""
-        fault = self.faultbox.fault(name)
-        return fault.hil if fault is not None else ""
 
     def all_off_async(self, reason: str) -> None:
         """ALLE AUS ueber die Warteschlange des Worker-Threads (wie MainWindow._safe_stop)."""
@@ -256,9 +244,8 @@ def _cmd_run(args, settings) -> int:
         return EXIT_SETUP
 
     _say(f"Warte auf Geräte (bis {args.wait_devices:g} s) …")
-    fault_hil = rig.fault_hil
-    _spin(app, max(0.0, args.wait_devices), lambda: not rig.directory.missing(steps, fault_hil=fault_hil))
-    missing = rig.directory.missing(steps, fault_hil=fault_hil)
+    _spin(app, max(0.0, args.wait_devices), lambda: not rig.directory.missing(steps))
+    missing = rig.directory.missing(steps)
     refusal = missing[0] if missing else rig.session.refusal(steps)
     if refusal:
         rig.shutdown(REASON_CLI_END)

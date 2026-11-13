@@ -215,15 +215,6 @@ Operation:
 *Tested against an emulated simulator only so far; the hardware check is
 pending.*
 
-### Fault box (microHIL)
-
-If faults are set up in the settings (section 5), the **"Fault box"** tile
-shows one button per fault; a tap sets the fault, a tap on the active one
-clears it, as does **"Clear"**. At most one fault is active: while one is
-set, the tile does not set another. The microHIL channels of the active
-fault are locked in the microHIL tile (greyed out) and over the network.
-ALL OFF clears the fault. During a test run the tile is locked.
-
 ### Device under test (UDS)
 
 If a device under test is set up in the settings (section 5), it appears as
@@ -318,15 +309,6 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   physical settling time (see note below).
 - **Check**: optional pass/fail limits (see below).
 - **Active**: checkbox to temporarily disable a row without deleting it.
-
-### Fault box steps
-
-With the device **"Fault box"** a sequence sets one of the configured faults
-("Set fault", name in the value column), clears it or clears all. If another
-fault is active, "Set fault" clears it first, waits the configured time and
-then sets the new one. A step that switches a channel of the active fault
-directly aborts the run. A fault set by the sequence is cleared at the end
-of the run.
 
 ### UDS steps (device under test)
 
@@ -541,13 +523,6 @@ time-window-limited ring buffer of the live charts.
   without a check that ran, "not tested". `python lab_gui/main.py coverage
   --csv coverage.csv` summarises all runs (per requirement the verdict of the
   latest run).
-- **Fault box** ("Devices" tab): faults as a table with name, switching
-  sequence, settle time and description. The sequence is a shorthand:
-  `R1=1` relay 1 on, `O3=1` digital output 3 on, `A1=1500` analog output 1 at
-  1500 mV, several separated by commas. Setting follows this order, clearing
-  the reverse (relays/outputs off, analog output 0 mV). The settle time applies
-  between clearing and setting when a sequence switches faults. Check button:
-  check and save (`faultbox.json` in the shared folder).
 - **Device under test (UDS)** ("Devices" tab): the ECU LabControl talks to
   over UDS. **ODX/PDX** is the neXtBSW export
   (`python -m tools.diaggen pdx <project> -o <file>.pdx`); it provides CAN IDs,

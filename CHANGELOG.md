@@ -6,6 +6,14 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Entfernt
+- **Fehlerbox am microHIL wieder zurückgenommen (0.61.1, PI-48 d, 13.11.2026).** Die in 0.61.0 (FT-9) gebaute
+  Fehlerbox (benannte Schaltfolgen, eigene Kachel, Sperre der microHIL-Kanäle) war vor allem eine zweite
+  Bedienschicht über den vorhandenen HIL-Schritten. Fehler werden stattdessen als Bausteine aus HIL-Schritten
+  abgebildet; bei Fehlschlag oder Stopp schaltet ALLE AUS die microHIL-Ausgänge wie bisher ab. 0.61.0 war nie auf
+  GitHub und am echten microHIL nie geschaltet. Die Kommandozeile,
+  Abläufe und Dateiformat sind wie in 0.60.2. **Mock-verifiziert:** volle Prüfsuite.
+
 ### Behoben
 - **Kommandozeile über die laufende Instanz schaltete am Ende nicht ALLE AUS (0.59.2, am Pi gefunden
   13.11.2026).** FP-4 a gilt auch für diesen Weg: der Start trägt jetzt `"all_off_at_end": true`, die Instanz
@@ -189,22 +197,6 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
-- **Fehlerbox am microHIL (0.61.0, FT-9, FP-25 a / FP-26 c / FP-27 a, 13.11.2026).**
-  - Fehler sind benannte Schaltfolgen in Kurzschrift (`R1=1, O3=1, A1=1500`: Relais, Digitalausgang,
-    Analogausgang in mV), gepflegt unter Einstellungen → Geräte → „Fehlerbox“ und gespeichert in `faultbox.json` im
-    gemeinsamen Ordner (PC und Pi sehen dieselben Fehler; optional je Fehler ein bestimmter microHIL). Gesetzt wird
-    in der angegebenen Reihenfolge, aufgehoben umgekehrt in den Ruhezustand.
-  - Höchstens ein Fehler ist aktiv. An der Kachel „Fehlerbox“ (je Fehler eine Taste, „Aufheben“) wird ein
-    zweiter abgelehnt, solange einer aktiv ist; im Testablauf hebt „Fehler setzen“ einen anderen erst auf, wartet
-    die eingestellte Zeit und setzt dann.
-  - Die Kanäle des aktiven Fehlers sind für direkte Bedienung gesperrt: in der microHIL-Kachel ausgegraut, über
-    das Netzwerk abgelehnt, als Ablaufschritt ein Fehler.
-  - ALLE AUS hebt den Fehler auf; ein vom Ablauf gesetzter Fehler wird am Laufende aufgehoben. Ablaufschritte
-    „Fehler setzen“, „Fehler aufheben“, „Alle Fehler aufheben“ (auch über die Kommandozeile, die dabei auf den
-    microHIL wartet); der Bericht nennt die Fehler im Zeitverlauf. Übersicht: aktiver Fehler und Zahl der Fehler.
-  - **Mock-verifiziert:** neue Prüfung `tools/check_faultbox.py` (Kurzschrift, Datei, Kachel, Sperren in Kachel,
-    Netzwerk und Ablauf, automatischer Wechsel im Ablauf, Laufende, ALLE AUS, Einstellungen, Kommandozeile).
-    Am echten microHIL noch nicht.
 - **Kachel „Prüfling“ (0.60.2, FT-1 Teil 3, 13.11.2026).** Sobald ein Prüfling eingestellt ist (im
   Simulationsmodus immer), erscheint er als Gerät in Steuerung, Übersicht (Session, Zahl der DTCs, letzte
   Bedienung) und Leiste oben („ECU“), online mit seinem CAN-Interface. Die Kachel wechselt die Session,
