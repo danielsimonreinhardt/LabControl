@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **CAN-Kachel: Spalten sprangen in der Delta-Ansicht (0.58.1, Nutzerfeedback 13.11.2026).** Δt, ID und Daten
+  passten ihre Breite bei jedem Frame an den Inhalt an; folgte „101.2 ms“ auf „99.8 ms“, sprang die Spalte.
+  Jetzt haben sie eine feste Startbreite (Δt für „999.9 ms“) und wachsen nur noch mit, nie zurück (auch die
+  Daten-Spalte im Verlauf); „Anzeige leeren“ setzt sie zurück. **Mock-verifiziert:** `check_can_delta` (Breiten
+  gleich bei 99,8/101,2/9,1 ms, kürzere Daten machen nicht schmaler, Sekunden passen). Am Pi noch nicht angesehen.
 - **Testablauf-Bericht ließ sich seit 0.28.0 nicht erstellen (0.58.0, gefunden 13.11.2026).** `run_report.py` hatte
   einen Syntaxfehler (Anführungszeichen in der Schriftangabe, eingeführt mit den Ersatzschriften); „Report öffnen“
   und „PDF exportieren“ scheiterten beim Laden des Moduls. Keine Prüfung lud das Modul. Jetzt schreibt

@@ -103,6 +103,23 @@ check("20 IDs = 20 Zeilen", group._delta_table.rowCount() == 20)
 check("Verlauf bleibt begrenzt", group._traffic_table.rowCount() == ct.CAN_TRAFFIC_ROW_LIMIT)
 check("Delta 20 ms bei jeder 20. Wiederholung", cells(group)[0][1] == "20.0 ms", cells(group)[0][1])
 
+print("Spaltenbreite springt nicht (Nutzerfeedback 13.11.2026: 99 ms <-> 101 ms)")
+group.clear_traffic()
+header = group._delta_table.horizontalHeader()
+t = 50.0
+group.append_frame(0x130, "01 02 03 04 05 06 07 08", False, t)
+widths = []
+for step in (0.0998, 0.1012, 0.0995, 0.1009, 0.0091, 0.1003):
+    t += step
+    group.append_frame(0x130, "01 02 03 04 05 06 07 08", False, t)
+    widths.append(tuple(header.sectionSize(c) for c in range(3)))
+check("ID/Δt/Daten gleich breit bei 99,8/101,2/9,1 ms", len(set(widths)) == 1, str(widths))
+group.append_frame(0x130, "01", False, t + 0.1)
+check("kuerzere Daten machen die Spalte nicht schmaler", header.sectionSize(2) == widths[-1][2])
+group.append_frame(0x131, "01", False, t + 0.2)
+group.append_frame(0x131, "01", False, t + 12.5)
+check("langer Abstand (s) passt hinein", header.sectionSize(1) >= group._delta_table.fontMetrics().horizontalAdvance("12.300 s"))
+
 if "--shot" in sys.argv:
     group.clear_traffic()
     for i, (cid, data) in enumerate([(0x120, "02 00 00 00"), (0x121, "05 01 FF 00"), (0x130, "01"), (0x300, "DE AD BE EF")]):

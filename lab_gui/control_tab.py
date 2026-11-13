@@ -1727,7 +1727,8 @@ class CanControlGroup(QGroupBox):
         self._traffic_table.setHorizontalHeaderItem(3, QTableWidgetItem())
         self._traffic_table.verticalHeader().setVisible(False)
         self._traffic_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        # Daten-Spalte waechst nur mit (_widen_column), statt bei jedem Frame auf den Inhalt zu springen
+        self._traffic_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         self._traffic_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._traffic_table.setMinimumHeight(160)
 
@@ -1739,9 +1740,10 @@ class CanControlGroup(QGroupBox):
             self._delta_table.setHorizontalHeaderItem(column, QTableWidgetItem())
         self._delta_table.verticalHeader().setVisible(False)
         self._delta_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._delta_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._delta_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._delta_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        # ID, Δt und Daten wachsen nur mit (_widen_column): mit "an Inhalt anpassen" sprang die Spalte bei
+        # jedem Wechsel 99,8 ms <-> 101,2 ms (Nutzerfeedback 13.11.2026). Δt reserviert gleich "999.9 ms".
+        for column in range(3):
+            self._delta_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
         self._delta_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._delta_table.setMinimumHeight(160)
 
@@ -1783,6 +1785,7 @@ class CanControlGroup(QGroupBox):
         self._delta_button.setToolTip(
             tr("Delta-Ansicht: je ID eine Zeile mit dem Zeitabstand zum vorigen Frame derselben ID und dem aktuellen Payload.")
         )
+        self._reset_column_widths()
         self._clear_button.setToolTip(tr("Anzeige leeren"))
 
     def _on_extended_toggled(self, extended: bool) -> None:
@@ -1804,6 +1807,28 @@ class CanControlGroup(QGroupBox):
         self._delta_keys.clear()
         self._delta_last_ts.clear()
         self._last_frame_id = None
+        self._reset_column_widths()
+
+    # Breitester Text der Δt-Spalte unter 1 s; darueber ("12.345 s") waechst sie einmal mit
+    _DELTA_WIDTH_SAMPLE = "999.9 ms"
+
+    def _widen_column(self, table: QTableWidget, column: int, text: str) -> None:
+        """Spalte nur verbreitern, nie schmaler machen -- springt nicht mit jedem neuen Wert."""
+        metrics = table.fontMetrics()
+        needed = metrics.horizontalAdvance(text) + 2 * metrics.averageCharWidth() + 6
+        header = table.horizontalHeader()
+        if needed > header.sectionSize(column):
+            header.resizeSection(column, needed)
+
+    def _reset_column_widths(self) -> None:
+        """Startbreiten aus Kopfzeile und typischem Inhalt (auch nach Leeren und Sprachwechsel)."""
+        for table, column, sample in ((self._delta_table, 0, "0x7FF"), (self._delta_table, 1, self._DELTA_WIDTH_SAMPLE),
+                                      (self._delta_table, 2, "00 00 00 00"), (self._traffic_table, 2, "00 00 00 00")):
+            header_item = table.horizontalHeaderItem(column)
+            table.horizontalHeader().resizeSection(column, 0)
+            self._widen_column(table, column, sample)
+            if header_item is not None and header_item.text():
+                self._widen_column(table, column, header_item.text())
 
     def _delta_row(self, arbitration_id: int, extended: bool) -> int:
         """Zeile der ID in der Delta-Tabelle, legt sie sortiert an, falls neu."""
@@ -1828,8 +1853,12 @@ class CanControlGroup(QGroupBox):
         previous = self._delta_last_ts.get(key)
         delta = timestamp - previous if previous is not None and timestamp >= previous else None
         self._delta_last_ts[key] = timestamp
-        self._delta_table.item(row, 1).setText(_format_can_delta(delta))
+        delta_text = _format_can_delta(delta)
+        self._delta_table.item(row, 1).setText(delta_text)
         self._delta_table.item(row, 2).setText(data_hex)
+        self._widen_column(self._delta_table, 0, _format_can_id(arbitration_id, extended))
+        self._widen_column(self._delta_table, 1, delta_text)
+        self._widen_column(self._delta_table, 2, data_hex)
         # Eine zur vorigen Botschaft gehoerende Decodierung nicht stehen lassen --
         # append_decoded_signals traegt die neue unmittelbar danach nach.
         self._delta_table.item(row, 3).setText("")
@@ -1841,6 +1870,7 @@ class CanControlGroup(QGroupBox):
         self._traffic_table.setItem(0, 0, QTableWidgetItem(f"{timestamp:.3f}"))
         self._traffic_table.setItem(0, 1, QTableWidgetItem(id_text))
         self._traffic_table.setItem(0, 2, QTableWidgetItem(data_hex))
+        self._widen_column(self._traffic_table, 2, data_hex)
         # Spalte "Signale" bleibt zunaechst leer -- eine ggf. passende
         # Decodierung trifft (falls ueberhaupt) unmittelbar danach separat
         # per append_decoded_signals ein, siehe dort.
