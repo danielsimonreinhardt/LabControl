@@ -183,17 +183,20 @@ def _make_app():
 def _prepare_steps(path: Path, rig: _Rig):
     """(steps, meta, problem): Datei laden, Geraete wie im Editor zuordnen, Verbund-IDs aufloesen."""
     import app_logging
+    import data_store
     import verbund_ids
-    from testcase_model import load_device_map, load_testcase, remap_devices
+    from testcase_model import load_testcase_linked, remap_devices
 
-    steps, meta = load_testcase(path)
+    steps, meta, file_devices, problems = load_testcase_linked(path, data_store.target_dir("blocks"))
+    for problem in problems:
+        _say(problem)
     known = {device_id: (kind, label) for kind, device_id, label in rig.registry.known_devices()}
     own = app_logging.host_name()
     local_ids = set(known)
     for step in steps:
         for attr in ("device_id", "cond_device_id"):
             setattr(step, attr, verbund_ids.localize(getattr(step, attr), own, "", local_ids))
-    remap_devices(steps, load_device_map(path), known)
+    remap_devices(steps, file_devices, known)
     partner = sorted({getattr(s, a) for s in steps if s.enabled for a in ("device_id", "cond_device_id")
                       if verbund_ids.is_qualified(getattr(s, a))})
     if partner:

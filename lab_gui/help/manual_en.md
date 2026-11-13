@@ -278,7 +278,17 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   structurally self-contained (e.g. a loop including its "End").
 - **Puzzle piece** ("Insert block…"): inserts a previously saved block at
   the current position — handy for recurring sections such as a
-  charge/discharge profile.
+  charge/discharge profile or a fault on the microHIL ("set open wire" /
+  "clear open wire" made of HIL steps). The block is **linked**: its header
+  row shows "Block (linked)", its rows are locked, and the testcase refers to
+  the block file. On loading and before every start it takes over the file's
+  current content — change the block (save it again under the same name) and
+  every testcase uses the new version. The testcase file also keeps the steps
+  as a copy; if the block file is missing (e.g. on the other computer), the
+  copy runs and the status line names the block.
+- **Crossed-out chain** ("Unlink from block"): turns the selected linked
+  block into an editable copy. Inserting or removing a row inside a linked
+  block also unlinks it.
 - **Folder icon** / **floppy-disk icon**: load/save a testcase (JSON
   file in the `testcases/` folder). If the opened file was changed elsewhere
   since it was opened (e.g. on the second computer in the shared folder),

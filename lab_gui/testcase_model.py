@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from i18n import tr
@@ -562,16 +562,21 @@ class TestStep:
     # Felder aus einer neueren Programmversion, die hier unbekannt sind -- beim Speichern unveraendert
     # zurueckgeschrieben, damit Laden und Speichern nichts verliert
     extra: dict = field(default_factory=dict)
+    # Verknuepfter Baustein (0.61.2, PI-49 b), nur am ersten Schritt des Bereichs:
+    # {"block": Datei relativ zum Baustein-Ordner, "name": Bausteinname, "count": Zahl der Schritte}.
+    # Die Datei enthaelt die Schritte zusaetzlich als Kopie (laeuft auch ohne Baustein-Datei).
+    link: dict = field(default_factory=dict)
 
 
 STEP_FIELDS = frozenset(f.name for f in fields(TestStep))
-# Diese drei Felder bringt erst Format v3 mit
-_V3_STEP_FIELDS = ("params", "requirements", "extra")
+# Diese Felder bringt erst Format v3 mit
+_V3_STEP_FIELDS = ("params", "requirements", "extra", "link")
 
 
 def carry_v3_fields(target: TestStep, source: TestStep) -> TestStep:
     """Uebernimmt params/requirements/extra von `source` (der Editor baut Schritte aus seinen
-    Eingabefeldern neu auf und kennt diese Felder nicht). Liefert `target`."""
+    Eingabefeldern neu auf und kennt diese Felder nicht). Liefert `target`. `link` nicht: das
+    setzt der Editor aus seinen Baustein-Gruppen."""
     target.params = dict(source.params)
     target.requirements = list(source.requirements)
     target.extra = dict(source.extra)
@@ -764,9 +769,12 @@ def clean_meta(meta: dict | None) -> dict:
 def _step_to_item(step: TestStep, v3: bool) -> dict:
     item = asdict(step)
     extra = item.pop("extra")
+    if not item.get("link"):
+        item.pop("link")
     if not v3:
         item.pop("params")
         item.pop("requirements")
+        item.pop("link", None)
         return item
     for key, value in extra.items():
         item.setdefault(key, value)
@@ -774,7 +782,8 @@ def _step_to_item(step: TestStep, v3: bool) -> dict:
 
 
 def needs_v3(steps: list[TestStep], meta: dict | None = None) -> bool:
-    return bool(clean_meta(meta)) or any(step.params or step.requirements or step.extra for step in steps)
+    return bool(clean_meta(meta)) or any(step.params or step.requirements or step.extra or step.link
+                                         for step in steps)
 
 
 def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
@@ -873,6 +882,8 @@ def _steps_from_items(items: list[dict]) -> list[TestStep]:
             raise ValueError(tr("„params“ muss ein Objekt sein"))
         if not isinstance(item.get("requirements", []), list):
             raise ValueError(tr("„requirements“ muss eine Liste sein"))
+        if not isinstance(item.get("link", {}), dict):
+            raise ValueError(tr("„link“ muss ein Objekt sein"))
         steps.append(TestStep(**item, extra=extra))
     return steps
 
@@ -914,6 +925,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     Testablauf sein muss (z.B. ein einzelner Block-Rumpf ohne Start/Ende)."""
     # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
     # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
+    steps = [replace(step, link={}) for step in steps]   # Bausteine sind flach (keine Verknuepfung in sich)
     v3 = needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
@@ -952,3 +964,82 @@ def action_label(device_kind: str, action_code: str) -> str:
     # genau wie beim bestehenden Fallback fuer einen unbekannten Aktionscode.
     base_label = DEVICE_ACTIONS.get(device_kind, {}).get(action_code)
     return tr(base_label) if base_label is not None else action_code
+
+
+# -- Verknuepfte Bausteine (0.61.2, PI-49 b) ------------------------------------
+#
+# "Baustein einfuegen" verweist auf die Baustein-Datei, statt die Schritte zu kopieren: der erste Schritt des
+# Bereichs traegt `link`, die Schritte stehen zusaetzlich als Kopie in der Ablauf-Datei. Beim Laden ersetzt der
+# aktuelle Inhalt der Baustein-Datei den Bereich; fehlt sie oder ist sie unlesbar, laeuft die Kopie.
+
+def block_ref(path: Path, blocks_dir: Path) -> str:
+    """Verweis auf eine Baustein-Datei: relativ zum Baustein-Ordner (PC und Pi teilen ihn), sonst absolut."""
+    try:
+        return Path(path).resolve().relative_to(Path(blocks_dir).resolve()).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
+def block_path(ref: str, blocks_dir: Path) -> Path:
+    path = Path(ref)
+    return path if path.is_absolute() else Path(blocks_dir) / path
+
+
+def link_count(steps: list[TestStep], index: int) -> int:
+    """Zahl der Schritte des an `index` beginnenden verknuepften Bereichs (auf das Ablaufende begrenzt)."""
+    try:
+        count = int(steps[index].link.get("count", 1))
+    except (TypeError, ValueError):
+        count = 1
+    return max(1, min(count, len(steps) - index))
+
+
+def resolve_links(steps: list[TestStep], file_devices: dict,
+                  blocks_dir: Path) -> tuple[list[TestStep], dict, list[str]]:
+    """Ersetzt verknuepfte Bereiche durch den aktuellen Inhalt ihrer Baustein-Datei. Liefert (Schritte,
+    Geraetenamen der Ablauf-Datei ergaenzt um die der Bausteine, Probleme)."""
+    result: list[TestStep] = []
+    devices = dict(file_devices)
+    problems: list[str] = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        if not step.link:
+            result.append(step)
+            index += 1
+            continue
+        count = link_count(steps, index)
+        link = dict(step.link, count=count)
+        ref = str(link.get("block", ""))
+        try:
+            path = block_path(ref, blocks_dir)
+            name, block_steps = load_block(path)
+            block_devices = load_device_map(path)
+            if not block_steps:
+                raise ValueError(tr("leer"))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            label = link.get("name") or ref
+            reason = (tr("Datei fehlt") if isinstance(exc, FileNotFoundError)
+                      else exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc))
+            problems.append(tr("Baustein „{name}“ nicht lesbar ({error}) – gespeicherte Kopie verwendet",
+                               name=label, error=reason))
+            _log.warning("Verknuepfter Baustein %s: %s -- Kopie aus der Ablauf-Datei", ref, exc)
+            result.append(replace(step, link=link))
+            result.extend(steps[index + 1:index + count])
+            index += count
+            continue
+        for block_step in block_steps:
+            block_step.link = {}
+        block_steps[0].link = {"block": ref, "name": name, "count": len(block_steps)}
+        for device_id, entry in block_devices.items():
+            devices.setdefault(device_id, entry)
+        result.extend(block_steps)
+        index += count
+    return result, devices, problems
+
+
+def load_testcase_linked(path: Path, blocks_dir: Path) -> tuple[list[TestStep], dict, dict, list[str]]:
+    """Wie load_testcase, mit aufgeloesten Bausteinen: (Schritte, meta, Geraetenamen, Probleme)."""
+    steps, meta = load_testcase(path)
+    steps, devices, problems = resolve_links(steps, load_device_map(path), blocks_dir)
+    return steps, meta, devices, problems

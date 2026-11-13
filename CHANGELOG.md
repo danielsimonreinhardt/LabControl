@@ -6,6 +6,19 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Verknüpfte Bausteine (0.61.2, PI-49 b, 13.11.2026).** „Baustein einfügen“ verweist jetzt auf die
+  Baustein-Datei, statt die Schritte zu kopieren: Die Kopfzeile zeigt „Baustein (verknüpft)“, die Zeilen sind
+  gesperrt, und beim Laden sowie vor jedem Start (Fenster, Kommandozeile, REST/MCP) gilt der aktuelle Inhalt der
+  Baustein-Datei – eine Änderung am Baustein wirkt in allen Abläufen. Die Ablauf-Datei trägt am ersten Schritt
+  `link` (Datei relativ zu `blocks/`, Name, Schrittzahl; Format 3) und die Schritte als Kopie; fehlt die
+  Baustein-Datei, läuft die Kopie mit Hinweis in Statuszeile bzw. Ausgabe. „Verknüpfung zum Baustein lösen“
+  (oder eine eingefügte/entfernte Zeile im Baustein) macht daraus eine bearbeitbare Kopie; auch ein einzelner
+  Schritt wird verknüpft. Gedacht u. a. für Fehler am microHIL als Bausteinpaar setzen/aufheben (statt der
+  zurückgenommenen Fehlerbox). Bausteine selbst bleiben flach. **Mock-verifiziert:** neue Prüfung
+  `tools/check_linked_blocks.py` (Format, Auflösen, fehlende Datei, Editor sperren/lösen/nachladen,
+  Kommandozeile führt den aktuellen Baustein aus).
+
 ### Entfernt
 - **Fehlerbox am microHIL wieder zurückgenommen (0.61.1, PI-48 d, 13.11.2026).** Die in 0.61.0 (FT-9) gebaute
   Fehlerbox (benannte Schaltfolgen, eigene Kachel, Sperre der microHIL-Kanäle) war vor allem eine zweite

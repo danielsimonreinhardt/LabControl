@@ -2107,6 +2107,7 @@ class MainWindow(QMainWindow):
         self.testcase_tab.stop_requested.connect(lambda: self._safe_stop("stop button"))
 
     def _on_run_requested(self) -> None:
+        self.testcase_tab.refresh_linked_blocks()   # geaenderte verknuepfte Bausteine (0.61.2, PI-49 b)
         steps = self.testcase_tab.steps()
         if not any(step.enabled and step.step_type == "action" for step in steps):
             return

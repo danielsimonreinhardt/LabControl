@@ -293,7 +293,19 @@ ist), **Laden** und **Speichern**.
   abgeschlossen ist (z.B. eine Schleife inklusive ihres „Ende“).
 - **Puzzleteil** („Baustein einfügen…“): fügt einen zuvor gespeicherten
   Baustein an der aktuellen Position ein – praktisch für wiederkehrende
-  Abschnitte wie ein Lade-/Entladeprofil.
+  Abschnitte wie ein Lade-/Entladeprofil oder einen Fehler am microHIL
+  („Kabelbruch setzen“ / „Kabelbruch aufheben“ aus HIL-Schritten).
+  Der Baustein ist **verknüpft**: Die Kopfzeile zeigt „Baustein (verknüpft)“,
+  seine Zeilen sind gesperrt, und der Ablauf verweist auf die Baustein-Datei.
+  Beim Laden und vor jedem Start übernimmt er deren aktuellen Inhalt –
+  ändert man den Baustein (neu speichern unter demselben Namen), gilt das in
+  allen Abläufen. Die Ablauf-Datei enthält die Schritte zusätzlich als Kopie;
+  fehlt die Baustein-Datei (z. B. am anderen Rechner), läuft die Kopie und die
+  Statuszeile nennt den Baustein.
+- **Kette durchgestrichen** („Verknüpfung zum Baustein lösen“): macht aus dem
+  markierten verknüpften Baustein eine bearbeitbare Kopie. Fügt man in einen
+  verknüpften Baustein eine Zeile ein oder entfernt eine, löst sich die
+  Verknüpfung ebenfalls.
 - **Ordner-Symbol** / **Diskette-Symbol**: Testablauf laden/speichern
   (JSON-Datei im Ordner `testcases/`). Wurde die geöffnete Datei seit dem
   Öffnen anderswo geändert (z. B. am zweiten Rechner im gemeinsamen Ordner),

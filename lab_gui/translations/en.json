@@ -812,5 +812,11 @@
   "Fehlerspeicher leer": "Fault memory empty",
   "UDS von Hand ist während eines Testlaufs gesperrt": "Manual UDS is locked during a test run",
   "Session": "Session",
-  "DTCs": "DTCs"
+  "DTCs": "DTCs",
+  "Baustein (verknüpft)": "Block (linked)",
+  "1 Schritt": "1 step",
+  "Verknüpfung zum Baustein lösen": "Unlink from block",
+  "Baustein „{name}“ nicht lesbar ({error}) – gespeicherte Kopie verwendet": "Block “{name}” not readable ({error}) – using the stored copy",
+  "Datei fehlt": "file missing",
+  "„link“ muss ein Objekt sein": "“link” must be an object"
 }

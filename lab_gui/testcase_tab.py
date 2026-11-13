@@ -95,6 +95,10 @@ from testcase_model import (
     load_block,
     load_device_map,
     load_testcase,
+    load_testcase_linked,
+    block_path,
+    block_ref,
+    link_count,
     remap_devices,
     save_block,
     save_steps,
@@ -330,6 +334,9 @@ class _BlockGroup:
     count: int
     name: str
     collapsed: bool = True
+    # Verknuepfter Baustein (0.61.2, PI-49 b): Verweis auf die Baustein-Datei (testcase_model.block_ref),
+    # "" = Kopie. Verknuepfte Zeilen sind gesperrt; eine Aenderung an der Zeilenzahl loest die Verknuepfung.
+    link: str = ""
     # True, sobald sich die Zeilenzahl durch Hinzufuegen/Entfernen einzelner
     # Zeilen INNERHALB des aufgeklappten Bausteins veraendert hat (BUGS.md
     # #22c) -- gesetzt von TestcaseTab._on_row_inserted/_on_row_removed,
@@ -506,6 +513,9 @@ class TestcaseTab(QWidget):
         # reine Puzzleteil-Umriss ohne Plus passt besser zu "speichern".
         self._block_save_button = IconButton("mdi.puzzle-outline", "")
         self._block_insert_button = IconButton("mdi.puzzle-plus-outline", "")
+        self._block_unlink_button = IconButton("mdi.link-variant-off", "")
+        self._block_unlink_button.setEnabled(False)
+        self._loaded_link_digests: dict = {}
         # Ablauf-Eigenschaften (Format v3 "meta", 0.58.0): Beschreibung, Anforderungen, Quelle/Senke
         self._meta: dict = {}
         self._props_button = IconButton("mdi.tune-variant", "")
@@ -539,6 +549,7 @@ class TestcaseTab(QWidget):
         self._save_button.clicked.connect(self._save_to_file)
         self._block_save_button.clicked.connect(self._save_block)
         self._block_insert_button.clicked.connect(self._insert_block_from_file)
+        self._block_unlink_button.clicked.connect(self._unlink_selected_block)
         self._props_button.clicked.connect(self._edit_properties)
         for button in (
             self._add_button, self._remove_button, self._up_button, self._down_button,
@@ -547,6 +558,7 @@ class TestcaseTab(QWidget):
             button_row.addWidget(button)
         button_row.addWidget(self._block_save_button)
         button_row.addWidget(self._block_insert_button)
+        button_row.addWidget(self._block_unlink_button)
         button_row.addStretch()
         button_row.addWidget(self._props_button)
         button_row.addWidget(self._new_button)
@@ -681,6 +693,7 @@ class TestcaseTab(QWidget):
         self._save_button.setToolTip(tr("Speichern…"))
         self._block_save_button.setToolTip(tr("Baustein speichern…"))
         self._block_insert_button.setToolTip(tr("Baustein einfügen…"))
+        self._block_unlink_button.setToolTip(tr("Verknüpfung zum Baustein lösen"))
         self._props_button.setToolTip(tr("Eigenschaften des Ablaufs…"))
         self._action_add_action.setText(tr("Aktionsschritt"))
         self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
@@ -1648,13 +1661,14 @@ class TestcaseTab(QWidget):
                 self._insert_row(lo + span + i, step)
             neighbor_new_start, new_start = lo, lo + span
 
-        new_group = _BlockGroup(start=new_start, count=count, name=group.name, collapsed=group.collapsed)
+        new_group = _BlockGroup(start=new_start, count=count, name=group.name, collapsed=group.collapsed,
+                                link=group.link)
         self._block_groups.append(new_group)
         self._apply_group_visibility(new_group)
         if neighbor is not None:
             new_neighbor = _BlockGroup(
                 start=neighbor_new_start, count=neighbor.count,
-                name=neighbor.name, collapsed=neighbor.collapsed,
+                name=neighbor.name, collapsed=neighbor.collapsed, link=neighbor.link,
             )
             self._block_groups.append(new_neighbor)
             self._apply_group_visibility(new_neighbor)
@@ -1863,10 +1877,11 @@ class TestcaseTab(QWidget):
             group.overlay = _BlockHeaderOverlay(lambda g=group: self._table.selectRow(g.start))
             group.overlay.setParent(self._table.viewport())
         overlay = group.overlay
-        overlay.device_label.setText(tr("Baustein"))
-        name = f"{group.name} {tr('(modifiziert)')}" if group.modified else group.name
+        overlay.device_label.setText(tr("Baustein (verknüpft)") if group.link else tr("Baustein"))
+        overlay.device_label.setToolTip(group.link)
+        name = f"{group.name} {tr('(modifiziert)')}" if group.modified and not group.link else group.name
         overlay.action_label.setText(name)
-        overlay.value_label.setText(tr("{n} Schritte", n=group.count))
+        overlay.value_label.setText(tr("1 Schritt") if group.count == 1 else tr("{n} Schritte", n=group.count))
         pal = current_palette()
         color = self._row_style_color(row) or pal.surface
         label_style = f"color: {self._row_text_color(color)}; font-style: italic;"
@@ -2044,6 +2059,7 @@ class TestcaseTab(QWidget):
             elif group.start < row_index < group.start + group.count:
                 group.count += 1
                 group.modified = True
+                group.link = ""     # Zeilenzahl weicht vom Baustein ab: Kopie
 
     def _on_row_removed(self, row_index: int) -> None:
         remaining: list[_BlockGroup] = []
@@ -2057,6 +2073,7 @@ class TestcaseTab(QWidget):
                 self._dissolve_group_overlay(group)
             elif group.start < row_index < group.start + group.count:
                 group.count -= 1
+                group.link = ""     # Zeilenzahl weicht vom Baustein ab: Kopie
                 if group.count > 1:
                     group.modified = True
                     remaining.append(group)
@@ -2222,7 +2239,11 @@ class TestcaseTab(QWidget):
         return TestStep(step_type=step_type)
 
     def steps(self) -> list[TestStep]:
-        return [self._row_to_step(row) for row in range(self._table.rowCount())]
+        steps = [self._row_to_step(row) for row in range(self._table.rowCount())]
+        for group in self._block_groups:
+            if group.link and 0 <= group.start < len(steps):
+                steps[group.start].link = {"block": group.link, "name": group.name, "count": group.count}
+        return steps
 
     def meta(self) -> dict:
         """Ablauf-Eigenschaften (Format v3 "meta"), z.B. source_sink fuer die Verriegelung."""
@@ -2236,6 +2257,7 @@ class TestcaseTab(QWidget):
     def mark_clean(self) -> None:
         """Aktueller Inhalt gilt als gespeichert (nach Laden/Speichern/Neu, beim Start)."""
         self._clean_key = self._content_key()
+        self._loaded_link_digests = self._link_digests()
 
     def is_modified(self) -> bool:
         """Ungespeicherte Aenderungen im Editor? Ein Lauf ueber REST/MCP laedt sonst darueber (0.59.0)."""
@@ -2377,8 +2399,7 @@ class TestcaseTab(QWidget):
     def _load_path(self, path: Path) -> bool:
         """Laedt einen Ablauf in den Editor (auch fuer die Ausfuehren-Ansicht im Touch-Profil)."""
         try:
-            steps, meta = load_testcase(path)
-            file_devices = load_device_map(path)
+            steps, meta, file_devices, problems = load_testcase_linked(path, data_store.target_dir("blocks"))
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return False
@@ -2393,12 +2414,34 @@ class TestcaseTab(QWidget):
         self._clear_block_groups()
         for step in steps:
             self._insert_row(self._table.rowCount(), step)
+        for index, step in enumerate(steps):
+            if step.link:
+                group = _BlockGroup(start=index, count=link_count(steps, index),
+                                    name=str(step.link.get("name") or ""), link=str(step.link.get("block") or ""))
+                self._block_groups.append(group)
+                self._apply_group_visibility(group)
         if not steps:
             self._add_row_clicked()
         self._revalidate_structure()
         self._sync_run_view_test()
         self.mark_clean()
+        if problems:
+            self._set_status("{text}", kind="error", text="; ".join(problems))
         return True
+
+    def refresh_linked_blocks(self) -> None:
+        """Vor einem Lauf: hat sich eine verknuepfte Baustein-Datei seit dem Laden geaendert, den (unveraenderten)
+        Ablauf neu laden, damit der Lauf den aktuellen Baustein ausfuehrt."""
+        if self._current_path is None or self.is_modified() or not any(g.link for g in self._block_groups):
+            return
+        if self._link_digests() != self._loaded_link_digests:
+            logger.info("Testablauf %s: verknüpfter Baustein geändert, neu geladen", self._current_path.name)
+            self._load_path(self._current_path)
+
+    def _link_digests(self) -> dict:
+        blocks = data_store.target_dir("blocks")
+        return {group.link: _file_digest(block_path(group.link, blocks))
+                for group in self._block_groups if group.link}
 
     # -- Ausfuehren-Ansicht (Touch-Profil, touch_run_view.py) ---------------------
 
@@ -2582,15 +2625,46 @@ class TestcaseTab(QWidget):
         for offset, step in enumerate(block_steps):
             self._insert_row(index + offset, step)
 
-        # Ab zwei Zeilen als einklappbare Gruppe nachverfolgen (siehe
-        # _BlockGroup) -- ein einzelner Schritt braucht keine Klapp-Funktion.
-        if len(block_steps) > 1:
-            group = _BlockGroup(start=index, count=len(block_steps), name=name)
-            self._block_groups.append(group)
-            self._apply_group_visibility(group)
+        # Verknuepft (0.61.2, PI-49 b): auch ein einzelner Schritt ist eine Gruppe, damit der Verweis
+        # mitgespeichert wird; "Verknüpfung lösen" macht daraus eine bearbeitbare Kopie.
+        group = _BlockGroup(start=index, count=len(block_steps), name=name,
+                            link=block_ref(Path(path_str), data_store.target_dir("blocks")))
+        self._block_groups.append(group)
+        self._apply_group_visibility(group)
 
         self._table.selectRow(index)
         self._revalidate_structure()
+
+    def _unlink_selected_block(self) -> None:
+        group = self._group_containing(self._selected_row)
+        if group is None or not group.link:
+            return
+        group.link = ""
+        self._revalidate_structure()
+
+    def _apply_link_locks(self) -> None:
+        """Zeilen verknuepfter Bausteine sperren (Zellen-Widgets aus), andere freigeben. Die Kopfzeile zeigt
+        "Baustein (verknüpft)" (_sync_header_overlay)."""
+        linked = {row: group for group in self._block_groups if group.link
+                  for row in range(group.start, group.start + group.count)}
+        for row in range(self._table.rowCount()):
+            group = linked.get(row)
+            for col in range(1, self._table.columnCount()):
+                widget = self._table.cellWidget(row, col)
+                if widget is None:
+                    continue
+                locked_before = getattr(widget, "_link_prev_enabled", None) is not None
+                if group is not None and not locked_before:
+                    widget._link_prev_enabled = widget.isEnabled()
+                    widget.setEnabled(False)
+                elif group is None and locked_before:
+                    widget.setEnabled(widget._link_prev_enabled)
+                    widget._link_prev_enabled = None
+        self._update_unlink_enabled()
+
+    def _update_unlink_enabled(self) -> None:
+        group = self._group_containing(self._selected_row)
+        self._block_unlink_button.setEnabled(not self._is_running and group is not None and bool(group.link))
 
     def current_testcase_name(self) -> str:
         return self._current_path.stem if self._current_path else tr("Unbenannt")
@@ -2621,6 +2695,7 @@ class TestcaseTab(QWidget):
 
     def _revalidate_structure(self) -> None:
         self._renumber_rows()
+        self._apply_link_locks()
         steps = self.steps()
         matching, depths, errors = validate_structure(steps)
         error_by_row = dict(errors)
@@ -2722,6 +2797,7 @@ class TestcaseTab(QWidget):
             self._props_button,
         ):
             button.setEnabled(not running)
+        self._update_unlink_enabled()
         self._report_button.setEnabled(self._report_available and not running)
         self._update_run_enabled()
 
@@ -3072,6 +3148,7 @@ class TestcaseTab(QWidget):
             self._apply_row_style(old_row)
         if row >= 0:
             self._apply_row_style(row)
+        self._update_unlink_enabled()
 
     def _start_blink(self, row: int) -> None:
         self._stop_blink()
