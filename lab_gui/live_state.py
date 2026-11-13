@@ -41,6 +41,7 @@ from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT
 from i18n import tr
 from lease_table import LeaseTable
 from pairing import PairingTable
+from run_registry import RunRegistry
 
 # Ab wann ein Wert als "steht" gilt. Bewusst identisch zu
 # safety.STALE_TIMEOUT_S (dort loest dieselbe Frist den Watchdog aus) --
@@ -124,6 +125,10 @@ class LiveState(QObject):
         # Kopplung mit einem zweiten LabControl (Token austauschen, pairing.py); share_api nimmt Anfragen
         # an, MainWindow zeigt den Bestaetigungsdialog und uebernimmt das Ergebnis.
         self.pairing = PairingTable()
+        # Testlaeufe fuer /api/v1/runs (0.59.0): thread-sicheres Register, MainWindow traegt ein
+        self.runs = RunRegistry()
+        # Namen der Ablaeufe im gemeinsamen Ordner fuer /api/v1/testcases (MainWindow setzt die Funktion)
+        self.list_testcases = lambda: []
         # Verbund-Partner (PI-32 a): seine Kacheln, wie sie der Abfrage-Thread zuletzt geliefert hat --
         # share_api reicht sie an Aufrufer auf DIESEM Rechner (MCP) durch. {} = kein Partner verbunden.
         self._partner: dict = {}

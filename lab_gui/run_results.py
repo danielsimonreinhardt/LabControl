@@ -78,6 +78,9 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
                         "label": record.device_meta.get(d, ("", d))[1]} for d in used},
         "interlock": {"groups": record.interlock_groups,
                       "released": bool(record.meta.get("source_sink"))},
+        "instruments": list(record.instruments),
+        "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
+                     for r in record.instruments if r.get("expired")],
     }
 
 
@@ -107,6 +110,14 @@ def junit_tree(record: RunRecord, interrupted: bool = False) -> ET.ElementTree:
         ET.SubElement(props, "property", name="requirement", value=req)
     if record.meta.get("source_sink"):
         ET.SubElement(props, "property", name="interlock", value="released")
+    for row in record.instruments:   # Messmittel (FT-8)
+        ET.SubElement(props, "property", name="instrument",
+                      value=" ".join(v for v in (row["device_id"], row.get("model", ""), row.get("serial", ""),
+                                                 f"fällig {row['due']}" if row.get("due") else "") if v))
+    expired = [r for r in record.instruments if r.get("expired")]
+    if expired:
+        ET.SubElement(props, "property", name="calibration.expired",
+                      value=", ".join(r["device_id"] for r in expired))
     for row in rows:
         case = ET.SubElement(suite, "testcase", classname=name,
                              name=f"{row['index']:03d} {row['action_label']} {row['check']}".strip(), time="0")
@@ -130,6 +141,10 @@ def junit_tree(record: RunRecord, interrupted: bool = False) -> ET.ElementTree:
         else:
             message = f"Schritt {record.error_index + 1}: {record.error_message}"
         ET.SubElement(case, "error", type=record.outcome if not interrupted else "interrupted", message=message)
+    if expired:   # Warnung, kein Fehler (FP-21 a)
+        err = ET.SubElement(suite, "system-err")
+        err.text = "\n".join(f"WARNUNG: Kalibrierung abgelaufen: {r['label']} ({r['device_id']}, fällig {r['due']})"
+                             for r in expired)
     ET.indent(suites)
     return ET.ElementTree(suites)
 

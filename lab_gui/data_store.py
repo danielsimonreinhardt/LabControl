@@ -125,6 +125,13 @@ class DataStore:
         local.mkdir(parents=True, exist_ok=True)
         return local
 
+    def shared_file(self, name: str) -> Path:
+        """Datei direkt im gemeinsamen Ordner (z. B. messmittel.json, FT-8): auf dem Netzlaufwerk, wenn es
+        bei der letzten Pruefung erreichbar war, sonst im lokalen Datenordner."""
+        with self._lock:
+            base = self._base if self._base is not None and self._reachable else None
+        return (base if base is not None else self.local_root) / name
+
     # -- Zustand -----------------------------------------------------------------
 
     def status(self) -> dict:

@@ -25,6 +25,8 @@ EXPECTED_TOOLS = {
     # Oszilloskope
     "list_scopes", "get_scope_capabilities", "acquire", "get_capture", "measure",
     "plot_capture", "release_scope",
+    # Testablaeufe (0.59.0)
+    "list_testcases", "run_testcase", "get_run", "stop_run",
 }
 
 

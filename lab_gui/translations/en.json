@@ -717,5 +717,16 @@
   "„requirements“ muss eine Liste sein": "\"requirements\" must be a list",
   "„meta“ muss ein Objekt sein": "\"meta\" must be an object",
   "Keine Testablauf-Datei": "Not a test sequence file",
-  "Ungültiger Schritt in der Datei: {item}": "Invalid step in file: {item}"
+  "Ungültiger Schritt in der Datei: {item}": "Invalid step in file: {item}",
+  "Messmittel": "Measuring instruments",
+  "Typ": "Type",
+  "Seriennr.": "Serial no.",
+  "Inventar-Nr.": "Inventory no.",
+  "Kalibriert": "Calibrated",
+  "Fällig": "Due",
+  "Kennungen und Kalibrierdaten neu lesen": "Reload identities and calibration data",
+  "Datum als JJJJ-MM-TT": "Date as YYYY-MM-DD",
+  "Kalibrierung abgelaufen: {devices}": "Calibration expired: {devices}",
+  "Im Editor gibt es ungespeicherte Änderungen": "The editor has unsaved changes",
+  "Laden fehlgeschlagen": "Loading failed"
 }

@@ -493,6 +493,13 @@ time-window-limited ring buffer of the live charts.
   panel colors and network sharing for all devices to their defaults;
   connected devices get new default names, disconnected ones disappear.
   Both buttons ask for confirmation and cannot be undone.
+- **Measuring instruments** ("Devices" tab): per device the type, serial
+  number and firmware as reported when connecting (the HCS power supply has
+  no firmware query), plus inventory number, calibration date and due date to
+  fill in (date as YYYY-MM-DD). Stored in `messmittel.json` in the shared
+  folder, so PC and Pi see the same data. A run's report lists the
+  instruments used and warns if a calibration has expired; the run still
+  counts as passed.
 - **Safety limits (watchdog)**: see section 6.
 - **Network sharing and remote control**: see below.
 - **Help** (question mark): opens this user manual.
@@ -845,8 +852,16 @@ python lab_gui/main.py devices
 - At the end LabControl always switches ALL OFF and releases the power
   supplies to manual control at 1 V / 0 A, as when closing the window.
 - If LabControl is already running (e.g. the kiosk on the Pi), the command
-  line refuses (exit 3), since two programs would otherwise open the same
-  devices.
+  line starts the run through the running instance (otherwise two programs
+  would open the same devices). This needs network sharing and "Claude (MCP)
+  may control" switched on there, and no unsaved changes in its editor; the
+  sequence then appears in the instance's editor.
+- Other programs and Claude start sequences through the network interface
+  (`POST /api/v1/runs` with the name of a sequence in the shared folder,
+  state at `/api/v1/runs/<id>`, results at `…/result`, `…/junit`,
+  `…/report`; MCP: `run_testcase`, `get_run`, `stop_run`). Every run, also
+  from the window, stores `run_<id>.json/.xml/.html` in the reports folder.
+- Nightly run on the Pi: `tools/pi/nightly_pi.sh` (see `tools/pi/README.md`).
 - Not yet without a window: devices of a linked partner and J-Link steps.
 - The `.exe` is a windowed program: it prints nothing to the console, and
   `cmd` only waits for it with `start /wait LabControl.exe run …`. The result

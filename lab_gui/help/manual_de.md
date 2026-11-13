@@ -518,6 +518,13 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Geräte auf die Standardwerte zurück; verbundene Geräte bekommen neue
   Standardnamen, nicht verbundene verschwinden.
   Beide Knöpfe fragen vorher nach und lassen sich nicht rückgängig machen.
+- **Messmittel** (Reiter „Geräte“): je Gerät Typ, Seriennummer und Firmware,
+  wie das Gerät sie beim Verbinden meldet (das HCS-Netzteil kennt keine
+  Firmware-Abfrage), dazu Inventarnummer, Kalibrierdatum und Fälligkeit zum
+  Eintragen (Datum als JJJJ-MM-TT). Gespeichert wird in `messmittel.json` im
+  gemeinsamen Ordner, PC und Pi sehen denselben Stand. Der Report eines
+  Laufs listet die verwendeten Messmittel und warnt, wenn eine Kalibrierung
+  abgelaufen ist; der Lauf gilt trotzdem als bestanden.
 - **Sicherheits-Grenzwerte (Watchdog)**: siehe Abschnitt 6.
 - **Netzwerk-Freigabe und Fernsteuerung**: siehe unten.
 - **Hilfe** (Fragezeichen): öffnet dieses Benutzerhandbuch.
@@ -887,8 +894,17 @@ python lab_gui/main.py devices
   unterbrochen (Strg+C).
 - Am Ende schaltet LabControl immer ALLE AUS und gibt die Netzteile wie beim
   Schließen des Fensters mit 1 V / 0 A zur Handbedienung frei.
-- Läuft LabControl schon (z. B. der Kiosk am Pi), lehnt die Kommandozeile ab
-  (Exit 3), weil sonst zwei Programme dieselben Geräte öffnen würden.
+- Läuft LabControl schon (z. B. der Kiosk am Pi), startet die Kommandozeile
+  den Lauf über die laufende Instanz (sonst würden zwei Programme dieselben
+  Geräte öffnen). Dafür müssen dort die Netzwerk-Freigabe und „Claude (MCP)
+  darf steuern“ an sein und der Editor darf keine ungespeicherten Änderungen
+  haben; der Ablauf erscheint dann im Editor der Instanz.
+- Andere Programme und Claude starten Abläufe über die Netzwerk-Schnittstelle
+  (`POST /api/v1/runs` mit dem Namen eines Ablaufs im gemeinsamen Ordner,
+  Stand unter `/api/v1/runs/<id>`, Ergebnisse unter `…/result`, `…/junit`,
+  `…/report`; MCP: `run_testcase`, `get_run`, `stop_run`). Jeder Lauf, auch
+  aus dem Fenster, legt `run_<id>.json/.xml/.html` im Berichtsordner ab.
+- Nachtlauf am Pi: `tools/pi/nightly_pi.sh` (siehe `tools/pi/README.md`).
 - Noch nicht ohne Fenster: Geräte eines Verbund-Partners und J-Link-Schritte.
 - Die `.exe` ist ein Fensterprogramm: sie schreibt keine Textausgabe in die
   Konsole, und `cmd` wartet nur mit `start /wait LabControl.exe run …` auf

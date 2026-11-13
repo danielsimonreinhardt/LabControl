@@ -1,0 +1,11 @@
+# Zeitpunkt des Nachtlaufs; nightly_pi.sh ersetzt @ONCALENDAR@ beim Einrichten (Standard 02:00).
+
+[Unit]
+Description=LabControl Nachtlauf (Zeitplan)
+
+[Timer]
+OnCalendar=@ONCALENDAR@
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -265,6 +265,25 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
         parts.append(f'<tr>{td(label, bold=True)}{td(value)}</tr>')
     parts.append('</table>')
 
+    if record.instruments:
+        parts.append('<h2>' + html.escape(tr("Messmittel")) + '</h2>')
+        expired = [r for r in record.instruments if r.get("expired")]
+        if expired:
+            parts.append(
+                f'<p style="color:{_COLOR_FAIL}; font-weight:bold;">'
+                + html.escape(tr("Kalibrierung abgelaufen: {devices}",
+                                 devices=", ".join(f"{r['label']} ({r['due']})" for r in expired)))
+                + '</p>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th(tr("Gerät")) + th(tr("Typ")) + th(tr("Seriennr.")) + th(tr("Firmware"))
+                     + th(tr("Inventar-Nr.")) + th(tr("Kalibriert")) + th(tr("Fällig")) + '</tr>')
+        for row in record.instruments:
+            due_cell = td(row.get("due") or "–", bold=bool(row.get("expired")))
+            parts.append('<tr>' + td(row.get("label") or row["device_id"]) + td(row.get("model") or "–")
+                         + td(row.get("serial") or "–") + td(row.get("firmware") or "–")
+                         + td(row.get("inventory") or "–") + td(row.get("calibrated") or "–") + due_cell + '</tr>')
+        parts.append('</table>')
+
     step_rows = _step_result_rows(record)
     parts.append('<h2>' + html.escape(tr("Schritt-Ergebnisse")) + '</h2>')
     if not step_rows:

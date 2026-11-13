@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 import app_logging
 import data_store
+import instruments
 import remote_actions
 import system_power
 import verbund_ids
@@ -43,6 +44,7 @@ from device_worker import (
     REASON_WINDOW_CLOSE, SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id,
 )
 from i18n import Translator, tr
+from instruments import Instruments
 from live_state import LiveState
 from presets import PresetStore
 from recording import Recorder
@@ -290,6 +292,7 @@ class MainWindow(QMainWindow):
         self._wire_jlink()
         self._style_safety_banner()
         self._retranslate()
+        self.testcase_tab.mark_clean()   # leerer Startzustand gilt als gespeichert (Laeufe ueber REST)
 
     def _retranslate(self) -> None:
         for page, text in ((self.control_tab, tr("Steuerung")), (self.testcase_tab, tr("Testablauf")),
@@ -402,6 +405,9 @@ class MainWindow(QMainWindow):
         self._worker.psu_limits.connect(self.testcase_tab.on_psu_limits)
         self._worker.can_frame_received.connect(self.control_tab.on_can_frame)
         self._worker.can_signals_decoded.connect(self.control_tab.on_can_signals_decoded)
+        # Messmittel (FT-8): vor dem Start verbinden, sonst fehlen die Kennungen der ersten Geraete
+        self._instruments = Instruments(lambda: data_store.store().shared_file(instruments.FILE_NAME))
+        instruments.connect_worker(self._worker, self._instruments)
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -1460,6 +1466,7 @@ class MainWindow(QMainWindow):
         self._share_bridge.all_off_requested.connect(
             self._on_share_all_off, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.meta_requested.connect(self._on_share_meta, Qt.ConnectionType.QueuedConnection)
+        self._share_bridge.run_requested.connect(self._on_run_command, Qt.ConnectionType.QueuedConnection)
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
@@ -1941,6 +1948,10 @@ class MainWindow(QMainWindow):
                                        self._interlock, live_state=self._live_state,
                                        scope_service=self._scope_service, parent=self)
         self._run_session.partner_router = self._route_partner_action
+        # Messmittel (FT-8): Kennungen aus dem Worker (verbunden in _setup_worker vor dem Thread-Start),
+        # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
+        self._run_session.instruments = self._instruments
+        self.settings_tab.instruments_editor.attach(self._instruments)
         self._test_runner = self._run_session.runner
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
         self._test_runner.step_result.connect(self.testcase_tab.on_step_result)
@@ -1949,6 +1960,22 @@ class MainWindow(QMainWindow):
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
         self._run_session.run_ended.connect(lambda _outcome: self.testcase_tab.set_report_available(True))
+        # Laufregister fuer REST/MCP/Kommandozeile (0.59.0): jeder Lauf, auch aus dem Fenster
+        self._runs = self._live_state.runs
+        self._run_id: str | None = None          # Lauf im Register, solange er laeuft
+        self._run_source = "gui"                  # naechster Start: Aufrufer (REST) oder Fenster
+        self._run_vars: dict[str, float] = {}
+        self._pending_run_id: str | None = None   # REST-Start wartet noch (z. B. auf Belegung beim Partner)
+        self._last_refusal = ""
+        self._live_state.list_testcases = self._list_testcases
+        data_store.store().on_moved(self._runs.relocate)
+        self._test_runner.step_started.connect(
+            lambda index, _step: self._run_id and self._runs.step_started(self._run_id, index))
+        self._test_runner.step_result.connect(
+            lambda index, ok, value: self._run_id and self._runs.step_result(self._run_id, index, ok, value))
+        self._test_runner.step_failed.connect(
+            lambda index, message: self._run_id and self._runs.step_failed(self._run_id, index, message))
+        self._run_session.run_ended.connect(self._on_run_ended_register)
         self.testcase_tab.open_report_requested.connect(self._on_open_report)
         self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)
 
@@ -1993,12 +2020,135 @@ class MainWindow(QMainWindow):
 
     def _refuse_run(self, message: str) -> None:
         logger.warning("Testlauf nicht gestartet: %s", message)
+        self._last_refusal = message
+        if self._pending_run_id is not None:   # REST-Start, der erst jetzt scheitert (Belegung beim Partner)
+            self._runs.step_failed(self._pending_run_id, 0, message)
+            self._runs.finish(self._pending_run_id, "error", 3, {})
+            self._pending_run_id = None
+        self._run_source, self._run_vars = "gui", {}
         self.testcase_tab.show_message(tr("Nicht gestartet: {reason}", reason=message), "error")
         self.statusBar().showMessage(tr("Nicht gestartet: {reason}", reason=message), 10000)
 
     def _start_run(self, steps: list[TestStep]) -> None:
         self.testcase_tab.on_run_started()
-        self._run_session.start(steps, self.testcase_tab.current_testcase_name(), self.testcase_tab.meta())
+        name = self.testcase_tab.current_testcase_name()
+        self._run_id = self._pending_run_id or self._runs.begin(name, self._run_source, len(steps))
+        self._pending_run_id = None
+        variables, self._run_source, self._run_vars = self._run_vars, "gui", {}
+        self._run_session.start(steps, name, self.testcase_tab.meta(), variables)
+
+    # -- Laeufe ueber REST/MCP/Kommandozeile (0.59.0) ---------------------------------
+
+    def _list_testcases(self) -> list[str]:
+        """Namen der Ablaeufe im gemeinsamen Ordner (relativ, mit Unterordnern) -- aus dem Server-Thread."""
+        try:
+            folder = data_store.target_dir("testcases")
+            return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*.json") if p.is_file())
+        except OSError:
+            return []
+
+    def _resolve_testcase(self, payload: dict):
+        """Pfad des Ablaufs: "path" (nur vom selben Rechner, share_api prueft) oder Name im gemeinsamen
+        Ordner -- nie ausserhalb davon."""
+        from pathlib import Path
+
+        if payload.get("path"):
+            path = Path(payload["path"]).expanduser()
+            return path if path.is_file() else None
+        folder = data_store.target_dir("testcases").resolve()
+        name = str(payload.get("testcase", "")).strip().replace("\\", "/")
+        if not name.endswith(".json"):
+            name += ".json"
+        path = (folder / name).resolve()
+        if not path.is_relative_to(folder) or not path.is_file():
+            return None
+        return path
+
+    def _on_run_command(self, request_id: int, command: str, payload: dict, client: str) -> None:
+        def answer(ok: bool, code: str = "", message: str = "") -> None:
+            self._share_bridge.complete(request_id, ok, code, message, 0.0)
+
+        if command == "stop":
+            run_id = payload.get("run", "")
+            if run_id != self._runs.current_id() or not self._test_runner.is_running():
+                answer(False, "not_running")
+                return
+            logger.info("Testlauf %s über das Netzwerk angehalten (%s)", run_id, client)
+            self._test_runner.stop()
+            self._safe_stop(f"run stop via network ({client})")
+            answer(True)
+            return
+        if command != "start":
+            answer(False, "unknown_command")
+            return
+        if self._safety.is_tripped():
+            answer(False, "locked", tr("Sicherheitsabschaltung zuerst quittieren"))
+            return
+        if self._test_runner.is_running() or self._pending_run_steps is not None:
+            answer(False, "busy", tr("Es läuft bereits ein Ablauf"))
+            return
+        path = self._resolve_testcase(payload)
+        if path is None:
+            answer(False, "unknown_testcase", payload.get("testcase") or payload.get("path") or "")
+            return
+        if self.testcase_tab.is_modified():
+            answer(False, "editor_modified", tr("Im Editor gibt es ungespeicherte Änderungen"))
+            return
+        error = self.testcase_tab.load_for_run(path)
+        if error:
+            answer(False, "invalid_testcase", error)
+            return
+        steps = self.testcase_tab.steps()
+        partner_host = self._partner_host_name
+        missing = self._directory.missing(
+            steps, skip=lambda d: verbund_ids.partner_device(d, partner_host) is not None)
+        if missing:
+            answer(False, "devices_missing", "; ".join(missing))
+            return
+        self._last_refusal = ""
+        self._run_source = client
+        self._run_vars = dict(payload.get("vars") or {})
+        self._pending_run_id = self._runs.begin(self.testcase_tab.current_testcase_name(), client, len(steps))
+        run_id = self._pending_run_id
+        self._on_run_requested()
+        # Gestartet: _start_run hat die ID uebernommen (der Lauf kann schon wieder zu Ende sein). Wartet auf
+        # die Belegung beim Partner: _pending_run_steps; scheitert die spaeter, traegt _refuse_run es ein.
+        started = self._pending_run_id is None and not self._last_refusal
+        if started or self._pending_run_steps is not None:
+            answer(True, "", run_id)
+            return
+        if self._pending_run_id is not None:   # still abgelehnt (z. B. keine aktiven Aktionsschritte)
+            self._pending_run_id = None
+            self._run_source, self._run_vars = "gui", {}
+            self._runs.finish(run_id, "error", 3, {})
+        answer(False, "busy" if self._last_refusal else "invalid_testcase",
+               self._last_refusal or tr("Keine aktiven Aktionsschritte"))
+
+    def _on_run_ended_register(self, outcome: str) -> None:
+        """Lauf zu Ende: run-result.json, JUnit und Bericht in den Berichtsordner, Register nachfuehren."""
+        run_id, self._run_id = self._run_id, None
+        record = self._run_recorder.record()
+        if run_id is None or record is None:
+            return
+        import run_report
+        import run_results
+        from run_session import exit_code
+
+        folder = data_store.store().local_dir("reports")
+        files: dict[str, str] = {}
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            for key, suffix, writer in (
+                    ("result", ".json", lambda p: run_results.write_json(record, p)),
+                    ("junit", ".xml", lambda p: run_results.write_junit(record, p)),
+                    ("report", ".html", lambda p: run_report.write_html_report(record, p))):
+                path = folder / f"run_{run_id}{suffix}"
+                writer(path)
+                files[key] = str(path)
+        except OSError as exc:
+            logger.warning("Ergebnisse des Laufs %s nicht geschrieben: %s", run_id, exc)
+        self._runs.finish(run_id, outcome, exit_code(record), files)
+        data_store.store().sync_now()
 
     def _route_partner_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> bool:
         """RunSession.partner_router: Partnergeraet -> ueber die Freigabe des Partners, mit Belegung

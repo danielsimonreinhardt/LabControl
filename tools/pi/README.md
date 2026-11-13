@@ -57,3 +57,8 @@ flowchart LR
   Andere Bitrate: Regel `/etc/udev/rules.d/80-labcontrol-can.rules` anpassen.
 - Fenster schließen beendet den Dienst ohne Neustart; nach einem Absturz startet er nach 5 s neu
   (höchstens 5-mal in 10 min). Ein Neustart schaltet keine Geräte ein.
+- **Nachtlauf** (seit 0.59.0): `bash ~/LabControl/tools/pi/nightly_pi.sh <ablauf.json> [HH:MM]` richtet einen
+  systemd-Timer ein (Standard 02:00), `--now` startet ihn einmal sofort, `--off` schaltet ihn ab. Der Lauf geht
+  über den laufenden Kiosk; dafür müssen dort Netzwerk-Freigabe und „Claude (MCP) darf steuern“ an sein.
+  Ergebnis: Exit-Code im Journal (`journalctl --user -u labcontrol-nightly`), Bericht, JUnit und
+  `run-result.json` als `run_<id>.*` im Berichtsordner (Netzlaufwerk `<netz>/raspberrypi/reports/`).

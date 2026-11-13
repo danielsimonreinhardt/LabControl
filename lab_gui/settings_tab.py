@@ -51,6 +51,7 @@ from can_bus.driver import (
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import ICON_SIZE, IconButton
+from instruments_editor import InstrumentsEditor
 from interlock_editor import InterlockEditor
 from paths import IS_FROZEN
 from remote_actions import CONTROL_KINDS, SCOPE_KINDS
@@ -900,6 +901,10 @@ class SettingsTab(QWidget):
         self._info_sections: dict[str, _DeviceInfoGroup] = {}
         self._info_section_rows: dict[str, QWidget] = {}
 
+        # Messmittel (FT-8, 0.59.1): Kennung und Kalibrierung je Geraet
+        self.instruments_editor = InstrumentsEditor()
+        layout.addWidget(self.instruments_editor)
+
         layout.addStretch()
         return page
 
@@ -1325,6 +1330,7 @@ class SettingsTab(QWidget):
 
     def _retranslate(self) -> None:
         self.interlock_editor.retranslate()
+        self.instruments_editor.retranslate()
         self._sim_checkbox.setText(tr("Simulationsmodus"))
         self._dark_checkbox.setText(tr("Dark Mode"))
         touch_text = tr("Touch-Bedienung")
@@ -1507,6 +1513,7 @@ class SettingsTab(QWidget):
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         self.interlock_editor.on_device_known(kind, device_id, label)
+        self.instruments_editor.on_device_known(kind, device_id, label)
         if kind == "hil":
             self._ensure_info_section(device_id, label)
         self._share_table.add_device(kind, device_id, label)
@@ -1541,6 +1548,7 @@ class SettingsTab(QWidget):
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         self.interlock_editor.on_label_changed(kind, device_id, label)
+        self.instruments_editor.on_label_changed(kind, device_id, label)
         self._share_table.set_label(device_id, label)
         info_section = self._info_sections.get(device_id)
         if info_section is not None:

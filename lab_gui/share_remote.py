@@ -56,6 +56,8 @@ ALL_OFF_TIMEOUT_S = 15.0
 # Aktion an einem Geraet des Verbund-Partners (PI-32 a): ggf. erst belegen, dann wartet der Besitzer
 # selbst bis zu REMOTE_TIMEOUT_S auf sein Geraet.
 PARTNER_TIMEOUT_S = 14.0
+# Testlauf starten (0.59.0): Ablauf laden, ggf. PicoScope-Sitzung oeffnen
+RUN_TIMEOUT_S = 15.0
 
 # Gleichzeitig auf den Worker wartende Aktionen. Der Rest der 8 Server-Slots
 # (share_server.MAX_CONCURRENT_REQUESTS) bleibt fuer Lesen und ALLE AUS frei.
@@ -86,6 +88,8 @@ class RemoteBridge(QObject):
     partner_action_requested = Signal(int, str, str, str, str, float, int, str)
     # Verbund (PI-43 b): id, eigene Geraete-ID, {"label"?, "color"?}
     meta_requested = Signal(int, str, object)
+    # Testlauf (0.59.0): id, "start" | "stop", Nutzdaten (share_api._run_start_payload bzw. {"run"}), client
+    run_requested = Signal(int, str, object, str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -178,6 +182,19 @@ class RemoteBridge(QObject):
             result = self._wait(lambda req_id: self.meta_requested.emit(req_id, device_id, dict(meta)),
                                 REMOTE_TIMEOUT_S)
         self._audit(client, f"{device_id} Name/Farbe {meta}", result)
+        return result
+
+    def submit_run(self, command: str, payload: dict, client: str) -> RemoteResult:
+        """Testlauf starten/stoppen (share_api._dispatch_runs). Der GUI-Thread (MainWindow._on_run_command)
+        meldet bei "start" die Lauf-ID als message. Wartet laenger als eine Aktion: das Oeffnen einer
+        PicoScope-Sitzung beim Start dauert ~4,5 s."""
+        if not self._take_token():
+            result = RemoteResult("error", "rate_limited")
+        else:
+            result = self._wait(lambda req_id: self.run_requested.emit(req_id, command, dict(payload), client),
+                                RUN_TIMEOUT_S)
+        what = payload.get("testcase") or payload.get("path") or payload.get("run") or ""
+        self._audit(client, f"Testlauf {command} {what}", result)
         return result
 
     def submit_all_off(self, client: str) -> RemoteResult:

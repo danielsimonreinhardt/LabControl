@@ -183,6 +183,31 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **Messmittel (0.59.1, FT-8, FP-20 a / FP-21 a, 13.11.2026).** Beim Verbinden meldet jedes Gerät Typ,
+  Seriennummer und Firmware (Last, Funktionsgenerator, microHIL per Kennungsabfrage; Netzteil: Typ aus den
+  Nennwerten, USB-Seriennummer, keine Firmware-Abfrage; Oszilloskope und Batterie-Simulator aus ihren Meldungen).
+  Einstellungen → Geräte → „Messmittel“: Inventarnummer, Kalibrierdatum und Fälligkeit je Gerät, gespeichert in
+  `messmittel.json` im gemeinsamen Ordner (PC und Pi sehen denselben Stand). Bericht (Abschnitt „Messmittel“),
+  `run-result.json` (`instruments`, `warnings`) und JUnit (`property instrument`, `calibration.expired`,
+  Warnung in `system-err`) nennen die verwendeten Messmittel; eine abgelaufene Kalibrierung ist nur eine Warnung,
+  der Lauf gilt weiter als bestanden. **Mock-verifiziert:** neue Prüfung `tools/check_instruments.py`.
+- **Testläufe über REST, MCP und die laufende Instanz, Nachtlauf am Pi (0.59.0, FP-2 c / FP-6 a, 13.11.2026).**
+  - REST: `GET /api/v1/testcases` (Abläufe im gemeinsamen Ordner), `POST /api/v1/runs` `{"testcase", "vars"}`,
+    `GET /api/v1/runs[/<id>]` (Stand mit Meldungen), `…/result`, `…/junit`, `…/report`, `POST …/stop`
+    (wie Stop: ALLE AUS). Starten/Stoppen wie Steuern: Token, Steuerrecht für den Aufrufer, Sperrzustand frei.
+    Nur Abläufe aus dem gemeinsamen Ordner; einen Dateipfad (`"path"`) darf nur ein Aufrufer am selben Rechner
+    nennen. Der Ablauf wird in den Editor geladen (der Kiosk zeigt ihn); hat der Editor ungespeicherte
+    Änderungen, lehnt der Start ab (`editor_modified`), fehlen Geräte ebenso (`devices_missing`).
+  - Jeder Lauf, auch aus dem Fenster, steht im Laufregister (`run_registry.py`) und legt
+    `run_<id>.json/.xml/.html` im Berichtsordner ab (aufs Netzlaufwerk wie die anderen Berichte).
+  - MCP: `list_testcases`, `run_testcase`, `get_run` (auch Ergebnis-JSON und JUnit), `stop_run`.
+  - Kommandozeile: läuft LabControl schon, geht `run` über die laufende Instanz (`instance_cli.py`) statt mit
+    Exit 3 abzulehnen; wartet bei fehlenden Geräten bis `--wait-devices`, holt Ergebnis, JUnit und Bericht,
+    Strg+C hält den Lauf an. `devices` listet die Kacheln der Instanz.
+  - Nachtlauf am Pi: `tools/pi/nightly_pi.sh <ablauf.json> [HH:MM]` richtet `labcontrol-nightly.timer` ein
+    (`--now` einmal sofort, `--off` abschalten).
+  - **Mock-verifiziert:** neue Prüfung `tools/check_runs_api.py` (API mit Stub, echtes Fenster mit Freigabe:
+    Start, Stand, Dateien, Fehlerfälle, Stopp; Kommandozeile über die Instanz mit Exit 0 und Dateien).
 - **Fundament für die neuen Prüfstandsfunktionen (0.58.0, Umsetzungsplan FP-1..29, 13.11.2026).**
   - **Kommandozeile ohne Fenster** (FT-4): `python lab_gui/main.py run ablauf.json --report x.html --junit x.xml
     --json x.json --var name=wert --simulation --wait-devices 15 --timeout 0` (als .exe `LabControl.exe run …`),

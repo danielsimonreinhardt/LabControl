@@ -25,6 +25,10 @@ der Server kann nichts, was die Schnittstelle nicht ohnehin erlaubt.
 | `measure` | Kennwerte einer gespeicherten Erfassung neu berechnen, ohne neue Messung |
 | `plot_capture` | Erfassung als Bild (PNG) ansehen, auch gezoomt oder für einzelne Kanäle |
 | `release_scope` | Verbindung zum Oszilloskop sofort trennen (sonst nach 60 s von selbst) |
+| `list_testcases` | Gespeicherte Testabläufe im gemeinsamen Ordner und die letzten Läufe (seit 0.59.0) |
+| `run_testcase` | Einen gespeicherten Ablauf starten (Name, optional Variablen); liefert die Lauf-ID |
+| `get_run` | Stand eines Laufs; mit `file="result"` die Prüfergebnisse als JSON, `file="junit"` das JUnit-XML |
+| `stop_run` | Laufenden Ablauf anhalten (ALLE AUS) |
 
 `control_device` bekommt die Antwort des Geräts abgewartet: `ok: true` heißt,
 das Gerät hat den Befehl bestätigt (nicht nur „abgeschickt"). Fehler kommen als

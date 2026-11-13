@@ -1115,6 +1115,120 @@ def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: 
     return _json(200, {"v": API_VERSION, "ok": True})
 
 
+# -- Testlaeufe (0.59.0, FT-4) ---------------------------------------------------
+#
+#   GET  /api/v1/testcases              Ablaeufe im gemeinsamen Ordner (Namen)
+#   GET  /api/v1/runs                   letzte Laeufe
+#   GET  /api/v1/runs/{id}[?events=n]   Stand eines Laufs (Meldungen ab Nummer n)
+#   GET  /api/v1/runs/{id}/result|junit|report   run-result.json, JUnit-XML, HTML-Bericht
+#   POST /api/v1/runs                   {"testcase": "name.json", "vars": {...}} starten
+#                                       ({"path": ...} nur vom selben Rechner, Kommandozeile)
+#   POST /api/v1/runs/{id}/stop         anhalten (wie Stop: ALLE AUS)
+# Starten/Stoppen wie Steuern: Token + Fernsteuerung fuer diesen Aufrufer + Sperrzustand frei. Dateien
+# kommen nur ueber die Pfade, die das Register (run_registry.py) zum Lauf kennt -- kein Pfad aus der Anfrage.
+
+RUN_FILE_TYPES = {"result": JSON_TYPE, "junit": "application/xml; charset=utf-8", "report": HTML_TYPE}
+MAX_RUN_VARS = 50
+
+
+def _runs_route(path: str) -> tuple[str, str, str] | None:
+    base = f"{API_PREFIX}/runs"
+    if path == f"{API_PREFIX}/testcases":
+        return "testcases", "", ""
+    if path == base:
+        return "runs", "", ""
+    if path.startswith(base + "/"):
+        run_id, _, what = path[len(base) + 1:].partition("/")
+        if run_id and "/" not in what:
+            return "run", run_id, what
+    return None
+
+
+def _run_start_payload(snapshot: dict, body: bytes) -> tuple[dict | None, Response | None]:
+    payload = _parse_body(body)
+    if payload is None:
+        return None, _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    testcase, path = payload.get("testcase"), payload.get("path")
+    if path is not None and not snapshot.get("local"):
+        return None, _error(403, "path_only_local")
+    if not (isinstance(testcase, str) and testcase.strip()) and not (isinstance(path, str) and path.strip()):
+        return None, _error(400, "testcase_missing")
+    variables = payload.get("vars") or {}
+    if not isinstance(variables, dict) or len(variables) > MAX_RUN_VARS:
+        return None, _error(400, "invalid_vars")
+    clean = {}
+    for name, value in variables.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+            return None, _error(400, "invalid_vars", var=str(name)[:40])
+        clean[str(name)[:40]] = float(value)
+    return {"testcase": testcase if isinstance(testcase, str) else "",
+            "path": path if isinstance(path, str) else "", "vars": clean}, None
+
+
+def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query: dict, body: bytes,
+                   executor, client: str) -> Response:
+    kind, run_id, what = route
+    registry = getattr(state, "runs", None)
+    if registry is None:
+        return _error(501, "not_implemented")
+    if method == "POST":
+        if not ((kind == "runs") or (kind == "run" and what == "stop")):
+            return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "GET, HEAD"})
+        denied = check_write_auth(snapshot, header_get)
+        if denied is not None:
+            return denied
+        if not remote_effective(snapshot):
+            return _error(403, "remote_control_inactive")
+        if executor is None or not hasattr(executor, "submit_run"):
+            return _error(501, "not_implemented")
+        if kind == "runs":
+            if snapshot.get("lock", "free") != "free":
+                return _error(409, "locked", lock=snapshot.get("lock", "free"))
+            payload, error = _run_start_payload(snapshot, body)
+            if error is not None:
+                return error
+            result = executor.submit_run("start", payload, client)
+            if result.status == "ok":
+                return _json(202, {"v": API_VERSION, "ok": True, "run": result.message})
+        else:
+            if registry.get(run_id) is None:
+                return _error(404, "unknown_run")
+            result = executor.submit_run("stop", {"run": run_id}, client)
+            if result.status == "ok":
+                return _json(200, {"v": API_VERSION, "ok": True, "run": run_id})
+        status = {"devices_missing": 409, "busy": 409, "editor_modified": 409, "locked": 409,
+                  "unknown_testcase": 404, "invalid_testcase": 400, "not_running": 409}.get(result.code, 502)
+        if result.status == "pending":
+            return _json(202, {"v": API_VERSION, "ok": None, "status": "pending"})
+        return _error(status, result.code or "run_error", **({"message": result.message} if result.message else {}))
+
+    if method not in ("GET", "HEAD"):
+        return _error(405, "method_not_allowed")
+    denied = check_auth(snapshot, header_get, query)
+    if denied is not None:
+        return denied
+    if kind == "testcases":
+        lister = getattr(state, "list_testcases", None)
+        return _json(200, {"v": API_VERSION, "testcases": lister() if lister is not None else []})
+    if kind == "runs":
+        return _json(200, {"v": API_VERSION, "runs": registry.list()})
+    if not what:
+        events = _int_param(query, "events", -1, -1, 100000)
+        entry = registry.get(run_id, events)
+        return _json(200, {"v": API_VERSION, **entry}) if entry is not None else _error(404, "unknown_run")
+    if what not in RUN_FILE_TYPES:
+        return _error(404, "not_found")
+    if registry.get(run_id) is None:
+        return _error(404, "unknown_run")
+    path = registry.file(run_id, what)
+    if path is None:
+        return _error(409, "not_ready")
+    try:
+        return Response(200, RUN_FILE_TYPES[what], path.read_bytes())
+    except OSError:
+        return _error(410, "file_gone")
+
+
 def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
              body: bytes = b"", executor=None, client: str = "", local: bool = False,
              scopes=None) -> Response:
@@ -1158,6 +1272,14 @@ def dispatch(method: str, raw_path: str, header_get, state, app_info: dict,
             return _scope_error(exc)
         except Exception:  # noqa: BLE001 -- dispatch wirft nie (siehe Docstring)
             logger.exception("Oszilloskop-Anfrage %s %s gescheitert", method, path)
+            return _error(500, "internal_error")
+
+    runs_route = _runs_route(path)
+    if runs_route is not None:
+        try:
+            return _dispatch_runs(method, runs_route, header_get, state, snapshot, query, body, executor, client)
+        except Exception:  # noqa: BLE001 -- dispatch wirft nie (siehe Docstring)
+            logger.exception("Lauf-Anfrage %s %s gescheitert", method, path)
             return _error(500, "internal_error")
 
     if method == "POST":

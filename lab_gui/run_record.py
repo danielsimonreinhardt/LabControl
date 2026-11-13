@@ -54,6 +54,8 @@ class RunRecord:
     # Ablauf-Eigenschaften (Format v3 "meta") und eingestellte Verriegelungsgruppen bei Laufstart
     meta: dict = field(default_factory=dict)
     interlock_groups: list = field(default_factory=list)
+    # Messmittel bei Laufstart (instruments.Instruments.for_run, FT-8): Kennung, Kalibrierung, "expired"
+    instruments: list = field(default_factory=list)
 
 
 class RunRecorder(QObject):

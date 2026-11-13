@@ -455,6 +455,9 @@ class DeviceWorker(QObject):
     # get_firmware_version(), z.B. "0.1.0") -- fuer die "Geraete-Info"-
     # Sektion im Settings-Tab (settings_tab.SettingsTab.set_hil_firmware_version).
     hil_info = Signal(str, str)
+    # Messmittel (FT-8, 0.59.1): device_id, kind, rohe Kennungs-Antwort (*IDN? o. ae.) beim Verbinden;
+    # instruments.parse_idn macht Typ/Seriennummer/Firmware daraus
+    device_identity = Signal(str, str, str)
     hil_digital_state = Signal(str, list, list)  # device_id, inputs (IN1-8), outputs (OUT1-8)
     hil_relay_state = Signal(str, list)        # device_id, relays (RELAY1-4)
     hil_analog_input = Signal(str, list)       # device_id, AIN1-4 in mV
@@ -795,6 +798,17 @@ class DeviceWorker(QObject):
         for device_id in list(self._can_buses):
             self._sync_can_nodes(device_id)
 
+    def _emit_identity(self, kind: str, device_id: str, device) -> str:
+        """Kennung (*IDN?) eines frisch verbundenen Geraets fuer die Messmittel (FT-8). Ein Fehler hier ist
+        unkritisch -- die Kennung fehlt dann nur im Bericht. Liefert die Antwort ("" bei Fehler)."""
+        try:
+            text = str(device.identify() or "")
+        except Exception as exc:  # noqa: BLE001 -- Treiber werfen je eigene Fehler; nur Anzeige
+            logger.debug("Kennung von %s nicht lesbar: %s", device_id, exc)
+            return ""
+        self.device_identity.emit(device_id, kind, text)
+        return text
+
     def _add_mock_psu(self) -> None:
         if SIM_PSU_ID in self._psus:
             return
@@ -819,6 +833,7 @@ class DeviceWorker(QObject):
         self._loads[SIM_LOAD_ID] = load
         self.device_added.emit("load", SIM_LOAD_ID)
         self.load_connected.emit(SIM_LOAD_ID, True)
+        self._emit_identity("load", SIM_LOAD_ID, load)
         self.load_input_state.emit(SIM_LOAD_ID, False)
         self.load_function_state.emit(SIM_LOAD_ID, load.get_function())
 
@@ -937,6 +952,7 @@ class DeviceWorker(QObject):
         self._fgs[SIM_FG_ID] = MockJDS66xx()
         self.device_added.emit("fg", SIM_FG_ID)
         self.fg_connected.emit(SIM_FG_ID, True)
+        self._emit_identity("fg", SIM_FG_ID, self._fgs[SIM_FG_ID])
         self._emit_fg_state(SIM_FG_ID)
 
     def _remove_mock_fg(self) -> None:
@@ -1130,6 +1146,7 @@ class DeviceWorker(QObject):
         self.device_added.emit("hil", SIM_HIL_ID)
         self.hil_connected.emit(SIM_HIL_ID, True)
         self.hil_info.emit(SIM_HIL_ID, self._hils[SIM_HIL_ID].get_firmware_version() or "")
+        self._emit_identity("hil", SIM_HIL_ID, self._hils[SIM_HIL_ID])
         self._poll_hil(SIM_HIL_ID, self._hils[SIM_HIL_ID])
 
     def _remove_mock_hil(self) -> None:
@@ -1356,6 +1373,7 @@ class DeviceWorker(QObject):
             logger.info("Last verbunden: %s", device_id)
             self.device_added.emit("load", device_id)
             self.load_connected.emit(device_id, True)
+            self._emit_identity("load", device_id, candidate)
             # Sofort abfragen statt auf den naechsten Poll-Zyklus zu warten
             # (bis zu POLL_INTERVAL_MS spaeter) -- der EIN/AUS-Button im
             # Control-Tab soll den echten Zustand so frueh wie moeglich zeigen.
@@ -1372,7 +1390,8 @@ class DeviceWorker(QObject):
             self.psu_manual_state.emit(device_id, False)
             self._adopt_psu_state(device_id)
         else:
-            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, candidate.identify())
+            identity = self._emit_identity("fg", device_id, candidate)
+            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, identity)
             self.device_added.emit("fg", device_id)
             self.fg_connected.emit(device_id, True)
             self._emit_fg_state(device_id)
@@ -1517,6 +1536,7 @@ class DeviceWorker(QObject):
         self.device_added.emit("hil", device_id)
         self.hil_connected.emit(device_id, True)
         self.hil_info.emit(device_id, candidate.get_firmware_version() or "")
+        self._emit_identity("hil", device_id, candidate)
         # Sofort abfragen statt auf den naechsten HIL_POLL_INTERVAL_MS-Zyklus
         # zu warten (analog zu _reconnect_loads/_reconnect_psus).
         self._poll_hil(device_id, candidate)

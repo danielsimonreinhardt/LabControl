@@ -11,8 +11,9 @@ Exit-Codes (FP-3 a): 0 bestanden, 1 nicht bestanden, 2 Abbruch/Fehler/Sicherheit
 Am Ende eines Laufs immer ALLE AUS (FP-4 a); beim Beenden gibt LabControl die Netzteile wie beim
 Schliessen des Fensters mit 1 V / 0 A zur Handbedienung frei.
 
-Laeuft LabControl schon (Kiosk am Pi), lehnt die Kommandozeile ab: zwei Instanzen oeffneten dieselben
-Ports. Der Lauf ueber die laufende Instanz (FP-2 c) kommt mit den REST-Laeufen (0.59).
+Laeuft LabControl schon (Kiosk am Pi), oeffnet die Kommandozeile die Geraete nicht selbst (zwei Instanzen
+oeffneten dieselben Ports), sondern startet den Lauf ueber die REST-Schnittstelle der laufenden Instanz
+(FP-2 c, 0.59.0, instance_cli.py).
 """
 from __future__ import annotations
 
@@ -110,6 +111,11 @@ class _Rig:
         self.safety.all_off_requested.connect(self.worker.all_outputs_off)
         self.interlock = Interlock(settings.interlock_groups, self.directory.is_online)
         self.session = RunSession(self.worker, self.safety, self.recorder, self.directory, self.interlock)
+        import data_store
+        import instruments
+        self.instruments = instruments.Instruments(lambda: data_store.store().shared_file(instruments.FILE_NAME))
+        instruments.connect_worker(self.worker, self.instruments)
+        self.session.instruments = self.instruments
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 
@@ -288,6 +294,7 @@ def _write_outputs(args, record, interrupted: bool) -> None:
 def main(argv: list[str]) -> int:
     import app_logging
     import data_store
+    import instance_cli
     from instance_lock import InstanceLock
     from run_session import EXIT_SETUP
     from settings import Settings
@@ -302,10 +309,13 @@ def main(argv: list[str]) -> int:
     logger.info("LAB CONTROL v%s Kommandozeile: %s", __version__, " ".join(argv[1:]))
     lock = InstanceLock()
     if not lock.acquire():
+        # LabControl laeuft schon (Kiosk am Pi): ueber dessen REST-Schnittstelle (FP-2 c, 0.59.0)
         holder = lock.holder()
-        _say("LabControl läuft bereits" + (f" ({holder})" if holder else "")
-             + " – Lauf über die laufende Instanz kommt mit 0.59")
-        return EXIT_SETUP
+        logger.info("Kommandozeile über die laufende Instanz (%s)", holder or "?")
+        try:
+            return instance_cli.main(args, settings)
+        finally:
+            app_logging.shutdown()
     try:
         if args.command == "devices":
             return _cmd_devices(args, settings)

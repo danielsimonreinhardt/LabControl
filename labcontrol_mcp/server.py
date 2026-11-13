@@ -82,6 +82,15 @@ HINTS = {
     "unknown_capture": "Erfassung nicht (mehr) im Speicher (es werden die letzten 50 gehalten). "
                        "Die CSV-Datei (csv_path) kann noch vorhanden sein.",
     "unknown_measurement": "Unbekannter Kennwert; 'allowed' listet die moeglichen.",
+    # Testlaeufe (0.59.0)
+    "unknown_testcase": "Ablauf nicht im gemeinsamen Ordner. list_testcases zeigt die Namen.",
+    "unknown_run": "Unbekannte Lauf-ID (es werden die letzten 30 Laeufe gehalten).",
+    "editor_modified": "Im Editor von LabControl gibt es ungespeicherte Aenderungen. Den Nutzer bitten, zu "
+                       "speichern oder zu verwerfen -- nicht umgehen.",
+    "devices_missing": "Geraete des Ablaufs sind nicht verbunden (siehe message).",
+    "invalid_testcase": "Der Ablauf laesst sich nicht laden oder hat keine aktiven Aktionsschritte (siehe message).",
+    "not_running": "Dieser Lauf laeuft nicht (mehr).",
+    "not_ready": "Der Lauf ist noch nicht fertig; Ergebnisdateien gibt es erst danach.",
 }
 
 INSTRUCTIONS = """\
@@ -131,6 +140,14 @@ release_scope):
 - Kanalnamen stehen in get_scope_capabilities: PicoScope 'A'/'B', UNI-T MSO1000HD (scpiscope) 'CH1'..'CH4'.
 - Die Verbindung bleibt 60 s nach der letzten Erfassung offen (PicoScope 7 kann das Geraet dann nicht
   oeffnen). Nach einer Messreihe release_scope aufrufen.
+
+Testablaeufe (list_testcases, run_testcase, get_run, stop_run):
+- Ein Ablauf ist eine gespeicherte, vom Nutzer erstellte Schrittfolge; statt vieler Einzelbefehle laeuft er
+  mit Pruefungen, Sicherheits-Watchdog und Bericht wie aus dem Fenster. Nur Ablaeufe starten, um die der
+  Nutzer gebeten hat. Steuerrecht wie bei control_device; waehrend des Laufs ist Steuern gesperrt.
+- run_testcase liefert eine Lauf-ID; mit get_run den Stand abfragen (running, step, checks_failed,
+  exit_code: 0 bestanden, 1 nicht bestanden, 2 Abbruch/Fehler). Am Ende stehen Bericht/JUnit/Ergebnis bereit
+  (get_run mit file='result' liefert die Pruefergebnisse als JSON). stop_run haelt an und schaltet ALLE AUS.
 """
 
 server = MCPServer("labcontrol", instructions=INSTRUCTIONS)
@@ -260,6 +277,62 @@ def all_off() -> dict:
     microHIL-Ausgaenge). Geht immer -- auch ohne Steuerrecht, bei laufendem Testablauf und
     nach einer Sicherheitsabschaltung. Bei Zweifeln oder Auffaelligkeiten sofort aufrufen."""
     return _checked("POST", "/api/v1/all-off", {})
+
+
+# -- Testablaeufe (0.59.0) -------------------------------------------------------
+
+
+@server.tool(annotations=READ_ONLY)
+def list_testcases() -> dict:
+    """Namen der gespeicherten Testablaeufe im gemeinsamen Ordner (fuer run_testcase) und die letzten
+    Laeufe mit Ergebnis."""
+    names = _checked("GET", "/api/v1/testcases")
+    runs = _checked("GET", "/api/v1/runs")
+    return {"testcases": names.get("testcases", []), "recent_runs": runs.get("runs", [])[:10]}
+
+
+@server.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+def run_testcase(testcase: str, variables: dict[str, float] | None = None) -> dict:
+    """Startet einen gespeicherten Testablauf (Name aus list_testcases, z. B. 'ladetest.json'). Optional
+    Laufvariablen vorbelegen. Liefert die Lauf-ID ('run'); danach mit get_run den Stand abfragen. Schaltet
+    Geraete gemaess Ablauf -- nur auf Bitte des Nutzers starten."""
+    payload: dict = {"testcase": testcase}
+    if variables:
+        payload["vars"] = variables
+    return _checked("POST", "/api/v1/runs", payload, timeout=TIMEOUT_S)
+
+
+@server.tool(annotations=READ_ONLY)
+def get_run(run_id: str, file: str | None = None) -> dict:
+    """Stand eines Laufs (running, step/steps_total, checks_total/checks_failed, status, exit_code, error,
+    Meldungen in 'events'). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
+    Urteil, Anforderungen, Geraete); file='junit' liefert das JUnit-XML als Text. Den HTML-Bericht oeffnet
+    der Nutzer in LabControl oder im Berichtsordner."""
+    path = "/api/v1/runs/" + urllib.parse.quote(run_id, safe="")
+    if file is None:
+        return _checked("GET", path + "?events=0")
+    if file == "result":
+        return _checked("GET", f"{path}/result")
+    if file != "junit":
+        raise ToolError("file muss 'result' oder 'junit' sein")
+    request = urllib.request.Request(BASE_URL + f"{path}/junit", method="GET")
+    if TOKEN:
+        request.add_header("Authorization", f"Bearer {TOKEN}")
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+            return {"junit": response.read().decode("utf-8", "replace")}
+    except urllib.error.HTTPError as exc:
+        raise _fail(exc.code, _parse(exc.read())) from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise ToolError(f"LabControl unter {BASE_URL} nicht erreichbar ({exc}).") from exc
+
+
+@server.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def stop_run(run_id: str) -> dict:
+    """Haelt einen laufenden Testablauf an und schaltet dabei ALLE AUS (wie der Stop-Knopf)."""
+    return _checked("POST", "/api/v1/runs/" + urllib.parse.quote(run_id, safe="") + "/stop", {})
 
 
 # -- Oszilloskope --------------------------------------------------------------

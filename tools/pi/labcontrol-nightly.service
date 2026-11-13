@@ -1,0 +1,16 @@
+# Nachtlauf (0.59.0, FT-4): fuehrt einen Testablauf per Kommandozeile aus. Laeuft der Kiosk, geht der Lauf
+# ueber dessen REST-Schnittstelle (Netzwerk-Freigabe und "Claude (MCP) darf steuern" muessen an sein),
+# sonst oeffnet die Kommandozeile die Geraete selbst. Ergebnis, JUnit und Bericht legt LabControl im
+# Berichtsordner ab (Netzlaufwerk: <netz>/<rechner>/reports/run_<id>.*), der Exit-Code steht im Journal.
+# Eingerichtet von tools/pi/nightly_pi.sh (Ablauf in ~/.config/labcontrol/nightly.env).
+
+[Unit]
+Description=LabControl Nachtlauf
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/LabControl
+EnvironmentFile=%h/.config/labcontrol/nightly.env
+Environment=QT_QPA_PLATFORM=offscreen
+ExecStart=%h/labcontrol-venv/bin/python %h/LabControl/lab_gui/main.py run ${TESTCASE} --wait-devices 60
+TimeoutStartSec=12h

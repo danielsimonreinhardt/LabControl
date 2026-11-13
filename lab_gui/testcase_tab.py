@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -95,6 +96,7 @@ from testcase_model import (
     remap_devices,
     save_block,
     save_steps,
+    testcase_payload,
     validate_structure,
 )
 
@@ -2158,6 +2160,31 @@ class TestcaseTab(QWidget):
         """Ablauf-Eigenschaften (Format v3 "meta"), z.B. source_sink fuer die Verriegelung."""
         return dict(self._meta)
 
+    def _content_key(self) -> str:
+        payload = testcase_payload(self.steps(), meta=self._meta)
+        payload.pop("devices", None)
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+    def mark_clean(self) -> None:
+        """Aktueller Inhalt gilt als gespeichert (nach Laden/Speichern/Neu, beim Start)."""
+        self._clean_key = self._content_key()
+
+    def is_modified(self) -> bool:
+        """Ungespeicherte Aenderungen im Editor? Ein Lauf ueber REST/MCP laedt sonst darueber (0.59.0)."""
+        return getattr(self, "_clean_key", None) != self._content_key()
+
+    def current_path(self) -> Path | None:
+        return self._current_path
+
+    def load_for_run(self, path: Path) -> str:
+        """Laedt einen Ablauf ohne Rueckfrage-Dialog fuer einen Lauf ueber REST/MCP; "" = geladen,
+        sonst der Fehler."""
+        try:
+            load_testcase(path)
+        except (OSError, ValueError, TypeError) as exc:
+            return str(exc)
+        return "" if self._load_path(path) else tr("Laden fehlgeschlagen")
+
     def _edit_properties(self) -> None:
         dialog = TestcasePropertiesDialog(self._meta, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -2188,6 +2215,7 @@ class TestcaseTab(QWidget):
             return
         self._current_path = path
         self._file_digest = _file_digest(path)
+        self.mark_clean()
 
     # -- Verbund Pi + PC (PI-24 a, verbund_ids.py) -----------------------------------
 
@@ -2301,6 +2329,7 @@ class TestcaseTab(QWidget):
             self._add_row_clicked()
         self._revalidate_structure()
         self._sync_run_view_test()
+        self.mark_clean()
         return True
 
     # -- Ausfuehren-Ansicht (Touch-Profil, touch_run_view.py) ---------------------
@@ -2354,6 +2383,7 @@ class TestcaseTab(QWidget):
         self._add_row_clicked()
         self._revalidate_structure()
         self._sync_run_view_test()
+        self.mark_clean()
         self._dismiss_hint()
         if self._table.rowCount() > 0:
             self._table.selectRow(0)

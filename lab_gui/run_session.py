@@ -188,6 +188,8 @@ class RunSession(QObject):
         # Verbund: (device_id, kind, action, value, channel) -> True, wenn der Router die Aktion
         # uebernommen hat (Partnergeraet, MainWindow._route_partner_action)
         self.partner_router: Callable[[str, str, str, float, int], bool] | None = None
+        # Messmittel (instruments.Instruments, FT-8); None = nicht erfassen
+        self.instruments = None
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
@@ -256,6 +258,12 @@ class RunSession(QObject):
             logger.warning("Testablauf %s: Verriegelung Netzteil/Last aufgehoben (Quelle/Senke)", testcase_name)
         self._active = True
         step_device_ids = self.directory.step_device_ids(steps)
+        if self.instruments is not None and record is not None:
+            # Messmittel (FT-8): Kennung und Kalibrierung der eigenen Geraete dieses Laufs festhalten
+            self.instruments.reload()
+            own = {d for d in step_device_ids if not d.startswith("@")}
+            record.instruments = self.instruments.for_run(
+                own, {d: record.device_meta.get(d, ("", d))[1] for d in own})
         # PicoScope und J-Link nicht in die Watchdog-Ueberwachung: kein Ausgang, und waehrend eines
         # Laufs keine periodischen Messwerte (sonst "veraltet" nach STALE_TIMEOUT_S, an Hardware
         # reproduziert)

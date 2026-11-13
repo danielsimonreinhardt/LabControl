@@ -1596,10 +1596,11 @@ def section_app() -> None:
                 {"name": "release", "tool": "release_scope", "args": {"scope_id": "picoscope:SIM"}},
             ]
             out = _run_mcp_probe(mcp_python, base, token, steps)
-            check("MCP: zwoelf Werkzeuge angeboten (5 Steuerung + 7 Oszilloskop)",
-                  out["tools"] == ["acquire", "all_off", "control_device", "get_capture",
+            check("MCP: 16 Werkzeuge angeboten (5 Steuerung + 7 Oszilloskop + 4 Testlauf)",
+                  out["tools"] == ["acquire", "all_off", "control_device", "get_capture", "get_run",
                                    "get_scope_capabilities", "get_status", "list_devices", "list_scopes",
-                                   "measure", "plot_capture", "read_device", "release_scope"],
+                                   "list_testcases", "measure", "plot_capture", "read_device", "release_scope",
+                                   "run_testcase", "stop_run"],
                   str(out["tools"]))
             check("MCP: Sicherheitshinweise fuer den Assistenten mitgeliefert",
                   "Hardware" in out["instructions"] and "all_off" in out["instructions"])
