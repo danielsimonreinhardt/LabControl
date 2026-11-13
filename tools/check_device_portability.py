@@ -66,7 +66,8 @@ def check_model() -> None:
     check("Datei nennt nur verwendete Geraete mit Art und Name",
           payload["devices"] == {k: {"kind": v[0], "label": v[1]} for k, v in PC_DEVICES.items()
                                  if k != "load:48DC385B3435"}, str(payload["devices"]))
-    check("Format-Version unveraendert", payload["version"] == tm.FILE_FORMAT_VERSION)
+    # Geraetenamen heben das Format nicht an; ohne v3-Inhalte (params/requirements/meta) bleibt es 2 (0.58.0)
+    check("Format-Version unveraendert", payload["version"] == 2)
     steps = tm.load_steps(path)
     mapping = tm.remap_devices(steps, tm.load_device_map(path), PI_DEVICES)
     check("Zuordnung ueber den Namen", mapping == {"psu:COM6": "psu:usb-1-1.2:1.0",

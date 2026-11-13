@@ -51,6 +51,7 @@ from can_bus.driver import (
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import ICON_SIZE, IconButton
+from interlock_editor import InterlockEditor
 from paths import IS_FROZEN
 from remote_actions import CONTROL_KINDS, SCOPE_KINDS
 from safety import SAFETY_LIMIT_FIELDS
@@ -1038,6 +1039,13 @@ class SettingsTab(QWidget):
         # muessen.
         self._safety_section_rows: dict[str, QWidget] = {}
 
+        # Verriegelung Netzteil/Last im Testablauf (FP-7 b, 0.58.0)
+        self.interlock_editor = InterlockEditor()
+        interlock_row = QHBoxLayout()
+        interlock_row.addWidget(self.interlock_editor)
+        interlock_row.addStretch(1)
+        layout.addLayout(interlock_row)
+
         layout.addStretch()
         return page
 
@@ -1316,6 +1324,7 @@ class SettingsTab(QWidget):
         self._share_url_edit.setText(url)
 
     def _retranslate(self) -> None:
+        self.interlock_editor.retranslate()
         self._sim_checkbox.setText(tr("Simulationsmodus"))
         self._dark_checkbox.setText(tr("Dark Mode"))
         touch_text = tr("Touch-Bedienung")
@@ -1497,6 +1506,7 @@ class SettingsTab(QWidget):
     # -- geraete-individuelle Sicherheits-Grenzwerte -------------------------
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
+        self.interlock_editor.on_device_known(kind, device_id, label)
         if kind == "hil":
             self._ensure_info_section(device_id, label)
         self._share_table.add_device(kind, device_id, label)
@@ -1530,6 +1540,7 @@ class SettingsTab(QWidget):
         self._safety_section_rows[device_id] = row_widget
 
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
+        self.interlock_editor.on_label_changed(kind, device_id, label)
         self._share_table.set_label(device_id, label)
         info_section = self._info_sections.get(device_id)
         if info_section is not None:

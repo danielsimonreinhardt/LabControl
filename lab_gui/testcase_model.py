@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from i18n import tr
@@ -415,8 +416,18 @@ CHECK_FIELD_SYMBOLS = {
 }
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
-# war ein nacktes JSON-Array ohne Umschlag/Versionsnummer.
-FILE_FORMAT_VERSION = 2
+# war ein nacktes JSON-Array ohne Umschlag/Versionsnummer. Version 3 (0.58.0, FP-5 a): je Schritt
+# "params" (Parameter neuer Aktionen, Schema je Aktion), "requirements" (Anforderungs-IDs) und
+# unbekannte Felder bleiben erhalten; dazu "meta" fuer den ganzen Ablauf (siehe TESTCASE_META_KEYS).
+# Ohne diese Inhalte wird weiter Version 2 geschrieben, damit aeltere Programmversionen die Datei lesen.
+FILE_FORMAT_VERSION = 3
+_V2 = 2
+
+# Ablauf-Eigenschaften (Datei "meta"): Beschreibung, Anforderungs-IDs des ganzen Ablaufs, und ob Netzteil
+# und Last trotz Verriegelung gleichzeitig eingeschaltet sein duerfen (Quelle/Senke, FP-7 b).
+TESTCASE_META_KEYS = ("description", "requirements", "source_sink")
+
+_log = logging.getLogger(__name__)
 
 # Aktuelle Baustein-Dateiversion (siehe save_block/load_block). Eigener
 # Zaehler statt FILE_FORMAT_VERSION, da Testablauf- und Baustein-Dateien
@@ -519,6 +530,29 @@ class TestStep:
     check_min: float = 0.0
     check_max: float = 0.0
     check_abort: bool = False     # True = Lauf bei Verletzung abbrechen (wie Geraetefehler)
+
+    # -- Format v3 (0.58.0, FP-5 a) ----------------------------------------
+    # Parameter neuer Aktionen (UDS, Profile, Fehlerbox, XCP ...) statt je Feature eigener Felder
+    params: dict = field(default_factory=dict)
+    # Anforderungs-IDs, die dieser Schritt (mit seiner Pruefung) nachweist (FT-3)
+    requirements: list = field(default_factory=list)
+    # Felder aus einer neueren Programmversion, die hier unbekannt sind -- beim Speichern unveraendert
+    # zurueckgeschrieben, damit Laden und Speichern nichts verliert
+    extra: dict = field(default_factory=dict)
+
+
+STEP_FIELDS = frozenset(f.name for f in fields(TestStep))
+# Diese drei Felder bringt erst Format v3 mit
+_V3_STEP_FIELDS = ("params", "requirements", "extra")
+
+
+def carry_v3_fields(target: TestStep, source: TestStep) -> TestStep:
+    """Uebernimmt params/requirements/extra von `source` (der Editor baut Schritte aus seinen
+    Eingabefeldern neu auf und kennt diese Felder nicht). Liefert `target`."""
+    target.params = dict(source.params)
+    target.requirements = list(source.requirements)
+    target.extra = dict(source.extra)
+    return target
 
 
 def arb_value(step: "TestStep", t: float) -> float:
@@ -688,13 +722,55 @@ def check_summary(step: TestStep) -> str:
     return f"{symbol}: {step.check_min:g}–{step.check_max:g} {unit}".rstrip()
 
 
-def save_steps(steps: list[TestStep], path: Path, known_devices: dict | None = None) -> None:
+def clean_meta(meta: dict | None) -> dict:
+    """Ablauf-Eigenschaften in fester Form; leere Eintraege fallen weg, unbekannte bleiben erhalten."""
+    result = {}
+    for key, value in (meta or {}).items():
+        if key == "requirements":
+            value = [str(r).strip() for r in (value or []) if str(r).strip()]
+        elif key == "description":
+            value = str(value or "").strip()
+        elif key == "source_sink":
+            value = bool(value)
+        if value in ("", [], False, None, {}):
+            continue
+        result[key] = value
+    return result
+
+
+def _step_to_item(step: TestStep, v3: bool) -> dict:
+    item = asdict(step)
+    extra = item.pop("extra")
+    if not v3:
+        item.pop("params")
+        item.pop("requirements")
+        return item
+    for key, value in extra.items():
+        item.setdefault(key, value)
+    return item
+
+
+def needs_v3(steps: list[TestStep], meta: dict | None = None) -> bool:
+    return bool(clean_meta(meta)) or any(step.params or step.requirements or step.extra for step in steps)
+
+
+def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
+    """Dateiinhalt eines Ablaufs (auch fuer REST/Kommandozeile, ohne Datei)."""
+    v3 = needs_v3(steps, meta)
     payload = {
         "format": "labor-testcase",
-        "version": FILE_FORMAT_VERSION,
-        "steps": [asdict(step) for step in steps],
+        "version": FILE_FORMAT_VERSION if v3 else _V2,
+        "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
+    if v3 and clean_meta(meta):
+        payload["meta"] = clean_meta(meta)
+    return payload
+
+
+def save_steps(steps: list[TestStep], path: Path, known_devices: dict | None = None,
+               meta: dict | None = None) -> None:
+    payload = testcase_payload(steps, known_devices, meta)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -757,31 +833,54 @@ def load_device_map(path: Path) -> dict:
 def _steps_from_items(items: list[dict]) -> list[TestStep]:
     steps = []
     for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(tr("Ungültiger Schritt in der Datei: {item}", item=str(item)[:60]))
+        item = dict(item)
         if "device" in item and "device_kind" not in item:
-            item = dict(item)
             legacy = item.pop("device")
             item["device_kind"] = _LEGACY_DEVICE_KIND.get(legacy, legacy)
             item.setdefault("device_id", "")
-        steps.append(TestStep(**item))
+        # Unbekannte Felder (neuere Programmversion) nicht verwerfen, sondern mitfuehren (Format v3)
+        extra = dict(item.pop("extra", None) or {})
+        for key in [k for k in item if k not in STEP_FIELDS]:
+            extra[key] = item.pop(key)
+        if extra:
+            _log.info("Testablauf: unbekannte Schrittfelder bleiben erhalten: %s", ", ".join(sorted(extra)))
+        if not isinstance(item.get("params", {}), dict):
+            raise ValueError(tr("„params“ muss ein Objekt sein"))
+        if not isinstance(item.get("requirements", []), list):
+            raise ValueError(tr("„requirements“ muss eine Liste sein"))
+        steps.append(TestStep(**item, extra=extra))
     return steps
 
 
-def load_steps(path: Path) -> list[TestStep]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def load_testcase(path: Path) -> tuple[list[TestStep], dict]:
+    """Schritte und Ablauf-Eigenschaften ("meta", siehe TESTCASE_META_KEYS) einer Datei."""
+    return testcase_from_data(json.loads(path.read_text(encoding="utf-8")))
+
+
+def testcase_from_data(data) -> tuple[list[TestStep], dict]:
     if isinstance(data, list):
-        items = data  # Altes Dateiformat (v1): nacktes Array ohne Umschlag.
-    else:
-        version = int(data.get("version", 0))
-        if version > FILE_FORMAT_VERSION:
-            raise ValueError(
-                tr(
-                    "Testablauf-Datei stammt aus einer neueren Programmversion "
-                    "(Format {version}) und kann nicht geladen werden.",
-                    version=version,
-                )
+        return _steps_from_items(data), {}   # Altes Dateiformat (v1): nacktes Array ohne Umschlag.
+    if not isinstance(data, dict) or not isinstance(data.get("steps"), list):
+        raise ValueError(tr("Keine Testablauf-Datei"))
+    version = int(data.get("version", 0))
+    if version > FILE_FORMAT_VERSION:
+        raise ValueError(
+            tr(
+                "Testablauf-Datei stammt aus einer neueren Programmversion "
+                "(Format {version}) und kann nicht geladen werden.",
+                version=version,
             )
-        items = data["steps"]
-    return _steps_from_items(items)
+        )
+    meta = data.get("meta") or {}
+    if not isinstance(meta, dict):
+        raise ValueError(tr("„meta“ muss ein Objekt sein"))
+    return _steps_from_items(data["steps"]), clean_meta(meta)
+
+
+def load_steps(path: Path) -> list[TestStep]:
+    return load_testcase(path)[0]
 
 
 def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict | None = None) -> None:
@@ -790,11 +889,14 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     eigenes Dateiformat statt save_steps(), da ein Baustein zusaetzlich einen
     Namen traegt und kein vollstaendiger, eigenstaendig lauffaehiger
     Testablauf sein muss (z.B. ein einzelner Block-Rumpf ohne Start/Ende)."""
+    # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
+    # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
+    v3 = needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
-        "version": BLOCK_FILE_FORMAT_VERSION,
+        "version": BLOCK_FILE_FORMAT_VERSION + 1 if v3 else BLOCK_FILE_FORMAT_VERSION,
         "name": name,
-        "steps": [asdict(step) for step in steps],
+        "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -803,7 +905,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
 def load_block(path: Path) -> tuple[str, list[TestStep]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = int(data.get("version", 0))
-    if version > BLOCK_FILE_FORMAT_VERSION:
+    if version > BLOCK_FILE_FORMAT_VERSION + 1:
         raise ValueError(
             tr(
                 "Baustein-Datei stammt aus einer neueren Programmversion "

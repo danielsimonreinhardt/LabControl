@@ -14,13 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (
 import logging
 import os
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 import app_logging
 import data_store
+import headless
 from app_icon import icon as app_icon
 from app_logging import setup_logging
-from i18n import Translator
+from i18n import Translator, tr
+from instance_lock import InstanceLock
 import shutdown_inhibit
 import shutdown_signals
 from main_window import MainWindow
@@ -61,6 +63,11 @@ def show_window(window: QWidget, mode: str | None = None) -> str:
 
 
 def main() -> None:
+    # Kommandozeile ohne Fenster (0.58.0): "run"/"devices" als erstes Argument
+    if headless.is_cli(sys.argv):
+        if pyi_splash is not None:
+            pyi_splash.close()
+        sys.exit(headless.main(sys.argv))
     # Einstellungen vor dem Logging: das Netzlaufwerk steht darin.
     settings = Settings()
     setup_logging(settings.network_dir)
@@ -71,6 +78,17 @@ def main() -> None:
     app.setWindowIcon(app_icon())
     Translator.instance().set_language(settings.language)
     ThemeManager.instance().apply(settings.dark_mode)
+    # Zweite Instanz auf demselben Datenordner wuerde dieselben Ports oeffnen (0.58.0). 3 s Geduld: ein
+    # Neustart des Dienstes kann die alte Instanz noch beim Beenden treffen.
+    lock = InstanceLock()
+    if not lock.acquire(3000):
+        holder = lock.holder()
+        logger.warning("LabControl läuft bereits (%s) – zweite Instanz beendet", holder or "?")
+        if pyi_splash is not None:
+            pyi_splash.close()
+        QMessageBox.warning(None, "LAB CONTROL", tr("LabControl läuft bereits."))
+        app_logging.shutdown()
+        sys.exit(1)
     window = MainWindow(settings)
     # SIGTERM/Strg+C und (Linux) das angekuendigte Herunterfahren beenden wie das Schliessen
     # des Fensters (Netzteile freigeben usw.) -- nur einmal, egal was zuerst kommt.
@@ -84,6 +102,7 @@ def main() -> None:
         pyi_splash.close()
     exit_code = app.exec()
     logger.info("LAB CONTROL beendet (exit_code=%d)", exit_code)
+    lock.release()
     data_store.store().stop()   # laufendes Nachschieben beenden (Daemon, haelt nicht auf)
     app_logging.shutdown()   # restliche Meldungen schreiben; ein haengendes Netzlaufwerk haelt nicht auf
     sys.exit(exit_code)

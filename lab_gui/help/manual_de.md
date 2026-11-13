@@ -289,6 +289,11 @@ ist), **Laden** und **Speichern**.
   Öffnen anderswo geändert (z. B. am zweiten Rechner im gemeinsamen Ordner),
   fragt das Speichern nach: **„Überschreiben“**, **„Als Kopie speichern“**
   (legt „Name (Kopie).json“ an) oder **„Abbrechen“**.
+- **Regler-Symbol** („Eigenschaften des Ablaufs…“): Beschreibung und
+  Anforderungs-IDs des ganzen Ablaufs (z. B. `SSR-12, SSR-13`) sowie
+  **„Netzteil und Last gleichzeitig (Quelle/Senke)“** – hebt für diesen Ablauf
+  die Verriegelung Netzteil/Last auf (Abschnitt 6), etwa um eine Batterie
+  nachzubilden. Der Report vermerkt das.
 
 ### Eine Zeile bearbeiten (Aktionsschritt)
 
@@ -825,6 +830,13 @@ läuft.
   solange der Alarm ausgelöst ist oder ein Testablauf läuft, und ein
   Sollwert über einem aktiven Grenzwert wird gar nicht erst angelegt.
   „Alle Ausgänge aus“ bleibt auch dann möglich.
+- **Verriegelung Netzteil/Last** (Einstellungen → Sicherheit): Paare aus
+  Netzteil und Last, die an derselben Stelle angeschlossen sind. Im
+  Testablauf wird „Ausgang EIN“ abgelehnt, solange das andere Gerät des
+  Paares eingeschaltet ist oder sein Zustand unbekannt ist; der Lauf endet
+  dann mit Fehler und ALLE AUS. Ein Ablauf kann das über „Eigenschaften des
+  Ablaufs…“ aufheben (Quelle/Senke). Kachel, Speicherplätze und Netzwerk
+  sind nicht verriegelt. Es zählen nur Geräte dieses Rechners.
 
 ---
 
@@ -853,3 +865,31 @@ unteren Fensterrand.
 - Presets, Geräte-Namen, Panel-Farben und Sicherheits-Grenzwerte werden
   automatisch zwischen Programmstarts gespeichert und müssen nicht
   manuell exportiert werden.
+
+---
+
+## 9. Kommandozeile (ohne Fenster)
+
+Für CI und Nachtläufe führt LabControl einen Testablauf ohne Fenster aus:
+
+```
+python lab_gui/main.py run ablauf.json --report bericht.html --junit ergebnis.xml --json run-result.json
+LabControl.exe run ablauf.json --junit ergebnis.xml
+python lab_gui/main.py devices
+```
+
+- `--var name=wert` belegt Laufvariablen vor (mehrfach möglich),
+  `--simulation` nimmt simulierte Geräte, `--wait-devices S` wartet bis zu
+  S Sekunden auf die Geräte des Ablaufs (Standard 15), `--timeout S` bricht
+  den Lauf nach S Sekunden ab.
+- **Exit-Code:** 0 bestanden, 1 nicht bestanden, 2 Abbruch, Fehler oder
+  Sicherheitsabschaltung, 3 Konfiguration oder Geräte fehlen, 130
+  unterbrochen (Strg+C).
+- Am Ende schaltet LabControl immer ALLE AUS und gibt die Netzteile wie beim
+  Schließen des Fensters mit 1 V / 0 A zur Handbedienung frei.
+- Läuft LabControl schon (z. B. der Kiosk am Pi), lehnt die Kommandozeile ab
+  (Exit 3), weil sonst zwei Programme dieselben Geräte öffnen würden.
+- Noch nicht ohne Fenster: Geräte eines Verbund-Partners und J-Link-Schritte.
+- Die `.exe` ist ein Fensterprogramm: sie schreibt keine Textausgabe in die
+  Konsole, und `cmd` wartet nur mit `start /wait LabControl.exe run …` auf
+  das Ende. Das Ergebnis steht im Exit-Code und in den Dateien.

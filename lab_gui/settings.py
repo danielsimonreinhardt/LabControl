@@ -81,6 +81,8 @@ class Settings(QObject):
     partner_config_changed = Signal(dict)
     # J-Link (PI-31 a, jlink_service.py): kompletter Block
     jlink_config_changed = Signal(dict)
+    # Verriegelung Netzteil/Last im Testablauf (FP-7 b): Liste der Gruppen
+    interlock_groups_changed = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -573,6 +575,36 @@ class Settings(QObject):
             return
         self._save()
         self.jlink_config_changed.emit(self.jlink_config)
+
+    # -- Verriegelung Netzteil/Last (FP-7 b, run_session.Interlock) ------------
+
+    @property
+    def interlock_groups(self) -> list[list[str]]:
+        """Gruppen von Geraete-IDs (Netzteile und Lasten), von denen im Testablauf hoechstens eines
+        eingeschaltet sein darf, z. B. [["psu:HCS60", "load:48DC385B3435"]]. Nur Geraete dieses
+        Rechners (FP-8 a): Verbund-IDs ("@host/...") werden verworfen."""
+        stored = self._data.get("interlock_groups")
+        result: list[list[str]] = []
+        for group in stored if isinstance(stored, list) else []:
+            if not isinstance(group, list):
+                continue
+            ids: list[str] = []
+            for device_id in group:
+                device_id = str(device_id).strip()
+                if (device_id.startswith(("psu:", "load:")) and not device_id.startswith("@")
+                        and device_id not in ids):
+                    ids.append(device_id)
+            if len(ids) >= 2:
+                result.append(ids)
+        return result
+
+    def set_interlock_groups(self, groups: list) -> None:
+        current = self.interlock_groups
+        self._data["interlock_groups"] = [list(g) for g in groups if isinstance(g, (list, tuple))]
+        if self.interlock_groups == current:
+            return
+        self._save()
+        self.interlock_groups_changed.emit(self.interlock_groups)
 
     # -- Verbund-Partner (PI-23 a, siehe partner_link.py) ---------------------
 

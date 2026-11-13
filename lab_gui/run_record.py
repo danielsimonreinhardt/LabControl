@@ -51,6 +51,9 @@ class RunRecord:
     device_meta: dict[str, tuple[str, str]] = field(default_factory=dict)  # device_id -> (kind, label)
     checks_total: int = 0
     checks_failed: int = 0
+    # Ablauf-Eigenschaften (Format v3 "meta") und eingestellte Verriegelungsgruppen bei Laufstart
+    meta: dict = field(default_factory=dict)
+    interlock_groups: list = field(default_factory=list)
 
 
 class RunRecorder(QObject):

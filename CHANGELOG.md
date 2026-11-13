@@ -7,6 +7,10 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **Testablauf-Bericht ließ sich seit 0.28.0 nicht erstellen (0.58.0, gefunden 13.11.2026).** `run_report.py` hatte
+  einen Syntaxfehler (Anführungszeichen in der Schriftangabe, eingeführt mit den Ersatzschriften); „Report öffnen“
+  und „PDF exportieren“ scheiterten beim Laden des Moduls. Keine Prüfung lud das Modul. Jetzt schreibt
+  `check_headless_run` den HTML-Bericht bei jedem Lauf. **Mock-verifiziert.**
 - **„Anordnen“ in der Steuerung legte Kacheln unter Linux ans Ende statt in die Zielzelle (0.57.2, CI 13.11.2026).**
   Die Zielzelle kam aus `QGridLayout.cellRect`; das liefert unter Linux nach dem Umordnen leere Zellen (Höhe 0),
   die Kachel landete dann in Zeile 10. Die Rasterlinien kommen jetzt aus den echten Positionen der Kacheln
@@ -174,6 +178,33 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **Fundament für die neuen Prüfstandsfunktionen (0.58.0, Umsetzungsplan FP-1..29, 13.11.2026).**
+  - **Kommandozeile ohne Fenster** (FT-4): `python lab_gui/main.py run ablauf.json --report x.html --junit x.xml
+    --json x.json --var name=wert --simulation --wait-devices 15 --timeout 0` (als .exe `LabControl.exe run …`),
+    dazu `devices`. Wartet auf die Geräte des Ablaufs, schreibt HTML-Bericht, JUnit-XML (je Prüfschritt ein
+    Testfall, Anforderungen als `property`) und `run-result.json` (Grundlage für Anforderungs-Abdeckung und Trends).
+    Exit-Codes (FP-3 a): 0 bestanden, 1 nicht bestanden (auch verletzte Prüfung mit Abbruch), 2 Abbruch/Fehler/
+    Sicherheitsabschaltung, 3 Konfiguration oder Geräte fehlen, 130 unterbrochen (Strg+C/SIGTERM). Am Ende immer
+    ALLE AUS (FP-4 a), beim Beenden wie das Fenster: Netzteile mit 1 V / 0 A zur Handbedienung frei. Geräte eines
+    Verbund-Partners und J-Link-Schritte gehen ohne Fenster noch nicht (Exit 3).
+  - **Sperre gegen eine zweite Instanz** auf demselben Datenordner (`labcontrol.lock`, `instance_lock.py`): ein
+    zweites Fenster meldet „LabControl läuft bereits.“, die Kommandozeile endet mit Exit 3. Der Lauf über die
+    laufende Instanz (FP-2 c, z. B. am Pi neben dem Kiosk) kommt mit den REST-Läufen in 0.59.
+  - **Ablaufformat v3** (FP-5 a): je Schritt `params` (für UDS, Profile, Fehlerbox, XCP) und `requirements`;
+    unbekannte Felder aus neueren Versionen bleiben beim Laden und Speichern erhalten, auch im Editor. Für den
+    ganzen Ablauf `meta` mit Beschreibung, Anforderungen und Quelle/Senke, im Editor über „Eigenschaften des
+    Ablaufs…“. Ohne diese Inhalte wird weiter Format 2 geschrieben, ältere Versionen lesen die Datei also weiter.
+  - **Verriegelung Netzteil/Last im Testablauf** (FP-7 b): Einstellungen → Sicherheit → Paare aus Netzteil und
+    Last. Im Ablauf wird „Ausgang EIN“ abgelehnt, solange das andere Gerät des Paares an ist oder sein Zustand
+    unbekannt ist (der Lauf endet mit Fehler und ALLE AUS). Ein Ablauf kann das mit „Netzteil und Last gleichzeitig
+    (Quelle/Senke)“ aufheben, z. B. um eine Batterie nachzubilden; der Bericht vermerkt Verriegelung und Freigabe.
+    Kachel, Speicherplätze und Netzwerk sind bewusst nicht verriegelt. Nur Geräte dieses Rechners (FP-8 a).
+  - Die Ablauf-Steuerung steckt nicht mehr im Hauptfenster, sondern in `run_session.py` (`RunSession`,
+    `DeviceDirectory`, `Interlock`); Fenster und Kommandozeile nutzen denselben Weg.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_headless_run.py` (Format v3 inkl. Editor, Verriegelung,
+    Kommandozeile mit allen Exit-Codes, JUnit, JSON, Bericht, zweite Instanz; SIGTERM nur unter Linux) und alle
+    46 Prüfungen unter Windows und Linux (WSL Ubuntu). `check_device_portability` erwartet jetzt Format 2 für
+    Dateien ohne v3-Inhalte. Hardware-Lauf (Nachtlauf, echtes Netzteil/Last-Paar) steht aus.
 - `tools/pi/netzlaufwerk_pi.sh`: hängt ein SMB-Netzlaufwerk am Pi per systemd-Automount ein (`nofail`, 15 s Frist,
   Zugangsdaten nur in `/etc/labcontrol/smb-credentials`, Passwort verdeckt abgefragt) und trägt `<mount>/LABCONTROL`
   als Netzlaufwerk in LabControl ein (12.11.2026). Am PC ist das Netzlaufwerk `\\192.168.178.1\data_exchange\LABCONTROL`

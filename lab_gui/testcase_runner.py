@@ -203,7 +203,8 @@ class TestRunner(QObject):
     def is_running(self) -> bool:
         return self._running
 
-    def start(self, steps: list[TestStep]) -> None:
+    def start(self, steps: list[TestStep], variables: dict[str, float] | None = None) -> None:
+        """variables: Startwerte der Laufvariablen (Kommandozeile --var name=wert, 0.58.0)."""
         if self._running:
             return
         self._steps = steps
@@ -217,7 +218,7 @@ class TestRunner(QObject):
             return
         self._matching = matching
         self._frames = []
-        self._vars = {}
+        self._vars = {str(k): float(v) for k, v in (variables or {}).items()}
         self._pending_check = None
         self._run_started = monotonic()
         self._index = -1

@@ -143,7 +143,7 @@ class SafetyMonitor(QObject):
         CAN hat keine U/I/P-Messwerte und daher keine SAFETY_LIMIT_FIELDS-
         Eintraege, aber ohne diesen Aufruf wuerde ein waehrend eines
         Testlaufs per CAN_SEND-Schritt supervisiertes Interface (siehe
-        main_window._resolve_step_device_ids) nach STALE_TIMEOUT_S faelschlich
+        run_session.RunSession.start) nach STALE_TIMEOUT_S faelschlich
         als "veraltet" abgebrochen, obwohl es einwandfrei laeuft -- device_
         worker.py emittiert can_stats bei jedem Poll-Zyklus, auch ohne neue
         Frames (siehe dessen Docstring), genau wie load_measurement/

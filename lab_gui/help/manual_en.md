@@ -274,6 +274,11 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   since it was opened (e.g. on the second computer in the shared folder),
   saving asks: **"Overwrite"**, **"Save as copy"** (creates
   "Name (copy).json") or **"Cancel"**.
+- **Slider icon** ("Test sequence properties…"): description and requirement
+  IDs of the whole sequence (e.g. `SSR-12, SSR-13`) and **"Power supply and
+  load at the same time (source/sink)"** – lifts the power supply/load
+  interlock (section 6) for this sequence, e.g. to emulate a battery. The
+  report notes it.
 
 ### Editing a row (action step)
 
@@ -784,6 +789,12 @@ whether a testcase is currently running.
 - Remote-control commands over the network (section 5) are rejected while
   the alarm is tripped or a test sequence is running, and a setpoint above
   an active limit is not applied at all. “All outputs off” remains possible.
+- **Power supply/load interlock** (Settings → Safety): pairs of a power
+  supply and a load connected to the same point. In a test sequence,
+  "Output ON" is rejected while the other device of the pair is on or its
+  state is unknown; the run then ends with an error and ALL OFF. A sequence
+  can lift this in "Test sequence properties…" (source/sink). Tiles, presets
+  and the network are not interlocked. Only devices of this computer count.
 
 ---
 
@@ -812,3 +823,31 @@ window.
 - Presets, device names, panel colors and safety limits are saved
   automatically between program runs and do not need to be exported
   manually.
+
+---
+
+## 9. Command line (without a window)
+
+For CI and nightly runs, LabControl runs a test sequence without a window:
+
+```
+python lab_gui/main.py run sequence.json --report report.html --junit result.xml --json run-result.json
+LabControl.exe run sequence.json --junit result.xml
+python lab_gui/main.py devices
+```
+
+- `--var name=value` presets run variables (repeatable), `--simulation`
+  uses simulated devices, `--wait-devices S` waits up to S seconds for the
+  sequence's devices (default 15), `--timeout S` aborts the run after S
+  seconds.
+- **Exit code:** 0 passed, 1 failed, 2 aborted, error or safety shutdown,
+  3 configuration or devices missing, 130 interrupted (Ctrl+C).
+- At the end LabControl always switches ALL OFF and releases the power
+  supplies to manual control at 1 V / 0 A, as when closing the window.
+- If LabControl is already running (e.g. the kiosk on the Pi), the command
+  line refuses (exit 3), since two programs would otherwise open the same
+  devices.
+- Not yet without a window: devices of a linked partner and J-Link steps.
+- The `.exe` is a windowed program: it prints nothing to the console, and
+  `cmd` only waits for it with `start /wait LabControl.exe run …`. The result
+  is in the exit code and the files.

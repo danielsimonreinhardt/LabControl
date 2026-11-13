@@ -213,7 +213,8 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
     )
 
     parts: list[str] = []
-    parts.append('<div style="font-family: 'Segoe UI', 'DejaVu Sans', Arial, sans-serif; color: #1e2530; max-width: 900px;">')
+    parts.append('<div style="font-family: \'Segoe UI\', \'DejaVu Sans\', Arial, sans-serif; color: #1e2530; '
+                 'max-width: 900px;">')
     parts.append(f'<h1 style="margin-bottom:4px;">{html.escape(tr("Testablauf-Report"))}</h1>')
     parts.append(
         f'<p style="color:{_TEXT_MUTED}; margin-top:0;">'
@@ -244,12 +245,23 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
 
     parts.append('<h2>' + html.escape(tr("Übersicht")) + '</h2>')
     parts.append('<table style="border-collapse:collapse;">')
-    for label, value in (
+    overview = [
         (tr("Start:"), _fmt_wall(record.started_at)),
         (tr("Ende:"), _fmt_wall(record.ended_at)),
         (tr("Dauer:"), _fmt_hms(duration)),
         (tr("Geräte:"), ", ".join(device_names) if device_names else "–"),
-    ):
+    ]
+    meta = record.meta or {}
+    if meta.get("description"):
+        overview.insert(0, (tr("Beschreibung:"), meta["description"]))
+    if meta.get("requirements"):
+        overview.append((tr("Anforderungen:"), ", ".join(meta["requirements"])))
+    if record.interlock_groups:
+        groups = "; ".join(" / ".join(record.device_meta.get(d, ("", d))[1] for d in group)
+                           for group in record.interlock_groups)
+        state = tr("aufgehoben (Quelle/Senke)") if meta.get("source_sink") else tr("aktiv")
+        overview.append((tr("Verriegelung:"), f"{state}: {groups}"))
+    for label, value in overview:
         parts.append(f'<tr>{td(label, bold=True)}{td(value)}</tr>')
     parts.append('</table>')
 
@@ -306,14 +318,19 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def write_html_report(record: RunRecord) -> Path:
-    REPORTS_DIR.mkdir(exist_ok=True)
+def write_html_report(record: RunRecord, path: Path | None = None) -> Path:
+    """Schreibt den Bericht nach `path` (Kommandozeile --report) oder in den Berichtsordner."""
     charts = _render_charts(record)
     image_srcs = [(title, _png_data_uri(image)) for title, image in charts]
     content = build_html(record, image_srcs)
-    slug = _slugify(record.testcase_name)
-    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(record.started_at or time.time()))
-    path = REPORTS_DIR / f"report_{slug}_{stamp}.html"
+    if path is None:
+        REPORTS_DIR.mkdir(exist_ok=True)
+        slug = _slugify(record.testcase_name)
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(record.started_at or time.time()))
+        path = REPORTS_DIR / f"report_{slug}_{stamp}.html"
+    else:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
     full_html = f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{html.escape(tr('Testablauf-Report'))}</title></head><body>{content}</body></html>"
     path.write_text(full_html, encoding="utf-8")
     return path

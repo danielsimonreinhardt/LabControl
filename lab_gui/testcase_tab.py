@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -53,6 +54,7 @@ import verbund_ids
 from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
+from testcase_properties import TestcasePropertiesDialog
 from theme import METRICS, Palette, ThemeManager
 from touch_run_view import TouchRunView
 from theme import current as current_palette
@@ -82,13 +84,14 @@ from testcase_model import (
     action_label,
     arb_shape_label,
     battsim_step_detail,
+    carry_v3_fields,
     check_summary,
     condition_summary,
     is_arb_action,
     kind_label,
     load_block,
     load_device_map,
-    load_steps,
+    load_testcase,
     remap_devices,
     save_block,
     save_steps,
@@ -101,6 +104,8 @@ logger = logging.getLogger(__name__)
 # damit ein spaeteres Einfuegen/Umsortieren von Spalten nicht wieder alle
 # verstreuten Literalindizes brechen kann.
 COL_NUM, COL_DEVICE, COL_ACTION, COL_VALUE, COL_DURATION, COL_CHECK, COL_ENABLED = range(7)
+# Datenrolle der Nummernzelle mit den Format-v3-Feldern eines Schritts (siehe _insert_row)
+ROLE_V3_FIELDS = Qt.ItemDataRole.UserRole + 1
 
 # Kehrwert von PICO_VOLTAGE_RANGE_CODES -- fuer die Lauf-Statuszeile
 # (_set_step_status), die aus TestStep.value (Zahlencode) wieder den
@@ -497,6 +502,9 @@ class TestcaseTab(QWidget):
         # reine Puzzleteil-Umriss ohne Plus passt besser zu "speichern".
         self._block_save_button = IconButton("mdi.puzzle-outline", "")
         self._block_insert_button = IconButton("mdi.puzzle-plus-outline", "")
+        # Ablauf-Eigenschaften (Format v3 "meta", 0.58.0): Beschreibung, Anforderungen, Quelle/Senke
+        self._meta: dict = {}
+        self._props_button = IconButton("mdi.tune-variant", "")
         self._add_menu = QMenu(self._add_button)
         self._action_add_action = self._add_menu.addAction("")
         self._action_add_loop = self._add_menu.addAction("")
@@ -527,6 +535,7 @@ class TestcaseTab(QWidget):
         self._save_button.clicked.connect(self._save_to_file)
         self._block_save_button.clicked.connect(self._save_block)
         self._block_insert_button.clicked.connect(self._insert_block_from_file)
+        self._props_button.clicked.connect(self._edit_properties)
         for button in (
             self._add_button, self._remove_button, self._up_button, self._down_button,
             self._clear_all_button,
@@ -535,6 +544,7 @@ class TestcaseTab(QWidget):
         button_row.addWidget(self._block_save_button)
         button_row.addWidget(self._block_insert_button)
         button_row.addStretch()
+        button_row.addWidget(self._props_button)
         button_row.addWidget(self._new_button)
         button_row.addWidget(self._load_button)
         button_row.addWidget(self._save_button)
@@ -667,6 +677,7 @@ class TestcaseTab(QWidget):
         self._save_button.setToolTip(tr("Speichern…"))
         self._block_save_button.setToolTip(tr("Baustein speichern…"))
         self._block_insert_button.setToolTip(tr("Baustein einfügen…"))
+        self._props_button.setToolTip(tr("Eigenschaften des Ablaufs…"))
         self._action_add_action.setText(tr("Aktionsschritt"))
         self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
         self._action_add_while.setText(tr("Solange … Ende"))
@@ -981,6 +992,9 @@ class TestcaseTab(QWidget):
         number_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         number_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         number_item.setData(Qt.ItemDataRole.UserRole, step.step_type)
+        # Format v3: params/requirements/unbekannte Felder haben (noch) keine Eingabefelder in der Zeile
+        # und reisen hier mit, damit _row_to_step sie nicht verliert
+        number_item.setData(ROLE_V3_FIELDS, carry_v3_fields(TestStep(), step))
         self._table.setItem(row_index, COL_NUM, number_item)
 
         if step.step_type == STEP_TYPE_ACTION:
@@ -2021,8 +2035,11 @@ class TestcaseTab(QWidget):
         number_item = self._table.item(row, COL_NUM)
         step_type = number_item.data(Qt.ItemDataRole.UserRole) or STEP_TYPE_ACTION
         if step_type == STEP_TYPE_ACTION:
-            return self._action_row_to_step(row)
-        return self._control_row_to_step(row, step_type)
+            step = self._action_row_to_step(row)
+        else:
+            step = self._control_row_to_step(row, step_type)
+        carried = number_item.data(ROLE_V3_FIELDS)
+        return carry_v3_fields(step, carried) if isinstance(carried, TestStep) else step
 
     def _action_row_to_step(self, row: int) -> TestStep:
         device_combo: QComboBox = self._table.cellWidget(row, COL_DEVICE)
@@ -2137,6 +2154,15 @@ class TestcaseTab(QWidget):
     def steps(self) -> list[TestStep]:
         return [self._row_to_step(row) for row in range(self._table.rowCount())]
 
+    def meta(self) -> dict:
+        """Ablauf-Eigenschaften (Format v3 "meta"), z.B. source_sink fuer die Verriegelung."""
+        return dict(self._meta)
+
+    def _edit_properties(self) -> None:
+        dialog = TestcasePropertiesDialog(self._meta, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._meta = dialog.meta()
+
     # -- Speichern/Laden -----------------------------------------------------
 
     def _save_to_file(self) -> None:
@@ -2156,7 +2182,7 @@ class TestcaseTab(QWidget):
             return
         try:
             file_steps, known = self._steps_for_file(self.steps())
-            save_steps(file_steps, path, known)
+            save_steps(file_steps, path, known, self._meta)
         except OSError as exc:
             QMessageBox.critical(self, tr("Fehler beim Speichern"), str(exc))
             return
@@ -2255,11 +2281,12 @@ class TestcaseTab(QWidget):
     def _load_path(self, path: Path) -> bool:
         """Laedt einen Ablauf in den Editor (auch fuer die Ausfuehren-Ansicht im Touch-Profil)."""
         try:
-            steps = load_steps(path)
+            steps, meta = load_testcase(path)
             file_devices = load_device_map(path)
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.critical(self, tr("Fehler beim Laden"), str(exc))
             return False
+        self._meta = meta
         self._current_path = path
         self._file_digest = _file_digest(path)
         self._dismiss_hint()
@@ -2321,6 +2348,7 @@ class TestcaseTab(QWidget):
         self._clear_block_groups()
         self._clear_all_row_colors()
         self._selected_row = -1   # sonst fuegt _add_row_clicked hinter der alten Auswahl ein (Zeile 1 leer)
+        self._meta = {}
         self._current_path = None
         self._file_digest = None
         self._add_row_clicked()
@@ -2593,6 +2621,7 @@ class TestcaseTab(QWidget):
             self._save_button,
             self._block_save_button,
             self._block_insert_button,
+            self._props_button,
         ):
             button.setEnabled(not running)
         self._report_button.setEnabled(self._report_available and not running)

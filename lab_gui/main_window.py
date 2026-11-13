@@ -47,6 +47,7 @@ from live_state import LiveState
 from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
+from run_session import DeviceDirectory, Interlock, RunSession
 from safety import SafetyMonitor
 from scope_service import ScopeService
 from settings import Settings
@@ -61,8 +62,7 @@ from partner_passthrough import PartnerPassthrough
 from partner_devices import PartnerDevices
 from share_remote import RemoteBridge
 from share_server import ShareServer, is_verbund_client
-from testcase_model import TestStep, kind_label
-from testcase_runner import TestRunner
+from testcase_model import TestStep
 from testcase_tab import TestcaseTab
 from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
@@ -99,40 +99,16 @@ def lan_scope_hosts(addresses: list) -> list[str]:
 
 
 class MainWindow(QMainWindow):
-    # An den DeviceWorker weitergereichte Testablauf-Aktion, nachdem eine leere
-    # device_id (siehe testcase_model.TestStep) auf ein konkretes Geraet
-    # aufgeloest wurde. Eigenes Signal statt direktem Methodenaufruf, damit die
-    # Verbindung -- wie alle anderen Worker-Aufrufe -- ueber eine Queued
-    # Connection korrekt in den Worker-Thread gelangt.
-    _dispatch_test_action = Signal(str, str, str, float, int)  # device_id, kind, action, value, channel
     # Aktion aus der Netzwerk-Fernsteuerung, nach der letzten Pruefung im GUI-
     # Thread (siehe _on_share_action) an den Worker weitergereicht -- eigenes
-    # Signal aus demselben Grund wie _dispatch_test_action, mit Anfrage-ID vorn.
+    # Signal statt direktem Methodenaufruf, damit die Verbindung ueber eine
+    # Queued Connection in den Worker-Thread gelangt. Testablauf-Aktionen gehen
+    # seit 0.58.0 ueber die RunSession (run_session.py).
     _dispatch_share_action = Signal(int, str, str, str, float, int)  # id, device_id, kind, action, value, channel
-    # device_id, arbitration_id, data (Hex-String), extended -- eigenes Signal
-    # aus demselben Grund wie _dispatch_test_action (Queued Connection in den
-    # Worker-Thread), siehe testcase_runner.TestRunner.execute_can_send.
-    _dispatch_test_can_send = Signal(str, int, str, bool)
-    # An DeviceWorker.set_test_running weitergereicht (pausiert den PicoScope-
-    # Reconnect-Timer waehrend eines Testlaufs) -- eigenes Signal aus demselben
-    # Grund wie _dispatch_test_action (Queued Connection in den Worker-Thread).
-    _set_picoscope_test_running = Signal(bool)
-    # DeviceWorker.open_picoscope_session() wird NICHT ueber ein eigenes
-    # Signal aufgerufen (anders als die uebrigen Worker-Aufrufe hier),
-    # sondern per QMetaObject.invokeMethod(..., BlockingQueuedConnection) in
-    # _on_run_requested -- ein einfaches emit() kehrt sofort zurueck, WAEHREND
-    # das Oeffnen (~4,5s) noch auf dem Worker-Thread laeuft, wodurch der
-    # direkt danach gestartete Testlauf seinen ersten PICO_*-Schritt schon
-    # vor Fertigstellung der Session ausfuehren konnte (an echter Hardware
-    # reproduziert). Die blockierende Variante wartet, bis die Session steht
-    # (oder das best-effort Oeffnen scheitert, siehe dortigen Docstring).
-    # An DeviceWorker.close_picoscope_sessions weitergereicht -- am Laufende
-    # (fertig/gestoppt/fehlgeschlagen), No-Op falls nie eine Session offen war.
-    _close_picoscope_sessions = Signal()
 
     # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
     # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
-    # demselben Grund wie _dispatch_test_action (Queued Connection in den
+    # demselben Grund wie _dispatch_share_action (Queued Connection in den
     # Worker-Thread).
     _request_all_off = Signal(str)  # reason
     # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
@@ -257,10 +233,9 @@ class MainWindow(QMainWindow):
         self._device_online: dict[str, bool] = {}
         # Netzteile in Handbedienung (siehe _on_psu_manual_state)
         self._manual_devices: set[str] = set()
-        self._online_devices: dict[str, set[str]] = {
-            "load": set(), "psu": set(), "can": set(), "hil": set(), "picoscope": set(), "fg": set(),
-            "scpiscope": set(), "battsim": set(), "jlink": set(),
-        }
+        # Verbundene Geraete je Art (run_session.DeviceDirectory, 0.58.0); _online_devices ist dasselbe Dict
+        self._directory = DeviceDirectory()
+        self._online_devices: dict[str, set[str]] = self._directory.online
 
         self._registry = DeviceRegistry()
         self._settings = settings if settings is not None else Settings()
@@ -1956,93 +1931,31 @@ class MainWindow(QMainWindow):
             self._registry.rename(kind, device_id, label)
 
     def _wire_testcase_tab(self) -> None:
-        self._test_runner = TestRunner()
-        self._test_runner.execute_action.connect(self._on_test_execute_action)
-        self._dispatch_test_action.connect(self._worker.execute_action)
-        self._test_runner.execute_can_send.connect(self._on_test_execute_can_send)
-        self._dispatch_test_can_send.connect(self._worker.execute_can_send)
-        self._worker.action_completed.connect(self._test_runner.on_action_completed)
-        self._worker.load_measurement.connect(self._test_runner.on_load_measurement)
-        self._worker.psu_measurement.connect(self._test_runner.on_psu_measurement)
-        # microHIL/CAN als while/if-Bedingungsquelle (BUGS_GESCHLOSSEN.md
-        # #35): fuettert die Cache-Strukturen, gegen die TestRunner.
-        # _eval_hil_condition/_eval_can_condition auswerten, genau wie
-        # load_measurement/psu_measurement oben es fuer _measurements tun.
-        self._worker.hil_analog_input.connect(self._test_runner.on_hil_analog_input)
-        self._worker.hil_digital_state.connect(self._test_runner.on_hil_digital_state)
-        self._worker.can_signals_decoded.connect(self._test_runner.on_can_signals_decoded)
-        self._worker.device_removed.connect(self._test_runner.on_device_removed)
+        # Ablauf-Steuerung ohne Fenster (run_session.py, 0.58.0): Runner, Worker, Sicherheit,
+        # Laufaufzeichnung, Oszi-Sitzung, Verriegelung. Hier nur noch Editor, Bericht und Verbund.
+        self._interlock = Interlock(self._settings.interlock_groups, self._directory.is_online)
+        self._settings.interlock_groups_changed.connect(self._interlock.set_groups)
+        self.settings_tab.interlock_editor.set_groups(self._settings.interlock_groups)
+        self.settings_tab.interlock_editor.groups_edited.connect(self._settings.set_interlock_groups)
+        self._run_session = RunSession(self._worker, self._safety, self._run_recorder, self._directory,
+                                       self._interlock, live_state=self._live_state,
+                                       scope_service=self._scope_service, parent=self)
+        self._run_session.partner_router = self._route_partner_action
+        self._test_runner = self._run_session.runner
         self._test_runner.step_started.connect(self.testcase_tab.on_step_started)
         self._test_runner.step_result.connect(self.testcase_tab.on_step_result)
         self._test_runner.step_failed.connect(self.testcase_tab.on_step_failed)
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
-
-        # Nachlauf-Report: passiver Mitschnitt des Laufs (siehe run_record.py),
-        # unabhaengig vom manuellen Recorder des Verlauf-Tabs.
-        self._test_runner.step_started.connect(self._run_recorder.on_step_started)
-        self._test_runner.step_result.connect(self._run_recorder.on_step_result)
-        self._test_runner.step_failed.connect(self._run_recorder.on_step_failed)
-        self._test_runner.run_finished.connect(self._run_recorder.on_run_finished)
-        self._test_runner.run_stopped.connect(self._run_recorder.on_run_stopped)
-        self._test_runner.iteration_changed.connect(self._run_recorder.on_iteration_changed)
-        self._worker.load_measurement.connect(self._run_recorder.on_load_measurement)
-        self._worker.psu_measurement.connect(self._run_recorder.on_psu_measurement)
-        for sig in (self._test_runner.run_finished, self._test_runner.run_stopped):
-            sig.connect(lambda: self.testcase_tab.set_report_available(True))
-        self._test_runner.step_failed.connect(
-            lambda *_args: self.testcase_tab.set_report_available(True)
-        )
+        self._run_session.run_ended.connect(lambda _outcome: self.testcase_tab.set_report_available(True))
         self.testcase_tab.open_report_requested.connect(self._on_open_report)
         self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)
 
-        # Watchdog-Ueberwachung endet mit dem Testlauf (egal ob normal beendet,
-        # gestoppt oder fehlgeschlagen) -- sonst wuerde der Stale-Timer nach
-        # einem bewussten Stop noch nachtriggern.
-        self._test_runner.run_finished.connect(self._safety.end_run_supervision)
-        self._test_runner.run_stopped.connect(self._safety.end_run_supervision)
-        self._test_runner.step_failed.connect(lambda *_args: self._safety.end_run_supervision())
-
-        # Pausiert den PicoScope-Reconnect-Timer waehrend eines Testlaufs
-        # (siehe device_worker._reconnect_picoscope-Docstring) -- sonst kann
-        # dessen periodisches Verbinden mit einer PICO_*-Testablauf-Aktion um
-        # das exklusive Handle konkurrieren. Ueber _set_picoscope_test_running
-        # (nicht direkt self._worker.set_test_running), da run_finished/
-        # run_stopped/step_failed im GUI-Thread emittiert werden -- ein
-        # direkter Methodenaufruf auf dem Worker wuerde KEINE Queued
-        # Connection nutzen (siehe Kommentar bei _dispatch_test_action oben).
-        self._set_picoscope_test_running.connect(self._worker.set_test_running)
-        self._test_runner.run_finished.connect(lambda: self._set_picoscope_test_running.emit(False))
-        self._test_runner.run_stopped.connect(lambda: self._set_picoscope_test_running.emit(False))
-        self._test_runner.step_failed.connect(lambda *_args: self._set_picoscope_test_running.emit(False))
-
-        # Sperrzustand der Netzwerk-Freigabe an dasselbe Tripel haengen --
-        # jeder Weg aus einem Laufe heraus muss ihn wieder freigeben.
-        self._test_runner.run_finished.connect(lambda: self._live_state.set_test_running(False))
-        self._test_runner.run_stopped.connect(lambda: self._live_state.set_test_running(False))
-        self._test_runner.step_failed.connect(lambda *_args: self._live_state.set_test_running(False))
-
-        # Einmalig offen gehaltene PicoScope-Verbindung fuer die Laufdauer
-        # (siehe _on_run_requested/device_worker.open_picoscope_session) --
-        # muss NACH set_test_running(False) verdrahtet sein (Reihenfolge der
-        # connect()-Aufrufe = Zustellreihenfolge auf dem Worker-Thread bei
-        # SELBER emittierender Signal-Quelle), damit _reconnect_picoscope()
-        # beim abschliessenden Status-Refresh in close_picoscope_sessions()
-        # nicht mehr durch _test_running blockiert wird.
-        self._close_picoscope_sessions.connect(self._worker.close_picoscope_sessions)
-        self._test_runner.run_finished.connect(lambda: self._close_picoscope_sessions.emit())
-        self._test_runner.run_stopped.connect(lambda: self._close_picoscope_sessions.emit())
-        self._test_runner.step_failed.connect(lambda *_args: self._close_picoscope_sessions.emit())
-        # Erfassungen ueber Netzwerk/MCP wieder zulassen (siehe _on_run_requested).
-        self._test_runner.run_finished.connect(lambda *_args: self._scope_service.end_test())
-        self._test_runner.run_stopped.connect(lambda *_args: self._scope_service.end_test())
-        self._test_runner.step_failed.connect(lambda *_args: self._scope_service.end_test())
-
         # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
-        # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen")
-        # schaltet sofort alle Ausgaenge ab, statt auf das manuelle Quittieren
-        # per Stop-Button zu warten (siehe testcase_tab.on_step_failed).
+        # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen",
+        # Verriegelung) schaltet sofort alle Ausgaenge ab, statt auf das manuelle
+        # Quittieren per Stop-Button zu warten (siehe testcase_tab.on_step_failed).
         self._test_runner.step_failed.connect(
             lambda _index, message: self._safe_stop(f"step failed: {message}")
         )
@@ -2085,129 +1998,19 @@ class MainWindow(QMainWindow):
 
     def _start_run(self, steps: list[TestStep]) -> None:
         self.testcase_tab.on_run_started()
-        self._run_recorder.begin(steps, self.testcase_tab.current_testcase_name())
-        step_device_ids = self._resolve_step_device_ids(steps)
-        # PicoScope bewusst NICHT an die Watchdog-Verbindungsueberwachung
-        # uebergeben (siehe _resolve_step_device_ids-Docstring): anders als
-        # PSU/Last/HIL hat es keinen steuerbaren Ausgang (taucht nirgends in
-        # all_outputs_off auf) UND liefert waehrend eines Laufs bewusst KEINE
-        # periodischen Messwerte (kein Poll-Zyklus, siehe device_worker.py) --
-        # ohne diesen Ausschluss wuerde jeder Lauf mit PICO_*-Schritt nach
-        # STALE_TIMEOUT_S faelschlich als "veraltet" abgebrochen, obwohl
-        # nichts falsch lief (an echter Hardware reproduziert).
-        # J-Link ebenso: keine Messwerte, kein Ausgang (PI-31 a)
-        self._safety.begin_run_supervision(
-            {d for d in step_device_ids if not d.startswith(("picoscope:", "jlink:"))}
-        )
-        self._set_picoscope_test_running.emit(True)
-        # Sperrt (ab Phase 2) den schreibenden Netzwerkzugriff und wird
-        # schon jetzt im Status-Endpoint gemeldet.
-        self._live_state.set_test_running(True)
-        # Nur oeffnen, wenn der Lauf tatsaechlich eine PICO_*-Aktion
-        # enthaelt -- ein Lauf ohne Oszilloskop-Beteiligung soll weder die
-        # ~4,5s Verbindungszeit noch die PicoScope-7-App fuer die gesamte
-        # Laufdauer blockieren (siehe device_worker.open_picoscope_session).
-        #
-        # BLOCKIEREND (BlockingQueuedConnection) statt per Signal-emit(), wie
-        # bereits bei closeEvent()/all_outputs_off(): ein einfaches emit()
-        # gibt sofort zurueck, WAEHREND open_picoscope_session() auf dem
-        # Worker-Thread noch die ~4,5s Verbindung aufbaut -- der direkt
-        # danach gestartete Testlauf konnte dadurch bereits seinen ersten
-        # PICO_*-Schritt ausfuehren, bevor die Session ueberhaupt existierte
-        # (an echter Hardware reproduziert, Nutzerfeedback). Der Aufruf hier
-        # blockiert den GUI-Thread bewusst bis die Session steht (oder das
-        # Oeffnen best-effort scheitert, siehe open_picoscope_session-
-        # Docstring) -- exakt einmal pro Lauf mit PicoScope-Beteiligung.
-        for device_id in step_device_ids:
-            if device_id.startswith("picoscope:"):
-                # Vorrang des Testablaufs: der ScopeService (Erfassungen ueber
-                # Netzwerk/MCP) nimmt keine neuen Erfassungen mehr an, wartet
-                # eine laufende ab und gibt das exklusive Handle frei, BEVOR
-                # die Session geoeffnet wird. Blockiert hoechstens so lange wie
-                # eine Erfassung (Trigger-Timeout max. 30 s).
-                self._scope_service.begin_test(device_id)
-                QMetaObject.invokeMethod(
-                    self._worker,
-                    "open_picoscope_session",
-                    Qt.ConnectionType.BlockingQueuedConnection,
-                    Q_ARG(str, device_id),
-                )
-        self._test_runner.start(steps)
+        self._run_session.start(steps, self.testcase_tab.current_testcase_name(), self.testcase_tab.meta())
 
-    def _resolve_step_device_ids(self, steps: list[TestStep]) -> set[str]:
-        """Ermittelt die an einem Testlauf beteiligten Geraete-IDs -- genutzt
-        sowohl fuer die Watchdog-Verbindungsueberwachung (siehe
-        safety.begin_run_supervision) als auch dafuer, welche PicoScope-
-        Sessions ein Lauf oeffnen muss (siehe _on_run_requested unten).
-        Liefert bewusst ALLE Geraetearten inkl. "picoscope" -- der Aufrufer
-        filtert fuer die Watchdog-Uebergabe selbst heraus, was er braucht
-        (PicoScope wird dort ausgeschlossen, siehe Kommentar dort).
-
-        Nicht aufloesbare Ziele (z.B. "automatisch" ohne aktuell verbundenes
-        Geraet dieser Art) werden uebersprungen -- der Runner scheitert an
-        solchen Schritten ohnehin sofort (step_failed), was ueber die
-        step_failed-Verdrahtung oben ebenfalls zum Safe-Stop fuehrt.
-        """
-        device_ids: set[str] = set()
-        for step in steps:
-            if not step.enabled:
-                continue
-            if step.step_type == "action":
-                resolved, _ = self._resolve_device_id(step.device_kind, step.device_id)
-                if resolved:
-                    device_ids.add(resolved)
-            elif step.step_type in ("while", "if") and step.cond_source == "measurement":
-                resolved, _ = self._resolve_device_id(step.cond_device_kind, step.cond_device_id)
-                if resolved:
-                    device_ids.add(resolved)
-        return device_ids
-
-    def _on_test_execute_action(
-        self, device_id: str, kind: str, action: str, value: float, channel: int
-    ) -> None:
-        # Verbund (PI-24 a): Partnergeraet -> ueber die Freigabe des Partners, mit Belegung
+    def _route_partner_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> bool:
+        """RunSession.partner_router: Partnergeraet -> ueber die Freigabe des Partners, mit Belegung
+        (PI-24 a). True = uebernommen."""
         remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
-        if remote_id is not None:
-            self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
-            return
-        resolved_id, error = self._resolve_device_id(kind, device_id)
-        if resolved_id is None:
-            self._test_runner.on_action_completed(False, error, 0.0)
-            return
-        self._dispatch_test_action.emit(resolved_id, kind, action, value, channel)
-
-    def _on_test_execute_can_send(self, device_id: str, arbitration_id: int, data_hex: str, extended: bool) -> None:
-        resolved_id, error = self._resolve_device_id("can", device_id)
-        if resolved_id is None:
-            self._test_runner.on_action_completed(False, error, 0.0)
-            return
-        self._dispatch_test_can_send.emit(resolved_id, arbitration_id, data_hex, extended)
+        if remote_id is None:
+            return False
+        self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
+        return True
 
     def _resolve_device_id(self, kind: str, device_id: str) -> tuple[str | None, str]:
-        if device_id:
-            # Gegen die aktuell verbundenen Geraete dieser Art pruefen, statt
-            # jede nicht-leere ID blind zu akzeptieren -- sonst wird ein
-            # veralteter/nie existenter device_id-Wert aus einer gespeicherten
-            # Testablauf-Datei (z.B. durch manuelles Bearbeiten oder einen
-            # Import) unbemerkt in die Watchdog-Ueberwachung uebernommen
-            # (siehe BUGS_OFFEN.md #28: "psu0001" ohne ":"-Trenner passt zu
-            # keinem von _resolve_device_ids() je erzeugten Format und war nie
-            # ein reales Geraet -- der Watchdog wartete trotzdem dauerhaft
-            # vergeblich auf dessen erste Messung und loeste nach
-            # STALE_TIMEOUT_S faelschlich "veraltet" aus).
-            if device_id in self._online_devices.get(kind, set()):
-                return device_id, ""
-            return None, tr("Gerät '{device_id}' nicht verbunden", device_id=device_id)
-        candidates = self._online_devices.get(kind, set())
-        if len(candidates) == 1:
-            return next(iter(candidates)), ""
-        label = kind_label(kind)
-        if not candidates:
-            return None, tr("Kein Gerät des Typs '{label}' verbunden", label=label)
-        return None, tr(
-            "Mehrere Geräte des Typs '{label}' verbunden -- bitte Zielgerät in der Testcase-Zeile auswählen",
-            label=label,
-        )
+        return self._directory.resolve(kind, device_id)
 
     @Slot(str, bool)
     def _on_load_connected(self, device_id: str, online: bool) -> None:
