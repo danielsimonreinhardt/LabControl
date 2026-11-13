@@ -51,6 +51,7 @@ from can_bus.driver import (
 from help_dialog import HelpDialog
 from i18n import AVAILABLE_LANGUAGES, Translator, tr
 from icons import ICON_SIZE, IconButton
+from dut_editor import DutEditor
 from instruments_editor import InstrumentsEditor
 from interlock_editor import InterlockEditor
 from paths import IS_FROZEN
@@ -944,6 +945,13 @@ class SettingsTab(QWidget):
         self.instruments_editor = InstrumentsEditor()
         layout.addWidget(self.instruments_editor)
 
+        # Pruefling fuer UDS (FT-1, 0.60.0)
+        self.dut_editor = DutEditor()
+        dut_row = QHBoxLayout()
+        dut_row.addWidget(self.dut_editor)
+        dut_row.addStretch(1)
+        layout.addLayout(dut_row)
+
         layout.addStretch()
         return page
 
@@ -1370,6 +1378,7 @@ class SettingsTab(QWidget):
     def _retranslate(self) -> None:
         self.interlock_editor.retranslate()
         self.instruments_editor.retranslate()
+        self.dut_editor.retranslate()
         self._requirements_label.setText(tr("Anforderungsregister:"))
         self._requirements_edit.setToolTip(tr("StrictDoc (.sdoc), CSV oder Markdown; mehrere mit ; trennen"))
         self._requirements_browse.setToolTip(tr("Datei hinzufügen…"))
@@ -1556,6 +1565,7 @@ class SettingsTab(QWidget):
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
         self.interlock_editor.on_device_known(kind, device_id, label)
         self.instruments_editor.on_device_known(kind, device_id, label)
+        self.dut_editor.on_device_known(kind, device_id, label)
         if kind == "hil":
             self._ensure_info_section(device_id, label)
         self._share_table.add_device(kind, device_id, label)

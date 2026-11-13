@@ -526,6 +526,14 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Prüfung lief und alle bestanden; ohne gelaufene Prüfung „nicht geprüft“.
   `python lab_gui/main.py coverage --csv abdeckung.csv` fasst alle Läufe
   zusammen (je Anforderung das Urteil des jüngsten Laufs).
+- **Prüfling (UDS)** (Reiter „Geräte“): das Steuergerät, mit dem LabControl
+  über UDS spricht. **ODX/PDX** ist der Export der neXtBSW
+  (`python -m tools.diaggen pdx <projekt> -o <datei>.pdx`); daraus kommen
+  CAN-IDs, DIDs mit Einheiten, Fehlertexte und Routinen. **CAN-Interface**
+  „automatisch“ nimmt das einzige verbundene. **Schlüssel** ist der Name der
+  Datei `<gemeinsamer Ordner>/keys/<Name>.key` mit dem Master-Schlüssel
+  (64 Hex-Zeichen) für das Entsperren. Im Simulationsmodus spricht LabControl
+  ohne Eintrag mit einem nachgebildeten Steuergerät am simulierten Bus.
 - **Messmittel** (Reiter „Geräte“): je Gerät Typ, Seriennummer und Firmware,
   wie das Gerät sie beim Verbinden meldet (das HCS-Netzteil kennt keine
   Firmware-Abfrage), dazu Inventarnummer, Kalibrierdatum und Fälligkeit zum

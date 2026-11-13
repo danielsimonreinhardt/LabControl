@@ -46,6 +46,7 @@ from device_worker import (
 from i18n import Translator, tr
 from instruments import Instruments
 from live_state import LiveState
+from uds_service import UdsService
 from presets import PresetStore
 from recording import Recorder
 from run_record import RunRecorder
@@ -408,6 +409,12 @@ class MainWindow(QMainWindow):
         # Messmittel (FT-8): vor dem Start verbinden, sonst fehlen die Kennungen der ersten Geraete
         self._instruments = Instruments(lambda: data_store.store().shared_file(instruments.FILE_NAME))
         instruments.connect_worker(self._worker, self._instruments)
+        # UDS am Pruefling (FT-1): eigener Thread, Bus ueber CanTap des Workers
+        self._uds = UdsService(self._worker, lambda: data_store.store().shared_file("x").parent, self)
+        self._worker.can_connected.connect(self._uds.on_can_connected)
+        self._uds.configure(self._settings.dut_config, self._settings.simulation_mode)
+        self._settings.dut_config_changed.connect(
+            lambda cfg: self._uds.configure(cfg, self._settings.simulation_mode))
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -1957,6 +1964,11 @@ class MainWindow(QMainWindow):
         self._run_session.requirement_register = self._requirement_register
         self.testcase_tab.set_requirement_provider(lambda: sorted(self._requirement_register()))
         self.settings_tab.requirement_registers_edited.connect(self._settings.set_requirement_registers)
+        # Pruefling (FT-1): Einstellungen <-> UdsService
+        self.settings_tab.dut_editor.set_config(self._settings.dut_config)
+        self.settings_tab.dut_editor.config_edited.connect(lambda cfg: self._settings.set_dut_config(**cfg))
+        self._uds.state_changed.connect(self._show_dut_status)
+        self._show_dut_status()
         self._settings.requirement_registers_changed.connect(lambda _paths: self._show_requirement_registers())
         self._show_requirement_registers()
         self._test_runner = self._run_session.runner
@@ -2045,6 +2057,18 @@ class MainWindow(QMainWindow):
         self._pending_run_id = None
         variables, self._run_source, self._run_vars = self._run_vars, "gui", {}
         self._run_session.start(steps, name, self.testcase_tab.meta(), variables)
+
+    def _show_dut_status(self, *_args) -> None:
+        odx = self._uds.odx()
+        if odx is None:
+            error = self._uds.odx_error()
+            self.settings_tab.dut_editor.set_status(tr("ODX-Fehler: {error}", error=error) if error
+                                                    else tr("nicht eingerichtet"))
+            return
+        self.settings_tab.dut_editor.set_status(tr(
+            "{name}: {dids} DIDs, {dtcs} DTCs, {routines} Routinen, Anfrage 0x{req:03X} / Antwort 0x{resp:03X}",
+            name=odx.name, dids=len(odx.dids), dtcs=len(odx.dtcs), routines=len(odx.routines),
+            req=odx.request_id, resp=odx.response_id))
 
     # -- Anforderungsregister (FT-3) ------------------------------------------------------
 
@@ -2434,6 +2458,8 @@ class MainWindow(QMainWindow):
             self._dashboard_window.close()
         # Offenes Oszilloskop-Handle freigeben (sonst bleibt es bis Prozessende belegt).
         self._scope_service.shutdown()
+        # UDS-Verbindung schliessen, solange der CAN-Bus noch offen ist
+        self._uds.shutdown()
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit
         # der Kill garantiert VOR thread.quit()/wait() abgeschlossen ist --
         # sonst koennte die Anwendung schliessen, bevor der Worker die

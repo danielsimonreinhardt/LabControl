@@ -501,6 +501,14 @@ time-window-limited ring buffer of the live charts.
   without a check that ran, "not tested". `python lab_gui/main.py coverage
   --csv coverage.csv` summarises all runs (per requirement the verdict of the
   latest run).
+- **Device under test (UDS)** ("Devices" tab): the ECU LabControl talks to
+  over UDS. **ODX/PDX** is the neXtBSW export
+  (`python -m tools.diaggen pdx <project> -o <file>.pdx`); it provides CAN IDs,
+  DIDs with units, fault texts and routines. **CAN interface** "automatic"
+  takes the only connected one. **Key** is the name of the file
+  `<shared folder>/keys/<name>.key` with the master key (64 hex digits) for
+  unlocking. In simulation mode without an entry, LabControl talks to a
+  simulated ECU on the simulated bus.
 - **Measuring instruments** ("Devices" tab): per device the type, serial
   number and firmware as reported when connecting (the HCS power supply has
   no firmware query), plus inventory number, calibration date and due date to

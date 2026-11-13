@@ -221,6 +221,21 @@ CAN_DRAIN_BUDGET_S = 0.05
 CAN_READER_IDLE_S = 0.005
 
 
+class CanTap:
+    """Abgriff fuer Protokolle ueber CAN (ISO-TP/UDS, spaeter XCP; FT-1, 0.60.0): bekommt jeden empfangenen
+    Frame mit einer der Kennungen `rx_ids` direkt aus dem CanReader-Thread, ohne Umweg ueber den Poll-Zyklus
+    (dort bis ~700 ms am Pi -- fuer ISO-TP viel zu langsam). Gesendet wird ueber CanBus.send (gesperrt)."""
+
+    def __init__(self, rx_ids, extended: bool = False) -> None:
+        self.rx_ids = frozenset(int(i) for i in rx_ids)
+        self.extended = extended
+        self.queue: "queue.SimpleQueue" = queue.SimpleQueue()
+
+    def feed(self, frame) -> None:
+        if frame.arbitration_id in self.rx_ids and bool(frame.extended) == self.extended:
+            self.queue.put(frame)
+
+
 class CanReader(threading.Thread):
     """Liest EIN CAN-Interface fortlaufend, unabhaengig vom Poll-Zyklus (Nutzerfeedback 12.11.2026: am Pi
     kamen die Botschaften stossweise -- der Zyklus fragt erst Last und Netzteile ueber die serielle
@@ -231,11 +246,13 @@ class CanReader(threading.Thread):
     Simulator) bleibt im Worker-Thread: der holt die Frames im Poll-Zyklus aus `frames` (Reihenfolge bleibt).
     Ein CanError landet als Ausnahme in `frames`, der Worker trennt dann wie bisher."""
 
-    def __init__(self, device_id: str, bus, on_frame: Callable, name: str = "") -> None:
+    def __init__(self, device_id: str, bus, on_frame: Callable, name: str = "", taps=None) -> None:
         super().__init__(name=name or f"CanReader-{device_id}", daemon=True)
         self.device_id = device_id
         self._bus = bus
         self._on_frame = on_frame
+        # Abgriffe (CanTap) dieses Interfaces; Liste gehoert DeviceWorker (_can_taps), wird nur ersetzt
+        self._taps = taps if taps is not None else (lambda: ())
         self.frames: "queue.SimpleQueue" = queue.SimpleQueue()
         self.rx_count = 0
         self._halt = threading.Event()
@@ -255,6 +272,8 @@ class CanReader(threading.Thread):
                 self._halt.wait(CAN_READER_IDLE_S)
                 continue
             self.rx_count += 1
+            for tap in self._taps():
+                tap.feed(frame)
             self.frames.put(frame)
             try:
                 self._on_frame(self.device_id, frame)
@@ -543,6 +562,9 @@ class DeviceWorker(QObject):
         self._psu_setpoints: dict[str, list[float]] = {}
         self._can_buses: dict[str, CanBus] = {}
         self._can_readers: dict[str, CanReader] = {}   # eigener Lese-Thread je Interface (0.57.1)
+        # Abgriffe fuer UDS/ISO-TP je Interface (CanTap, FT-1): Tupel, nur unter der Sperre ersetzt
+        self._can_taps: dict[str, tuple] = {}
+        self._can_tap_lock = threading.Lock()
         self._can_stats: dict[str, list[int]] = {}  # device_id -> [tx_count, rx_count]
         self._can_configs: list[dict] = list(can_configs or [])
         # device_id -> geladene cantools-Datenbank, nur fuer Interfaces mit
@@ -570,6 +592,7 @@ class DeviceWorker(QObject):
         self._battsim_limits: dict[str, float] = {}
         # Nachgebildeter Simulator am simulierten Bus (Simulationsmodus).
         self._sim_battsim: SimulatedBattSim | None = None
+        self._sim_ecu = None   # nachgebildetes UDS-Steuergeraet am simulierten Bus (uds_sim.SimEcu, FT-1)
         self._hils: dict[str, MicroHIL] = {}
         # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
         # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
@@ -970,6 +993,14 @@ class DeviceWorker(QObject):
         # (battsim/mock.py) -- der echte Treiber laeuft dagegen.
         self._sim_battsim = SimulatedBattSim(firmware="v2")   # neue Firmware (BattSimFW), mit 0x121
         bus.attach_peer(self._sim_battsim)
+        # ... und ein nachgebildetes UDS-Steuergeraet (uds_sim.py, FT-1): Pruefling "Simulation"
+        try:
+            from uds_sim import SimEcu
+            self._sim_ecu = SimEcu()
+            bus.attach_peer(self._sim_ecu)
+        except ImportError as exc:   # can-isotp fehlt: Simulation ohne Steuergeraet
+            logger.warning("Nachgebildetes UDS-Steuergeraet nicht verfuegbar: %s", exc)
+            self._sim_ecu = None
         self._can_buses[SIM_CAN_ID] = bus
         self._can_stats[SIM_CAN_ID] = [0, 0]
         self._start_can_reader(SIM_CAN_ID, bus)
@@ -981,9 +1012,28 @@ class DeviceWorker(QObject):
 
     def _start_can_reader(self, device_id: str, bus) -> None:
         self._stop_can_reader(device_id)
-        reader = CanReader(device_id, bus, self._emit_can_frame)
+        reader = CanReader(device_id, bus, self._emit_can_frame,
+                           taps=lambda d=device_id: self._can_taps.get(d, ()))
         self._can_readers[device_id] = reader
         reader.start()
+
+    # -- Abgriffe fuer UDS/ISO-TP (CanTap, FT-1) -- thread-sicher, aus jedem Thread aufrufbar ---------
+
+    def add_can_tap(self, device_id: str, tap: CanTap) -> None:
+        with self._can_tap_lock:
+            self._can_taps[device_id] = tuple(self._can_taps.get(device_id, ())) + (tap,)
+
+    def remove_can_tap(self, device_id: str, tap: CanTap) -> None:
+        with self._can_tap_lock:
+            self._can_taps[device_id] = tuple(t for t in self._can_taps.get(device_id, ()) if t is not tap)
+
+    def can_send_threadsafe(self, device_id: str, arbitration_id: int, data: bytes, extended: bool = False) -> None:
+        """Sendet aus einem fremden Thread (UDS). CanBus.send ist gesperrt; ein fehlendes Interface ist ein
+        CanError wie ein Sendefehler."""
+        bus = self._can_buses.get(device_id)
+        if bus is None:
+            raise CanError(f"CAN-Interface {device_id} nicht verbunden")
+        bus.send(arbitration_id, bytes(data), extended)
 
     def _stop_can_reader(self, device_id: str) -> None:
         reader = self._can_readers.pop(device_id, None)
@@ -1011,6 +1061,9 @@ class DeviceWorker(QObject):
             self.device_removed.emit("can", device_id)
         if device_id == SIM_CAN_ID:
             self._sim_battsim = None
+            if getattr(self, "_sim_ecu", None) is not None:
+                self._sim_ecu.close()
+                self._sim_ecu = None
 
     # -- CAN-Knoten (Geraete, die ueber ein Interface sprechen) --------------
 

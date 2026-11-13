@@ -14,6 +14,9 @@ numpy>=1.26
 # pyvisa-py ist das reine Python-Backend fuer LAN (VXI-11), kein NI-VISA noetig.
 pyvisa>=1.14
 pyvisa-py>=0.7
+# UDS ueber ISO-TP (FT-1, 0.60.0, FP-9 a): wie neXtBSW canflash, reines Python (auch am Pi)
+can-isotp>=2.0
+udsoncan>=1.21
 
 # nur zum Bauen der .exe (siehe lab_gui/README.md)
 pyinstaller>=6.0

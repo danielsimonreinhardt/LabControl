@@ -189,6 +189,23 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **UDS-Grundlage (0.60.0, FT-1 Teil 1, FP-9 a / FP-10 b / FP-11 b / FP-12 a, 13.11.2026).**
+  - ODX-Leser (`uds_odx.py`, eigene Implementierung, nur Standardbibliothek) für den Export von neXtBSW
+    `tools/diaggen` (`.odx-d` oder `.pdx`): Sessions, Security-Stufen, DIDs mit Elementen (Kodierung, Byte-
+    Reihenfolge, Skalierung, Wertetabelle, Einheit), Routinen, DTCs, CAN-IDs, Füllbyte, P2.
+  - UDS-Client (`uds_client.py`) mit can-isotp und udsoncan (neue Abhängigkeiten, reines Python): der Bus bleibt
+    beim Geräte-Worker, ISO-TP bekommt die Frames direkt aus dem CAN-Lesethread (`CanTap`), nicht erst im
+    Poll-Zyklus. Dienste: Session (mit TesterPresent), Entsperren (wie neXtBSW: UID aus 0xF18C, HMAC-SHA256),
+    DID lesen/schreiben, Fehlerspeicher lesen/löschen, Routine, Reset, rohe Anfrage; Ergebnis positiv oder NRC.
+  - `UdsService`: eigener Thread, Ergebnisse als Signal; Einstellungen → Geräte → „Prüfling (UDS)“: Name,
+    CAN-Interface, ODX-Datei, Schlüsselname. Der Master-Schlüssel liegt als `<gemeinsamer Ordner>/keys/<Name>.key`
+    (64 Hex-Zeichen, FP-11 b) und wird nie geloggt oder gespeichert.
+  - Nachgebildetes Steuergerät am simulierten Bus (`uds_sim.py`, „LabControl SimECU“, eigenes ODX): im
+    Simulationsmodus ohne Einstellung der Prüfling „Simulation“.
+  - Ablaufschritte und Kachel folgen (0.60.1/0.60.2).
+  - **Mock-verifiziert:** neue Prüfung `tools/check_uds.py` (ODX der Nachbildung und ein frischer diaggen-Export
+    des neXtBSW-Demo-Projekts, Schlüssel, alle Dienste über den echten CAN-Lesethread, NRCs 0x31/0x33/0x35/0x7F,
+    Schlüssel aus dem gemeinsamen Ordner, Antwortzeit < 0,5 s). Am Evalboard noch nicht.
 - **Anforderungen (0.59.3, FT-3, FP-22 d / FP-23 a / FP-24 a, 13.11.2026).**
   - Register: Einstellungen → Allgemein → „Anforderungsregister“, StrictDoc-Dateien direkt (z. B. neXtBSW
     `doc/requirements/safety/ssr.sdoc`, SSR und Klauseln) sowie CSV/Markdown-Tabellen für andere Projekte.

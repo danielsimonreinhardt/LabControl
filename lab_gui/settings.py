@@ -85,6 +85,8 @@ class Settings(QObject):
     interlock_groups_changed = Signal(list)
     # Anforderungsregister (FT-3): Liste der Dateien (.sdoc, .csv, .md)
     requirement_registers_changed = Signal(list)
+    # Pruefling fuer UDS (FT-1, FP-12 a): kompletter Block
+    dut_config_changed = Signal(dict)
 
     def __init__(self) -> None:
         super().__init__()
@@ -607,6 +609,39 @@ class Settings(QObject):
             return
         self._save()
         self.interlock_groups_changed.emit(self.interlock_groups)
+
+    # -- Pruefling (FT-1 UDS, FP-12 a) --------------------------------------------
+
+    DUT_SIM_ODX = "builtin:sim"
+
+    @property
+    def dut_config(self) -> dict:
+        """Pruefling fuer UDS: {"name", "can_device" (z. B. "can:socketcan:can0", leer = einziges CAN-Interface),
+        "odx" (Pfad zur .odx-d/.pdx von diaggen, "builtin:sim" = nachgebildetes Steuergeraet), "key" (Name der
+        Schluesseldatei <gemeinsam>/keys/<key>.key), "request_id"/"response_id" (0 = aus dem ODX)}."""
+        stored = self._data.get("dut")
+        stored = stored if isinstance(stored, dict) else {}
+
+        def text(key: str, limit: int = 300) -> str:
+            value = stored.get(key, "")
+            return value.strip()[:limit] if isinstance(value, str) else ""
+
+        def can_id(key: str) -> int:
+            try:
+                value = int(stored.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+            return value if 0 <= value <= 0x1FFFFFFF else 0
+        return {"name": text("name", 60), "can_device": text("can_device", 120), "odx": text("odx"),
+                "key": text("key", 64), "request_id": can_id("request_id"), "response_id": can_id("response_id")}
+
+    def set_dut_config(self, **changes) -> None:
+        current = self.dut_config
+        self._data["dut"] = {**current, **{k: v for k, v in changes.items() if k in current}}
+        if self.dut_config == current:
+            return
+        self._save()
+        self.dut_config_changed.emit(self.dut_config)
 
     # -- Anforderungsregister (FT-3, requirements.py) ---------------------------
 
