@@ -1162,7 +1162,9 @@ def _run_start_payload(snapshot: dict, body: bytes) -> tuple[dict | None, Respon
             return None, _error(400, "invalid_vars", var=str(name)[:40])
         clean[str(name)[:40]] = float(value)
     return {"testcase": testcase if isinstance(testcase, str) else "",
-            "path": path if isinstance(path, str) else "", "vars": clean}, None
+            "path": path if isinstance(path, str) else "", "vars": clean,
+            # Kommandozeile (FP-4 a): am Ende ALLE AUS an diesem Rechner (nicht beim Verbund-Partner)
+            "all_off_at_end": bool(payload.get("all_off_at_end"))}, None
 
 
 def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query: dict, body: bytes,

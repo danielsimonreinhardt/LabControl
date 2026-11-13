@@ -1967,6 +1967,7 @@ class MainWindow(QMainWindow):
         self._run_vars: dict[str, float] = {}
         self._pending_run_id: str | None = None   # REST-Start wartet noch (z. B. auf Belegung beim Partner)
         self._last_refusal = ""
+        self._run_all_off_at_end = False          # Lauf von der Kommandozeile: am Ende ALLE AUS
         self._live_state.list_testcases = self._list_testcases
         data_store.store().on_moved(self._runs.relocate)
         self._test_runner.step_started.connect(
@@ -2026,6 +2027,7 @@ class MainWindow(QMainWindow):
             self._runs.finish(self._pending_run_id, "error", 3, {})
             self._pending_run_id = None
         self._run_source, self._run_vars = "gui", {}
+        self._run_all_off_at_end = False
         self.testcase_tab.show_message(tr("Nicht gestartet: {reason}", reason=message), "error")
         self.statusBar().showMessage(tr("Nicht gestartet: {reason}", reason=message), 10000)
 
@@ -2108,6 +2110,7 @@ class MainWindow(QMainWindow):
         self._last_refusal = ""
         self._run_source = client
         self._run_vars = dict(payload.get("vars") or {})
+        self._run_all_off_at_end = bool(payload.get("all_off_at_end"))
         self._pending_run_id = self._runs.begin(self.testcase_tab.current_testcase_name(), client, len(steps))
         run_id = self._pending_run_id
         self._on_run_requested()
@@ -2120,6 +2123,7 @@ class MainWindow(QMainWindow):
         if self._pending_run_id is not None:   # still abgelehnt (z. B. keine aktiven Aktionsschritte)
             self._pending_run_id = None
             self._run_source, self._run_vars = "gui", {}
+            self._run_all_off_at_end = False
             self._runs.finish(run_id, "error", 3, {})
         answer(False, "busy" if self._last_refusal else "invalid_testcase",
                self._last_refusal or tr("Keine aktiven Aktionsschritte"))
@@ -2127,6 +2131,10 @@ class MainWindow(QMainWindow):
     def _on_run_ended_register(self, outcome: str) -> None:
         """Lauf zu Ende: run-result.json, JUnit und Bericht in den Berichtsordner, Register nachfuehren."""
         run_id, self._run_id = self._run_id, None
+        if self._run_all_off_at_end:
+            # Lauf von der Kommandozeile (FP-4 a): immer ALLE AUS, nur an diesem Rechner
+            self._run_all_off_at_end = False
+            self._request_all_off.emit("cli: Lauf beendet")
         record = self._run_recorder.record()
         if run_id is None or record is None:
             return

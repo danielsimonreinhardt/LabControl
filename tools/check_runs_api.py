@@ -278,6 +278,8 @@ def section_cli(app, window, port: int, folder: Path) -> None:
 
     lock = InstanceLock(DATA)
     check("Sperre wie die laufende Instanz geholt", lock.acquire())
+    reasons: list[str] = []
+    window._request_all_off.connect(reasons.append)
     out = DATA / "cli_out"
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.Popen([sys.executable, str(ROOT / "lab_gui" / "main.py"), "run", str(folder / "kurz.json"),
@@ -296,6 +298,12 @@ def section_cli(app, window, port: int, folder: Path) -> None:
         result = {}
     check("Ergebnisdatei geholt", result.get("outcome") == "passed", str(result)[:200])
     check("JUnit geholt", (out / "r.xml").exists())
+    check("am Ende ALLE AUS nur hier (FP-4 a)", "cli: Lauf beendet" in reasons, str(reasons))
+    count = len(reasons)
+    status, body = ask(app, "POST", port, "/runs", {"testcase": "kurz.json"})
+    spin(app, 20.0, lambda: (window._live_state.runs.get(body.get("run", "")) or {}).get("running") is False)
+    check("REST-Lauf ohne all_off_at_end: kein ALLE AUS am Ende", "cli: Lauf beendet" not in reasons[count:],
+          str(reasons[count:]))
     proc = subprocess.Popen([sys.executable, str(ROOT / "lab_gui" / "main.py"), "run", str(folder / "kurz.json"),
                              "--simulation"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             encoding="utf-8", errors="replace")

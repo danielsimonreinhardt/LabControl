@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **Kommandozeile über die laufende Instanz schaltete am Ende nicht ALLE AUS (0.59.2, am Pi gefunden
+  13.11.2026).** FP-4 a gilt auch für diesen Weg: der Start trägt jetzt `"all_off_at_end": true`, die Instanz
+  schaltet am Laufende ihre eigenen Geräte ab (nicht die des Verbund-Partners, anders als `POST /all-off`).
+  Ein Lauf über REST/MCP ohne diese Angabe verhält sich wie aus dem Fenster. **Mock-verifiziert:**
+  `check_runs_api` (mit und ohne Angabe).
 - **CAN-Kachel: Spalten sprangen in der Delta-Ansicht (0.58.1, Nutzerfeedback 13.11.2026).** Δt, ID und Daten
   passten ihre Breite bei jedem Frame an den Inhalt an; folgte „101.2 ms“ auf „99.8 ms“, sprang die Spalte.
   Jetzt haben sie eine feste Startbreite (Δt für „999.9 ms“) und wachsen nur noch mit, nie zurück (auch die
@@ -208,6 +213,11 @@ Semantic Versioning (`lab_gui/version.py`).
     (`--now` einmal sofort, `--off` abschalten).
   - **Mock-verifiziert:** neue Prüfung `tools/check_runs_api.py` (API mit Stub, echtes Fenster mit Freigabe:
     Start, Stand, Dateien, Fehlerfälle, Stopp; Kommandozeile über die Instanz mit Exit 0 und Dateien).
+  - **Hardware-verifiziert am Pi (13.11.2026, 09:28, 0.59.1):** bei laufendem Kiosk `devices` über die Instanz
+    (eigene und Partnergeräte) und `run` mit HCS60 auf 1 V / 0 A über die Instanz → Exit 0, Ergebnis, JUnit und
+    Bericht geholt, `run_<id>.*` im Berichtsordner, Messmittel HCS60 mit Typ und Seriennummer; Nachtlauf mit
+    `nightly_pi.sh` eingerichtet, einmal ausgelöst (Exit 0) und wieder abgeschaltet. Dabei fiel das fehlende
+    ALLE AUS am Ende auf (0.59.2).
 - **Fundament für die neuen Prüfstandsfunktionen (0.58.0, Umsetzungsplan FP-1..29, 13.11.2026).**
   - **Kommandozeile ohne Fenster** (FT-4): `python lab_gui/main.py run ablauf.json --report x.html --junit x.xml
     --json x.json --var name=wert --simulation --wait-devices 15 --timeout 0` (als .exe `LabControl.exe run …`),

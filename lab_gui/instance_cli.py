@@ -97,7 +97,8 @@ def main(args, settings) -> int:
     deadline = time.monotonic() + max(0.0, args.wait_devices)
     while True:
         try:
-            run_id = instance.request("POST", "/runs", {"path": str(path), "vars": variables})["run"]
+            run_id = instance.request("POST", "/runs", {"path": str(path), "vars": variables,
+                                                        "all_off_at_end": True})["run"]
             break
         except InstanceError as exc:
             if exc.code == "devices_missing" and time.monotonic() < deadline:
