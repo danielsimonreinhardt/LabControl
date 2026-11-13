@@ -11,7 +11,8 @@ Semantic Versioning (`lab_gui/version.py`).
   13.11.2026).** FP-4 a gilt auch für diesen Weg: der Start trägt jetzt `"all_off_at_end": true`, die Instanz
   schaltet am Laufende ihre eigenen Geräte ab (nicht die des Verbund-Partners, anders als `POST /all-off`).
   Ein Lauf über REST/MCP ohne diese Angabe verhält sich wie aus dem Fenster. **Mock-verifiziert:**
-  `check_runs_api` (mit und ohne Angabe).
+  `check_runs_api` (mit und ohne Angabe). **Hardware-verifiziert am Pi (09:30):** nach dem Lauf über die Instanz
+  „ALL OFF (cli: Lauf beendet)“, HCS60 Ausgang aus.
 - **CAN-Kachel: Spalten sprangen in der Delta-Ansicht (0.58.1, Nutzerfeedback 13.11.2026).** Δt, ID und Daten
   passten ihre Breite bei jedem Frame an den Inhalt an; folgte „101.2 ms“ auf „99.8 ms“, sprang die Spalte.
   Jetzt haben sie eine feste Startbreite (Δt für „999.9 ms“) und wachsen nur noch mit, nie zurück (auch die
