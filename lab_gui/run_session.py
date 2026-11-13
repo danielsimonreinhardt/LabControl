@@ -80,7 +80,7 @@ class DeviceDirectory:
         fehlen -- der Runner scheitert an solchen Schritten ohnehin sofort."""
         device_ids: set[str] = set()
         for step in steps:
-            if not step.enabled:
+            if not step.enabled or step.device_kind == "uds":   # UDS: Pruefling, kein Geraet (RunSession.refusal)
                 continue
             if step.step_type == "action":
                 resolved, _ = self.resolve(step.device_kind, step.device_id)
@@ -97,7 +97,7 @@ class DeviceDirectory:
         auf Geraete vor einem Lauf ohne Fenster. `skip(device_id)` nimmt z. B. Partnergeraete aus."""
         problems: list[str] = []
         for step in steps:
-            if not step.enabled:
+            if not step.enabled or (step.step_type == "action" and step.device_kind == "uds"):
                 continue
             if step.step_type == "action":
                 kind, device_id = step.device_kind, step.device_id
@@ -192,6 +192,9 @@ class RunSession(QObject):
         self.instruments = None
         # Anforderungsregister (FT-3): () -> {id: {"title", ...}}; None = ohne Titel
         self.requirement_register: Callable[[], dict] | None = None
+        # UDS am Pruefling (FT-1): uds_service.UdsService, siehe set_uds
+        self.uds = None
+        self._uds_pending: tuple[int, TestStep] | None = None
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
@@ -200,6 +203,7 @@ class RunSession(QObject):
         runner.setParent(self)
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
+        runner.execute_uds.connect(self._on_execute_uds)
         self.dispatch_action.connect(worker.execute_action)
         self.dispatch_can_send.connect(worker.execute_can_send)
         worker.action_completed.connect(self._on_action_completed)
@@ -244,7 +248,47 @@ class RunSession(QObject):
             return tr("Sicherheitsabschaltung zuerst quittieren")
         if self.runner.is_running():
             return tr("Es läuft bereits ein Ablauf")
+        if any(s.enabled and s.step_type == "action" and s.device_kind == "uds" for s in steps) and (
+                self.uds is None or not self.uds.configured()):
+            return tr("Kein Prüfling (UDS) eingestellt")
         return ""
+
+    # -- UDS (FT-1) ------------------------------------------------------------------
+
+    def set_uds(self, uds) -> None:
+        self.uds = uds
+        uds.finished.connect(self._on_uds_finished)
+
+    @Slot(int, object)
+    def _on_execute_uds(self, _index: int, step: TestStep) -> None:
+        import uds_steps
+
+        self._uds_pending = None
+        if self.uds is None or not self.uds.configured():
+            self.runner.on_action_completed(False, tr("Kein Prüfling (UDS) eingestellt"), 0.0)
+            return
+        try:
+            command, args = uds_steps.command_for(step.action, step.params)
+        except (ValueError, TypeError) as exc:
+            self.runner.on_action_completed(False, tr("UDS-Parameter: {error}", error=str(exc)), 0.0)
+            return
+        self._uds_pending = (self.uds.submit(command, args), step)
+
+    @Slot(int, object)
+    def _on_uds_finished(self, request_id: int, result) -> None:
+        import uds_steps
+
+        if self._uds_pending is None or self._uds_pending[0] != request_id:
+            return   # Kachel/anderer Aufrufer oder abgebrochener Lauf
+        step = self._uds_pending[1]
+        self._uds_pending = None
+        verdict = uds_steps.evaluate(step.action, step.params, result)
+        if verdict.status == "ok":
+            self.runner.on_action_completed(True, "", verdict.value)
+        elif verdict.status == "check_failed":
+            self.runner.fail_check(verdict.message, verdict.value)
+        else:
+            self.runner.on_action_completed(False, verdict.message, 0.0)
 
     def start(self, steps: list[TestStep], testcase_name: str, meta: dict | None = None,
               variables: dict[str, float] | None = None) -> None:

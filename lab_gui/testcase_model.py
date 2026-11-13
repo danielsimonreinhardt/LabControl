@@ -166,6 +166,25 @@ JLINK_ACTIONS = {
 }
 
 
+# UDS am Pruefling (FT-1, 0.60.1, uds_steps.py/uds_service.py). Parameter in TestStep.params (Format v3),
+# jeder Schritt mit Erwartung "positiv" oder "NRC 0x.." (params["expect"]); DID lesen liefert einen Wert fuer
+# Pruefung und Variable (wie die anderen Lese-Aktionen).
+UDS_ACTIONS = {
+    "UDS_SESSION": "Session wechseln",
+    "UDS_SECURITY": "Entsperren",
+    "UDS_READ_DID": "DID lesen",
+    "UDS_WRITE_DID": "DID schreiben",
+    "UDS_READ_DTC": "Fehlerspeicher lesen",
+    "UDS_CLEAR_DTC": "Fehlerspeicher löschen",
+    "UDS_ROUTINE": "Routine",
+    "UDS_RESET": "Reset",
+    "UDS_RAW": "Rohe Anfrage",
+}
+UDS_READ_ACTIONS = {"UDS_READ_DID"}
+UDS_CHECK_FIELD_LABELS = {"uds_value": "Wert"}
+UDS_READ_CHECK_FIELD = {"UDS_READ_DID": "uds_value"}
+
+
 def battsim_step_detail(step) -> str:
     """Kurzbeschreibung eines Batterie-Simulator-Schritts fuer Statuszeile und
     Laufbericht (testcase_tab, run_report): Zelle und ggf. Spannung."""
@@ -180,7 +199,7 @@ def battsim_step_detail(step) -> str:
 # sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
 # zur Codepruefung ist daher nicht noetig (siehe testcase_runner.py:
 # on_action_completed/_finish_step).
-READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS
+READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS | UDS_READ_ACTIONS
 
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
@@ -211,6 +230,7 @@ DEVICE_ACTIONS = {
     "fg": FG_ACTIONS,
     "battsim": BATTSIM_ACTIONS,
     "jlink": JLINK_ACTIONS,
+    "uds": UDS_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -223,6 +243,7 @@ DEVICE_KIND_LABELS = {
     "fg": "Funktionsgenerator",
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
+    "uds": "Prüfling (UDS)",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -273,6 +294,7 @@ VALUELESS_ACTIONS = {
     "BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF", "BS_CELL_ON", "BS_CELL_OFF",
     "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
     *JLINK_ACTIONS,
+    *UDS_ACTIONS,
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -333,6 +355,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
                                       "BS_CELL_ON", "BS_CELL_OFF", "BS_ALL_ON", "BS_ALL_OFF",
                                       "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ")},
     **{code: ("", 0, 0) for code in JLINK_ACTIONS},
+    **{code: ("", 0, 0) for code in UDS_ACTIONS},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -412,7 +435,7 @@ BATTSIM_READ_CHECK_FIELD = {"BS_CELL_READ": "bs_cell", "BS_STACK_READ": "bs_stac
 CHECK_FIELD_SYMBOLS = {
     "voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN",
     "pico_vmax": "VMAX", "pico_vmin": "VMIN", "pico_vpp": "VPP", "pico_vrms": "VRMS",
-    "bs_cell": "UZ", "bs_stack": "US",
+    "bs_cell": "UZ", "bs_stack": "US", "uds_value": "DID",
 }
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1

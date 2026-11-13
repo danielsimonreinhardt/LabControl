@@ -125,6 +125,12 @@ class _Rig:
         self.session.instruments = self.instruments
         import requirements
         self.session.requirement_register = lambda: requirements.load_register(settings.requirement_registers)
+        # UDS am Pruefling (FT-1): wie im Fenster
+        from uds_service import UdsService
+        self.uds = UdsService(self.worker, lambda: data_store.store().shared_file("x").parent)
+        self.worker.can_connected.connect(self.uds.on_can_connected)
+        self.uds.configure(settings.dut_config, simulation)
+        self.session.set_uds(self.uds)
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 
@@ -143,6 +149,7 @@ class _Rig:
 
         from device_worker import REASON_WINDOW_CLOSE
 
+        self.uds.shutdown()   # UDS-Verbindung schliessen, solange der Bus offen ist
         # Erst ALLE AUS (FP-4 a), dann wie beim Schliessen des Fensters: Netzteile mit 1 V / 0 A zur
         # Handbedienung frei (das HCS hat keine Ausgangstaste, gesperrt waere es von Hand nicht bedienbar)
         QMetaObject.invokeMethod(self.worker, "all_outputs_off", Qt.ConnectionType.BlockingQueuedConnection,

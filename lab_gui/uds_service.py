@@ -182,8 +182,10 @@ class UdsService(QObject):
                 did = _did_id(odx, args.get("did"))
                 result = client.read_did(did)
                 if result.ok and did in odx.dids:
+                    definition = odx.dids[did]
                     try:
-                        result.values = {"did": did, "decoded": odx.dids[did].decode(result.data)}
+                        result.values = {"did": did, "decoded": definition.decode(result.data),
+                                         "numeric": {e.name: e.numeric(result.data) for e in definition.elements}}
                     except Exception as exc:  # noqa: BLE001
                         result.values = {"did": did, "decode_error": str(exc)}
                 return result

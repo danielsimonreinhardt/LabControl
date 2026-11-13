@@ -316,6 +316,19 @@ ist), **Laden** und **Speichern**.
 - **Aktiv**: Häkchen zum vorübergehenden Deaktivieren einer Zeile, ohne
   sie zu löschen.
 
+### UDS-Schritte (Prüfling)
+
+Mit dem Gerät **„Prüfling (UDS)“** spricht ein Ablauf über UDS mit dem in
+den Einstellungen eingetragenen Steuergerät (Abschnitt 5): Session wechseln,
+Entsperren, DID lesen/schreiben, Fehlerspeicher lesen/löschen, Routine,
+Reset, rohe Anfrage. **„UDS-Parameter…“** wählt DID, Element, Session oder
+Routine aus dem ODX. Jeder Schritt hat eine **Erwartung**: positive Antwort
+oder eine bestimmte negative Antwort (NRC, z. B. 0x33 für „gesperrt“).
+„Fehlerspeicher lesen“ kann DTCs verlangen, verbieten oder einen leeren
+Speicher. Eine Abweichung gilt als verletzte Prüfung und bricht den Lauf ab.
+„DID lesen“ liefert den Wert des gewählten Elements für eine Prüfung mit
+Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
+
 ### Ablaufsteuerung
 
 Über das „+“-Menü lassen sich zusätzlich einfügen:

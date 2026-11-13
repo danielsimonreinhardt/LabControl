@@ -1958,6 +1958,8 @@ class MainWindow(QMainWindow):
         # Messmittel (FT-8): Kennungen aus dem Worker (verbunden in _setup_worker vor dem Thread-Start),
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
+        self._run_session.set_uds(self._uds)   # UDS-Schritte (FT-1)
+        self.testcase_tab.set_uds_odx_provider(self._uds.odx)
         self.settings_tab.instruments_editor.attach(self._instruments)
         # Anforderungsregister (FT-3): Titel fuer Bericht, IDs fuer die Vervollstaendigung im Pruefungsdialog
         self._requirement_cache: tuple = ((), {})
@@ -2021,6 +2023,10 @@ class MainWindow(QMainWindow):
             )
             return
         if self._test_runner.is_running() or self._pending_run_steps is not None:
+            return
+        refusal = self._run_session.refusal(steps)   # z. B. UDS-Schritte ohne eingestellten Pruefling
+        if refusal:
+            self._refuse_run(refusal)
             return
         # Verbund (PI-24 a): Partnergeraete erst belegen (PI-25 a), dann starten
         steps, partner_devices, problem = self._partner_steps(steps)

@@ -189,6 +189,18 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **UDS-Schritte im Testablauf (0.60.1, FT-1 Teil 2, 13.11.2026).** Neue Geräteart „Prüfling (UDS)“ mit den
+  Aktionen Session wechseln, Entsperren, DID lesen, DID schreiben, Fehlerspeicher lesen/löschen, Routine, Reset
+  und rohe Anfrage. Parameter über „UDS-Parameter…“ (Auswahl aus dem ODX: Sessions, Stufen, DIDs mit Elementen
+  und Einheiten, Routinen), gespeichert in `params` (Format v3). Jeder Schritt hat eine Erwartung „positive
+  Antwort“ oder „negative Antwort (NRC 0x..)“; Fehlerspeicher lesen kann verlangen, dass DTCs gesetzt, nicht
+  gesetzt oder der Speicher leer ist. Eine Abweichung zählt als verletzte Prüfung und bricht ab (Exit 1), keine
+  Antwort als Fehler (Exit 2). „DID lesen“ liefert den Wert eines Elements (Wertetabelle: Rohwert) für die
+  Prüfung mit Bereich, Anforderungen und eine Variable – so lassen sich etwa Startzähler oder Versorgung in
+  Bedingungen nutzen. Ohne eingestellten Prüfling startet ein Ablauf mit UDS-Schritten nicht. Bericht und
+  Kommandozeile wie bei den anderen Schritten. **Mock-verifiziert:** neue Prüfung `tools/check_uds_steps.py`
+  (Urteile, ganzer Ablauf gegen das nachgebildete Steuergerät über `labcontrol run`, Abweichungen Exit 1,
+  fehlender Prüfling Exit 3, Editor und Dialog). Am Evalboard noch nicht.
 - **UDS-Grundlage (0.60.0, FT-1 Teil 1, FP-9 a / FP-10 b / FP-11 b / FP-12 a, 13.11.2026).**
   - ODX-Leser (`uds_odx.py`, eigene Implementierung, nur Standardbibliothek) für den Export von neXtBSW
     `tools/diaggen` (`.odx-d` oder `.pdx`): Sessions, Security-Stufen, DIDs mit Elementen (Kodierung, Byte-

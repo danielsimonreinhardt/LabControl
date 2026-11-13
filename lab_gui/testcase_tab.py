@@ -80,6 +80,8 @@ from testcase_model import (
     PICO_VOLTAGE_RANGE_CODES,
     READ_ACTIONS,
     STEP_TYPE_ACTION,
+    UDS_CHECK_FIELD_LABELS,
+    UDS_READ_CHECK_FIELD,
     VALUELESS_ACTIONS,
     TestStep,
     action_label,
@@ -1141,6 +1143,31 @@ class TestcaseTab(QWidget):
         file_page._refresh = refresh_file_label
         refresh_file_label()
 
+        # UDS (FT-1): Parameter in step.params, Zusammenfassung + Knopf "UDS…" (uds_step_dialog.py)
+        uds_page = QWidget()
+        uds_layout = QHBoxLayout(uds_page)
+        uds_layout.setContentsMargins(2, 0, 2, 0)
+        uds_label = QLabel()
+        set_tone(uds_label, "muted")
+        uds_button = IconButton("mdi.car-connected", tr("UDS-Parameter…"))
+        uds_layout.addWidget(uds_label, 1)
+        uds_layout.addWidget(uds_button)
+        uds_page._params = dict(step.params) if step.device_kind == "uds" else {}
+
+        def refresh_uds_label() -> None:
+            import uds_steps
+            uds_label.setText(uds_steps.summary(action_combo.currentData() or "", uds_page._params) or "–")
+
+        def open_uds_dialog() -> None:
+            from uds_step_dialog import UdsStepDialog
+            dialog = UdsStepDialog(action_combo.currentData() or "", uds_page._params, self._uds_odx(), self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                uds_page._params = dialog.params()
+                refresh_uds_label()
+
+        uds_button.clicked.connect(open_uds_dialog)
+        uds_page._refresh = refresh_uds_label
+
         value_stack = QStackedWidget()
         value_stack.addWidget(value_spin)       # Index 0: normaler Zahlenwert
         value_stack.addWidget(arb_page)         # Index 1: Arbiträrsignal-Zusammenfassung + Button
@@ -1148,6 +1175,7 @@ class TestcaseTab(QWidget):
         value_stack.addWidget(hil_page)         # Index 3: microHIL Kanal + Wert
         value_stack.addWidget(picoscope_page)   # Index 4: PicoScope Kanal + Bereich
         value_stack.addWidget(file_page)        # Index 5: J-Link-Firmware-Datei
+        value_stack.addWidget(uds_page)         # Index 6: UDS-Parameter (FT-1)
         self._table.setCellWidget(row_index, COL_VALUE, value_stack)
 
         duration_spin = SteppedDoubleSpinBox()
@@ -1204,7 +1232,7 @@ class TestcaseTab(QWidget):
             code = action_combo.currentData() or ""
             field_choices = None
             field_code = (HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
-                          or BATTSIM_READ_CHECK_FIELD.get(code))
+                          or BATTSIM_READ_CHECK_FIELD.get(code) or UDS_READ_CHECK_FIELD.get(code))
             if field_code is not None:
                 # Nur der eine Wert, den die jeweilige Lese-Aktion (HIL_AIN_READ/
                 # HIL_IN_READ/PICO_*) tatsaechlich liefert -- die drei
@@ -1212,7 +1240,7 @@ class TestcaseTab(QWidget):
                 # CheckDialog) waeren hier bedeutungslos.
                 unit = COND_FIELD_UNITS.get(field_code, "")
                 label = (HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS.get(field_code)
-                         or BATTSIM_CHECK_FIELD_LABELS[field_code])
+                         or BATTSIM_CHECK_FIELD_LABELS.get(field_code) or UDS_CHECK_FIELD_LABELS[field_code])
                 field_choices = {field_code: (label, unit)}
             # Nur eine Lese-Aktion (microHIL oder PicoScope) liefert ueberhaupt
             # einen Wert, der sich sinnvoll in eine Variable schreiben laesst
@@ -1367,6 +1395,9 @@ class TestcaseTab(QWidget):
                 value_stack.setCurrentIndex(4)
             elif code == "JLINK_FLASH":
                 value_stack.setCurrentIndex(5)
+            elif kind == "uds":
+                refresh_uds_label()
+                value_stack.setCurrentIndex(6)
             else:
                 value_stack.setCurrentIndex(0)
             # Pass/Fail-Pruefung setzt eine Messung voraus, die der Runner
@@ -2048,6 +2079,10 @@ class TestcaseTab(QWidget):
         carried = number_item.data(ROLE_V3_FIELDS)
         if isinstance(carried, TestStep):
             step = carry_v3_fields(step, carried)
+        if step_type == STEP_TYPE_ACTION and step.device_kind == "uds":
+            # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
+            uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
+            step.params = dict(getattr(uds_page, "_params", {}))
         if step_type == STEP_TYPE_ACTION:
             # Anforderungen pflegt der Pruefungsdialog (FT-3); er ist fuer Aktionszeilen massgeblich
             check_page = self._table.cellWidget(row, COL_CHECK)
@@ -2055,6 +2090,14 @@ class TestcaseTab(QWidget):
             if "requirements" in params:
                 step.requirements = list(params["requirements"])
         return step
+
+    def set_uds_odx_provider(self, provider) -> None:
+        """Von MainWindow: () -> ODX des eingestellten Pruefings (uds_odx.OdxDiag) oder None."""
+        self._uds_odx_provider = provider
+
+    def _uds_odx(self):
+        provider = getattr(self, "_uds_odx_provider", None)
+        return provider() if provider is not None else None
 
     def set_requirement_provider(self, provider) -> None:
         """Von MainWindow: () -> Liste der Anforderungs-IDs aus dem Register (Vervollstaendigung)."""

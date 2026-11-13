@@ -116,6 +116,8 @@ class TestRunner(QObject):
     execute_can_send = Signal(str, int, str, bool)
     # device_id, Aktion, Datei -- J-Link (PI-31 a), ausgefuehrt vom JLinkService
     execute_jlink = Signal(str, str, str)
+    # Schrittindex, TestStep -- UDS am Pruefling (FT-1), ausgefuehrt von RunSession/UdsService
+    execute_uds = Signal(int, object)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -316,6 +318,15 @@ class TestRunner(QObject):
                 self._vars[step.store_var] = value
         self._wait_timer.start(max(0, round(step.duration * 1000)))
 
+    def fail_check(self, message: str, value: float = 0.0) -> None:
+        """Die Aktion des laufenden Schritts hat ihre eingebaute Erwartung verfehlt (UDS: falsche Antwort, DTC
+        fehlt): zaehlt als verletzte Pruefung und bricht ab -- wie eine Pruefung mit "Bei Verletzung abbrechen"
+        (Exit 1 statt 2, run_session.failed_by_check)."""
+        if not self._running:
+            return
+        self.step_result.emit(self._index, False, value)
+        self._fail_at(self._index, message)
+
     def _retry_pico_action(self) -> None:
         """Reagiert auf PICOSCOPE_RETRY_MESSAGE (siehe deren Kommentar in
         device_worker.py): kein echter Fehler, sondern eine erkannte
@@ -481,6 +492,9 @@ class TestRunner(QObject):
                 elif step.device_kind == "jlink":
                     # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
                     self.execute_jlink.emit(step.device_id, step.action, step.file_path)
+                elif step.device_kind == "uds":
+                    # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
+                    self.execute_uds.emit(self._index, step)
                 else:
                     self.execute_action.emit(
                         step.device_id, step.device_kind, step.action, step.value, step.hil_channel

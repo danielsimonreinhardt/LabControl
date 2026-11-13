@@ -300,6 +300,18 @@ asking first if something is already loaded or entered), **Load** and **Save**.
 - **Check**: optional pass/fail limits (see below).
 - **Active**: checkbox to temporarily disable a row without deleting it.
 
+### UDS steps (device under test)
+
+With the device **"Device under test (UDS)"** a sequence talks UDS to the
+ECU set up in the settings (section 5): change session, unlock, read/write
+DID, read/clear fault memory, routine, reset, raw request. **"UDS
+parameters…"** picks DID, element, session or routine from the ODX. Each step
+has an **expectation**: positive response or a specific negative response
+(NRC, e.g. 0x33 for "locked"). "Read fault memory" can require DTCs, forbid
+them or require an empty memory. A mismatch counts as a violated check and
+aborts the run. "Read DID" returns the value of the chosen element for a
+range check and for a variable (conditions in "If"/"While").
+
 ### Flow control
 
 The "+" menu additionally offers:
