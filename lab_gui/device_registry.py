@@ -27,6 +27,7 @@ KIND_DISPLAY = {
     "fg": "Funktionsgenerator",
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
+    "uds": "Prüfling",
 }
 
 

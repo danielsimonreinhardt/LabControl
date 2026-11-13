@@ -215,6 +215,16 @@ Operation:
 *Tested against an emulated simulator only so far; the hardware check is
 pending.*
 
+### Device under test (UDS)
+
+If a device under test is set up in the settings (section 5), it appears as
+its own tile. At the top: session (with "unlocked") and the result of the
+last operation. Below: choose and change the session, **unlock** (padlock),
+choose a DID and **read** it (values with units), **read fault memory** (code,
+status, text) and **clear** it, **reset**. Clearing and reset ask first.
+While a test sequence runs, the tile is locked; the overview shows session,
+number of DTCs and the last operation.
+
 ### J-Link (flashing and reset)
 
 A SEGGER J-Link on the PC can be added as a device: in the settings under

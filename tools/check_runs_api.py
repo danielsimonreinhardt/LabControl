@@ -286,7 +286,8 @@ def section_cli(app, window, port: int, folder: Path) -> None:
                              "--json", str(out / "r.json"), "--junit", str(out / "r.xml"), "--var", "k=3"],
                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             encoding="utf-8", errors="replace")
-    spin(app, 60.0, lambda: proc.poll() is not None)
+    # 120 s: in der Komplett-Pruefung unter Last (Windows und WSL parallel) reichten 60 s nicht (13.11.2026)
+    spin(app, 120.0, lambda: proc.poll() is not None)
     if proc.poll() is None:
         proc.kill()
     text = proc.stdout.read() if proc.stdout else ""

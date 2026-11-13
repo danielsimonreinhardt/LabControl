@@ -338,9 +338,7 @@ def _cmd_coverage(args, settings) -> int:
 def main(argv: list[str]) -> int:
     import app_logging
     import data_store
-    import instance_cli
     from instance_lock import InstanceLock
-    from run_session import EXIT_SETUP
     from settings import Settings
     from version import __version__
 
@@ -363,6 +361,7 @@ def main(argv: list[str]) -> int:
         holder = lock.holder()
         logger.info("Kommandozeile über die laufende Instanz (%s)", holder or "?")
         try:
+            import instance_cli   # erst hier: zieht run_session/cantools nach (Startzeit, 0.60.2)
             return instance_cli.main(args, settings)
         finally:
             app_logging.shutdown()

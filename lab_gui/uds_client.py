@@ -115,7 +115,10 @@ class UdsClient:
                                 extended_id=frame.extended)
 
     def _tx(self, msg) -> None:
-        self._worker.can_send_threadsafe(self._can_id, msg.arbitration_id, bytes(msg.data), msg.is_extended_id)
+        try:
+            self._worker.can_send_threadsafe(self._can_id, msg.arbitration_id, bytes(msg.data), msg.is_extended_id)
+        except Exception as exc:  # noqa: BLE001 -- im ISO-TP-Thread: Bus weg (Beenden, Abziehen) -> kein Absturz,
+            logger.debug("UDS senden: %s", exc)   # der Dienst endet mit "keine Antwort"
 
     @staticmethod
     def _isotp_error(exc: Exception) -> None:

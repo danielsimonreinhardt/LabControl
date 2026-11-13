@@ -189,6 +189,16 @@ Semantic Versioning (`lab_gui/version.py`).
   der online ist (am 12.11.2026 beim ersten echten Koppeln von PC und Pi gesehen).
 
 ### Hinzugefügt
+- **Kachel „Prüfling“ (0.60.2, FT-1 Teil 3, 13.11.2026).** Sobald ein Prüfling eingestellt ist (im
+  Simulationsmodus immer), erscheint er als Gerät in Steuerung, Übersicht (Session, Zahl der DTCs, letzte
+  Bedienung) und Leiste oben („ECU“), online mit seinem CAN-Interface. Die Kachel wechselt die Session,
+  entsperrt, liest eine DID (Werte mit Einheiten aus dem ODX), liest und löscht den Fehlerspeicher (mit Texten)
+  und setzt das Steuergerät zurück (Löschen und Reset mit Rückfrage); während eines Testlaufs ist sie gesperrt.
+  Englische Texte für alle UDS-Teile. Behoben dabei: ein ISO-TP-Sendeversuch auf einen schon geschlossenen Bus
+  (beim Beenden) warf einen Traceback. Die Kommandozeile startet schneller (~2 s statt ~4,4 s): `main.py` lädt
+  das Hauptfenster erst nach der Weiche, `headless` den Instanz-Client nur bei laufender Instanz;
+  `check_runs_api` wartet unter Last bis 120 s auf den Kindprozess. **Mock-verifiziert:** neue Prüfung
+  `tools/check_uds_tile.py`.
 - **UDS-Schritte im Testablauf (0.60.1, FT-1 Teil 2, 13.11.2026).** Neue Geräteart „Prüfling (UDS)“ mit den
   Aktionen Session wechseln, Entsperren, DID lesen, DID schreiben, Fehlerspeicher lesen/löschen, Routine, Reset
   und rohe Anfrage. Parameter über „UDS-Parameter…“ (Auswahl aus dem ODX: Sessions, Stufen, DIDs mit Elementen

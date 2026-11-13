@@ -2800,6 +2800,8 @@ class ControlTab(QWidget):
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
     # J-Link-Kachel (PI-31 a): device_id, Aktion, Datei -> MainWindow -> JLinkService
     jlink_action_requested = Signal(str, str, str)
+    # Pruefling-Kachel (FT-1): Befehl, Argumente -> MainWindow -> UdsService
+    uds_command_requested = Signal(str, object)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
     # device_ids) -- MainWindow verdrahtet das mit Settings.
     # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
@@ -2907,6 +2909,7 @@ class ControlTab(QWidget):
         # _relayout_grid) -- zum Zuruecksetzen, wenn das Raster schrumpft.
         self._sized_rows = 0
         self._sized_cols = 0
+        self._uds_odx = None   # ODX des Pruefings fuer die UDS-Kachel (set_uds_odx)
 
         # Nach einem Sprachwechsel aendern sich Label-Breiten/-Hoehen -- die
         # Kachelgroessen muessen dann neu angeglichen werden.
@@ -2945,6 +2948,12 @@ class ControlTab(QWidget):
         elif kind == "jlink":
             section = JLinkControlGroup(device_id, label)
             section.action_requested.connect(self.jlink_action_requested)
+        elif kind == "uds":
+            from uds_tile import UdsControlGroup   # Pruefling (FT-1, 0.60.2)
+            section = UdsControlGroup(device_id, label)
+            section.command_requested.connect(self.uds_command_requested)
+            if self._uds_odx is not None:
+                section.set_odx(self._uds_odx)
         else:
             section = CanControlGroup(device_id, label)
         # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion
@@ -3534,6 +3543,21 @@ class ControlTab(QWidget):
             section.set_state(state)
 
     def set_battsim_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_uds_odx(self, odx) -> None:
+        """ODX des Pruefings fuer die Auswahllisten der Kachel (FT-1)."""
+        self._uds_odx = odx
+        for section in self._sections.values():
+            if hasattr(section, "set_odx"):
+                section.set_odx(odx)
+
+    def set_uds_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if section is not None and hasattr(section, "set_odx"):
+            section.set_state(state)
+
+    def set_uds_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
     def set_jlink_online(self, device_id: str, online: bool) -> None:

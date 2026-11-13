@@ -2795,6 +2795,9 @@ class TestcaseTab(QWidget):
             detail = tr("Kanal {ch}, {range}", ch=ch, range=range_name)
         elif step.device_kind == "jlink":
             detail = Path(step.file_path).name if step.action == "JLINK_FLASH" else "–"
+        elif step.device_kind == "uds":
+            import uds_steps
+            detail = uds_steps.summary(step.action, step.params) or "–"
         else:
             detail = f"{step.value}"
         self._set_status(

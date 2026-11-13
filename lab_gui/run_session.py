@@ -24,7 +24,7 @@ from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
 
-DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink")
+DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds")
 
 # Aktionen, die einen Ausgang/Eingang EINschalten (Verriegelung FP-7 b)
 SWITCH_ON_ACTIONS = {"load": {"OUT_ON"}, "psu": {"PSU_OUT_ON"}}

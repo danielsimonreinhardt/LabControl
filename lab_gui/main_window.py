@@ -77,7 +77,9 @@ logger = logging.getLogger(__name__)
 
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
-                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL"}
+                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL", "uds": "ECU"}
+# Pruefling (FT-1): ein festes Geraet fuer Kachel, Uebersicht und Statusleiste
+UDS_DEVICE_ID = "uds:dut"
 STATUS_CHIP_HEIGHT = 28      # Touch-Profil
 STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
@@ -291,6 +293,7 @@ class MainWindow(QMainWindow):
         self._wire_touch()
         self._wire_partner()
         self._wire_jlink()
+        self._wire_uds_tile()
         self._style_safety_banner()
         self._retranslate()
         self.testcase_tab.mark_clean()   # leerer Startzustand gilt als gespeichert (Laeufe ueber REST)
@@ -618,6 +621,87 @@ class MainWindow(QMainWindow):
             logger.info("Verbund: Partner %s Batterie-Simulator%s", "führt einen" if present else "ohne",
                         " - 0x130 wird hier nicht gesendet" if present else "")
             self._request_partner_battsim.emit(present)
+
+    # -- Pruefling (UDS, FT-1): Kachel, Uebersicht, Statusleiste ----------------------
+
+    def _wire_uds_tile(self) -> None:
+        self._uds_state: dict = {}
+        self._uds_known = False
+        self._uds_tile_requests: dict[int, tuple[str, dict]] = {}
+        self.control_tab.uds_command_requested.connect(self._on_uds_tile_command)
+        self._uds.finished.connect(self._on_uds_finished)
+        self._uds.state_changed.connect(lambda _text: self._update_uds_presence())
+        # CAN-Interface verbunden/getrennt: _on_can_connected ruft _update_uds_presence (eine eigene Verbindung
+        # an can_connected kaeme hier zu spaet -- der simulierte Bus meldet sich schon beim Start des Workers)
+        self._update_uds_presence()
+
+    def _update_uds_presence(self) -> None:
+        odx = self._uds.odx()
+        self.control_tab.set_uds_odx(odx)
+        if odx is None:
+            if self._uds_known:
+                self._set_uds_online(False)
+            return
+        can_id = self._uds.can_device()
+        online_can = self._online_devices.get("can", set())
+        online = can_id in online_can if can_id else len(online_can) == 1
+        if not self._uds_known:
+            self._uds_known = True
+            self._registry.on_device_added("uds", UDS_DEVICE_ID)
+        self._set_uds_online(online)
+
+    def _set_uds_online(self, online: bool) -> None:
+        self._set_online("uds", UDS_DEVICE_ID, online)
+        self.dashboard.set_uds_online(UDS_DEVICE_ID, online)
+        self.control_tab.set_uds_online(UDS_DEVICE_ID, online)
+        self._push_uds_state()
+
+    def _push_uds_state(self) -> None:
+        self.control_tab.set_uds_state(UDS_DEVICE_ID, self._uds_state)
+        self.dashboard.update_uds(UDS_DEVICE_ID, self._uds_state)
+
+    def _on_uds_tile_command(self, command: str, args: dict) -> None:
+        if self._test_runner.is_running():
+            self.statusBar().showMessage(tr("UDS von Hand ist während eines Testlaufs gesperrt"), 5000)
+            return
+        self._uds_state.update(busy=True, last=tr("läuft …"))
+        self._push_uds_state()
+        self._uds_tile_requests[self._uds.submit(command, dict(args or {}))] = (command, dict(args or {}))
+
+    def _on_uds_finished(self, request_id: int, result) -> None:
+        from uds_tile import format_values
+
+        if request_id not in self._uds_tile_requests:
+            return
+        command, args = self._uds_tile_requests.pop(request_id)
+        state = self._uds_state
+        state.update(busy=False, ok=result.ok, last=f"{time.strftime('%H:%M:%S')} {command}: {result.describe()}",
+                     last_short=("✓ " if result.ok else "✕ ") + time.strftime("%H:%M:%S"))
+        if result.ok and command == "session":
+            odx = self._uds.odx()
+            target = args.get("session")
+            names = {v: k for k, v in odx.sessions.items()} if odx else {}
+            state["session"] = names.get(target, str(target)) if isinstance(target, int) else str(target)
+            state["unlocked"] = False
+        elif result.ok and command == "unlock":
+            state["unlocked"] = True
+        elif result.ok and command == "reset":
+            state.update(session="Default", unlocked=False)
+        elif result.ok and command == "read_did":
+            odx = self._uds.odx()
+            did = result.values.get("did")
+            decoded = result.values.get("decoded")
+            state["values"] = (format_values(decoded, odx.dids.get(did) if odx else None) if decoded
+                               else result.data.hex(" ").upper())
+        elif result.ok and command == "read_dtcs":
+            dtcs = result.values.get("dtcs", [])
+            texts = result.values.get("texts", {})
+            state["dtc_count"] = len(dtcs)
+            state["dtcs"] = "\n".join(f"0x{code:06X} ({status:02X}) {texts.get(code, '')}".rstrip()
+                                      for code, status in dtcs) or tr("Fehlerspeicher leer")
+        elif result.ok and command == "clear_dtcs":
+            state.update(dtc_count=0, dtcs=tr("Fehlerspeicher leer"))
+        self._push_uds_state()
 
     # -- J-Link (Verbund V3, PI-31 a; jlink_service.py) ------------------------
 
@@ -1122,6 +1206,10 @@ class MainWindow(QMainWindow):
                 self._set_online("jlink", device_id, False)
                 self.dashboard.set_jlink_online(device_id, False)
                 self.control_tab.set_jlink_online(device_id, False)
+            elif kind == "uds":
+                self._set_online("uds", device_id, False)
+                self.dashboard.set_uds_online(device_id, False)
+                self.control_tab.set_uds_online(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -1201,6 +1289,11 @@ class MainWindow(QMainWindow):
             section.voltage_limit_changed.connect(self._worker.set_battsim_voltage_limit)
         elif kind == "jlink":
             pass   # Kachel meldet ueber control_tab.jlink_action_requested (siehe _wire_jlink)
+        elif kind == "uds":
+            # Befehle ueber control_tab.uds_command_requested (_wire_uds_tile); beim Wiederherstellen gespeicherter
+            # Geraete (vor _wire_uds_tile) gibt es noch keinen Stand
+            if hasattr(self, "_uds_state"):
+                self._push_uds_state()
         else:
             section.send_frame.connect(self._worker.send_can_frame)
 
@@ -2263,6 +2356,8 @@ class MainWindow(QMainWindow):
         self._set_online("can", device_id, online)
         self.dashboard.set_can_online(device_id, online)
         self.control_tab.set_can_online(device_id, online)
+        if hasattr(self, "_uds_state"):   # Pruefling haengt am CAN-Interface (FT-1, _wire_uds_tile)
+            self._update_uds_presence()
 
     @Slot(str, bool)
     def _on_hil_connected(self, device_id: str, online: bool) -> None:

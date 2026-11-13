@@ -14,21 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # fuer lokale Module (
 import logging
 import os
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
-
-import app_logging
-import data_store
 import headless
-from app_icon import icon as app_icon
-from app_logging import setup_logging
-from i18n import Translator, tr
-from instance_lock import InstanceLock
-import shutdown_inhibit
-import shutdown_signals
-from main_window import MainWindow
-from settings import Settings
-from theme import ThemeManager
-from version import __version__
+
+# Fenster-Module erst in main() (nach der Weiche fuer die Kommandozeile): `main.py run|devices|coverage`
+# startet sonst ~4 s langsamer, weil es das ganze Hauptfenster laedt (0.60.2).
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +38,7 @@ WINDOW_ENV = "LABCONTROL_WINDOW"
 DESKTOP_FILE_NAME = "labcontrol"
 
 
-def show_window(window: QWidget, mode: str | None = None) -> str:
+def show_window(window, mode: str | None = None) -> str:
     """Zeigt das Hauptfenster im gewuenschten Zustand und gibt den verwendeten zurueck."""
     mode = (os.environ.get(WINDOW_ENV, "") if mode is None else mode).strip().lower()
     if mode == "fullscreen":
@@ -68,6 +57,20 @@ def main() -> None:
         if pyi_splash is not None:
             pyi_splash.close()
         sys.exit(headless.main(sys.argv))
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    import app_logging
+    import data_store
+    import shutdown_inhibit
+    import shutdown_signals
+    from app_icon import icon as app_icon
+    from app_logging import setup_logging
+    from i18n import Translator, tr
+    from instance_lock import InstanceLock
+    from main_window import MainWindow
+    from settings import Settings
+    from theme import ThemeManager
+    from version import __version__
     # Einstellungen vor dem Logging: das Netzlaufwerk steht darin.
     settings = Settings()
     setup_logging(settings.network_dir)

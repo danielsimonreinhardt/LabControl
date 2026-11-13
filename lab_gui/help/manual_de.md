@@ -227,6 +227,16 @@ Bedienung in der Sektion:
 *Bisher nur gegen einen nachgebildeten Simulator getestet, die Prüfung am
 Gerät steht aus.*
 
+### Prüfling (UDS)
+
+Ist in den Einstellungen ein Prüfling eingetragen (Abschnitt 5), erscheint
+er als eigene Kachel. Oben stehen Session (mit „entsperrt“) und das Ergebnis
+der letzten Bedienung. Darunter: Session wählen und wechseln, **Entsperren**
+(Schloss), eine DID wählen und **lesen** (Werte mit Einheiten), **Fehlerspeicher
+lesen** (Code, Status, Text) und **löschen**, **Reset**. Löschen und Reset
+fragen nach. Während ein Testablauf läuft, ist die Kachel gesperrt; die
+Übersicht zeigt Session, Zahl der DTCs und die letzte Bedienung.
+
 ### J-Link (Flashen und Reset)
 
 Ein SEGGER J-Link am PC lässt sich als Gerät einbinden: in den Einstellungen
