@@ -26,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = ("run", "devices", "coverage")
+COMMANDS = ("run", "devices", "coverage", "timing")
 DEFAULT_WAIT_DEVICES_S = 15.0
 REASON_CLI_END = "cli: Lauf beendet"
 
@@ -60,6 +60,16 @@ def _parser() -> argparse.ArgumentParser:
                           help="Anforderungsregister (.sdoc/.csv/.md); Standard: aus den Einstellungen")
     coverage.add_argument("--csv", help="als CSV schreiben")
     coverage.add_argument("--md", help="als Markdown schreiben")
+    timing = sub.add_parser("timing", help="Zeitprüfung auf einer Aufzeichnung oder Oszi-Erfassung (FT-7)")
+    timing.add_argument("file", help="LabControl-Aufzeichnung (.csv/.mf4) oder Oszi-Erfassung (.csv)")
+    timing.add_argument("--channel", help="Kanal, z. B. 'Netzteil 1/Spannung' oder 'A' (bei mehreren nötig)")
+    timing.add_argument("--list", action="store_true", help="Kanäle der Datei auflisten")
+    timing.add_argument("--band", metavar="MIN:MAX", help="Wert bleibt im Band")
+    timing.add_argument("--reach", metavar="'OP WERT'", help="Wert erreicht z. B. '>= 11.5' …")
+    timing.add_argument("--within", type=float, metavar="S", help="… innerhalb S Sekunden ab --from")
+    timing.add_argument("--from", dest="t_from", type=float, metavar="S", help="Fensterbeginn (s ab Aufnahme)")
+    timing.add_argument("--to", dest="t_to", type=float, metavar="S", help="Fensterende (s ab Aufnahme)")
+    timing.add_argument("--json", help="Ergebnis als JSON hierhin schreiben")
     return parser
 
 
@@ -338,6 +348,42 @@ def _cmd_coverage(args, settings) -> int:
     return 0
 
 
+def _cmd_timing(args) -> int:
+    """Zeitpruefung auf einer Datei (0.63.1): Exit 0 bestanden, 1 verletzt, 3 Aufruf/Datei falsch."""
+    import json
+    import timing_files
+    from run_session import EXIT_FAILED, EXIT_PASSED, EXIT_SETUP
+    try:
+        if args.list:
+            for name, (times, _values) in sorted(timing_files.read_series(args.file).items()):
+                span = f"{times[0]:g}–{times[-1]:g} s" if times else "leer"
+                _say(f"{name}  ({len(times)} Werte, {span})")
+            return EXIT_PASSED
+        if bool(args.band) == bool(args.reach):
+            raise timing_files.TimingFileError("genau eine Prüfung angeben: --band MIN:MAX oder --reach 'OP WERT'")
+        if args.band:
+            lo, sep, hi = args.band.replace(",", ".").partition(":")
+            if not sep:
+                raise timing_files.TimingFileError("--band erwartet MIN:MAX")
+            config = {"mode": "band", "min": float(lo), "max": float(hi)}
+        else:
+            op, _sep, value = args.reach.strip().partition(" ")
+            if args.within is None:
+                raise timing_files.TimingFileError("--reach braucht --within S")
+            config = {"mode": "reach", "op": op, "value": float(value.replace(",", ".")), "within_s": args.within}
+        result = timing_files.check_file(args.file, args.channel, config, args.t_from, args.t_to)
+    except (timing_files.TimingFileError, ValueError, OSError) as exc:
+        _say(f"Fehler: {exc}")
+        return EXIT_SETUP
+    resolution = f"{result['resolution_ms']:g} ms" if result["resolution_ms"] is not None else "–"
+    _say(f"{result['check']}: {'BESTANDEN' if result['passed'] else 'VERLETZT'} – Wert {result['value']:g}, "
+         f"Auflösung {resolution}, {result['samples']} Werte" + (f" – {result['message']}" if result["message"] else ""))
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    return EXIT_PASSED if result["passed"] else EXIT_FAILED
+
+
 def main(argv: list[str]) -> int:
     import app_logging
     import data_store
@@ -352,9 +398,9 @@ def main(argv: list[str]) -> int:
     app_logging.setup_logging(settings.network_dir)
     data_store.setup(app_logging.effective_network_dir(settings.network_dir))
     logger.info("LAB CONTROL v%s Kommandozeile: %s", __version__, " ".join(argv[1:]))
-    if args.command == "coverage":   # liest nur Dateien, braucht weder Geraete noch Sperre
+    if args.command in ("coverage", "timing"):   # liest nur Dateien, braucht weder Geraete noch Sperre
         try:
-            return _cmd_coverage(args, settings)
+            return _cmd_coverage(args, settings) if args.command == "coverage" else _cmd_timing(args)
         finally:
             data_store.store().stop()
             app_logging.shutdown()

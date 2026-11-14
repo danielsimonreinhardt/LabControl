@@ -388,7 +388,12 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
   einen Kurvenausschnitt mit den Grenzen; ist die Auflösung für eine Frist zu
   grob (mehr als die halbe Frist), gilt die Prüfung als verletzt.
   `run-result.json` führt sie unter `timing_checks`, JUnit als eigene
-  Testfälle.
+  Testfälle. Dieselben Prüfungen gehen auch auf einer Aufzeichnung (CSV/MF4
+  aus Verlauf/Aufnahme) oder einer Oszi-Erfassung (CSV aus `captures/`):
+  `python lab_gui/main.py timing <datei> --list` zeigt die Kanäle,
+  `… timing aufnahme.csv --channel "Netzteil 1/Spannung" --band 11:13` bzw.
+  `--reach ">= 11.5" --within 1.5 --from 2.0` prüft (optional `--to`,
+  `--json`); Exit 0 bestanden, 1 verletzt, 3 Aufruf/Datei falsch.
 - **Variable setzen / Variable erhöhen**: legt eine Laufvariable an bzw.
   ändert ihren Wert – nützlich als Zähler oder um Bedingungen später im
   Ablauf abzufragen.

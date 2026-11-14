@@ -7,6 +7,14 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Zeitprüfungen auf Aufzeichnungen (0.63.1, FT-7, FP-19 b, 14.11.2026).** `main.py timing <datei>` prüft
+  „Im Band bleiben“ (`--band MIN:MAX`) und „Erreichen innerhalb“ (`--reach "OP WERT" --within S`) auf einem Kanal
+  einer LabControl-Aufzeichnung (CSV/MF4, Kanal „Gerät/Messgröße“) oder einer Oszi-Erfassung (CSV aus
+  `captures/`, Kanal „A“/„CH1“), optional im Fenster `--from/--to`; `--list` zeigt die Kanäle, `--json` schreibt
+  das Ergebnis. Dieselbe Auswertung wie der Block „Überwachen“ (`timing_files.py` über `timing_checks.Monitor`),
+  mit Auflösung der Datei (z. B. 1 µs bei der Oszi-Erfassung). Exit 0/1/3. CAN-Lücken gehen nur live (die
+  Aufzeichnung enthält keine CAN-Frames). **Mock-verifiziert:** `check_timing_checks` Abschnitt „files“
+  (CSV, MF4, Oszi-CSV, Fenster, Kommandozeile mit Exit-Codes).
 - **Zeitprüfungen live (0.63.0, FT-7, FP-18 c, 14.11.2026).** Neuer Block **„Überwachen … Ende“** im Testablauf:
   die Quelle wie bei einer Messwert-Bedingung (Netzteil, Last, microHIL-Kanal, CAN-Signal), drei Arten –
   **Im Band bleiben**, **Erreichen innerhalb** (gemessene Zeit = Reaktionszeit) und **CAN-Lücken** (auch die aus

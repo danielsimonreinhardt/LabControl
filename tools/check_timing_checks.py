@@ -276,6 +276,69 @@ def section_cli() -> None:
     check("Kommandozeile: Schwelle nie erreicht -> Exit 1", code == 1, f"{code}: {text[-300:]}")
 
 
+def section_files() -> None:
+    print("files (0.63.1)")
+    import timing_files
+    from recording import Sample
+    from recording_export import export_csv, export_mf4
+    t0 = 1_700_000_000.0
+    samples = []
+    for i in range(50):                       # 5 s, 100 ms Abstand; ab 2,0 s auf 10 V (Einbruch)
+        volts = 10.0 if 2.0 <= i * 0.1 < 3.0 else 12.0
+        samples.append(Sample(t0 + i * 0.1, "psu:X", "voltage", volts))
+        samples.append(Sample(t0 + i * 0.1, "psu:X", "current", 0.5))
+    meta = {"psu:X": ("psu", "Netzteil 1")}
+    rec_csv = DATA / "aufnahme.csv"
+    export_csv(rec_csv, samples, meta)
+    series = timing_files.read_series(rec_csv)
+    channel = next((name for name in series if name.startswith("Netzteil 1/") and "pannung" in name), None)
+    check("Aufzeichnung CSV: Kanaele 'Geraet/Kanal'", channel is not None and len(series[channel][0]) == 50,
+          str(sorted(series)))
+    result = timing_files.check_file(rec_csv, channel, {"mode": "band", "min": 11.0, "max": 13.0})
+    check("CSV: Einbruch verletzt das Band bei 2,0 s, Aufloesung 100 ms", not result["passed"]
+          and "2.00 s" in result["message"] and abs(result["resolution_ms"] - 100.0) < 1.0, str(result))
+    result = timing_files.check_file(rec_csv, channel, {"mode": "band", "min": 11.0, "max": 13.0}, 3.0, 4.9)
+    check("CSV: Fenster nach dem Einbruch bestanden", result["passed"], str(result))
+    result = timing_files.check_file(rec_csv, channel, {"mode": "reach", "op": ">=", "value": 11.5,
+                                                        "within_s": 1.5}, 2.0)
+    check("CSV: Erholung nach 1,0 s erreicht", result["passed"] and abs(result["value"] - 1.0) < 1e-6, str(result))
+    try:
+        mf4 = DATA / "aufnahme.mf4"
+        export_mf4(mf4, samples, meta)
+        mseries = timing_files.read_series(mf4)
+        mchannel = next((n for n in mseries if "pannung" in n), None)
+        result = timing_files.check_file(mf4, mchannel, {"mode": "band", "min": 11.0, "max": 13.0})
+        check("MF4: gleiches Ergebnis wie CSV", mchannel is not None and not result["passed"]
+              and "2.00 s" in result["message"], f"{sorted(mseries)} {result}")
+    except ImportError:
+        print("  (asammdf fehlt -- MF4 uebersprungen)")
+    scope = DATA / "c-test.csv"
+    lines = ["# scope=picoscope:x model=2204A timestamp=0", "# sample_interval_s=1e-06 trigger_index=0 triggered=True",
+             "# A: range_v=5 coupling=DC probe=1 overrange=False", "time_s,A_V,B_V"]
+    lines += [f"{i * 1e-6:.9g},{(3.3 if i >= 400 else 0.0):g},0" for i in range(1000)]
+    scope.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = timing_files.check_file(scope, "A", {"mode": "reach", "op": ">=", "value": 3.0, "within_s": 0.001})
+    check("Oszi-Erfassung: Flanke nach 400 us, Aufloesung 1 us", result["passed"]
+          and abs(result["value"] - 0.0004) < 1e-9 and abs(result["resolution_ms"] - 0.001) < 1e-6, str(result))
+    try:
+        timing_files.check_file(rec_csv, None, {"mode": "band"})
+        check("mehrere Kanaele ohne --channel -> Fehler", False)
+    except timing_files.TimingFileError as exc:
+        check("mehrere Kanaele ohne --channel -> Fehler mit Kanalliste", "Netzteil 1/" in str(exc), str(exc))
+
+    code, text = run_cli("timing", str(rec_csv), "--channel", channel, "--band", "11:13")
+    check("main.py timing: Band verletzt -> Exit 1", code == 1 and "VERLETZT" in text, f"{code}: {text[-300:]}")
+    out = DATA / "timing.json"
+    code, text = run_cli("timing", str(rec_csv), "--channel", channel, "--reach", ">= 11.5", "--within", "1.5",
+                         "--from", "2.0", "--json", str(out))
+    check("main.py timing: Erholung -> Exit 0, JSON", code == 0 and json.loads(out.read_text(encoding="utf-8"))
+          ["passed"], f"{code}: {text[-300:]}")
+    code, text = run_cli("timing", str(scope), "--list")
+    check("main.py timing --list", code == 0 and "A  (1000 Werte" in text, text[-200:])
+    code, text = run_cli("timing", str(rec_csv), "--band", "11:13")
+    check("main.py timing: Kanal fehlt -> Exit 3", code == 3 and "--channel" in text, f"{code}: {text[-200:]}")
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--child":
         return child_main()
@@ -288,6 +351,7 @@ def main() -> int:
     section_editor(app)
     section_dialog(app)
     section_cli()
+    section_files()
     print()
     if FAILURES:
         print(f"{len(FAILURES)} Fehler:")

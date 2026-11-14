@@ -368,7 +368,12 @@ The "+" menu additionally offers:
   power supply) and a curve excerpt with the limits for every timing check;
   if the resolution is too coarse for a deadline (more than half of it), the
   check counts as violated. `run-result.json` lists them under
-  `timing_checks`, JUnit as separate test cases.
+  `timing_checks`, JUnit as separate test cases. The same checks also work
+  on a recording (CSV/MF4 from history/recording) or a scope capture (CSV
+  from `captures/`): `python lab_gui/main.py timing <file> --list` lists the
+  channels, `… timing rec.csv --channel "Power supply 1/Voltage" --band
+  11:13` or `--reach ">= 11.5" --within 1.5 --from 2.0` checks (optional
+  `--to`, `--json`); exit 0 passed, 1 violated, 3 wrong call/file.
 - **Set variable / Increase variable**: creates a run variable resp.
   changes its value — useful as a counter or to query conditions later
   in the sequence.
