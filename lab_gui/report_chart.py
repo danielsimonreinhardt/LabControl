@@ -48,9 +48,12 @@ def render_field_chart(
     step_marks: list[tuple[float, int]],
     width: int = CHART_W,
     height: int = CHART_H,
+    setpoints: list[tuple[float, float]] | None = None,
 ) -> QImage:
     """Zeichnet den Verlauf von `field` (bereits gefilterte samples) aller
-    beteiligten Geraete zwischen t0 und t1 (Wanduhr-Sekunden, time.time())."""
+    beteiligten Geraete zwischen t0 und t1 (Wanduhr-Sekunden, time.time()).
+    setpoints (0.62.0, FT-2): gesendete Sollwerte (t, Wert) als gestrichelte Haltekurve "Soll"."""
+    setpoints = sorted(p for p in (setpoints or []) if t0 <= p[0] <= t1)
     image = QImage(width, height, QImage.Format.Format_RGB32)
     image.fill(QColor(BG))
 
@@ -84,13 +87,13 @@ def render_field_chart(
     painter.setPen(QPen(QColor(TEXT)))
     painter.drawText(0, 0, left_margin - 4, top_margin, Qt.AlignmentFlag.AlignRight, f"[{unit}]")
 
-    if not device_ids:
+    if not device_ids and not setpoints:
         painter.setPen(QPen(QColor(MUTED)))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("Keine Messwerte"))
         painter.end()
         return image
 
-    all_values = [v for points in by_device.values() for _t, v in points]
+    all_values = [v for points in by_device.values() for _t, v in points] + [v for _t, v in setpoints]
     lo, hi = min(all_values), max(all_values)
     if hi <= lo:
         pad = abs(lo) * 0.1 or 1.0
@@ -181,6 +184,25 @@ def render_field_chart(
         painter.fillRect(int(legend_x), int(legend_y) + i * 14, 10, 10, color)
         painter.setPen(QPen(QColor(TEXT)))
         painter.drawText(int(legend_x) + 14, int(legend_y) + i * 14 + 9, label)
+
+    if setpoints:
+        # Haltekurve wie das Geraet sie sieht: Wert gilt bis zum naechsten Sollwert
+        soll_pen = QPen(QColor(TEXT))
+        soll_pen.setWidth(2)
+        soll_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(soll_pen)
+        ends = [t for t, _v in setpoints[1:]] + [t_hi]
+        for (t, v), t_next in zip(setpoints, ends):
+            painter.drawLine(int(x_of(t)), int(y_of(v)), int(x_of(t_next)), int(y_of(v)))
+        for (_t, v), (t_next, v_next) in zip(setpoints, setpoints[1:]):
+            painter.drawLine(int(x_of(t_next)), int(y_of(v)), int(x_of(t_next)), int(y_of(v_next)))
+        row = len(device_ids)
+        label = tr("Soll")
+        if not device_ids:
+            legend_x = rect.right() - painter.fontMetrics().horizontalAdvance(label) - 18
+        painter.drawLine(int(legend_x), int(legend_y) + row * 14 + 5, int(legend_x) + 10, int(legend_y) + row * 14 + 5)
+        painter.setPen(QPen(QColor(TEXT)))
+        painter.drawText(int(legend_x) + 14, int(legend_y) + row * 14 + 9, label)
 
     painter.end()
     return image

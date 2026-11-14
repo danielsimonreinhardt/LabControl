@@ -225,6 +225,7 @@ class RunSession(QObject):
         runner.step_failed.connect(recorder.on_step_failed)
         runner.run_finished.connect(recorder.on_run_finished)
         runner.run_stopped.connect(recorder.on_run_stopped)
+        runner.setpoint_sent.connect(recorder.on_setpoint_sent)
         runner.iteration_changed.connect(recorder.on_iteration_changed)
         worker.load_measurement.connect(recorder.on_load_measurement)
         worker.psu_measurement.connect(recorder.on_psu_measurement)

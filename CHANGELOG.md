@@ -6,6 +6,23 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Spannungsprofile schlank (0.62.0, FT-2, PI-50 b, 14.11.2026).** Statt eines eigenen Profil-Schritts ergänzt
+  das vorhandene Arbiträrsignal, was fehlte:
+  - Form **„Rampe“**: linear von Start nach Ziel über die Schrittdauer, am Ende genau der Zielwert; im Dialog
+    Start/Ziel statt Offset/Amplitude, ohne Frequenz, Ziel im Gerätebereich (Netzteil ab 1 V, FP-15).
+  - Update-Intervall **„Auto“** (0): so schnell wie quittiert, mindestens 100 ms (FP-16 b). Das Intervall gilt
+    jetzt **von Senden zu Senden** (bisher: Quittung + Intervall, die Signale liefen dadurch langsamer als
+    eingestellt); quittiert das Gerät langsamer, folgt der nächste Wert sofort.
+  - **Soll gegen Ist** im Bericht: je Arbiträrsignal-Schritt ein Diagramm (Soll als Haltekurve, Ist vom selben
+    Gerät) und eine Tabelle „Sollwertverläufe“ mit Zahl der Sollwerte, Start → Ziel und tatsächlichen Abständen
+    min/mittel/max (je Ausführung, Schleifen getrennt); `run-result.json` unter `setpoints`.
+  - Profile (Einbruch, Treppe, Startprofil) entstehen aus „Spannung setzen“, Rampe, „Ausgang AUS“, Schleifen und
+    verknüpften Bausteinen; UDS vorher/nachher mit den UDS-Schritten. Partner-Netzteile (FP-17 b) gehen über
+    denselben Weg, die Abstände bestimmt dann das Netz.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_voltage_profiles.py` (Rampenwerte, Abstände bei schneller,
+    langsamer und fester Quittung, Zielwert am Ende, Schleifen, Bericht, Dialog, Kommandozeile).
+
 ### Behoben
 - **Prüfling-Kachel hieß „Prüfling 1“ statt wie eingestellt (0.61.3, am Evalboard gesehen 14.11.2026).** Der
   Name aus Einstellungen → Geräte → Prüfling wird jetzt Kachel-, Bericht- und Netzwerkname, solange die Kachel

@@ -20,6 +20,7 @@ from PySide6.QtCore import QBuffer, QIODevice, QSizeF, QUrl
 from PySide6.QtGui import QImage, QPageSize, QPdfWriter, QTextDocument
 
 import requirements
+import run_results
 from i18n import tr
 from paths import app_dir
 from report_chart import fmt_elapsed, render_field_chart
@@ -92,6 +93,29 @@ def _render_charts(record: RunRecord) -> list[tuple[str, QImage]]:
             continue
         image = render_field_chart(field, unit, record.samples, record.device_meta, t0, t1, step_marks)
         title = tr(COND_FIELD_LABELS.get(field, field))
+        charts.append((title, image))
+    charts.extend(_render_setpoint_charts(record))
+    return charts
+
+
+def _render_setpoint_charts(record: RunRecord) -> list[tuple[str, QImage]]:
+    """Soll gegen Ist je Arbitraersignal-Schritt (0.62.0, FT-2): erste Ausfuehrung, Ist vom selben Geraet."""
+    units = dict(_FIELDS)
+    charts = []
+    for item in run_results.setpoint_runs(record):
+        run = item["executions"][0]
+        step = record.steps[item["index"]] if 0 <= item["index"] < len(record.steps) else None
+        duration = step.duration if step is not None else 0.0
+        t_start = run[0][0]
+        t_end = max(run[-1][0], t_start + duration) + 1.0
+        if record.ended_at:
+            t_end = min(t_end, max(record.ended_at, run[-1][0] + 0.1))
+        field = run_results.SETPOINT_FIELDS.get(item["target"], "")
+        samples = [s for s in record.samples if s.device_id == item["device_id"] and s.field == field]
+        image = render_field_chart(field or "setpoint", units.get(field, ""), samples, record.device_meta,
+                                   t_start, t_end, [], setpoints=run)
+        title = tr("Schritt {n}: Soll gegen Ist – {target}", n=item["index"] + 1,
+                   target=action_label(step.device_kind, item["target"]) if step is not None else item["target"])
         charts.append((title, image))
     return charts
 
@@ -338,6 +362,25 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
                 f'<td style="{cell_style}">{html.escape(measured_text)}</td>'
                 f'</tr>'
             )
+        parts.append('</table>')
+
+    setpoint_items = run_results.setpoint_runs(record)
+    if setpoint_items:
+        parts.append('<h2>' + html.escape(tr("Sollwertverläufe")) + '</h2>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th("#") + th(tr("Gerät")) + th(tr("Zielgröße")) + th(tr("Sollwerte"))
+                     + th(tr("Von → bis")) + th(tr("Abstand min/mittel/max")) + '</tr>')
+        for item in setpoint_items:
+            step = record.steps[item["index"]]
+            gaps = item["interval_ms"]
+            gap_text = (f'{gaps["min"]:g} / {gaps["mean"]:g} / {gaps["max"]:g} ms' if gaps else "–")
+            if len(item["executions"]) > 1:
+                gap_text += " · " + tr("{n} Ausführungen", n=len(item["executions"]))
+            cells = (item["index"] + 1, _device_display(record, step.device_kind, item["device_id"]),
+                     action_label(step.device_kind, item["target"]), item["count"],
+                     f'{item["first"]:g} → {item["last"]:g}', gap_text)
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
         parts.append('</table>')
 
     parts.append('<h2>' + html.escape(tr("Zeitverlauf")) + '</h2>')

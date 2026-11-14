@@ -313,7 +313,18 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   button. The dialog lets you choose between sine, square (with
   adjustable duty cycle), triangle and sawtooth, plus amplitude, offset,
   frequency and update interval — a live preview shows the resulting
-  waveform.
+  waveform. **Ramp** runs linearly from **Start** to **Target** over the
+  step's duration and sets exactly the target value at the end — together
+  with "Set voltage", "Output OFF", loops and linked blocks this builds
+  voltage profiles (dip with recovery, staircase, start profile; there are no
+  setpoints below 1 V, use "Output OFF" instead). The **update interval** is
+  the minimum time from one send to the next; if the instrument acknowledges
+  more slowly, the next value follows right after the acknowledgement.
+  **Auto** means as fast as acknowledged, at least 100 ms. The report shows
+  setpoint vs. actual and the actual intervals (min/mean/max) for every
+  arbitrary-signal step, `run-result.json` the same figures under
+  `setpoints`. This also works with a power supply of the linked partner; the
+  network round trip then sets the intervals.
 - **Value / Duration (s)**: setpoint resp. wait time after the step,
   before the next one begins. The wait time must cover the device's
   physical settling time (see note below).

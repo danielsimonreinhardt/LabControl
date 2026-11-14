@@ -215,11 +215,29 @@ ARB_TARGETS: dict[str, list[str]] = {
 # Interner Signalform-Code -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
 # fuer i18n.tr, siehe arb_shape_label()). Zentral hier statt dupliziert in
 # signal_dialog.py/testcase_tab.py, da beide dieselbe Zuordnung brauchen.
-ARB_SHAPE_LABELS = {"sine": "Sinus", "square": "Rechteck", "triangle": "Dreieck", "sawtooth": "Sägezahn"}
+ARB_SHAPE_LABELS = {"sine": "Sinus", "square": "Rechteck", "triangle": "Dreieck", "sawtooth": "Sägezahn",
+                    "ramp": "Rampe"}
+# Rampe (0.62.0, FT-2/PI-50 b): linear von arb_offset (Start) nach arb_amplitude (Ziel) ueber die Schrittdauer;
+# am Ende wird genau der Zielwert gesetzt (testcase_runner._continue_arb). Frequenz/Tastgrad spielen keine Rolle.
+ARB_RAMP = "ramp"
+# arb_interval_ms == 0: "so schnell wie quittiert", aber nicht oefter als alle ARB_AUTO_MIN_INTERVAL_MS (FP-16 b)
+ARB_AUTO_MIN_INTERVAL_MS = 100
 
 
 def arb_shape_label(shape: str) -> str:
     return tr(ARB_SHAPE_LABELS.get(shape, shape))
+
+
+def arb_spacing_ms(interval_ms: int) -> int:
+    """Mindestabstand zwischen zwei gesendeten Sollwerten (von Senden zu Senden)."""
+    return int(interval_ms) if int(interval_ms) > 0 else ARB_AUTO_MIN_INTERVAL_MS
+
+
+def arb_summary(shape: str, target_label: str, offset: float, amplitude: float, frequency: float) -> str:
+    """Kurzbeschreibung eines Arbitraersignals (Editorzeile, Statuszeile)."""
+    if shape == ARB_RAMP:
+        return f"{arb_shape_label(shape)}: {target_label}, {offset:g} → {amplitude:g}"
+    return f"{arb_shape_label(shape)}: {target_label}, {offset:g}±{amplitude:g}, {frequency:g} Hz"
 
 DEVICE_ACTIONS = {
     "load": LOAD_ACTIONS,
@@ -486,12 +504,12 @@ class TestStep:
     duration: float = 0.0
     enabled: bool = True
     # -- Arbiträrsignal-Parameter (nur relevant wenn action in ARB_ACTIONS) --
-    arb_shape: str = "sine"       # "sine" | "square" | "triangle" | "sawtooth"
+    arb_shape: str = "sine"       # "sine" | "square" | "triangle" | "sawtooth" | "ramp"
     arb_target: str = ""          # tatsaechlich gesendeter Aktionscode, z.B. "VOLT"/"PSU_CURR"
-    arb_amplitude: float = 0.0    # Signal schwingt zwischen offset-amplitude und offset+amplitude
-    arb_offset: float = 0.0
+    arb_amplitude: float = 0.0    # Signal schwingt zwischen offset-amplitude und offset+amplitude; Rampe: Zielwert
+    arb_offset: float = 0.0       # Rampe: Startwert
     arb_frequency: float = 1.0    # Hz
-    arb_interval_ms: int = 200    # Abstand zwischen zwei Sollwert-Updates
+    arb_interval_ms: int = 200    # Mindestabstand zweier Sollwerte (Senden zu Senden), 0 = so schnell wie quittiert
     arb_duty: float = 0.5         # nur "square": Tastgrad (Anteil High-Phase), 0..1
 
     # -- CAN-Frame-Parameter (nur relevant wenn action == "CAN_SEND") -----
@@ -585,6 +603,11 @@ def carry_v3_fields(target: TestStep, source: TestStep) -> TestStep:
 
 def arb_value(step: "TestStep", t: float) -> float:
     """Momentanwert des Arbiträrsignals von `step` zum Zeitpunkt t (Sekunden)."""
+    if step.arb_shape == ARB_RAMP:
+        frac = min(max(t / max(getattr(step, "duration", 0.0), 1e-9), 0.0), 1.0)
+        value = step.arb_offset + (step.arb_amplitude - step.arb_offset) * frac
+        _unit, lo, hi = ACTION_VALUE_RANGE.get(step.arb_target, ("", value, value))
+        return min(max(value, lo), hi) if lo < hi else value
     period = 1.0 / max(step.arb_frequency, 1e-9)
     # Phasenanteil innerhalb der aktuellen Periode, 0..1 -- Grundlage fuer
     # square/triangle/sawtooth, die alle stueckweise-lineare bzw. stufige

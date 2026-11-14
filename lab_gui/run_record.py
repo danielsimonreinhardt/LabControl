@@ -21,6 +21,8 @@ from testcase_model import TestStep
 # Laeufen (z.B. eine 100000er-Schleife) -- darueber hinausgehende Ereignisse
 # werden nur noch gezaehlt (events_dropped), nicht mehr gespeichert.
 MAX_EVENTS = 5000
+# Sollwerte der Arbitraersignal-Schritte (bei 100 ms gut 13 h)
+MAX_SETPOINTS = 500_000
 
 
 @dataclass
@@ -58,6 +60,8 @@ class RunRecord:
     instruments: list = field(default_factory=list)
     # Registereintraege (Titel) der im Lauf genannten Anforderungs-IDs (requirements.load_register, FT-3)
     requirement_register: dict = field(default_factory=dict)
+    # Gesendete Sollwerte der Arbitraersignal-Schritte (0.62.0, FT-2): (t, Schrittindex, device_id, Ziel, Wert)
+    setpoints: list = field(default_factory=list)
 
 
 class RunRecorder(QObject):
@@ -166,6 +170,13 @@ class RunRecorder(QObject):
         if not self._active:
             return
         self._finish("stopped")
+
+    @Slot(int, str, str, float)
+    def on_setpoint_sent(self, index: int, device_id: str, target: str, value: float) -> None:
+        if not self._active or self._record is None:
+            return
+        if len(self._record.setpoints) < MAX_SETPOINTS:
+            self._record.setpoints.append((time.time(), index, device_id, target, value))
 
     @Slot(int, int, int)
     def on_iteration_changed(self, _start_index: int, iteration: int, total: int) -> None:

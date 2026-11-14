@@ -330,7 +330,18 @@ ist), **Laden** und **Speichern**.
   Button „Signal definieren…“. Im folgenden Dialog lässt sich zwischen
   Sinus, Rechteck (mit einstellbarem Tastgrad), Dreieck und Sägezahn
   wählen, dazu Amplitude, Offset, Frequenz und Update-Intervall – eine
-  Live-Vorschau zeigt den Signalverlauf.
+  Live-Vorschau zeigt den Signalverlauf. **Rampe** fährt linear von
+  **Start** nach **Ziel** über die Dauer des Schritts und setzt am Ende genau
+  den Zielwert – zusammen mit „Spannung setzen“, „Ausgang AUS“, Schleifen und
+  verknüpften Bausteinen entstehen so Spannungsprofile (Einbruch mit
+  Erholung, Treppe, Startprofil; Werte unter 1 V gibt es nicht, dafür
+  „Ausgang AUS“). Das **Update-Intervall** ist der Mindestabstand von Senden
+  zu Senden; quittiert das Gerät langsamer, folgt der nächste Wert direkt
+  nach der Quittung. **Auto** heißt: so schnell wie quittiert, mindestens
+  100 ms. Der Bericht zeigt je Arbiträrsignal-Schritt Soll gegen Ist und die
+  tatsächlichen Abstände (min/mittel/max), `run-result.json` dieselben Zahlen
+  unter `setpoints`. Das geht auch mit einem Netzteil des Verbund-Partners;
+  dann bestimmt die Netzwerk-Laufzeit die Abstände.
 - **Wert / Dauer (s)**: Sollwert bzw. Wartezeit nach dem Schritt, bevor
   der nächste beginnt. Die Wartezeit muss die physikalische
   Einschwingzeit des Geräts abdecken (siehe Hinweis unten).

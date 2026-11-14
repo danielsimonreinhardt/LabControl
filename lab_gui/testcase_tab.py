@@ -86,6 +86,7 @@ from testcase_model import (
     TestStep,
     action_label,
     arb_shape_label,
+    arb_summary,
     battsim_step_detail,
     carry_v3_fields,
     check_summary,
@@ -1334,12 +1335,9 @@ class TestcaseTab(QWidget):
         def refresh_arb_summary() -> None:
             kind = current_kind()
             params = arb_page._params
-            shape_label = arb_shape_label(params["shape"])
             target_label = action_label(kind, params["target"]) if params["target"] else "?"
-            arb_summary_label.setText(
-                f"{shape_label}: {target_label}, {params['offset']:g}±{params['amplitude']:g}, "
-                f"{params['frequency']:g} Hz"
-            )
+            arb_summary_label.setText(arb_summary(params["shape"], target_label, params["offset"],
+                                                  params["amplitude"], params["frequency"]))
 
         arb_page._refresh_summary = refresh_arb_summary
 
@@ -2840,17 +2838,9 @@ class TestcaseTab(QWidget):
         label = action_label(step.device_kind, step.action)
         device_display = self._device_display(step.device_kind, step.device_id)
         if is_arb_action(step.action):
-            shape = arb_shape_label(step.arb_shape)
             target_label = action_label(step.device_kind, step.arb_target)
-            detail = tr(
-                "{shape} auf {target}, {offset:g}±{amplitude:g}, {frequency:g} Hz, {duration:g} s",
-                shape=shape,
-                target=target_label,
-                offset=step.arb_offset,
-                amplitude=step.arb_amplitude,
-                frequency=step.arb_frequency,
-                duration=step.duration,
-            )
+            detail = (arb_summary(step.arb_shape, target_label, step.arb_offset, step.arb_amplitude,
+                                  step.arb_frequency) + f", {step.duration:g} s")
         elif step.action == "CAN_SEND":
             id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
             detail = f"ID {id_text}: {step.can_data or '–'}"

@@ -27,6 +27,45 @@ def _iso(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)) if ts else ""
 
 
+# Zielaktion eines Arbitraersignals -> Messgroesse fuer Soll gegen Ist (RES hat keine passende Messung)
+SETPOINT_FIELDS = {"PSU_VOLT": "voltage", "VOLT": "voltage", "PSU_CURR": "current", "CURR": "current",
+                   "POW": "power"}
+
+
+def setpoint_runs(record: RunRecord) -> list[dict]:
+    """Je Arbitraersignal-Schritt (0.62.0, FT-2): gesendete Sollwerte und tatsaechliche Abstaende (Senden zu
+    Senden, nur innerhalb einer Ausfuehrung). "executions" sind die (t, Wert)-Listen je Ausfuehrung."""
+    starts = sorted((e.t, e.index) for e in record.events if e.kind == "started")
+    by_index: dict[int, dict] = {}
+    for t, index, device_id, target, value in record.setpoints:
+        item = by_index.setdefault(index, {"index": index, "device_id": device_id, "target": target,
+                                           "executions": [], "_last_start": None})
+        # zugehoerige Ausfuehrung = letzter "started" dieses Schritts vor t
+        started = max((ts for ts, i in starts if i == index and ts <= t + 1e-6), default=None)
+        if started != item["_last_start"] or not item["executions"]:
+            item["executions"].append([])
+            item["_last_start"] = started
+        item["executions"][-1].append((t, value))
+    result = []
+    for index in sorted(by_index):
+        item = by_index[index]
+        item.pop("_last_start")
+        gaps = [(b[0] - a[0]) * 1000.0 for run in item["executions"] for a, b in zip(run, run[1:])]
+        values = [v for run in item["executions"] for _t, v in run]
+        item.update(count=len(values), first=values[0], last=values[-1],
+                    interval_ms={"min": round(min(gaps), 1), "mean": round(sum(gaps) / len(gaps), 1),
+                                 "max": round(max(gaps), 1)} if gaps else None)
+        result.append(item)
+    return result
+
+
+def setpoint_summary(record: RunRecord) -> list[dict]:
+    """setpoint_runs ohne die Einzelwerte (fuer run-result.json)."""
+    return [{"step": item["index"] + 1, "device_id": item["device_id"], "target": item["target"],
+             "executions": len(item["executions"]), "setpoints": item["count"], "first": item["first"],
+             "last": item["last"], "interval_ms": item["interval_ms"]} for item in setpoint_runs(record)]
+
+
 def check_rows(record: RunRecord) -> list[dict]:
     """Je Schritt mit Pruefung: Ausfuehrungen, Fehlschlaege, letzter Messwert, Anforderungen."""
     rows = []
@@ -81,6 +120,7 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
                       "released": bool(record.meta.get("source_sink"))},
         "instruments": list(record.instruments),
         "requirements": requirements.verdicts(record, record.requirement_register),
+        "setpoints": setpoint_summary(record),
         "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
                      for r in record.instruments if r.get("expired")],
     }

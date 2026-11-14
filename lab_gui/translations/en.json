@@ -818,5 +818,16 @@
   "Verknüpfung zum Baustein lösen": "Unlink from block",
   "Baustein „{name}“ nicht lesbar ({error}) – gespeicherte Kopie verwendet": "Block “{name}” not readable ({error}) – using the stored copy",
   "Datei fehlt": "file missing",
-  "„link“ muss ein Objekt sein": "“link” must be an object"
+  "„link“ muss ein Objekt sein": "“link” must be an object",
+  "Rampe": "Ramp",
+  "Auto (≥ 100 ms)": "Auto (≥ 100 ms)",
+  "Soll": "Setpoint",
+  "Schritt {n}: Soll gegen Ist – {target}": "Step {n}: setpoint vs. actual – {target}",
+  "Sollwertverläufe": "Setpoint profiles",
+  "Zielgröße": "Target",
+  "Sollwerte": "Setpoints",
+  "Von → bis": "From → to",
+  "Abstand min/mittel/max": "Interval min/mean/max",
+  "{n} Ausführungen": "{n} executions",
+  "Mindestabstand zwischen zwei Sollwert-Updates (von Senden zu Senden). Die Geräte sind keine\nechten Signalgeneratoren -- das Signal wird als Folge einzelner Kommandos über die\nserielle Schnittstelle angenähert; quittiert das Gerät langsamer, folgt der nächste Wert\nsofort nach der Quittung. „Auto“: so schnell wie quittiert, mindestens 100 ms.\nDie tatsächlichen Abstände stehen im Bericht.": "Minimum interval between two setpoint updates (send to send). The instruments are not real\nsignal generators -- the signal is approximated as a series of single commands over the\nserial interface; if the instrument acknowledges more slowly, the next value follows right\nafter the acknowledgement. “Auto”: as fast as acknowledged, at least 100 ms.\nThe actual intervals are listed in the report."
 }

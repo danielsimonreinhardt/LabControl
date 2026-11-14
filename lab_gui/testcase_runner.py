@@ -57,18 +57,21 @@ blockiert ihn aber nicht (Wartezeiten laufen ueber QTimer statt time.sleep).
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from time import monotonic
 
-from PySide6.QtCore import QElapsedTimer, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
 
 from device_worker import PICOSCOPE_RETRY_MESSAGE
 from i18n import tr
 from testcase_model import (
+    ARB_RAMP,
     COND_FIELD_UNITS,
     READ_ACTIONS,
     BlockMatch,
     TestStep,
+    arb_spacing_ms,
     arb_value,
     is_arb_action,
     kind_label,
@@ -126,6 +129,9 @@ class TestRunner(QObject):
     step_result = Signal(int, bool, float)
     run_finished = Signal()
     run_stopped = Signal()
+    # Gesendeter Sollwert eines Arbitraersignal-Schritts (0.62.0, FT-2): index, device_id, Zielaktion, Wert --
+    # fuer Soll gegen Ist und die tatsaechlichen Abstaende im Bericht
+    setpoint_sent = Signal(int, str, str, float)
     # Block-Start-Index, aktueller Durchlauf (1-basiert), Gesamtzahl
     # (0 = unbegrenzt/While) -- fuer die Fortschrittsanzeige im Editor.
     iteration_changed = Signal(int, int, int)
@@ -160,10 +166,14 @@ class TestRunner(QObject):
 
         # Zustand fuer einen laufenden Arbiträrsignal-Schritt.
         self._arb_active = False
+        self._arb_final_sent = False
+        self._arb_last_send_ms = 0
         self._arb_clock = QElapsedTimer()
         self._arb_timer = QTimer(self)
         self._arb_timer.setSingleShot(True)
         self._arb_timer.timeout.connect(self._send_arb_sample)
+        # Praezise statt grob: der grobe Timer darf bis 5 % zu frueh feuern -- der Mindestabstand (FP-16 b) gilt
+        self._arb_timer.setTimerType(Qt.TimerType.PreciseTimer)
 
         # Automatischer Retry nach PICOSCOPE_RETRY_MESSAGE (siehe deren
         # Kommentar in device_worker.py) -- Anzahl bereits versuchter
@@ -800,23 +810,36 @@ class TestRunner(QObject):
 
     def _start_arb(self, step: TestStep) -> None:
         self._arb_active = True
+        self._arb_final_sent = False
         self._arb_clock.start()
         self._send_arb_sample()
 
     def _send_arb_sample(self) -> None:
+        if not self._running or not self._arb_active:
+            return
         step = self._steps[self._index]
-        t = self._arb_clock.elapsed() / 1000.0
-        value = arb_value(step, t)
+        self._arb_last_send_ms = self._arb_clock.elapsed()
+        value = arb_value(step, self._arb_last_send_ms / 1000.0)
+        self.setpoint_sent.emit(self._index, step.device_id, step.arb_target, value)
         self.execute_action.emit(step.device_id, step.device_kind, step.arb_target, value, step.hil_channel)
 
     def _continue_arb(self) -> None:
+        """Nach der Quittung eines Sollwerts: naechster Sollwert, sobald der Mindestabstand (von Senden zu Senden,
+        arb_spacing_ms) um ist -- quittiert das Geraet langsamer, sofort (FP-16 b: kein Rueckstau)."""
         step = self._steps[self._index]
-        elapsed_s = self._arb_clock.elapsed() / 1000.0
-        if elapsed_s >= step.duration:
+        elapsed_ms = self._arb_clock.elapsed()
+        wait_ms = arb_spacing_ms(step.arb_interval_ms) - (elapsed_ms - self._arb_last_send_ms)
+        if elapsed_ms >= step.duration * 1000.0:
+            if step.arb_shape == ARB_RAMP and not self._arb_final_sent:
+                # Rampe: genau den Zielwert setzen, statt beim letzten Zwischenwert stehenzubleiben -- auch er
+                # haelt den Mindestabstand ein; ab der Schrittdauer liefert arb_value den Zielwert
+                self._arb_final_sent = True
+                self._arb_timer.start(max(0, math.ceil(wait_ms)))
+                return
             self._arb_active = False
             # Ueber _finish_step statt _advance, damit auch ein ARB-Schritt
             # eine Pass/Fail-Pruefung tragen kann (gemessen wird dann der
             # Zustand nach dem Signalende).
             self._finish_step()
             return
-        self._arb_timer.start(max(1, step.arb_interval_ms))
+        self._arb_timer.start(max(0, math.ceil(wait_ms)))

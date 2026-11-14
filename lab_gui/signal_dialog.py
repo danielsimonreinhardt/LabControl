@@ -23,7 +23,15 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from testcase_model import ACTION_VALUE_RANGE, ARB_SHAPE_LABELS, ARB_TARGETS, action_label, arb_value
+from testcase_model import (
+    ACTION_VALUE_RANGE,
+    ARB_RAMP,
+    ARB_SHAPE_LABELS,
+    ARB_TARGETS,
+    action_label,
+    arb_spacing_ms,
+    arb_value,
+)
 from theme import current as current_palette
 
 PREVIEW_PERIODS = 3.0
@@ -40,11 +48,11 @@ class _ScopePreview(QWidget):
 
     def set_params(
         self, shape: str, target: str, amplitude: float, offset: float,
-        frequency: float, interval_ms: int, duty: float,
+        frequency: float, interval_ms: int, duty: float, duration: float = 0.0,
     ) -> None:
         self._params = dict(
             shape=shape, target=target, amplitude=amplitude, offset=offset,
-            frequency=frequency, interval_ms=interval_ms, duty=duty,
+            frequency=frequency, interval_ms=interval_ms, duty=duty, duration=duration,
         )
         self.update()
 
@@ -63,11 +71,16 @@ class _ScopePreview(QWidget):
         amplitude = self._params["amplitude"]
         offset = self._params["offset"]
         frequency = max(self._params["frequency"], 1e-6)
-        interval_ms = max(self._params["interval_ms"], 1)
+        interval_ms = arb_spacing_ms(self._params["interval_ms"])
+        duration = max(self._params.get("duration", 0.0), 0.1)
+        is_ramp = shape == ARB_RAMP
 
         _, lo, hi = ACTION_VALUE_RANGE.get(target, ("", 0.0, 0.0))
-        span_lo = min(lo, offset - amplitude)
-        span_hi = max(hi, offset + amplitude)
+        if is_ramp:
+            span_lo, span_hi = min(lo, offset, amplitude), max(hi, offset, amplitude)
+        else:
+            span_lo = min(lo, offset - amplitude)
+            span_hi = max(hi, offset + amplitude)
         if span_hi <= span_lo:
             span_hi = span_lo + 1.0
 
@@ -90,7 +103,7 @@ class _ScopePreview(QWidget):
             painter.drawLine(rect.left(), int(y_of(lo)), rect.right(), int(y_of(lo)))
             painter.drawLine(rect.left(), int(y_of(hi)), rect.right(), int(y_of(hi)))
 
-        window_s = PREVIEW_PERIODS / frequency
+        window_s = duration if is_ramp else PREVIEW_PERIODS / frequency
         step_s = interval_ms / 1000.0
         sample_count = max(2, int(window_s / step_s) + 1)
 
@@ -101,6 +114,7 @@ class _ScopePreview(QWidget):
             arb_offset = offset
             arb_frequency = frequency
             arb_duty = self._params["duty"]
+            duration = self._params.get("duration", 0.0)
 
         points = []
         for i in range(sample_count):
@@ -110,6 +124,9 @@ class _ScopePreview(QWidget):
             value = arb_value(_Step(), t)
             x = rect.left() + (t / window_s) * rect.width()
             points.append((x, y_of(value)))
+        if is_ramp:
+            # der Runner setzt am Ende genau den Zielwert
+            points.append((rect.right(), y_of(arb_value(_Step(), window_s))))
 
         signal_pen = QPen(QColor(pal.plot_signal))
         signal_pen.setWidth(2)
@@ -171,7 +188,7 @@ class SignalDialog(QDialog):
         # 50/200 statt der Standard-1/10 -- passend zum bisherigen
         # QSpinBox-singleStep(50) dieses Felds (Update-Intervall in ms).
         self._interval_spin = SteppedSpinBox(small_step=50, large_step=200)
-        self._interval_spin.setRange(50, 5000)
+        self._interval_spin.setRange(0, 5000)   # 0 = so schnell wie quittiert, min. 100 ms (FP-16 b)
         self._interval_spin.setSuffix(" ms")
         self._interval_spin.setValue(200)
 
@@ -254,17 +271,18 @@ class SignalDialog(QDialog):
         self._populate_target_combo()
         self._form.labelForField(self._shape_combo).setText(tr("Signalform:"))
         self._form.labelForField(self._target_combo).setText(tr("Zielgröße:"))
-        self._form.labelForField(self._amplitude_spin).setText(tr("Amplitude (±):"))
-        self._form.labelForField(self._offset_spin).setText(tr("Offset (Mitte):"))
+        self._apply_shape_labels()
         self._form.labelForField(self._frequency_spin).setText(tr("Frequenz:"))
         self._form.labelForField(self._interval_spin).setText(tr("Update-Intervall:"))
+        self._interval_spin.setSpecialValueText(tr("Auto (≥ 100 ms)"))
         self._form.labelForField(self._duty_spin).setText(tr("Tastgrad:"))
         self._interval_spin.setToolTip(
             tr(
-                "Abstand zwischen zwei Sollwert-Updates. Die Geräte sind keine echten\n"
-                "Signalgeneratoren -- das Signal wird als Folge einzelner Kommandos über\n"
-                "die serielle Schnittstelle angenähert. Werte unter ~100 ms können bei\n"
-                "manchen Geräten (v.a. dem Netzteil) nicht zuverlässig eingehalten werden."
+                "Mindestabstand zwischen zwei Sollwert-Updates (von Senden zu Senden). Die Geräte sind keine\n"
+                "echten Signalgeneratoren -- das Signal wird als Folge einzelner Kommandos über die\n"
+                "serielle Schnittstelle angenähert; quittiert das Gerät langsamer, folgt der nächste Wert\n"
+                "sofort nach der Quittung. „Auto“: so schnell wie quittiert, mindestens 100 ms.\n"
+                "Die tatsächlichen Abstände stehen im Bericht."
             )
         )
         self._duration_label.setText(
@@ -288,13 +306,41 @@ class SignalDialog(QDialog):
         self._duty_spin.setValue(params.get("duty", 0.5) * 100.0)
         self._on_shape_changed()
 
+    def _is_ramp(self) -> bool:
+        return self._shape_combo.currentData() == ARB_RAMP
+
+    def _apply_shape_labels(self) -> None:
+        ramp = self._is_ramp()
+        self._form.labelForField(self._amplitude_spin).setText(tr("Ziel:") if ramp else tr("Amplitude (±):"))
+        self._form.labelForField(self._offset_spin).setText(tr("Start:") if ramp else tr("Offset (Mitte):"))
+
     def _on_shape_changed(self) -> None:
         is_square = self._shape_combo.currentData() == "square"
         self._duty_spin.setVisible(is_square)
         duty_label = self._form.labelForField(self._duty_spin)
         if duty_label is not None:
             duty_label.setVisible(is_square)
+        ramp = self._is_ramp()
+        self._frequency_spin.setVisible(not ramp)
+        frequency_label = self._form.labelForField(self._frequency_spin)
+        if frequency_label is not None:
+            frequency_label.setVisible(not ramp)
+        if self._form.labelForField(self._amplitude_spin) is not None:
+            self._apply_shape_labels()
+        self._apply_amplitude_range()
         self._update_preview()
+
+    def _apply_amplitude_range(self) -> None:
+        """Rampe: Ziel im Geraetebereich (wie der Start, z. B. 1-60 V -- Sollwerte unter 1 V gibt es nicht,
+        FP-15); sonst Amplitude 0 bis Bereichsbreite."""
+        code = self._target_combo.currentData()
+        _unit, lo, hi = ACTION_VALUE_RANGE.get(code, ("", 0.0, 100.0))
+        value = self._amplitude_spin.value()
+        if self._is_ramp():
+            self._amplitude_spin.setRange(lo, hi)
+        else:
+            self._amplitude_spin.setRange(0, max(hi - lo, 0.0))
+        self._amplitude_spin.setValue(value)
 
     def _on_target_changed(self) -> None:
         code = self._target_combo.currentData()
@@ -314,7 +360,8 @@ class SignalDialog(QDialog):
         self._pending_offset = None
         self._pending_amplitude = None
         self._offset_spin.setValue(min(max(offset, lo), hi))
-        self._amplitude_spin.setValue(min(max(amplitude, 0.0), max(hi - lo, 0.0)))
+        self._apply_amplitude_range()
+        self._amplitude_spin.setValue(amplitude)
         self._update_preview()
 
     def _update_preview(self) -> None:
@@ -325,11 +372,12 @@ class SignalDialog(QDialog):
         frequency = self._frequency_spin.value()
         interval_ms = self._interval_spin.value()
         duty = self._duty_spin.value() / 100.0
-        self._preview.set_params(shape, target, amplitude, offset, frequency, interval_ms, duty)
+        self._preview.set_params(shape, target, amplitude, offset, frequency, interval_ms, duty,
+                                 duration=self._step_duration)
 
         warnings = []
-        samples_per_period = (1000.0 / interval_ms) / frequency
-        if samples_per_period < MIN_SAMPLES_PER_PERIOD_WARN:
+        samples_per_period = (1000.0 / arb_spacing_ms(interval_ms)) / frequency
+        if shape != ARB_RAMP and samples_per_period < MIN_SAMPLES_PER_PERIOD_WARN:
             warnings.append(
                 tr(
                     "Nur ~{samples:.1f} Stützstellen pro Periode -- das Signal wird stufig/kantig "
@@ -343,7 +391,7 @@ class SignalDialog(QDialog):
             threshold = ovp if target == "PSU_VOLT" else ocp
             label = "OVP" if target == "PSU_VOLT" else "OCP"
             unit = "V" if target == "PSU_VOLT" else "A"
-            peak = offset + amplitude
+            peak = max(offset, amplitude) if shape == ARB_RAMP else offset + amplitude
             if peak > threshold:
                 warnings.append(
                     tr(
