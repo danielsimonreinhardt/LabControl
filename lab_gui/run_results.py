@@ -16,7 +16,7 @@ from pathlib import Path
 import requirements
 from run_record import RunRecord
 from run_session import exit_code
-from testcase_model import COND_FIELD_UNITS, action_label, check_summary
+from testcase_model import COND_FIELD_UNITS, action_label, check_summary, monitor_summary
 from version import __version__
 
 RESULT_FORMAT = "labcontrol-run-result"
@@ -57,6 +57,32 @@ def setpoint_runs(record: RunRecord) -> list[dict]:
                                  "max": round(max(gaps), 1)} if gaps else None)
         result.append(item)
     return result
+
+
+def monitor_unit(result: dict, step) -> str:
+    """Einheit des Messwerts einer Zeitpruefung: band = Einheit der Quelle, reach = s, can_gap = ms."""
+    mode = result["config"]["mode"]
+    if mode == "reach":
+        return "s"
+    if mode == "can_gap":
+        return "ms"
+    return COND_FIELD_UNITS.get(getattr(step, "cond_field", ""), "") if step is not None else ""
+
+
+def timing_rows(record: RunRecord) -> list[dict]:
+    """Zeitpruefungen (0.63.0, FT-7) fuer run-result.json und JUnit, ohne Verlauf."""
+    rows = []
+    for result in record.monitors:
+        index = result["index"]
+        step = record.steps[index] if 0 <= index < len(record.steps) else None
+        rows.append({"step": index + 1, "mode": result["config"]["mode"],
+                     "check": monitor_summary(step) if step is not None else "",
+                     "passed": result["passed"], "value": round(result["value"], 6),
+                     "unit": monitor_unit(result, step), "message": result["message"],
+                     "resolution_ms": round(result["resolution_s"] * 1000.0, 1)
+                     if result.get("resolution_s") is not None else None,
+                     "samples": result["samples"], "source": result["source"]})
+    return rows
 
 
 def setpoint_summary(record: RunRecord) -> list[dict]:
@@ -121,6 +147,7 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
         "instruments": list(record.instruments),
         "requirements": requirements.verdicts(record, record.requirement_register),
         "setpoints": setpoint_summary(record),
+        "timing_checks": timing_rows(record),
         "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
                      for r in record.instruments if r.get("expired")],
     }
@@ -134,15 +161,17 @@ def write_json(record: RunRecord, path: Path, interrupted: bool = False) -> None
 
 def junit_tree(record: RunRecord, interrupted: bool = False) -> ET.ElementTree:
     rows = check_rows(record)
+    timing = timing_rows(record)
     name = record.testcase_name or "labcontrol"
     duration = max(0.0, record.ended_at - record.started_at) if record.ended_at else 0.0
-    failures = sum(1 for r in rows if r["verdict"] == "failed")
+    failures = sum(1 for r in rows if r["verdict"] == "failed") + sum(1 for r in timing if not r["passed"])
     skipped = sum(1 for r in rows if r["verdict"] == "not_run")
     aborted = interrupted or record.outcome in ("error", "stopped")
     errors = 1 if aborted and not (record.outcome == "error" and exit_code(record) == 1) else 0
-    suites = ET.Element("testsuites", name="LabControl", tests=str(len(rows) + errors),
+    tests = len(rows) + len(timing) + errors
+    suites = ET.Element("testsuites", name="LabControl", tests=str(tests),
                         failures=str(failures), errors=str(errors), time=f"{duration:.3f}")
-    suite = ET.SubElement(suites, "testsuite", name=name, tests=str(len(rows) + errors),
+    suite = ET.SubElement(suites, "testsuite", name=name, tests=str(tests),
                           failures=str(failures), errors=str(errors), skipped=str(skipped),
                           time=f"{duration:.3f}", timestamp=_iso(record.started_at),
                           hostname=socket.gethostname())
@@ -176,6 +205,12 @@ def junit_tree(record: RunRecord, interrupted: bool = False) -> ET.ElementTree:
             failure.text = values
         elif row["verdict"] == "not_run":
             ET.SubElement(case, "skipped", message="nicht ausgeführt")
+    for row in timing:   # Zeitpruefungen (FT-7): je Ausfuehrung eines Blocks "Ueberwachen" ein Testfall
+        case = ET.SubElement(suite, "testcase", classname=name,
+                             name=f"{row['step']:03d} Überwachen {row['check']}".strip(), time="0")
+        if not row["passed"]:
+            failure = ET.SubElement(case, "failure", type="timing", message=row["message"] or row["check"])
+            failure.text = f"{row['value']:g} {row['unit']}".strip()
     if errors:
         case = ET.SubElement(suite, "testcase", classname=name, name="Lauf", time=f"{duration:.3f}")
         if interrupted:

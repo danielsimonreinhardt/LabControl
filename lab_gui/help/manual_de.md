@@ -374,6 +374,21 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
   nie falsch wird (0 = unbegrenzt, mit Vorsicht verwenden).
 - **Wenn … Ende** (mit optionalem **Sonst**): führt den Rumpf nur aus,
   wenn eine Bedingung zutrifft.
+- **Überwachen … Ende**: prüft einen Messwert über die Zeit, während die
+  Schritte im Block laufen (Zeitprüfung). Quelle wie bei einer Bedingung
+  (Netzteil, Last, microHIL-Kanal, CAN-Signal); drei Arten:
+  **Im Band bleiben** (Minimum–Maximum für den ganzen Block),
+  **Erreichen innerhalb** (Vergleich und Frist ab Blockbeginn – gemessen
+  wird die Zeit bis dahin, also die Reaktionszeit, wenn der Auslöser der
+  erste Schritt im Block ist) und **CAN-Lücken** (eine CAN-ID kommt höchstens
+  im angegebenen Abstand). Eine Verletzung zählt als nicht bestandene
+  Prüfung; mit **Bei Verletzung abbrechen** endet der Lauf sofort. Der
+  Bericht zeigt je Zeitprüfung Ergebnis, Messwert, die **Auflösung** der
+  Quelle (mittlerer Abstand der Messwerte, z. B. ~500 ms beim Netzteil) und
+  einen Kurvenausschnitt mit den Grenzen; ist die Auflösung für eine Frist zu
+  grob (mehr als die halbe Frist), gilt die Prüfung als verletzt.
+  `run-result.json` führt sie unter `timing_checks`, JUnit als eigene
+  Testfälle.
 - **Variable setzen / Variable erhöhen**: legt eine Laufvariable an bzw.
   ändert ihren Wert – nützlich als Zähler oder um Bedingungen später im
   Ablauf abzufragen.

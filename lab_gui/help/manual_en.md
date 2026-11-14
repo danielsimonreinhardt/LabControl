@@ -355,6 +355,20 @@ The "+" menu additionally offers:
   with care).
 - **If … End** (with an optional **Else**): only runs the body if a
   condition holds.
+- **Monitor … End**: checks a measurement over time while the steps in
+  the block run (timing check). Source as in a condition (power supply,
+  load, microHIL channel, CAN signal); three kinds: **Stay within band**
+  (minimum–maximum for the whole block), **Reach within** (comparison and
+  deadline from block start – the time until then is measured, i.e. the
+  reaction time if the trigger is the first step in the block) and **CAN
+  gaps** (a CAN ID arrives at most the given interval apart). A violation
+  counts as a failed check; with **Abort on violation** the run ends at
+  once. The report lists result, measured value, the source's
+  **resolution** (mean interval between measurements, e.g. ~500 ms for the
+  power supply) and a curve excerpt with the limits for every timing check;
+  if the resolution is too coarse for a deadline (more than half of it), the
+  check counts as violated. `run-result.json` lists them under
+  `timing_checks`, JUnit as separate test cases.
 - **Set variable / Increase variable**: creates a run variable resp.
   changes its value — useful as a counter or to query conditions later
   in the sequence.

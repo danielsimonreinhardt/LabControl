@@ -49,6 +49,7 @@ def render_field_chart(
     width: int = CHART_W,
     height: int = CHART_H,
     setpoints: list[tuple[float, float]] | None = None,
+    limits: list[float] | None = None,
 ) -> QImage:
     """Zeichnet den Verlauf von `field` (bereits gefilterte samples) aller
     beteiligten Geraete zwischen t0 und t1 (Wanduhr-Sekunden, time.time()).
@@ -93,7 +94,9 @@ def render_field_chart(
         painter.end()
         return image
 
-    all_values = [v for points in by_device.values() for _t, v in points] + [v for _t, v in setpoints]
+    limits = list(limits or [])
+    all_values = ([v for points in by_device.values() for _t, v in points] + [v for _t, v in setpoints]
+                  + limits)
     lo, hi = min(all_values), max(all_values)
     if hi <= lo:
         pad = abs(lo) * 0.1 or 1.0
@@ -184,6 +187,14 @@ def render_field_chart(
         painter.fillRect(int(legend_x), int(legend_y) + i * 14, 10, 10, color)
         painter.setPen(QPen(QColor(TEXT)))
         painter.drawText(int(legend_x) + 14, int(legend_y) + i * 14 + 9, label)
+
+    if limits:
+        # Grenzen einer Zeitpruefung (FT-7): Band bzw. Schwelle
+        limit_pen = QPen(QColor("#dc2626"))
+        limit_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(limit_pen)
+        for value in limits:
+            painter.drawLine(int(rect.left()), int(y_of(value)), int(rect.right()), int(y_of(value)))
 
     if setpoints:
         # Haltekurve wie das Geraet sie sieht: Wert gilt bis zum naechsten Sollwert

@@ -33,6 +33,8 @@ from testcase_model import (
     battsim_step_detail,
     check_summary,
     kind_label,
+    monitor_source,
+    monitor_summary,
 )
 from version import __version__
 
@@ -95,6 +97,30 @@ def _render_charts(record: RunRecord) -> list[tuple[str, QImage]]:
         title = tr(COND_FIELD_LABELS.get(field, field))
         charts.append((title, image))
     charts.extend(_render_setpoint_charts(record))
+    charts.extend(_render_monitor_charts(record))
+    return charts
+
+
+MAX_MONITOR_CHARTS = 20
+
+
+def _render_monitor_charts(record: RunRecord) -> list[tuple[str, QImage]]:
+    """Kurvenausschnitt je Zeitpruefung (FT-7) mit Band bzw. Schwelle; CAN-Luecken ohne Kurve."""
+    from recording import Sample
+    charts = []
+    for result in record.monitors[:MAX_MONITOR_CHARTS]:
+        config = result["config"]
+        if config["mode"] == "can_gap" or not result.get("series"):
+            continue
+        index = result["index"]
+        step = record.steps[index]
+        source, unit = monitor_source(step)
+        samples = [Sample(t, "monitor", "monitor", v) for t, v in result["series"]]
+        limits = [config["min"], config["max"]] if config["mode"] == "band" else [config["value"]]
+        image = render_field_chart("monitor", unit, samples, {"monitor": ("", source)}, result["t_start"],
+                                   max(result["t_end"], result["t_start"] + 0.1), [], limits=limits)
+        title = tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step))
+        charts.append((title, image))
     return charts
 
 
@@ -146,6 +172,8 @@ def _verdict(record: RunRecord) -> tuple[str, str]:
 
 def _step_started_text(record: RunRecord, index: int) -> str:
     step = record.steps[index]
+    if step.step_type == "monitor":
+        return tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step))
     if step.step_type in ("set_var", "inc_var"):
         op = "=" if step.step_type == "set_var" else "+="
         return tr("Schritt {n}: {var} {op} {value:g}", n=index + 1, var=step.var_name, op=op, value=step.value)
@@ -197,6 +225,10 @@ def _timeline_rows(record: RunRecord) -> list[tuple[str, str, str | None]]:
         if event.kind == "started":
             text = _step_started_text(record, event.index) + _iteration_suffix(event)
             rows.append((offset, text, None))
+        elif event.kind == "result" and record.steps[event.index].step_type == "monitor":
+            verdict = tr("bestanden") if event.passed else tr("verletzt")
+            rows.append((offset, tr("Überwachung Schritt {n}: {verdict}", n=event.index + 1, verdict=verdict),
+                         None if event.passed else _COLOR_FAIL))
         elif event.kind == "result":
             step = record.steps[event.index]
             unit = COND_FIELD_UNITS.get(step.check_field, "")
@@ -362,6 +394,22 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
                 f'<td style="{cell_style}">{html.escape(measured_text)}</td>'
                 f'</tr>'
             )
+        parts.append('</table>')
+
+    timing = run_results.timing_rows(record)
+    if timing:
+        parts.append('<h2>' + html.escape(tr("Zeitprüfungen")) + '</h2>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th("#") + th(tr("Prüfung")) + th(tr("Ergebnis")) + th(tr("Gemessen"))
+                     + th(tr("Auflösung")) + th(tr("Meldung")) + '</tr>')
+        for row in timing:
+            bg = _BG_PASS if row["passed"] else _BG_FAIL
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER}; background:{bg};'
+            resolution = (f'{row["resolution_ms"]:g} ms ({row["samples"]})' if row["resolution_ms"] is not None
+                          else f'– ({row["samples"]})')
+            cells = (row["step"], row["check"], tr("bestanden") if row["passed"] else tr("verletzt"),
+                     f'{row["value"]:g} {row["unit"]}'.strip(), resolution, row["message"] or "–")
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
         parts.append('</table>')
 
     setpoint_items = run_results.setpoint_runs(record)

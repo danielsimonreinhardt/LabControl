@@ -62,6 +62,8 @@ class RunRecord:
     requirement_register: dict = field(default_factory=dict)
     # Gesendete Sollwerte der Arbitraersignal-Schritte (0.62.0, FT-2): (t, Schrittindex, device_id, Ziel, Wert)
     setpoints: list = field(default_factory=list)
+    # Ergebnisse der Bloecke "Ueberwachen" (0.63.0, FT-7), dicts von TestRunner.monitor_result
+    monitors: list = field(default_factory=list)
 
 
 class RunRecorder(QObject):
@@ -170,6 +172,13 @@ class RunRecorder(QObject):
         if not self._active:
             return
         self._finish("stopped")
+
+    @Slot(int, object)
+    def on_monitor_result(self, _index: int, result: dict) -> None:
+        if not self._active or self._record is None:
+            return
+        if len(self._record.monitors) < MAX_EVENTS:
+            self._record.monitors.append(dict(result))
 
     @Slot(int, str, str, float)
     def on_setpoint_sent(self, index: int, device_id: str, target: str, value: float) -> None:

@@ -58,7 +58,9 @@ from __future__ import annotations
 
 import logging
 import math
+import timing_checks
 from dataclasses import dataclass
+import time
 from time import monotonic
 
 from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
@@ -129,6 +131,8 @@ class TestRunner(QObject):
     step_result = Signal(int, bool, float)
     run_finished = Signal()
     run_stopped = Signal()
+    # Ergebnis eines Blocks "Ueberwachen" (0.63.0, FT-7): Schrittindex, dict (siehe _monitor_result)
+    monitor_result = Signal(int, object)
     # Gesendeter Sollwert eines Arbitraersignal-Schritts (0.62.0, FT-2): index, device_id, Zielaktion, Wert --
     # fuer Soll gegen Ist und die tatsaechlichen Abstaende im Bericht
     setpoint_sent = Signal(int, str, str, float)
@@ -183,6 +187,12 @@ class TestRunner(QObject):
         self._pico_retry_timer = QTimer(self)
         self._pico_retry_timer.setSingleShot(True)
         self._pico_retry_timer.timeout.connect(self._retry_current_action)
+
+        # -- Zeitpruefungen (FT-7): Startindex -> [Monitor, Quelle, gemeldet?] ----------------
+        self._monitors: dict[int, list] = {}
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.setInterval(50)
+        self._monitor_timer.timeout.connect(self._tick_monitors)
 
         # -- Ablaufsteuerung ---------------------------------------------
         self._matching: dict[int, BlockMatch] = {}
@@ -251,6 +261,7 @@ class TestRunner(QObject):
         self._running = False
         self._frames = []
         self._vars = {}
+        self._clear_monitors()
         self.run_stopped.emit()
 
     def abort(self, message: str) -> None:
@@ -266,6 +277,7 @@ class TestRunner(QObject):
     @Slot(str, float, float, float)
     def on_load_measurement(self, device_id: str, voltage: float, current: float, power: float) -> None:
         self._measurements[device_id] = (voltage, current, power, monotonic())
+        self._feed_monitors(("load", "psu"), device_id, {"voltage": voltage, "current": current, "power": power})
         self._maybe_complete_check(device_id)
 
     @Slot(str, float, float, bool)
@@ -273,12 +285,15 @@ class TestRunner(QObject):
         self, device_id: str, voltage: float, current: float, _constant_current: bool
     ) -> None:
         self._measurements[device_id] = (voltage, current, voltage * current, monotonic())
+        self._feed_monitors(("load", "psu"), device_id,
+                            {"voltage": voltage, "current": current, "power": voltage * current})
         self._maybe_complete_check(device_id)
 
     @Slot(str, list)
     def on_hil_analog_input(self, device_id: str, values_mv: list) -> None:
         _ain, digital_in, _ts = self._hil_measurements.get(device_id, ([], [], 0.0))
         self._hil_measurements[device_id] = (list(values_mv), digital_in, monotonic())
+        self._feed_monitors(("hil",), device_id, {"hil_ain": list(values_mv)})
 
     @Slot(str, list, list)
     def on_hil_digital_state(self, device_id: str, inputs: list, outputs: list) -> None:
@@ -287,6 +302,7 @@ class TestRunner(QObject):
         # ist ohnehin von der App selbst gesetzt, also bereits bekannt).
         ain, _digital_in, _ts = self._hil_measurements.get(device_id, ([], [], 0.0))
         self._hil_measurements[device_id] = (ain, list(inputs), monotonic())
+        self._feed_monitors(("hil",), device_id, {"hil_in": [float(v) for v in inputs]})
 
     @Slot(str, int, object)
     def on_can_signals_decoded(self, device_id: str, arbitration_id: int, decoded) -> None:
@@ -295,6 +311,7 @@ class TestRunner(QObject):
             if isinstance(sig.value, str):
                 continue  # DBC-Value-Table-Enum, nicht sinnvoll vergleichbar
             self._can_signals[f"{device_id}:{decoded.message_name}.{sig.name}"] = (float(sig.value), now)
+            self._feed_monitors(("can",), device_id, {f"{decoded.message_name}.{sig.name}": float(sig.value)})
 
     @Slot(str, str)
     def on_device_removed(self, _kind: str, device_id: str) -> None:
@@ -369,6 +386,7 @@ class TestRunner(QObject):
         self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value, step.hil_channel)
 
     def _fail_at(self, index: int, message: str) -> None:
+        self._clear_monitors()
         self._running = False
         self._arb_active = False
         self._wait_timer.stop()
@@ -590,10 +608,27 @@ class TestRunner(QObject):
                 self._index = self._frames[-1].end_index - 1
                 continue
 
+            if t == "monitor":
+                match = self._matching[self._index]
+                if not step.enabled:
+                    self._index = match.end_index
+                    continue
+                error = self._start_monitor(self._index, step)
+                if error:
+                    self._fail_at(self._index, error)
+                    return
+                self._frames.append(_Frame("monitor", self._index, None, match.end_index, 1, monotonic()))
+                continue
+
             if t == "end":
                 frame = self._frames[-1]
                 if frame.kind == "if":
                     self._frames.pop()
+                    continue
+                if frame.kind == "monitor":
+                    self._frames.pop()
+                    if not self._finish_monitor(frame.start_index):
+                        return
                     continue
                 start_step = self._steps[frame.start_index]
                 if frame.kind == "loop":
@@ -633,6 +668,114 @@ class TestRunner(QObject):
             # Unbekannter step_type (z.B. aus einer neueren Programmversion
             # geladen) -- als No-Op ueberspringen statt abzustuerzen.
             continue
+
+    # -- Zeitpruefungen (FT-7, "Ueberwachen … Ende") -------------------------------
+
+    @Slot(str, int, str, bool, float)
+    def on_can_frame(self, device_id: str, arbitration_id: int, _data: str, _extended: bool, _ts: float) -> None:
+        """Jeder empfangene CAN-Frame -- fuer CAN-Luecken (can_gap)."""
+        if not self._monitors:
+            return
+        now = monotonic()
+        for index, entry in list(self._monitors.items()):
+            monitor, source, _reported = entry
+            if (monitor.mode == "can_gap" and monitor.config["can_id"] == arbitration_id
+                    and source["device_id"] in ("", device_id)):
+                self._handle_violation(index, monitor.feed(now))
+
+    def _start_monitor(self, index: int, step: TestStep) -> str:
+        """Monitor anlegen; "" = ok, sonst Fehlermeldung (Quelle nicht eindeutig/nicht verbunden)."""
+        config = timing_checks.clean_config((step.params or {}).get("monitor"))
+        kind = step.cond_device_kind
+        device_id = step.cond_device_id
+        if config["mode"] == "can_gap":
+            kind = "can"
+        elif not device_id and kind in ("load", "psu"):
+            device_id, status = self._resolve_fresh_device(kind)
+            if device_id is None:
+                return (tr("Mehrere Geräte vom Typ '{kind}' verbunden -- bitte Zielgerät in der Überwachung "
+                           "auswählen", kind=kind_label(kind)) if status == "ambiguous" else
+                        tr("Keine aktuelle Messung für ein Gerät vom Typ '{kind}'", kind=kind_label(kind)))
+        elif not device_id and kind == "hil":
+            device_id, status = self._resolve_fresh_device("hil", self._hil_measurements)
+            if device_id is None:
+                return tr("Keine aktuelle Messung für ein Gerät vom Typ '{kind}'", kind=kind_label("hil"))
+        source = {"kind": kind, "device_id": device_id or "", "field": step.cond_field,
+                  "channel": step.hil_channel}
+        self._monitors[index] = [timing_checks.Monitor(config, monotonic()), source, False]
+        self.step_started.emit(index, step)
+        if not self._monitor_timer.isActive():
+            self._monitor_timer.start()
+        return ""
+
+    def _feed_monitors(self, kinds: tuple, device_id: str, values: dict) -> None:
+        if not self._monitors or not self._running:
+            return
+        now = monotonic()
+        for index, entry in list(self._monitors.items()):
+            monitor, source, _reported = entry
+            if monitor.mode == "can_gap" or source["kind"] not in kinds:
+                continue
+            if source["device_id"] not in ("", device_id):
+                continue
+            value = values.get(source["field"])
+            if isinstance(value, list):
+                channel = source["channel"]
+                value = value[channel - 1] if 1 <= channel <= len(value) else None
+            if value is None:
+                continue
+            self._handle_violation(index, monitor.feed(now, float(value)))
+
+    def _tick_monitors(self) -> None:
+        if not self._monitors:
+            self._monitor_timer.stop()
+            return
+        now = monotonic()
+        for index, entry in list(self._monitors.items()):
+            self._handle_violation(index, entry[0].tick(now))
+
+    def _handle_violation(self, index: int, verdict) -> None:
+        """Erste Verletzung eines Monitors melden; mit "Bei Verletzung abbrechen" endet der Lauf hier."""
+        entry = self._monitors.get(index)
+        if verdict is None or entry is None or entry[2] or not self._running:
+            return
+        monitor = entry[0]
+        entry[2] = True
+        self.step_result.emit(index, False, verdict.value)
+        self.monitor_result.emit(index, self._monitor_result(index, monitor, entry[1], verdict, monotonic()))
+        if monitor.config["abort"]:
+            self._fail_at(index, verdict.message)
+
+    def _finish_monitor(self, index: int) -> bool:
+        """Blockende: Urteil melden. False = der Lauf wurde dabei beendet."""
+        entry = self._monitors.pop(index, None)
+        if not self._monitors:
+            self._monitor_timer.stop()
+        if entry is None:
+            return True
+        monitor, source, reported = entry
+        now = monotonic()
+        verdict = monitor.finish(now)
+        if reported:
+            return True
+        self.step_result.emit(index, verdict.passed, verdict.value)
+        self.monitor_result.emit(index, self._monitor_result(index, monitor, source, verdict, now))
+        if not verdict.passed and monitor.config["abort"]:
+            self._fail_at(index, verdict.message)
+            return False
+        return True
+
+    def _monitor_result(self, index: int, monitor, source: dict, verdict, now: float) -> dict:
+        offset = time.time() - now          # monotonic -> Wanduhr (Bericht)
+        return {"index": index, "config": dict(monitor.config), "passed": verdict.passed, "value": verdict.value,
+                "message": verdict.message, "resolution_s": timing_checks.resolution_s(monitor.times),
+                "samples": len(monitor.times), "source": dict(source),
+                "t_start": monitor.t_start + offset, "t_end": now + offset,
+                "series": [(t + offset, v) for t, v in monitor.series()]}
+
+    def _clear_monitors(self) -> None:
+        self._monitors.clear()
+        self._monitor_timer.stop()
 
     # -- Bedingungsauswertung --------------------------------------------------
 

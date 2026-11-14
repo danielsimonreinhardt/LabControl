@@ -47,6 +47,7 @@ from block_dialog import SaveBlockDialog
 from can_frame_dialog import CanFrameDialog
 from check_dialog import CheckDialog
 from condition_dialog import ConditionDialog
+from monitor_dialog import MonitorDialog, monitor_step
 from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
 import app_logging
@@ -96,6 +97,7 @@ from testcase_model import (
     load_block,
     load_device_map,
     load_testcase,
+    monitor_summary,
     load_testcase_linked,
     block_path,
     block_ref,
@@ -131,7 +133,7 @@ _PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.ite
 #   else/end:        keine weiteren Spalten
 #   set_var/inc_var: COL_ACTION = Variablenname, COL_VALUE = Wert, COL_DURATION = Dauer, COL_ENABLED = Aktiv
 #   wait:            COL_DURATION = Wartezeit,                 COL_ENABLED = Aktiv
-CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait"}
+CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait", "monitor"}
 
 
 class _NoWheelComboBox(QComboBox):
@@ -525,6 +527,7 @@ class TestcaseTab(QWidget):
         self._action_add_loop = self._add_menu.addAction("")
         self._action_add_while = self._add_menu.addAction("")
         self._action_add_if = self._add_menu.addAction("")
+        self._action_add_monitor = self._add_menu.addAction("")
         self._action_add_else = self._add_menu.addAction("")
         self._action_add_end = self._add_menu.addAction("")
         self._action_add_set_var = self._add_menu.addAction("")
@@ -534,6 +537,7 @@ class TestcaseTab(QWidget):
         self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
         self._action_add_while.triggered.connect(lambda: self._insert_block("while"))
         self._action_add_if.triggered.connect(lambda: self._insert_block("if"))
+        self._action_add_monitor.triggered.connect(lambda: self._insert_block("monitor"))
         self._action_add_else.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="else")))
         self._action_add_end.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="end")))
         self._action_add_set_var.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="set_var")))
@@ -700,6 +704,7 @@ class TestcaseTab(QWidget):
         self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
         self._action_add_while.setText(tr("Solange … Ende"))
         self._action_add_if.setText(tr("Wenn … Ende"))
+        self._action_add_monitor.setText(tr("Überwachen … Ende"))
         self._action_add_else.setText(tr("Sonst"))
         self._action_add_end.setText(tr("Ende"))
         self._action_add_set_var.setText(tr("Variable setzen"))
@@ -748,11 +753,11 @@ class TestcaseTab(QWidget):
             label.setText(tr(CONTROL_STEP_LABELS.get(step_type, step_type)))
         elif label is not None and not label.text():
             label.setText(tr("Ende"))  # vorlaeufig, _revalidate_structure ergaenzt den Blocktyp
-        if step_type in ("while", "if"):
+        if step_type in ("while", "if", "monitor"):
             container = self._table.cellWidget(row, COL_VALUE)
             cond_button = container.findChild(IconButton)
             if cond_button is not None:
-                cond_button.setToolTip(tr("Bedingung…"))
+                cond_button.setToolTip(tr("Überwachung…") if step_type == "monitor" else tr("Bedingung…"))
             container._refresh_summary()
         if step_type in ("set_var", "inc_var"):
             name_edit: QLineEdit = self._table.cellWidget(row, COL_ACTION)
@@ -1454,6 +1459,40 @@ class TestcaseTab(QWidget):
             count_spin.valueChanged.connect(lambda _=None: self._revalidate_structure())
             self._table.setCellWidget(row_index, COL_VALUE, count_spin)
 
+        elif t == "monitor":
+            container = QWidget()
+            h_layout = QHBoxLayout(container)
+            h_layout.setContentsMargins(2, 0, 2, 0)
+            summary_label = QLabel()
+            summary_label.setStyleSheet(f"color: {current_palette().text_muted}; font-style: italic;")
+            monitor_button = IconButton("mdi.clock-check-outline", tr("Überwachung…"))
+            h_layout.addWidget(summary_label, 1)
+            h_layout.addWidget(monitor_button)
+            container._cond_params = dict(
+                cond_device_kind=step.cond_device_kind, cond_device_id=step.cond_device_id,
+                cond_field=step.cond_field, hil_channel=step.hil_channel,
+                monitor=dict((step.params or {}).get("monitor") or {}),
+            )
+
+            def refresh_monitor_summary() -> None:
+                summary_label.setText(monitor_summary(monitor_step(container._cond_params)))
+
+            container._refresh_summary = refresh_monitor_summary
+            refresh_monitor_summary()
+
+            def open_monitor_dialog() -> None:
+                dialog = MonitorDialog(container._cond_params, self._condition_device_items(), parent=self)
+                if dialog.exec() == MonitorDialog.DialogCode.Accepted:
+                    params = dialog.params()
+                    container._cond_params = {key: params[key] for key in
+                                              ("cond_device_kind", "cond_device_id", "cond_field", "hil_channel",
+                                               "monitor")}
+                    refresh_monitor_summary()
+                    self._revalidate_structure()
+
+            monitor_button.clicked.connect(open_monitor_dialog)
+            self._table.setCellWidget(row_index, COL_VALUE, container)
+
         elif t in ("while", "if"):
             container = QWidget()
             h_layout = QHBoxLayout(container)
@@ -2094,6 +2133,10 @@ class TestcaseTab(QWidget):
         carried = number_item.data(ROLE_V3_FIELDS)
         if isinstance(carried, TestStep):
             step = carry_v3_fields(step, carried)
+        if step_type == "monitor":
+            # params["monitor"] pflegt der Dialog der Zeile; er ist massgeblich (andere params bleiben)
+            step.params = {**step.params, "monitor": dict(self._table.cellWidget(row, COL_VALUE)._cond_params
+                                                             .get("monitor") or {})}
         if step_type == STEP_TYPE_ACTION and step.device_kind == "uds":
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
@@ -2198,6 +2241,9 @@ class TestcaseTab(QWidget):
         if step_type == "loop":
             count_spin: QSpinBox = self._table.cellWidget(row, COL_VALUE)
             return TestStep(step_type="loop", loop_count=count_spin.value(), enabled=enabled)
+
+        if step_type == "monitor":
+            return monitor_step(self._table.cellWidget(row, COL_VALUE)._cond_params, enabled)
 
         if step_type in ("while", "if"):
             container = self._table.cellWidget(row, COL_VALUE)
@@ -2551,6 +2597,8 @@ class TestcaseTab(QWidget):
             text = tr(CONTROL_STEP_LABELS[step.step_type])
             if step.step_type == "loop":
                 text += f" ({step.loop_count}×)"
+            elif step.step_type == "monitor":
+                text += f": {monitor_summary(step)}"
             return text
         if step.step_type == "wait":
             return tr("Warten ({duration:g} s)", duration=step.duration)
@@ -2697,7 +2745,8 @@ class TestcaseTab(QWidget):
         steps = self.steps()
         matching, depths, errors = validate_structure(steps)
         error_by_row = dict(errors)
-        end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn")}
+        end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn"),
+                           "monitor": tr("Überwachen")}
 
         # group_member_rows markiert die Zeilen INNERHALB eines (auf- oder
         # eingeklappten) Bausteins (ohne die Kopfzeile selbst) -- sie werden
@@ -2821,6 +2870,10 @@ class TestcaseTab(QWidget):
         self._start_blink(index)
         self._run_view.set_progress(index)
         total = self._table.rowCount()
+        if step.step_type == "monitor":
+            self._set_status("Schritt {index}/{total}: Überwachen – {detail} {iter}", index=index + 1, total=total,
+                             detail=monitor_summary(step), iter=self._iteration_text)
+            return
         if step.step_type in ("set_var", "inc_var"):
             op = "=" if step.step_type == "set_var" else "+="
             detail = f"{step.var_name} {op} {step.value:g}"

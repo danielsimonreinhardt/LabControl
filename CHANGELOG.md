@@ -7,6 +7,19 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Zeitprüfungen live (0.63.0, FT-7, FP-18 c, 14.11.2026).** Neuer Block **„Überwachen … Ende“** im Testablauf:
+  die Quelle wie bei einer Messwert-Bedingung (Netzteil, Last, microHIL-Kanal, CAN-Signal), drei Arten –
+  **Im Band bleiben**, **Erreichen innerhalb** (gemessene Zeit = Reaktionszeit) und **CAN-Lücken** (auch die aus
+  PI-50 b übernommene Überwachung, ob eine Botschaft ausbleibt). Verletzung = nicht bestandene Prüfung (Exit 1),
+  optional „Bei Verletzung abbrechen“. Auswertung in `timing_checks.py` (Qt-frei, für 0.63.1 auch auf
+  Aufzeichnungen). Bericht: Abschnitt „Zeitprüfungen“ (Ergebnis, Messwert, Auflösung der Quelle, Meldung) und
+  Kurvenausschnitt mit Band/Schwelle; `run-result.json` unter `timing_checks`, JUnit je Ausführung ein Testfall.
+  Zu grobe Auflösung für eine Frist (mehr als die halbe Frist) gilt als verletzt (FP-18 a); schnelleres Abfragen
+  der betroffenen Kanäle (FP-18 b) folgt. **Mock-verifiziert:** neue Prüfung `tools/check_timing_checks.py`
+  (Auswertung, Runner mit nachgebildeten Messwerten und CAN-Frames, Abbruch/Exit-Code, Schleife, Bericht/JUnit/
+  JSON, Editor, Dialog, Kommandozeile).
+
+### Hinzugefügt
 - **Spannungsprofile schlank (0.62.0, FT-2, PI-50 b, 14.11.2026).** Statt eines eigenen Profil-Schritts ergänzt
   das vorhandene Arbiträrsignal, was fehlte:
   - Form **„Rampe“**: linear von Start nach Ziel über die Schrittdauer, am Ende genau der Zielwert; im Dialog

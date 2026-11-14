@@ -384,8 +384,10 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
 # Laufvariable, die in Bedingungen als cond_source=="variable" gelesen wird.
 # "wait" wartet nur die in duration angegebene Zeitspanne, ohne Geraeteaktion.
 STEP_TYPE_ACTION = "action"
-CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait"}
-BLOCK_START_TYPES = {"loop", "while", "if"}
+CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor"}
+# "monitor" (0.63.0, FT-7): Block "Ueberwachen … Ende" -- zeitbezogene Pruefung (timing_checks.py) ueber die
+# Schritte im Block; Quelle in den cond_*-Feldern (wie eine Messwert-Bedingung), Art/Grenzen in params["monitor"]
+BLOCK_START_TYPES = {"loop", "while", "if", "monitor"}
 CONDITION_STEP_TYPES = {"while", "if"}
 
 # step_type-Basis-Anzeigenamen (Uebersetzungsschluessel), analog zu
@@ -399,6 +401,7 @@ CONTROL_STEP_LABELS = {
     "set_var": "Variable setzen",
     "inc_var": "Variable erhöhen",
     "wait": "Warten",
+    "monitor": "Überwachen",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -757,6 +760,26 @@ def condition_summary(step: TestStep) -> str:
     if step.cond_source == "variable":
         return f"{step.cond_var or '?'} {op} {step.cond_value:g}"
     return ""
+
+
+def monitor_source(step: TestStep) -> tuple[str, str]:
+    """(Quelle, Einheit) eines Blocks "Ueberwachen" (FT-7), z. B. ("Netzteil (automatisch): Spannung", "V")."""
+    device = step.cond_device_id or tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind))
+    if step.cond_device_kind == "can":
+        return f"{device}: {step.cond_field or '?'}", ""
+    field_labels = COND_FIELD_LABELS if step.cond_device_kind != "hil" else HIL_CHECK_FIELD_LABELS
+    field = tr(field_labels.get(step.cond_field, step.cond_field))
+    if step.cond_device_kind == "hil":
+        field = f"{field} {step.hil_channel}"
+    return f"{device}: {field}", COND_FIELD_UNITS.get(step.cond_field, "")
+
+
+def monitor_summary(step: TestStep) -> str:
+    import timing_checks
+    config = (step.params or {}).get("monitor")
+    source, unit = monitor_source(step)
+    text = timing_checks.summary(config, source, unit)
+    return text + (" · " + tr("abbrechen") if timing_checks.clean_config(config)["abort"] else "")
 
 
 def check_summary(step: TestStep) -> str:
