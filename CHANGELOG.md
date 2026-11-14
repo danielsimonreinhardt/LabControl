@@ -6,6 +6,24 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **XCP am Prüfling, Grundlage (0.64.0, FT-10, FP-28 a / FP-29 b, 14.11.2026).** Eigene Umsetzung (kein Code aus
+  neXtBSW übernommen) für das A2L-Subset von neXtBSW `tools/a2lgen`:
+  - `xcp_a2l.py` liest MOD_PAR (EPK), MOD_COMMON, IF_DATA XCP (IDs, 29-Bit über Bit 31, T1, MAX_CTO),
+    COMPU_METHOD (IDENTICAL, LINEAR, RAT_FUNC, TAB_VERB), MEASUREMENT und CHARACTERISTIC VALUE/VAL_BLK mit
+    Grenzen; Kennlinien/Kennfelder noch nicht.
+  - `xcp_client.py`: XCP on CAN über denselben CAN-Abgriff wie UDS (CONNECT, SHORT_UPLOAD, SET_MTA/UPLOAD,
+    DOWNLOAD; Schreiben über mehrere Frames nicht atomar). `xcp_service.py`: eigener Thread, EPK-Abgleich nach
+    jedem Verbinden – passt er nicht, wird nichts gelesen oder geschrieben.
+  - Einstellungen → Geräte → Prüfling: Feld **A2L (XCP)**, Statuszeile mit Messgrößen/Parametern/IDs.
+  - Testablauf-Schritte „Prüfling (XCP)“: **Messgröße lesen** (Wert für Prüfung/Variable) und **Parameter
+    schreiben** (nur in den A2L-Grenzen, mit Rückleseprobe); Schreiben nur aus GUI/Ablauf (FP-29 b).
+  - Nachgebildeter XCP-Slave mit eigener A2L am simulierten Bus (`xcp_sim.py`).
+  - Kommandozeile wartet bei UDS-/XCP-Schritten auch auf das CAN-Interface des Prüflings.
+  - **Mock-verifiziert:** neue Prüfung `tools/check_xcp.py` (A2L-Leser, Master gegen Nachbildung, Dienst mit
+    Grenzen/EPK, Schritte, Kommandozeile). Am Evalboard noch nicht. Messliste mit Abfrage für Verlauf/
+    Aufzeichnung/Zeitprüfungen und Kachel folgen (0.64.1).
+
 ### Behoben
 - **Spannungsprofil am Netzteil des Verbund-Partners (0.63.2, FP-17 b, am Evalboard gefunden 14.11.2026).** Ein
   Arbiträrsignal/eine Rampe auf ein Gerät am Pi wurde vor dem Start abgelehnt („PSU_ARB geht über den Verbund

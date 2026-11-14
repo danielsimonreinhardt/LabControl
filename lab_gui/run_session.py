@@ -24,7 +24,7 @@ from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
 
-DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds")
+DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds", "xcp")
 
 # Aktionen, die einen Ausgang/Eingang EINschalten (Verriegelung FP-7 b)
 SWITCH_ON_ACTIONS = {"load": {"OUT_ON"}, "psu": {"PSU_OUT_ON"}}
@@ -80,7 +80,7 @@ class DeviceDirectory:
         fehlen -- der Runner scheitert an solchen Schritten ohnehin sofort."""
         device_ids: set[str] = set()
         for step in steps:
-            if not step.enabled or step.device_kind == "uds":   # UDS: Pruefling, kein Geraet (RunSession.refusal)
+            if not step.enabled or step.device_kind in ("uds", "xcp"):   # Pruefling, kein Geraet (refusal)
                 continue
             if step.step_type == "action":
                 resolved, _ = self.resolve(step.device_kind, step.device_id)
@@ -97,7 +97,7 @@ class DeviceDirectory:
         auf Geraete vor einem Lauf ohne Fenster. `skip(device_id)` nimmt z. B. Partnergeraete aus."""
         problems: list[str] = []
         for step in steps:
-            if not step.enabled or (step.step_type == "action" and step.device_kind == "uds"):
+            if not step.enabled or (step.step_type == "action" and step.device_kind in ("uds", "xcp")):
                 continue
             if step.step_type == "action":
                 kind, device_id = step.device_kind, step.device_id
@@ -204,6 +204,9 @@ class RunSession(QObject):
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
         runner.execute_uds.connect(self._on_execute_uds)
+        runner.execute_xcp.connect(self._on_execute_xcp)
+        self.xcp = None
+        self._xcp_pending = None
         self.dispatch_action.connect(worker.execute_action)
         self.dispatch_can_send.connect(worker.execute_can_send)
         worker.action_completed.connect(self._on_action_completed)
@@ -254,7 +257,44 @@ class RunSession(QObject):
         if any(s.enabled and s.step_type == "action" and s.device_kind == "uds" for s in steps) and (
                 self.uds is None or not self.uds.configured()):
             return tr("Kein Prüfling (UDS) eingestellt")
+        if any(s.enabled and s.step_type == "action" and s.device_kind == "xcp" for s in steps) and (
+                self.xcp is None or not self.xcp.configured()):
+            return tr("Keine A2L beim Prüfling eingestellt (XCP)")
         return ""
+
+    # -- XCP (FT-10) ------------------------------------------------------------------
+
+    def set_xcp(self, xcp) -> None:
+        self.xcp = xcp
+        xcp.finished.connect(self._on_xcp_finished)
+
+    @Slot(int, object)
+    def _on_execute_xcp(self, _index: int, step: TestStep) -> None:
+        import xcp_steps
+
+        self._xcp_pending = None
+        if self.xcp is None or not self.xcp.configured():
+            self.runner.on_action_completed(False, tr("Keine A2L beim Prüfling eingestellt (XCP)"), 0.0)
+            return
+        try:
+            command, args = xcp_steps.command_for(step.action, step.params)
+        except (ValueError, TypeError) as exc:
+            self.runner.on_action_completed(False, tr("XCP-Parameter: {error}", error=str(exc)), 0.0)
+            return
+        self._xcp_pending = (self.xcp.submit(command, args), step, args)
+
+    @Slot(int, object)
+    def _on_xcp_finished(self, request_id: int, result) -> None:
+        if self._xcp_pending is None or self._xcp_pending[0] != request_id:
+            return
+        _request, step, args = self._xcp_pending
+        self._xcp_pending = None
+        if not result.ok:
+            self.runner.on_action_completed(False, tr("XCP: {error}", error=result.error), 0.0)
+            return
+        index = int(args.get("index", 0) or 0)
+        value = result.values[index] if step.action == "XCP_READ" and index < len(result.values) else 0.0
+        self.runner.on_action_completed(True, "", float(value))
 
     # -- UDS (FT-1) ------------------------------------------------------------------
 

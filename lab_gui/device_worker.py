@@ -593,6 +593,7 @@ class DeviceWorker(QObject):
         # Nachgebildeter Simulator am simulierten Bus (Simulationsmodus).
         self._sim_battsim: SimulatedBattSim | None = None
         self._sim_ecu = None   # nachgebildetes UDS-Steuergeraet am simulierten Bus (uds_sim.SimEcu, FT-1)
+        self._sim_xcp = None   # nachgebildeter XCP-Slave am simulierten Bus (xcp_sim.SimXcpEcu, FT-10)
         self._hils: dict[str, MicroHIL] = {}
         # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
         # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
@@ -1001,6 +1002,10 @@ class DeviceWorker(QObject):
         except ImportError as exc:   # can-isotp fehlt: Simulation ohne Steuergeraet
             logger.warning("Nachgebildetes UDS-Steuergeraet nicht verfuegbar: %s", exc)
             self._sim_ecu = None
+        # ... und ein nachgebildeter XCP-Slave (xcp_sim.py, FT-10) mit eigener A2L
+        from xcp_sim import SimXcpEcu
+        self._sim_xcp = SimXcpEcu()
+        bus.attach_peer(self._sim_xcp)
         self._can_buses[SIM_CAN_ID] = bus
         self._can_stats[SIM_CAN_ID] = [0, 0]
         self._start_can_reader(SIM_CAN_ID, bus)
@@ -1064,6 +1069,9 @@ class DeviceWorker(QObject):
             if getattr(self, "_sim_ecu", None) is not None:
                 self._sim_ecu.close()
                 self._sim_ecu = None
+            if getattr(self, "_sim_xcp", None) is not None:
+                self._sim_xcp.close()
+                self._sim_xcp = None
 
     # -- CAN-Knoten (Geraete, die ueber ein Interface sprechen) --------------
 

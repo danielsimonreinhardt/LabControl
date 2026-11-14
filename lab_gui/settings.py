@@ -633,7 +633,8 @@ class Settings(QObject):
                 return 0
             return value if 0 <= value <= 0x1FFFFFFF else 0
         return {"name": text("name", 60), "can_device": text("can_device", 120), "odx": text("odx"),
-                "key": text("key", 64), "request_id": can_id("request_id"), "response_id": can_id("response_id")}
+                "key": text("key", 64), "request_id": can_id("request_id"), "response_id": can_id("response_id"),
+                "a2l": text("a2l")}
 
     def set_dut_config(self, **changes) -> None:
         current = self.dut_config

@@ -123,6 +123,8 @@ class TestRunner(QObject):
     execute_jlink = Signal(str, str, str)
     # Schrittindex, TestStep -- UDS am Pruefling (FT-1), ausgefuehrt von RunSession/UdsService
     execute_uds = Signal(int, object)
+    # Schrittindex, TestStep -- XCP am Pruefling (FT-10), ausgefuehrt von RunSession/XcpService
+    execute_xcp = Signal(int, object)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -520,6 +522,8 @@ class TestRunner(QObject):
                 elif step.device_kind == "jlink":
                     # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
                     self.execute_jlink.emit(step.device_id, step.action, step.file_path)
+                elif step.device_kind == "xcp":
+                    self.execute_xcp.emit(self._index, step)
                 elif step.device_kind == "uds":
                     # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
                     self.execute_uds.emit(self._index, step)

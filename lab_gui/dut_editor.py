@@ -1,5 +1,6 @@
 """Einstellungsabschnitt "Pruefling" (FT-1 UDS, FP-12 a): CAN-Interface, ODX-Datei von neXtBSW diaggen,
-Name der Schluesseldatei im gemeinsamen Ordner. Abläufe nennen nur UDS-Schritte, nicht diese Angaben."""
+Name der Schluesseldatei im gemeinsamen Ordner, A2L fuer XCP (FT-10, 0.64.0). Abläufe nennen nur UDS-/XCP-Schritte,
+nicht diese Angaben."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -18,7 +19,7 @@ class DutEditor(QGroupBox):
         self._filling = False
         form = QFormLayout(self)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key")}
+        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key", "a2l")}
         self._name = QLineEdit()
         self._name.setMinimumWidth(220)
         self._name.editingFinished.connect(self._emit)
@@ -41,6 +42,16 @@ class DutEditor(QGroupBox):
         self._key.setPlaceholderText("evalboard_s32k144")
         self._key.editingFinished.connect(self._emit)
         form.addRow(self._labels["key"], self._key)
+        a2l_row = QHBoxLayout()
+        self._a2l = QLineEdit()
+        self._a2l.setMinimumWidth(320)
+        self._a2l.setPlaceholderText("…/build/evalboard_s32k144_demo/…/app.ecu.a2l")
+        self._a2l.editingFinished.connect(self._emit)
+        self._a2l_browse = IconButton("mdi.folder-open-outline", "")
+        self._a2l_browse.clicked.connect(self._browse_a2l)
+        a2l_row.addWidget(self._a2l, 1)
+        a2l_row.addWidget(self._a2l_browse)
+        form.addRow(self._labels["a2l"], a2l_row)
         self._status = QLabel()
         self._status.setWordWrap(True)
         form.addRow("", self._status)
@@ -48,14 +59,17 @@ class DutEditor(QGroupBox):
         self.retranslate()
 
     def retranslate(self) -> None:
-        self.setTitle(tr("Prüfling (UDS)"))
+        self.setTitle(tr("Prüfling (UDS/XCP)"))
         for key, text in (("name", tr("Name:")), ("can", tr("CAN-Interface:")), ("odx", tr("ODX/PDX:")),
-                          ("key", tr("Schlüssel:"))):
+                          ("key", tr("Schlüssel:")), ("a2l", tr("A2L (XCP):"))):
             self._labels[key].setText(text)
         self._odx.setToolTip(tr("Export von neXtBSW: python -m tools.diaggen pdx <projekt> -o <datei>.pdx; "
                                 "leer im Simulationsmodus = nachgebildetes Steuergerät"))
         self._key.setToolTip(tr("Datei <gemeinsamer Ordner>/keys/<Name>.key (64 Hex-Zeichen)"))
         self._odx_browse.setToolTip(tr("ODX-Datei wählen…"))
+        self._a2l.setToolTip(tr("A2L von neXtBSW tools/a2lgen (app.ecu.a2l im Build-Ordner); leer im "
+                                "Simulationsmodus = nachgebildetes Steuergerät"))
+        self._a2l_browse.setToolTip(tr("A2L-Datei wählen…"))
         self._fill_can(self._can.currentData() or "")
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
@@ -68,6 +82,7 @@ class DutEditor(QGroupBox):
         self._name.setText(config.get("name", ""))
         self._odx.setText(config.get("odx", ""))
         self._key.setText(config.get("key", ""))
+        self._a2l.setText(config.get("a2l", ""))
         self._fill_can(config.get("can_device", ""))
         self._filling = False
 
@@ -93,8 +108,16 @@ class DutEditor(QGroupBox):
             self._odx.setText(path)
             self._emit()
 
+    def _browse_a2l(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, tr("A2L-Datei wählen…"), self._a2l.text(),
+                                              tr("A2L (*.a2l);;Alle Dateien (*)"))
+        if path:
+            self._a2l.setText(path)
+            self._emit()
+
     def _emit(self) -> None:
         if self._filling:
             return
         self.config_edited.emit({"name": self._name.text().strip(), "can_device": self._can.currentData() or "",
-                                 "odx": self._odx.text().strip(), "key": self._key.text().strip()})
+                                 "odx": self._odx.text().strip(), "key": self._key.text().strip(),
+                                 "a2l": self._a2l.text().strip()})

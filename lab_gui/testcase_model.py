@@ -181,6 +181,14 @@ UDS_ACTIONS = {
     "UDS_RAW": "Rohe Anfrage",
 }
 UDS_READ_ACTIONS = {"UDS_READ_DID"}
+# XCP am Pruefling (0.64.0, FT-10): Parameter in params (xcp_steps.py); Schreiben nur aus GUI/Ablauf (FP-29 b)
+XCP_ACTIONS = {
+    "XCP_READ": "Messgröße lesen",
+    "XCP_WRITE": "Parameter schreiben",
+}
+XCP_READ_ACTIONS = {"XCP_READ"}
+XCP_CHECK_FIELD_LABELS = {"xcp_value": "Wert"}
+XCP_READ_CHECK_FIELD = {"XCP_READ": "xcp_value"}
 UDS_CHECK_FIELD_LABELS = {"uds_value": "Wert"}
 UDS_READ_CHECK_FIELD = {"UDS_READ_DID": "uds_value"}
 
@@ -199,7 +207,7 @@ def battsim_step_detail(step) -> str:
 # sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
 # zur Codepruefung ist daher nicht noetig (siehe testcase_runner.py:
 # on_action_completed/_finish_step).
-READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS | UDS_READ_ACTIONS
+READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS | UDS_READ_ACTIONS | XCP_READ_ACTIONS
 
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
@@ -256,6 +264,7 @@ DEVICE_ACTIONS = {
     "battsim": BATTSIM_ACTIONS,
     "jlink": JLINK_ACTIONS,
     "uds": UDS_ACTIONS,
+    "xcp": XCP_ACTIONS,
 }
 
 # Geraeteart -> deutscher Basis-Anzeigename (Uebersetzungsschluessel).
@@ -269,6 +278,7 @@ DEVICE_KIND_LABELS = {
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
     "uds": "Prüfling (UDS)",
+    "xcp": "Prüfling (XCP)",
 }
 
 # Geraetearten, die U/I/P-Messwerte liefern (siehe testcase_runner.py:
@@ -320,6 +330,7 @@ VALUELESS_ACTIONS = {
     "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
     *JLINK_ACTIONS,
     *UDS_ACTIONS,
+    *XCP_ACTIONS,
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -381,6 +392,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
                                       "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ")},
     **{code: ("", 0, 0) for code in JLINK_ACTIONS},
     **{code: ("", 0, 0) for code in UDS_ACTIONS},
+    **{code: ("", 0, 0) for code in XCP_ACTIONS},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -463,7 +475,7 @@ BATTSIM_READ_CHECK_FIELD = {"BS_CELL_READ": "bs_cell", "BS_STACK_READ": "bs_stac
 CHECK_FIELD_SYMBOLS = {
     "voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN",
     "pico_vmax": "VMAX", "pico_vmin": "VMIN", "pico_vpp": "VPP", "pico_vrms": "VRMS",
-    "bs_cell": "UZ", "bs_stack": "US", "uds_value": "DID",
+    "bs_cell": "UZ", "bs_stack": "US", "uds_value": "DID", "xcp_value": "XCP",
 }
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1

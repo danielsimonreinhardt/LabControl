@@ -572,6 +572,15 @@ time-window-limited ring buffer of the live charts.
   `<shared folder>/keys/<name>.key` with the master key (64 hex digits) for
   unlocking. In simulation mode without an entry, LabControl talks to a
   simulated ECU on the simulated bus.
+  **A2L (XCP)** is the description from neXtBSW `tools/a2lgen`
+  (`app.ecu.a2l` in the build folder); it provides CAN IDs, measurements,
+  parameters with limits and the EPK. Testcase steps "Device under test
+  (XCP)": **Read measurement** (value for check and variable, with an index
+  for arrays) and **Write parameter** (physical values, only within the A2L
+  limits, read back afterwards). On connecting, LabControl compares the ECU's
+  EPK with the A2L's; if they differ, nothing is read or written. Measuring by
+  polling only (no DAQ), writing only from a testcase, not over the network.
+  Curves and maps are not supported yet.
 - **Measuring instruments** ("Devices" tab): per device the type, serial
   number and firmware as reported when connecting (the HCS power supply has
   no firmware query), plus inventory number, calibration date and due date to

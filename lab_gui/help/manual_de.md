@@ -601,6 +601,16 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   Datei `<gemeinsamer Ordner>/keys/<Name>.key` mit dem Master-Schlüssel
   (64 Hex-Zeichen) für das Entsperren. Im Simulationsmodus spricht LabControl
   ohne Eintrag mit einem nachgebildeten Steuergerät am simulierten Bus.
+  **A2L (XCP)** ist die Beschreibung von neXtBSW `tools/a2lgen`
+  (`app.ecu.a2l` im Build-Ordner); daraus kommen CAN-IDs, Messgrößen,
+  Parameter mit Grenzen und der EPK. Testablauf-Schritte „Prüfling (XCP)“:
+  **Messgröße lesen** (Wert für Prüfung und Variable, bei Feldern mit Index)
+  und **Parameter schreiben** (physikalische Werte, nur innerhalb der
+  A2L-Grenzen, danach zurückgelesen). Beim Verbinden vergleicht LabControl
+  den EPK des Steuergeräts mit dem der A2L; passt er nicht, wird nichts
+  gelesen oder geschrieben. Messen nur per Abfrage (kein DAQ), Schreiben nur
+  aus dem Testablauf, nicht über das Netzwerk. Kennlinien und Kennfelder
+  gehen noch nicht.
 - **Messmittel** (Reiter „Geräte“): je Gerät Typ, Seriennummer und Firmware,
   wie das Gerät sie beim Verbinden meldet (das HCS-Netzteil kennt keine
   Firmware-Abfrage), dazu Inventarnummer, Kalibrierdatum und Fälligkeit zum

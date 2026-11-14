@@ -83,6 +83,8 @@ from testcase_model import (
     STEP_TYPE_ACTION,
     UDS_CHECK_FIELD_LABELS,
     UDS_READ_CHECK_FIELD,
+    XCP_CHECK_FIELD_LABELS,
+    XCP_READ_CHECK_FIELD,
     VALUELESS_ACTIONS,
     TestStep,
     action_label,
@@ -1171,15 +1173,27 @@ class TestcaseTab(QWidget):
         uds_button = IconButton("mdi.car-connected", tr("UDS-Parameter…"))
         uds_layout.addWidget(uds_label, 1)
         uds_layout.addWidget(uds_button)
-        uds_page._params = dict(step.params) if step.device_kind == "uds" else {}
+        uds_page._params = dict(step.params) if step.device_kind in ("uds", "xcp") else {}
 
         def refresh_uds_label() -> None:
+            # dieselbe Seite fuer UDS (FT-1) und XCP (FT-10): Zusammenfassung + Knopf fuer den Dialog
+            if (action_combo.currentData() or "").startswith("XCP_"):
+                import xcp_steps
+                uds_label.setText(xcp_steps.summary(action_combo.currentData() or "", uds_page._params) or "–")
+                uds_button.setToolTip(tr("XCP-Parameter…"))
+                return
             import uds_steps
             uds_label.setText(uds_steps.summary(action_combo.currentData() or "", uds_page._params) or "–")
+            uds_button.setToolTip(tr("UDS-Parameter…"))
 
         def open_uds_dialog() -> None:
-            from uds_step_dialog import UdsStepDialog
-            dialog = UdsStepDialog(action_combo.currentData() or "", uds_page._params, self._uds_odx(), self)
+            action = action_combo.currentData() or ""
+            if action.startswith("XCP_"):
+                from xcp_step_dialog import XcpStepDialog
+                dialog = XcpStepDialog(action, uds_page._params, self._xcp_a2l(), self)
+            else:
+                from uds_step_dialog import UdsStepDialog
+                dialog = UdsStepDialog(action, uds_page._params, self._uds_odx(), self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 uds_page._params = dialog.params()
                 refresh_uds_label()
@@ -1251,7 +1265,8 @@ class TestcaseTab(QWidget):
             code = action_combo.currentData() or ""
             field_choices = None
             field_code = (HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
-                          or BATTSIM_READ_CHECK_FIELD.get(code) or UDS_READ_CHECK_FIELD.get(code))
+                          or BATTSIM_READ_CHECK_FIELD.get(code) or UDS_READ_CHECK_FIELD.get(code)
+                          or XCP_READ_CHECK_FIELD.get(code))
             if field_code is not None:
                 # Nur der eine Wert, den die jeweilige Lese-Aktion (HIL_AIN_READ/
                 # HIL_IN_READ/PICO_*) tatsaechlich liefert -- die drei
@@ -1259,7 +1274,8 @@ class TestcaseTab(QWidget):
                 # CheckDialog) waeren hier bedeutungslos.
                 unit = COND_FIELD_UNITS.get(field_code, "")
                 label = (HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS.get(field_code)
-                         or BATTSIM_CHECK_FIELD_LABELS.get(field_code) or UDS_CHECK_FIELD_LABELS[field_code])
+                         or BATTSIM_CHECK_FIELD_LABELS.get(field_code) or UDS_CHECK_FIELD_LABELS.get(field_code)
+                         or XCP_CHECK_FIELD_LABELS[field_code])
                 field_choices = {field_code: (label, unit)}
             # Nur eine Lese-Aktion (microHIL oder PicoScope) liefert ueberhaupt
             # einen Wert, der sich sinnvoll in eine Variable schreiben laesst
@@ -1411,7 +1427,7 @@ class TestcaseTab(QWidget):
                 value_stack.setCurrentIndex(4)
             elif code == "JLINK_FLASH":
                 value_stack.setCurrentIndex(5)
-            elif kind == "uds":
+            elif kind in ("uds", "xcp"):
                 refresh_uds_label()
                 value_stack.setCurrentIndex(6)
             else:
@@ -2137,7 +2153,7 @@ class TestcaseTab(QWidget):
             # params["monitor"] pflegt der Dialog der Zeile; er ist massgeblich (andere params bleiben)
             step.params = {**step.params, "monitor": dict(self._table.cellWidget(row, COL_VALUE)._cond_params
                                                              .get("monitor") or {})}
-        if step_type == STEP_TYPE_ACTION and step.device_kind == "uds":
+        if step_type == STEP_TYPE_ACTION and step.device_kind in ("uds", "xcp"):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
             step.params = dict(getattr(uds_page, "_params", {}))
@@ -2148,6 +2164,14 @@ class TestcaseTab(QWidget):
             if "requirements" in params:
                 step.requirements = list(params["requirements"])
         return step
+
+    def set_xcp_a2l_provider(self, provider) -> None:
+        """XCP (FT-10): () -> A2l des Prueflings oder None (Objektauswahl im XCP-Dialog)."""
+        self._xcp_a2l_provider = provider
+
+    def _xcp_a2l(self):
+        provider = getattr(self, "_xcp_a2l_provider", None)
+        return provider() if provider is not None else None
 
     def set_uds_odx_provider(self, provider) -> None:
         """Von MainWindow: () -> ODX des eingestellten Pruefings (uds_odx.OdxDiag) oder None."""

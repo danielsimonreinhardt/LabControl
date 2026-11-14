@@ -141,6 +141,11 @@ class _Rig:
         self.worker.can_connected.connect(self.uds.on_can_connected)
         self.uds.configure(settings.dut_config, simulation)
         self.session.set_uds(self.uds)
+        from xcp_service import XcpService
+        self.xcp = XcpService(self.worker)
+        self.worker.can_connected.connect(self.xcp.on_can_connected)
+        self.xcp.configure(settings.dut_config, simulation)
+        self.session.set_xcp(self.xcp)
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 
@@ -160,6 +165,7 @@ class _Rig:
         from device_worker import REASON_WINDOW_CLOSE
 
         self.uds.shutdown()   # UDS-Verbindung schliessen, solange der Bus offen ist
+        self.xcp.shutdown()
         # Erst ALLE AUS (FP-4 a), dann wie beim Schliessen des Fensters: Netzteile mit 1 V / 0 A zur
         # Handbedienung frei (das HCS hat keine Ausgangstaste, gesperrt waere es von Hand nicht bedienbar)
         QMetaObject.invokeMethod(self.worker, "all_outputs_off", Qt.ConnectionType.BlockingQueuedConnection,
@@ -257,8 +263,20 @@ def _cmd_run(args, settings) -> int:
         return EXIT_SETUP
 
     _say(f"Warte auf Geräte (bis {args.wait_devices:g} s) …")
-    _spin(app, max(0.0, args.wait_devices), lambda: not rig.directory.missing(steps))
-    missing = rig.directory.missing(steps)
+    def dut_missing() -> list[str]:
+        """UDS-/XCP-Schritte (FT-1/FT-10): das CAN-Interface des Prueflings muss verbunden sein (0.64.0)."""
+        kinds = {st.device_kind for st in steps if st.enabled and st.step_type == "action"}
+        online = rig.directory.online.get("can", set())
+        problems = []
+        for kind, service in (("uds", rig.uds), ("xcp", rig.xcp)):
+            if kind in kinds:
+                can = service.can_device()
+                if (can and can not in online) or (not can and not online):
+                    problems.append(f"CAN-Interface des Prüflings ({can or 'automatisch'}) nicht verbunden")
+        return problems
+
+    _spin(app, max(0.0, args.wait_devices), lambda: not rig.directory.missing(steps) and not dut_missing())
+    missing = rig.directory.missing(steps) + dut_missing()
     refusal = missing[0] if missing else rig.session.refusal(steps)
     if refusal:
         rig.shutdown(REASON_CLI_END)

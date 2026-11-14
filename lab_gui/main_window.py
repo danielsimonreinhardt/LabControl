@@ -418,6 +418,13 @@ class MainWindow(QMainWindow):
         self._uds.configure(self._settings.dut_config, self._settings.simulation_mode)
         self._settings.dut_config_changed.connect(
             lambda cfg: self._uds.configure(cfg, self._settings.simulation_mode))
+        # XCP am Pruefling (FT-10): eigener Thread, Bus ueber CanTap wie UDS, A2L aus Einstellungen -> Pruefling
+        from xcp_service import XcpService
+        self._xcp = XcpService(self._worker, self)
+        self._worker.can_connected.connect(self._xcp.on_can_connected)
+        self._xcp.configure(self._settings.dut_config, self._settings.simulation_mode)
+        self._settings.dut_config_changed.connect(
+            lambda cfg: self._xcp.configure(cfg, self._settings.simulation_mode))
         self._dut_name_applied = ""
         self._settings.dut_config_changed.connect(
             lambda _cfg: self._uds_known and self._apply_dut_name())
@@ -2069,7 +2076,9 @@ class MainWindow(QMainWindow):
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
         self._run_session.set_uds(self._uds)   # UDS-Schritte (FT-1)
+        self._run_session.set_xcp(self._xcp)   # XCP-Schritte (FT-10)
         self.testcase_tab.set_uds_odx_provider(self._uds.odx)
+        self.testcase_tab.set_xcp_a2l_provider(self._xcp.a2l)
         self.settings_tab.instruments_editor.attach(self._instruments)
         # Anforderungsregister (FT-3): Titel fuer Bericht, IDs fuer die Vervollstaendigung im Pruefungsdialog
         self._requirement_cache: tuple = ((), {})
@@ -2080,6 +2089,7 @@ class MainWindow(QMainWindow):
         self.settings_tab.dut_editor.set_config(self._settings.dut_config)
         self.settings_tab.dut_editor.config_edited.connect(lambda cfg: self._settings.set_dut_config(**cfg))
         self._uds.state_changed.connect(self._show_dut_status)
+        self._xcp.state_changed.connect(self._show_dut_status)
         self._show_dut_status()
         self._settings.requirement_registers_changed.connect(lambda _paths: self._show_requirement_registers())
         self._show_requirement_registers()
@@ -2179,13 +2189,21 @@ class MainWindow(QMainWindow):
         odx = self._uds.odx()
         if odx is None:
             error = self._uds.odx_error()
-            self.settings_tab.dut_editor.set_status(tr("ODX-Fehler: {error}", error=error) if error
-                                                    else tr("nicht eingerichtet"))
-            return
-        self.settings_tab.dut_editor.set_status(tr(
-            "{name}: {dids} DIDs, {dtcs} DTCs, {routines} Routinen, Anfrage 0x{req:03X} / Antwort 0x{resp:03X}",
-            name=odx.name, dids=len(odx.dids), dtcs=len(odx.dtcs), routines=len(odx.routines),
-            req=odx.request_id, resp=odx.response_id))
+            text = tr("ODX-Fehler: {error}", error=error) if error else tr("nicht eingerichtet")
+        else:
+            text = tr(
+                "{name}: {dids} DIDs, {dtcs} DTCs, {routines} Routinen, Anfrage 0x{req:03X} / Antwort 0x{resp:03X}",
+                name=odx.name, dids=len(odx.dids), dtcs=len(odx.dtcs), routines=len(odx.routines),
+                req=odx.request_id, resp=odx.response_id)
+        xcp = getattr(self, "_xcp", None)
+        a2l = xcp.a2l() if xcp is not None else None
+        if a2l is not None:
+            text += "\n" + tr("XCP {module}: {meas} Messgrößen, {chars} Parameter, 0x{master:X} / 0x{slave:X}",
+                              module=a2l.module, meas=len(a2l.names("measurement")),
+                              chars=len(a2l.names("characteristic")), master=a2l.master_id, slave=a2l.slave_id)
+        elif xcp is not None and xcp.a2l_error():
+            text += "\n" + tr("A2L-Fehler: {error}", error=xcp.a2l_error())
+        self.settings_tab.dut_editor.set_status(text)
 
     # -- Anforderungsregister (FT-3) ------------------------------------------------------
 
@@ -2579,6 +2597,7 @@ class MainWindow(QMainWindow):
         self._scope_service.shutdown()
         # UDS-Verbindung schliessen, solange der CAN-Bus noch offen ist
         self._uds.shutdown()
+        self._xcp.shutdown()
         # Synchron (BlockingQueuedConnection) statt per _request_all_off, damit
         # der Kill garantiert VOR thread.quit()/wait() abgeschlossen ist --
         # sonst koennte die Anwendung schliessen, bevor der Worker die
