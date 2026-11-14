@@ -114,12 +114,13 @@ def _render_monitor_charts(record: RunRecord) -> list[tuple[str, QImage]]:
             continue
         index = result["index"]
         step = record.steps[index]
-        source, unit = monitor_source(step)
+        labels = {device_id: label for device_id, (_kind, label) in record.device_meta.items()}
+        source, unit = monitor_source(step, labels)
         samples = [Sample(t, "monitor", "monitor", v) for t, v in result["series"]]
         limits = [config["min"], config["max"]] if config["mode"] == "band" else [config["value"]]
         image = render_field_chart("monitor", unit, samples, {"monitor": ("", source)}, result["t_start"],
                                    max(result["t_end"], result["t_start"] + 0.1), [], limits=limits)
-        title = tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step))
+        title = tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step, labels))
         charts.append((title, image))
     return charts
 
@@ -173,7 +174,8 @@ def _verdict(record: RunRecord) -> tuple[str, str]:
 def _step_started_text(record: RunRecord, index: int) -> str:
     step = record.steps[index]
     if step.step_type == "monitor":
-        return tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step))
+        labels = {device_id: label for device_id, (_kind, label) in record.device_meta.items()}
+        return tr("Schritt {n}: Überwachen – {detail}", n=index + 1, detail=monitor_summary(step, labels))
     if step.step_type in ("set_var", "inc_var"):
         op = "=" if step.step_type == "set_var" else "+="
         return tr("Schritt {n}: {var} {op} {value:g}", n=index + 1, var=step.var_name, op=op, value=step.value)

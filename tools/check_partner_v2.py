@@ -214,13 +214,27 @@ def main() -> int:
     check("Kachel beim Besitzer wieder frei", window_b.control_tab.lease_text(dw.SIM_PSU_ID) == ""
           and section_b._voltage_spin.isEnabled() and section_b._output_on_button.isEnabled())
 
+    print("ramp -- Rampe am Partner-Netzteil (FP-17 b, 0.63.2)")
+    save_steps([TestStep(device_kind="psu", device_id=partner_psu, action="PSU_ARB", arb_shape="ramp",
+                         arb_target="PSU_VOLT", arb_offset=5.0, arb_amplitude=6.0, duration=1.0)], path)
+    tab_a._load_path(path)
+    finished.clear()
+    failed.clear()
+    window_a._on_run_requested()
+    spin(app, 15.0, lambda: bool(finished) or bool(failed))
+    check("Rampe am Partnergeraet laeuft durch", finished and not failed, str(failed))
+    check("... Zielwert beim Besitzer angekommen", mock_b is not None and mock_b.get_setpoint()[0] == 6.0,
+          str(mock_b.get_setpoint() if mock_b else None))
+    spin(app, 3.0, lambda: leases_b.holder_of(dw.SIM_PSU_ID) is None)
+
     print("refuse -- Lauf startet nicht")
-    save_steps([TestStep(device_kind="psu", device_id=partner_psu, action="PSU_ARB", duration=1.0)], path)
+    partner_hil = partner_psu.rsplit("/", 1)[0] + "/hil:SIM"
+    save_steps([TestStep(device_kind="hil", device_id=partner_hil, action="HIL_AIN_READ", hil_channel=1)], path)
     tab_a._load_path(path)
     finished.clear()
     window_a._on_run_requested()
     spin(app, 1.0)
-    check("Arbitraersignal am Partnergeraet -> nicht gestartet",
+    check("Lese-Aktion am Partnergeraet -> nicht gestartet",
           not window_a._test_runner.is_running() and "Verbund nicht" in tab_a._status_label.text(),
           tab_a._status_label.text())
 

@@ -971,7 +971,8 @@ class TestRunner(QObject):
         arb_spacing_ms) um ist -- quittiert das Geraet langsamer, sofort (FP-16 b: kein Rueckstau)."""
         step = self._steps[self._index]
         elapsed_ms = self._arb_clock.elapsed()
-        wait_ms = arb_spacing_ms(step.arb_interval_ms) - (elapsed_ms - self._arb_last_send_ms)
+        wait_ms = (arb_spacing_ms(step.arb_interval_ms, partner=step.device_id.startswith("@"))
+                   - (elapsed_ms - self._arb_last_send_ms))
         if elapsed_ms >= step.duration * 1000.0:
             if step.arb_shape == ARB_RAMP and not self._arb_final_sent:
                 # Rampe: genau den Zielwert setzen, statt beim letzten Zwischenwert stehenzubleiben -- auch er

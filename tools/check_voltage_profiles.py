@@ -151,6 +151,30 @@ def section_runner(app) -> None:
           str(summary))
 
 
+def section_partner(app) -> None:
+    print("partner (FP-17 b, 0.63.2)")
+    import dataclasses
+    step = dataclasses.replace(ramp_step(12.0, 10.0, 1.2, 0), device_id="@raspberrypi/psu:HCS16")
+    device, _emitted, record, done = run_steps(app, [step], ack_ms=20)
+    gaps = gaps_ms(device.sent)
+    check("Partner-Netzteil: Abstand >= 220 ms (Token-Eimer des Partners 5/s)", done and gaps
+          and min(gaps) >= 215, str([round(g) for g in gaps]))
+    import main_window
+    import remote_actions
+
+    class Fake:
+        _partner_host_name = "raspberrypi"
+        _online_devices: dict = {}
+    steps = [step]
+    _result, devices, error = main_window.MainWindow._partner_steps(Fake(), steps)
+    check("Vorpruefung: Rampe am Partner-Netzteil erlaubt (gesendet wird PSU_VOLT)", error == ""
+          and devices == {"psu:HCS16": "psu"}, error)
+    bad = dataclasses.replace(step, arb_target="PSU_FANTASIE")
+    _result, _devices, error = main_window.MainWindow._partner_steps(Fake(), [bad])
+    check("Vorpruefung: unbekannte Zielaktion weiter abgelehnt", "geht über den Verbund nicht" in error, error)
+    check("PSU_VOLT ist eine Fernaktion des Netzteils", "PSU_VOLT" in remote_actions.REMOTE_ACTIONS["psu"])
+
+
 def section_report(app) -> None:
     print("report")
     import run_report
@@ -230,6 +254,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication([])
     section_model()
     section_runner(app)
+    section_partner(app)
     section_report(app)
     section_dialog(app)
     section_cli()

@@ -6,6 +6,20 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **Spannungsprofil am Netzteil des Verbund-Partners (0.63.2, FP-17 b, am Evalboard gefunden 14.11.2026).** Ein
+  Arbiträrsignal/eine Rampe auf ein Gerät am Pi wurde vor dem Start abgelehnt („PSU_ARB geht über den Verbund
+  nicht“), obwohl je Sollwert nur `PSU_VOLT` gesendet wird – die Vorprüfung prüft jetzt die Zielaktion. Danach
+  brach die Rampe nach 2 s mit „zu viele Befehle“ ab: der Partner nimmt höchstens 5 Fernbefehle/s an (Token-Eimer
+  zum Schutz von ALLE AUS). Arbiträrsignale auf Partnergeräten halten deshalb mindestens 220 ms Abstand.
+  Bericht und Zeitprüfungen nennen das Gerät mit seinem Namen statt der Kennung.
+  **Mock-verifiziert:** `check_voltage_profiles` Abschnitt „partner“. **Hardware-verifiziert (PI-51, 14.11.2026,
+  12:33):** Ablauf über MCP am PC, HCS16 am Pi mit laufendem Evalboard S32K144: UDS-Versorgung vorher 11 984 mV,
+  Rampe 12 → 10 V in 5 s (25 Sollwerte, Abstand 219–254 ms, Mittel 222 ms), 5 s halten, Rampe 10 → 12 V
+  (25 Sollwerte, 219–224 ms), danach 12 V und UDS-Versorgung 11 984 mV; Überwachen 9,5–12,5 V bestanden
+  (15 Messwerte, Auflösung 1,03 s über den Verbund); Exit 0, Soll/Ist-Diagramme im Bericht. Damit auch FT-2
+  (0.62.0) und FT-7 live (0.63.0) an Hardware belegt; HCS16 danach unverändert 12 V, Ausgang EIN.
+
 ### Hinzugefügt
 - **Zeitprüfungen auf Aufzeichnungen (0.63.1, FT-7, FP-19 b, 14.11.2026).** `main.py timing <datei>` prüft
   „Im Band bleiben“ (`--band MIN:MAX`) und „Erreichen innerhalb“ (`--reach "OP WERT" --within S`) auf einem Kanal

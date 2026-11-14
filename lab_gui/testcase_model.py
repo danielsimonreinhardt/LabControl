@@ -228,9 +228,16 @@ def arb_shape_label(shape: str) -> str:
     return tr(ARB_SHAPE_LABELS.get(shape, shape))
 
 
-def arb_spacing_ms(interval_ms: int) -> int:
-    """Mindestabstand zwischen zwei gesendeten Sollwerten (von Senden zu Senden)."""
-    return int(interval_ms) if int(interval_ms) > 0 else ARB_AUTO_MIN_INTERVAL_MS
+# Geraet des Verbund-Partners (FP-17 b, 0.63.2): der Partner nimmt Fernbefehle hoechstens mit
+# share_remote.RATE_PER_S = 5/s an (Token-Eimer, schuetzt ALLE AUS) -- 220 ms Abstand mit Reserve
+ARB_PARTNER_MIN_INTERVAL_MS = 220
+
+
+def arb_spacing_ms(interval_ms: int, partner: bool = False) -> int:
+    """Mindestabstand zwischen zwei gesendeten Sollwerten (von Senden zu Senden); beim Verbund-Partner nie
+    kuerzer als ARB_PARTNER_MIN_INTERVAL_MS."""
+    spacing = int(interval_ms) if int(interval_ms) > 0 else ARB_AUTO_MIN_INTERVAL_MS
+    return max(spacing, ARB_PARTNER_MIN_INTERVAL_MS) if partner else spacing
 
 
 def arb_summary(shape: str, target_label: str, offset: float, amplitude: float, frequency: float) -> str:
@@ -762,9 +769,11 @@ def condition_summary(step: TestStep) -> str:
     return ""
 
 
-def monitor_source(step: TestStep) -> tuple[str, str]:
-    """(Quelle, Einheit) eines Blocks "Ueberwachen" (FT-7), z. B. ("Netzteil (automatisch): Spannung", "V")."""
-    device = step.cond_device_id or tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind))
+def monitor_source(step: TestStep, labels: dict | None = None) -> tuple[str, str]:
+    """(Quelle, Einheit) eines Blocks "Ueberwachen" (FT-7), z. B. ("Netzteil (automatisch): Spannung", "V").
+    labels: device_id -> Anzeigename (Bericht), sonst steht die Kennung da."""
+    device = ((labels or {}).get(step.cond_device_id) or step.cond_device_id
+              or tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind)))
     if step.cond_device_kind == "can":
         return f"{device}: {step.cond_field or '?'}", ""
     field_labels = COND_FIELD_LABELS if step.cond_device_kind != "hil" else HIL_CHECK_FIELD_LABELS
@@ -774,10 +783,10 @@ def monitor_source(step: TestStep) -> tuple[str, str]:
     return f"{device}: {field}", COND_FIELD_UNITS.get(step.cond_field, "")
 
 
-def monitor_summary(step: TestStep) -> str:
+def monitor_summary(step: TestStep, labels: dict | None = None) -> str:
     import timing_checks
     config = (step.params or {}).get("monitor")
-    source, unit = monitor_source(step)
+    source, unit = monitor_source(step, labels)
     text = timing_checks.summary(config, source, unit)
     return text + (" · " + tr("abbrechen") if timing_checks.clean_config(config)["abort"] else "")
 

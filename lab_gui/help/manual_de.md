@@ -341,7 +341,8 @@ ist), **Laden** und **Speichern**.
   100 ms. Der Bericht zeigt je Arbiträrsignal-Schritt Soll gegen Ist und die
   tatsächlichen Abstände (min/mittel/max), `run-result.json` dieselben Zahlen
   unter `setpoints`. Das geht auch mit einem Netzteil des Verbund-Partners;
-  dann bestimmt die Netzwerk-Laufzeit die Abstände.
+  dort gelten mindestens 220 ms Abstand (der Partner nimmt höchstens 5
+  Fernbefehle pro Sekunde an, damit ALLE AUS nie hinter einem Stau wartet).
 - **Wert / Dauer (s)**: Sollwert bzw. Wartezeit nach dem Schritt, bevor
   der nächste beginnt. Die Wartezeit muss die physikalische
   Einschwingzeit des Geräts abdecken (siehe Hinweis unten).

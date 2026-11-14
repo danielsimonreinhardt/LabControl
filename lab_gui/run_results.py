@@ -72,11 +72,12 @@ def monitor_unit(result: dict, step) -> str:
 def timing_rows(record: RunRecord) -> list[dict]:
     """Zeitpruefungen (0.63.0, FT-7) fuer run-result.json und JUnit, ohne Verlauf."""
     rows = []
+    labels = {device_id: label for device_id, (_kind, label) in record.device_meta.items()}
     for result in record.monitors:
         index = result["index"]
         step = record.steps[index] if 0 <= index < len(record.steps) else None
         rows.append({"step": index + 1, "mode": result["config"]["mode"],
-                     "check": monitor_summary(step) if step is not None else "",
+                     "check": monitor_summary(step, labels) if step is not None else "",
                      "passed": result["passed"], "value": round(result["value"], 6),
                      "unit": monitor_unit(result, step), "message": result["message"],
                      "resolution_ms": round(result["resolution_s"] * 1000.0, 1)

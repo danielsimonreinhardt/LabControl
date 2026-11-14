@@ -65,7 +65,7 @@ from partner_passthrough import PartnerPassthrough
 from partner_devices import PartnerDevices
 from share_remote import RemoteBridge
 from share_server import ShareServer, is_verbund_client
-from testcase_model import TestStep
+from testcase_model import TestStep, is_arb_action
 from testcase_tab import TestcaseTab
 from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
@@ -841,7 +841,9 @@ class MainWindow(QMainWindow):
             remote = verbund_ids.partner_device(step.device_id, partner)
             if remote is None:
                 continue
-            if step.action not in remote_actions.REMOTE_ACTIONS.get(step.device_kind, {}):
+            # Arbitraersignal/Rampe (FP-17 b, 0.63.2): gesendet wird je Sollwert die Zielaktion (z. B. PSU_VOLT)
+            sent = step.arb_target if is_arb_action(step.action) else step.action
+            if sent not in remote_actions.REMOTE_ACTIONS.get(step.device_kind, {}):
                 return result, {}, tr("Aktion {action} geht über den Verbund nicht ({device})",
                                       action=step.action, device=step.device_id)
             devices[remote] = step.device_kind

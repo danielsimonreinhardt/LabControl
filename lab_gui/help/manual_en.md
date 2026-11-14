@@ -323,8 +323,9 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   **Auto** means as fast as acknowledged, at least 100 ms. The report shows
   setpoint vs. actual and the actual intervals (min/mean/max) for every
   arbitrary-signal step, `run-result.json` the same figures under
-  `setpoints`. This also works with a power supply of the linked partner; the
-  network round trip then sets the intervals.
+  `setpoints`. This also works with a power supply of the linked partner;
+  there the interval is at least 220 ms (the partner accepts at most 5 remote
+  commands per second so that ALL OFF never waits behind a queue).
 - **Value / Duration (s)**: setpoint resp. wait time after the step,
   before the next one begins. The wait time must cover the device's
   physical settling time (see note below).
