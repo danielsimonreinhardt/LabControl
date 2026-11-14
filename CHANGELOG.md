@@ -7,6 +7,14 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Behoben
+- **XCP: Nullwerte erschienen als „-0“ (0.64.2, am Evalboard gesehen 14.11.2026).** Die RAT_FUNC-Umrechnung
+  lieferte für 0 eine negative Null. **Mock-verifiziert:** `check_xcp`. **Hardware-verifiziert (PI-53 a,
+  14.11.2026, 22:15):** Demo-Firmware aus neXtBSW `dev` 3cba3467 in einem eigenen Worktree gebaut und per CAN
+  geflasht (`canflash`, Bootloader 0.3.13, CRC geprüft), A2L/PDX aus demselben Stand im gemeinsamen Ordner.
+  XCP am Evalboard (PC, A-CAN, HCS16 12 V): EPK passt, sieben Objekte gelesen (Poti 1 744 mV, gefiltert
+  1 656 mV, Taster/LEDs 0, PC_Command.Qlf 8 = QLF_ERROR_TIMEOUT, FilterAlpha 0,125); FilterAlpha 0,125 → 0,5 →
+  0,125 geschrieben und jeweils zurückgelesen, alter Wert wiederhergestellt. UDS-Lesetest mit der neuen
+  Firmware ebenfalls bestanden. Damit XCP-Grundlage (0.64.0) an Hardware belegt.
 - **XCP: verständliche Meldung, wenn die A2L nicht zur Firmware passt (0.64.1, PI-52 a, 14.11.2026).** Am
   Evalboard (PC, A-CAN, HCS16 12 V) antwortete der neXtBSW-XCP-Slave auf CONNECT, wies aber schon das Lesen des
   EPK an der Adresse der A2L vom 29.09. mit ERR_ACCESS_DENIED ab – der Slave liest nur innerhalb der Objekte der

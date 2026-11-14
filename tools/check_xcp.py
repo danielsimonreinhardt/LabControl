@@ -98,6 +98,8 @@ def section_a2l() -> None:
     check("RAT_FUNC 1/10: 235 -> 23,5", abs(temp.compu.to_phys(235) - 23.5) < 1e-9
           and abs(temp.compu.to_raw(23.5) - 235) < 1e-9)
     check("TAB_VERB: 1 -> RUN", a2l.get("Sim.State").compu.text(1) == "RUN")
+    zero = a2l.get("Sim.Counter").compu.to_phys(0)
+    check("RAT_FUNC 0 -> +0 (kein '-0')", f"{zero:g}" == "0", f"{zero:g}")
     table = a2l.get("Sim.Table")
     check("VAL_BLK NUMBER 4", table.count == 4 and table.size == 8 and table.writable)
     try:

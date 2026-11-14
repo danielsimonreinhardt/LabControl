@@ -94,13 +94,14 @@ class Compu:
     table: dict = field(default_factory=dict)
 
     def to_phys(self, raw: float) -> float:
+        # "+ 0.0": RAT_FUNC liefert fuer 0 sonst -0.0 (am Evalboard als "-0" angezeigt, 0.64.2)
         if self.kind == "LINEAR":
             a, b = self.coeffs[:2]
-            return a * raw + b
+            return a * raw + b + 0.0
         if self.kind == "RAT_FUNC":
             _a, b, c, _d, e, f = self.coeffs
-            return (c - f * raw) / (e * raw - b)
-        return raw
+            return (c - f * raw) / (e * raw - b) + 0.0
+        return raw + 0.0
 
     def to_raw(self, phys: float) -> float:
         if self.kind == "LINEAR":
