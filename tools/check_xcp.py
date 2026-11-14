@@ -162,6 +162,14 @@ def section_service() -> None:
     check("ausserhalb der A2L-Grenzen abgelehnt", not result.ok and "außerhalb" in result.error, result.describe())
     result = service.call("write", {"name": "Sim.Counter", "values": [1]})
     check("Messgroesse nicht schreibbar", not result.ok and "nicht schreibbar" in result.error, result.describe())
+    from xcp_sim import sim_a2l_text
+    stale = DATA / "alt.a2l"
+    stale.write_text(sim_a2l_text().replace(f"ADDR_EPK 0x{ADDR_EPK:08X}", "ADDR_EPK 0x0003A2E4"), encoding="utf-8")
+    service.configure({"a2l": str(stale), "can_device": "can:FAKE"}, simulation=False)
+    result = service.call("read", {"name": "Sim.Supply_mV"})
+    check("EPK-Adresse nicht lesbar -> 'A2L passt nicht zur Firmware'", not result.ok
+          and "passt nicht zur Firmware" in result.error, result.describe())
+    service.configure({"a2l": "builtin:sim", "can_device": "can:FAKE"}, simulation=False)
     sim.memory[ADDR_EPK - 0x20000000] = ord("X")
     service.on_can_connected("can:FAKE", False)            # Verbindung neu aufbauen
     result = service.call("read", {"name": "Sim.Supply_mV"})

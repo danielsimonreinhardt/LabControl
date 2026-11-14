@@ -153,7 +153,13 @@ class XcpService(QObject):
             try:
                 client.connect()
                 if a2l.epk and a2l.addr_epk is not None:
-                    raw = client.read(a2l.addr_epk, len(a2l.epk.encode("latin-1")))
+                    try:
+                        raw = client.read(a2l.addr_epk, len(a2l.epk.encode("latin-1")))
+                    except XcpError as exc:
+                        if exc.code in (0x22, 0x24):   # Adresse ausserhalb der Objekte dieser Firmware (0.64.1)
+                            raise RuntimeError(f"EPK an 0x{a2l.addr_epk:X} nicht lesbar ({exc}) – die A2L passt "
+                                               f"nicht zur Firmware auf dem Steuergerät") from None
+                        raise
                     found = raw.decode("latin-1", errors="replace")
                     if found != a2l.epk:
                         raise RuntimeError(f"EPK passt nicht zur A2L: Steuergerät „{found}“, "

@@ -6,6 +6,14 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **XCP: verständliche Meldung, wenn die A2L nicht zur Firmware passt (0.64.1, PI-52 a, 14.11.2026).** Am
+  Evalboard (PC, A-CAN, HCS16 12 V) antwortete der neXtBSW-XCP-Slave auf CONNECT, wies aber schon das Lesen des
+  EPK an der Adresse der A2L vom 29.09. mit ERR_ACCESS_DENIED ab – der Slave liest nur innerhalb der Objekte der
+  laufenden Firmware. Statt „ERR_ACCESS_DENIED (0x24)“ meldet LabControl jetzt „EPK an 0x… nicht lesbar – die A2L
+  passt nicht zur Firmware auf dem Steuergerät“. **Mock-verifiziert:** `check_xcp` (A2L mit falscher EPK-Adresse).
+  **Hardware:** CONNECT am Evalboard bestätigt; Lesen/Schreiben braucht eine zur Firmware passende A2L (PI-53).
+
 ### Hinzugefügt
 - **XCP am Prüfling, Grundlage (0.64.0, FT-10, FP-28 a / FP-29 b, 14.11.2026).** Eigene Umsetzung (kein Code aus
   neXtBSW übernommen) für das A2L-Subset von neXtBSW `tools/a2lgen`:
