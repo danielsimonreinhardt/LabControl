@@ -121,6 +121,20 @@ def main() -> int:
     check("gespeichertes Geraet kommt als Pruefling wieder (nicht als CAN)",
           window._device_kinds.get(UDS_DEVICE_ID) == "uds"
           and type(window.control_tab._sections.get(UDS_DEVICE_ID)).__name__ == "UdsControlGroup")
+    def tile_label() -> str:
+        return {d: label for _k, d, label in window._registry.known_devices()}.get(UDS_DEVICE_ID, "")
+
+    check("ohne Namen: automatischer Name", tile_label().startswith("Prüfling"), tile_label())
+    window._settings.set_dut_config(name="Evalboard S32K144")
+    spin(app, 0.3)
+    check("Name aus den Einstellungen wird Kachelname", tile_label() == "Evalboard S32K144", tile_label())
+    window._settings.set_dut_config(name="Evalboard B")
+    spin(app, 0.3)
+    check("geaenderter Name folgt", tile_label() == "Evalboard B", tile_label())
+    window._registry.rename("uds", UDS_DEVICE_ID, "Mein Board")
+    window._settings.set_dut_config(name="Evalboard C")
+    spin(app, 0.3)
+    check("selbst vergebener Kachelname bleibt", tile_label() == "Mein Board", tile_label())
     window._settings.set_dut_config(odx=str(DATA / "gibtsnicht.pdx"))
     spin(app, 1.0)
     check("ohne lesbares ODX: Pruefling getrennt", UDS_DEVICE_ID not in window._online_devices.get("uds", set()))

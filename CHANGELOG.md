@@ -6,6 +6,13 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Behoben
+- **Prüfling-Kachel hieß „Prüfling 1“ statt wie eingestellt (0.61.3, am Evalboard gesehen 14.11.2026).** Der
+  Name aus Einstellungen → Geräte → Prüfling wird jetzt Kachel-, Bericht- und Netzwerkname, solange die Kachel
+  ihren automatischen Namen (oder den vorigen Prüflingsnamen) trägt; ein selbst vergebener Kachelname bleibt.
+  **Mock-verifiziert:** `check_uds_tile` (Name übernommen, Änderung folgt, eigener Name bleibt).
+  **Hardware:** am PC mit dem Evalboard angesehen (siehe UDS-Grundlage).
+
 ### Hinzugefügt
 - **Verknüpfte Bausteine (0.61.2, PI-49 b, 13.11.2026).** „Baustein einfügen“ verweist jetzt auf die
   Baustein-Datei, statt die Schritte zu kopieren: Die Kopfzeile zeigt „Baustein (verknüpft)“, die Zeilen sind
@@ -248,7 +255,11 @@ Semantic Versioning (`lab_gui/version.py`).
   - Ablaufschritte und Kachel folgen (0.60.1/0.60.2).
   - **Mock-verifiziert:** neue Prüfung `tools/check_uds.py` (ODX der Nachbildung und ein frischer diaggen-Export
     des neXtBSW-Demo-Projekts, Schlüssel, alle Dienste über den echten CAN-Lesethread, NRCs 0x31/0x33/0x35/0x7F,
-    Schlüssel aus dem gemeinsamen Ordner, Antwortzeit < 0,5 s). Am Evalboard noch nicht.
+    Schlüssel aus dem gemeinsamen Ordner, Antwortzeit < 0,5 s). **Hardware-verifiziert am Evalboard S32K144
+    (14.11.2026, PI-46 a, PC an A-CAN, HCS16 12 V):** Testablauf über REST/MCP mit ODX aus diaggen – Session
+    Default/Extended, DIDs lesen (Software-Kennung, Seriennummer, Workspace, EcuConditions.supply 11 965 mV bei
+    11,98 V am Netzteil, Startzähler), Fehlerspeicher lesen; LedSelfTest antwortet ohne Entsperren korrekt mit
+    NRC 0x33. Entsperren und Schreiben noch nicht (Schlüssel liegt nicht im gemeinsamen Ordner).
 - **Anforderungen (0.59.3, FT-3, FP-22 d / FP-23 a / FP-24 a, 13.11.2026).**
   - Register: Einstellungen → Allgemein → „Anforderungsregister“, StrictDoc-Dateien direkt (z. B. neXtBSW
     `doc/requirements/safety/ssr.sdoc`, SSR und Klauseln) sowie CSV/Markdown-Tabellen für andere Projekte.

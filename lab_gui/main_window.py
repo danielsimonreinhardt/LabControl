@@ -39,7 +39,7 @@ import verbund_ids
 from control_tab import ControlTab
 from dashboard import DashboardWidget
 from dashboard_window import DashboardWindow
-from device_registry import DeviceRegistry
+from device_registry import KIND_DISPLAY, DeviceRegistry
 from device_worker import (
     REASON_WINDOW_CLOSE, SIM_BATTSIM_ID, SIM_CAN_ID, DeviceWorker, battsim_device_id, can_device_id,
 )
@@ -418,6 +418,9 @@ class MainWindow(QMainWindow):
         self._uds.configure(self._settings.dut_config, self._settings.simulation_mode)
         self._settings.dut_config_changed.connect(
             lambda cfg: self._uds.configure(cfg, self._settings.simulation_mode))
+        self._dut_name_applied = ""
+        self._settings.dut_config_changed.connect(
+            lambda _cfg: self._uds_known and self._apply_dut_name())
 
         self._thread.started.connect(self._worker.start)
         self._thread.start()
@@ -648,7 +651,19 @@ class MainWindow(QMainWindow):
         if not self._uds_known:
             self._uds_known = True
             self._registry.on_device_added("uds", UDS_DEVICE_ID)
+        self._apply_dut_name()
         self._set_uds_online(online)
+
+    def _apply_dut_name(self) -> None:
+        """Name aus Einstellungen -> Prüfling als Kachelname, solange die Kachel ihren automatischen Namen
+        ("Prüfling 1") oder den vorigen Prüflingsnamen traegt (0.61.3, am Evalboard gesehen)."""
+        name = self._settings.dut_config.get("name", "")
+        labels = {device_id: label for _kind, device_id, label in self._registry.known_devices()}
+        current = labels.get(UDS_DEVICE_ID, "")
+        automatic = re.fullmatch(re.escape(KIND_DISPLAY.get("uds", "uds")) + r" \d+", current) is not None
+        if name and current != name and (automatic or current == self._dut_name_applied):
+            self._registry.rename("uds", UDS_DEVICE_ID, name)
+        self._dut_name_applied = name
 
     def _set_uds_online(self, online: bool) -> None:
         self._set_online("uds", UDS_DEVICE_ID, online)
