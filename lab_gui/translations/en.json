@@ -880,5 +880,18 @@
   "Keine A2L geladen": "No A2L loaded",
   "Messgröße": "Measurement",
   "Parameter": "Parameter",
-  "nur lesbar": "read only"
+  "nur lesbar": "read only",
+  "Messliste (XCP):": "Measurement list (XCP):",
+  "Abfragerate:": "Polling rate:",
+  "Messliste stoppen": "Stop measurement list",
+  "Messliste abfragen": "Poll measurement list",
+  "Fehler: {error}": "Error: {error}",
+  "misst {n} Größen mit {rate:g} Hz": "measuring {n} quantities at {rate:g} Hz",
+  "Messliste: {n} Größen": "Measurement list: {n} quantities",
+  "keine Messliste": "no measurement list",
+  "… {n} weitere": "… {n} more",
+  "Messliste": "Measurement list",
+  "{n} Größen, {rate:g} Hz": "{n} quantities, {rate:g} Hz",
+  "Kein aktueller XCP-Wert für '{name}' (Messliste)": "No current XCP value for '{name}' (measurement list)",
+  "Fehler": "Error"
 }

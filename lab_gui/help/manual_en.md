@@ -580,7 +580,13 @@ time-window-limited ring buffer of the live charts.
   limits, read back afterwards). On connecting, LabControl compares the ECU's
   EPK with the A2L's; if they differ, nothing is read or written. Measuring by
   polling only (no DAQ), writing only from a testcase, not over the network.
-  Curves and maps are not supported yet.
+  Curves and maps are not supported yet. **Measurement list (XCP)**: A2L
+  names (comma-separated) and **polling rate** (default 10 Hz). The tile
+  "Device under test (XCP)" starts and stops polling and shows the values;
+  they also go to history and recording. In conditions (While/If) and
+  Monitor blocks "Device under test (XCP)" is a source (field: A2L name); a
+  testcase using it switches polling on for its duration. Polling loads the
+  ECU (no DAQ) and carries no ECU time stamps.
 - **Measuring instruments** ("Devices" tab): per device the type, serial
   number and firmware as reported when connecting (the HCS power supply has
   no firmware query), plus inventory number, calibration date and due date to

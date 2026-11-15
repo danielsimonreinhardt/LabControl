@@ -122,6 +122,12 @@ class Recorder(QObject):
         self._append(device_id, "voltage", voltage)
         self._append(device_id, "current", current)
 
+    @Slot(object)
+    def on_xcp_values(self, payload: dict) -> None:
+        """XCP-Messliste (FT-10, 0.64.3): Geraet "xcp:dut", Feld = A2L-Name."""
+        for name, value in (payload or {}).get("values", {}).items():
+            self._append("xcp:dut", name, float(value))
+
     def _append(self, device_id: str, field: str, value: float) -> None:
         if not self._active:
             return

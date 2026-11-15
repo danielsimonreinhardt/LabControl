@@ -77,9 +77,10 @@ logger = logging.getLogger(__name__)
 
 # Touch-Profil: Kurznamen fuer die Status-Chips oben (MainWindow._short_name, GUI-Review UX-1)
 STATUS_KIND_SHORT = {"psu": "NT", "load": "Last", "can": "CAN", "hil": "HIL", "picoscope": "Scope",
-                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL", "uds": "ECU"}
+                     "scpiscope": "Scope", "fg": "FG", "battsim": "BS", "jlink": "JL", "uds": "ECU", "xcp": "XCP"}
 # Pruefling (FT-1): ein festes Geraet fuer Kachel, Uebersicht und Statusleiste
 UDS_DEVICE_ID = "uds:dut"
+XCP_DEVICE_ID = "xcp:dut"     # Pruefling ueber XCP (FT-10, 0.64.3): Kachel mit Messliste
 STATUS_CHIP_HEIGHT = 28      # Touch-Profil
 STATUS_CHIP_HEIGHT_PC = 22   # PC: passt in die Statusleiste (PI-17/PI-18 a)
 SAFETY_ICONS = {"off": "mdi.shield-off-outline", "armed": "mdi.shield-check", "tripped": "mdi.shield-alert"}
@@ -294,6 +295,7 @@ class MainWindow(QMainWindow):
         self._wire_partner()
         self._wire_jlink()
         self._wire_uds_tile()
+        self._wire_xcp_tile()
         self._style_safety_banner()
         self._retranslate()
         self.testcase_tab.mark_clean()   # leerer Startzustand gilt als gespeichert (Laeufe ueber REST)
@@ -644,6 +646,61 @@ class MainWindow(QMainWindow):
         # CAN-Interface verbunden/getrennt: _on_can_connected ruft _update_uds_presence (eine eigene Verbindung
         # an can_connected kaeme hier zu spaet -- der simulierte Bus meldet sich schon beim Start des Workers)
         self._update_uds_presence()
+
+    # -- XCP-Kachel (FT-10, 0.64.3) -------------------------------------------------------------
+
+    def _wire_xcp_tile(self) -> None:
+        self._xcp_known = False
+        self._xcp_poll_state: dict = {}
+        self._xcp_last = ""
+        self.control_tab.xcp_polling_requested.connect(lambda on: self._xcp.set_polling("tile", on))
+        self._xcp.poll_state.connect(self._on_xcp_poll_state)
+        self._xcp.values_polled.connect(self._on_xcp_values)
+        self._xcp.values_polled.connect(self.timeline_tab.on_xcp_values)
+        self._xcp.values_polled.connect(self._recorder.on_xcp_values)
+        self._xcp.state_changed.connect(lambda _text: self._update_xcp_presence())
+        self._update_xcp_presence()
+
+    def _update_xcp_presence(self) -> None:
+        a2l = self._xcp.a2l()
+        if a2l is None:
+            if self._xcp_known:
+                self._set_xcp_online(False)
+            return
+        can_id = self._xcp.can_device()
+        online_can = self._online_devices.get("can", set())
+        online = can_id in online_can if can_id else len(online_can) == 1
+        if not self._xcp_known:
+            self._xcp_known = True
+            self._registry.on_device_added("xcp", XCP_DEVICE_ID)
+        self._set_xcp_online(online)
+
+    def _set_xcp_online(self, online: bool) -> None:
+        self._set_online("xcp", XCP_DEVICE_ID, online)
+        self.dashboard.set_xcp_online(XCP_DEVICE_ID, online)
+        self.control_tab.set_xcp_online(XCP_DEVICE_ID, online)
+        if not online:
+            self._xcp.set_polling("tile", False)
+        self._push_xcp_state()
+
+    def _on_xcp_poll_state(self, state: dict) -> None:
+        self._xcp_poll_state = dict(state)
+        self._push_xcp_state()
+
+    def _on_xcp_values(self, payload: dict) -> None:
+        values = payload.get("values", {})
+        if values:
+            name, value = next(iter(values.items()))
+            self._xcp_last = f"{name.rsplit('.', 1)[-1]} = {value:g}"
+        self.control_tab.set_xcp_values(XCP_DEVICE_ID, payload)
+        self.dashboard.update_xcp(XCP_DEVICE_ID, self._xcp_poll_state, self._xcp_last)
+
+    def _push_xcp_state(self) -> None:
+        a2l = self._xcp.a2l()
+        state = self._xcp_poll_state or {"active": False, "names": self._xcp.measure_names(),
+                                         "rate_hz": self._xcp.rate_hz(), "error": ""}
+        self.control_tab.set_xcp_state(XCP_DEVICE_ID, state, a2l.module if a2l is not None else "")
+        self.dashboard.update_xcp(XCP_DEVICE_ID, state, self._xcp_last)
 
     def _update_uds_presence(self) -> None:
         odx = self._uds.odx()
@@ -1234,6 +1291,10 @@ class MainWindow(QMainWindow):
                 self._set_online("uds", device_id, False)
                 self.dashboard.set_uds_online(device_id, False)
                 self.control_tab.set_uds_online(device_id, False)
+            elif kind == "xcp":
+                self._set_online("xcp", device_id, False)
+                self.dashboard.set_xcp_online(device_id, False)
+                self.control_tab.set_xcp_online(device_id, False)
             else:
                 self._on_can_connected(device_id, False)
 
@@ -1313,6 +1374,9 @@ class MainWindow(QMainWindow):
             section.voltage_limit_changed.connect(self._worker.set_battsim_voltage_limit)
         elif kind == "jlink":
             pass   # Kachel meldet ueber control_tab.jlink_action_requested (siehe _wire_jlink)
+        elif kind == "xcp":
+            if hasattr(self, "_xcp_poll_state"):
+                self._push_xcp_state()
         elif kind == "uds":
             # Befehle ueber control_tab.uds_command_requested (_wire_uds_tile); beim Wiederherstellen gespeicherter
             # Geraete (vor _wire_uds_tile) gibt es noch keinen Stand
@@ -2394,6 +2458,8 @@ class MainWindow(QMainWindow):
         self.control_tab.set_can_online(device_id, online)
         if hasattr(self, "_uds_state"):   # Pruefling haengt am CAN-Interface (FT-1, _wire_uds_tile)
             self._update_uds_presence()
+        if hasattr(self, "_xcp_poll_state"):   # ... ebenso XCP (FT-10, _wire_xcp_tile)
+            self._update_xcp_presence()
 
     @Slot(str, bool)
     def _on_hil_connected(self, device_id: str, online: bool) -> None:

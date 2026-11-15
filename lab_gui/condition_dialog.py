@@ -229,7 +229,7 @@ class ConditionDialog(QDialog):
         HIL-Messgroesse an (AIN1-4 vs. IN1-8) -- BUGS_GESCHLOSSEN.md #35."""
         kind = self._current_device_kind()
         is_hil = kind == "hil"
-        is_can = kind == "can"
+        is_can = kind in ("can", "xcp")   # CAN-Signal bzw. XCP-Messgroesse (FT-10) als Text
         m_form = self._measurement_page.layout()
         m_form.setRowVisible(self._field_combo, not is_can)
         m_form.setRowVisible(self._m_channel_spin, is_hil)
@@ -324,7 +324,7 @@ class ConditionDialog(QDialog):
         # gespeichertes cond_field="hil_ain" faende darin keinen Treffer.
         self._populate_field_combo()
         kind = self._current_device_kind()
-        if kind == "can":
+        if kind in ("can", "xcp"):
             self._m_can_signal_edit.setText(params.get("cond_field", ""))
         else:
             field_index = self._field_combo.findData(params.get("cond_field", "voltage"))
@@ -356,7 +356,8 @@ class ConditionDialog(QDialog):
             kind, device_id = _decode_device_key(self._device_combo.currentData())
             # CAN: freier Signalpfad statt Combo-Auswahl; microHIL: zusaetzlich
             # der Kanalindex -- beide BUGS_GESCHLOSSEN.md #35.
-            field = self._m_can_signal_edit.text().strip() if kind == "can" else self._field_combo.currentData()
+            field = (self._m_can_signal_edit.text().strip() if kind in ("can", "xcp")
+                     else self._field_combo.currentData())
             return TestStep(
                 cond_source="measurement", cond_device_kind=kind, cond_device_id=device_id,
                 cond_field=field, cond_op=self._m_op_combo.currentData(),

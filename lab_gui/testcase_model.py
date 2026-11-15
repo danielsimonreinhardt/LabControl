@@ -300,7 +300,7 @@ MEASUREMENT_DEVICE_KINDS = ("load", "psu")
 # _eval_can_condition) statt ueber _measurements wie load/psu, und sind
 # deshalb bewusst NICHT auch in MEASUREMENT_DEVICE_KINDS selbst (siehe
 # dessen Docstring).
-COND_DEVICE_KINDS = MEASUREMENT_DEVICE_KINDS + ("hil", "can")
+COND_DEVICE_KINDS = MEASUREMENT_DEVICE_KINDS + ("hil", "can", "xcp")
 
 # Alte Testablauf-Dateien speichern die Geraeteart noch unter dem Feldnamen
 # "device" mit den frueheren deutschen Anzeigenamen als Wert.
@@ -757,7 +757,7 @@ def condition_summary(step: TestStep) -> str:
             if step.cond_device_id
             else tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind))
         )
-        if step.cond_device_kind == "can":
+        if step.cond_device_kind in ("can", "xcp"):
             # cond_field ist hier kein fester Code, sondern der frei
             # eingegebene Signalpfad "Nachricht.Signal" (BUGS_GESCHLOSSEN.md
             # #35) -- bereits menschenlesbar, keine Uebersetzung/Einheit.
@@ -786,7 +786,7 @@ def monitor_source(step: TestStep, labels: dict | None = None) -> tuple[str, str
     labels: device_id -> Anzeigename (Bericht), sonst steht die Kennung da."""
     device = ((labels or {}).get(step.cond_device_id) or step.cond_device_id
               or tr("{kind} (automatisch)", kind=kind_label(step.cond_device_kind)))
-    if step.cond_device_kind == "can":
+    if step.cond_device_kind in ("can", "xcp"):   # Signalpfad bzw. A2L-Messgroesse als Text
         return f"{device}: {step.cond_field or '?'}", ""
     field_labels = COND_FIELD_LABELS if step.cond_device_kind != "hil" else HIL_CHECK_FIELD_LABELS
     field = tr(field_labels.get(step.cond_field, step.cond_field))

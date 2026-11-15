@@ -217,6 +217,8 @@ class TestRunner(QObject):
         # Table-Signale (str) werden nicht aufgenommen, sind als Bedingung
         # nicht sinnvoll vergleichbar.
         self._can_signals: dict[str, tuple[float, float]] = {}
+        # XCP-Messliste (FT-10, 0.64.3): A2L-Name -> (Wert, monotonic-Zeitstempel)
+        self._xcp_values: dict[str, tuple[float, float]] = {}
         # Zuletzt von einer Lese-Aktion (READ_ACTIONS -- microHIL oder
         # PicoScope) gelesener Wert -- anders als _measurements kein Cache
         # mehrerer Geraete/Kanaele, da immer nur EIN Lese-Schritt gleichzeitig
@@ -314,6 +316,15 @@ class TestRunner(QObject):
                 continue  # DBC-Value-Table-Enum, nicht sinnvoll vergleichbar
             self._can_signals[f"{device_id}:{decoded.message_name}.{sig.name}"] = (float(sig.value), now)
             self._feed_monitors(("can",), device_id, {f"{decoded.message_name}.{sig.name}": float(sig.value)})
+
+    @Slot(object)
+    def on_xcp_values(self, payload: dict) -> None:
+        """Abfrage der XCP-Messliste (XcpService.values_polled) -- Quelle fuer Bedingungen und Ueberwachen."""
+        now = monotonic()
+        values = {str(k): float(v) for k, v in (payload or {}).get("values", {}).items()}
+        for name, value in values.items():
+            self._xcp_values[name] = (value, now)
+        self._feed_monitors(("xcp",), "xcp:dut", values)
 
     @Slot(str, str)
     def on_device_removed(self, _kind: str, device_id: str) -> None:
@@ -815,6 +826,11 @@ class TestRunner(QObject):
                 return self._eval_hil_condition(step)
             if step.cond_device_kind == "can":
                 return self._eval_can_condition(step)
+            if step.cond_device_kind == "xcp":
+                entry = self._xcp_values.get(step.cond_field.strip())
+                if entry is None or (monotonic() - entry[1]) > MEASUREMENT_STALE_S:
+                    return None, tr("Kein aktueller XCP-Wert für '{name}' (Messliste)", name=step.cond_field)
+                return self._compare(entry[0], step.cond_op, step.cond_value), ""
             device_id = step.cond_device_id
             if device_id:
                 entry = self._measurements.get(device_id)

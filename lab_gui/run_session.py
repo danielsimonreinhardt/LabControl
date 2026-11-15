@@ -267,6 +267,14 @@ class RunSession(QObject):
     def set_xcp(self, xcp) -> None:
         self.xcp = xcp
         xcp.finished.connect(self._on_xcp_finished)
+        xcp.values_polled.connect(self.runner.on_xcp_values)
+
+    @staticmethod
+    def xcp_names_needed(steps: list[TestStep]) -> set[str]:
+        """XCP-Messgroessen, die Bedingungen und Ueberwachen-Bloecke eines Ablaufs lesen (FT-10, 0.64.3)."""
+        return {s.cond_field.strip() for s in steps if s.enabled and s.cond_device_kind == "xcp"
+                and s.cond_field.strip() and (s.step_type == "monitor"
+                                              or (s.step_type in ("while", "if") and s.cond_source == "measurement"))}
 
     @Slot(int, object)
     def _on_execute_xcp(self, _index: int, step: TestStep) -> None:
@@ -383,6 +391,9 @@ class RunSession(QObject):
                     self.worker, "open_picoscope_session", Qt.ConnectionType.BlockingQueuedConnection,
                     Q_ARG(str, device_id),
                 )
+        needed = self.xcp_names_needed(steps)
+        if needed and self.xcp is not None:   # XCP-Messliste fuer Bedingungen/Ueberwachen abfragen (0.64.3)
+            self.xcp.set_polling("run", True, needed)
         self.runner.start(steps, variables)
 
     # -- Aktionen ------------------------------------------------------------------
@@ -427,6 +438,8 @@ class RunSession(QObject):
         if not self._active:
             return
         self._active = False
+        if self.xcp is not None:
+            self.xcp.set_polling("run", False)
         # Reihenfolge wie frueher in MainWindow: Watchdog aus, PicoScope-Reconnect wieder frei, Netzwerk-
         # Sperre aus, DANN Sitzungen schliessen (der Worker arbeitet die Signale in dieser Reihenfolge ab)
         self.safety.end_run_supervision()

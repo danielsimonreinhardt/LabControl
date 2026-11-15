@@ -944,6 +944,23 @@ class TimelineTab(QWidget):
                 self._resolve_pending(key)
             self._record_value(series, float(sig.value))
 
+    @Slot(object)
+    def on_xcp_values(self, payload: dict) -> None:
+        """XCP-Messliste (FT-10, 0.64.3): je A2L-Messgroesse eine Reihe am Geraet "xcp:dut", wie CAN-Signale
+        erst zur Laufzeit bekannt."""
+        device_id = "xcp:dut"
+        units = (payload or {}).get("units", {})
+        for name, value in (payload or {}).get("values", {}).items():
+            key = signal_key(device_id, name)
+            series = self._series.get(key)
+            if series is None:
+                series = SignalSeries(device_id=device_id, kind="xcp", field=name,
+                                      device_label=self._device_labels.get(device_id, "XCP"),
+                                      unit=units.get(name, "") or "", color=self._next_color())
+                self._series[key] = series
+                self._resolve_pending(key)
+            self._record_value(series, float(value))
+
     # -- Diagramme: hinzufuegen/entfernen ---------------------------------------
 
     def _available_signals(self) -> list[SignalSeries]:

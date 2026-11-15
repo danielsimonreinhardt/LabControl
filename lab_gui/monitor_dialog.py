@@ -98,9 +98,9 @@ class MonitorDialog(ConditionDialog):
         m_form = self._measurement_page.layout()
         gap = mode == "can_gap"
         kind = self._current_device_kind()
-        m_form.setRowVisible(self._field_combo, not gap and kind != "can")
+        m_form.setRowVisible(self._field_combo, not gap and kind not in ("can", "xcp"))
         m_form.setRowVisible(self._m_channel_spin, not gap and kind == "hil")
-        m_form.setRowVisible(self._m_can_signal_edit, not gap and kind == "can")
+        m_form.setRowVisible(self._m_can_signal_edit, not gap and kind in ("can", "xcp"))
         m_form.setRowVisible(self._m_op_combo, mode == "reach")
         m_form.setRowVisible(self._m_value_spin, mode == "reach")
         form = self._extra.layout()

@@ -632,9 +632,15 @@ class Settings(QObject):
             except (TypeError, ValueError):
                 return 0
             return value if 0 <= value <= 0x1FFFFFFF else 0
+        def rate() -> float:
+            try:
+                value = float(stored.get("xcp_rate_hz", 10.0) or 10.0)
+            except (TypeError, ValueError):
+                return 10.0
+            return min(max(value, 0.5), 50.0)
         return {"name": text("name", 60), "can_device": text("can_device", 120), "odx": text("odx"),
                 "key": text("key", 64), "request_id": can_id("request_id"), "response_id": can_id("response_id"),
-                "a2l": text("a2l")}
+                "a2l": text("a2l"), "xcp_measure": text("xcp_measure", 4000), "xcp_rate_hz": rate()}
 
     def set_dut_config(self, **changes) -> None:
         current = self.dut_config

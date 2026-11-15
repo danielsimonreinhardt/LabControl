@@ -610,7 +610,13 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   den EPK des Steuergeräts mit dem der A2L; passt er nicht, wird nichts
   gelesen oder geschrieben. Messen nur per Abfrage (kein DAQ), Schreiben nur
   aus dem Testablauf, nicht über das Netzwerk. Kennlinien und Kennfelder
-  gehen noch nicht.
+  gehen noch nicht. **Messliste (XCP)**: A2L-Namen (durch Komma getrennt) und
+  **Abfragerate** (Vorgabe 10 Hz). Die Kachel „Prüfling (XCP)“ startet und
+  stoppt die Abfrage und zeigt die Werte; sie laufen zusätzlich in Verlauf
+  und Aufzeichnung. In Bedingungen (Solange/Wenn) und Überwachen-Blöcken ist
+  „Prüfling (XCP)“ eine Quelle (Feld: A2L-Name); ein Ablauf, der das nutzt,
+  schaltet die Abfrage für seine Dauer selbst ein. Die Abfrage belastet das
+  Steuergerät (kein DAQ) und hat keine Zeitstempel des Steuergeräts.
 - **Messmittel** (Reiter „Geräte“): je Gerät Typ, Seriennummer und Firmware,
   wie das Gerät sie beim Verbinden meldet (das HCS-Netzteil kennt keine
   Firmware-Abfrage), dazu Inventarnummer, Kalibrierdatum und Fälligkeit zum

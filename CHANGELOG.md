@@ -6,6 +6,15 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **XCP-Messliste und Kachel (0.64.3, FT-10).** Einstellungen → Prüfling: **Messliste (XCP)** (A2L-Namen) und
+  **Abfragerate** (Vorgabe 10 Hz, 0,5–50 Hz). `XcpService` fragt die Liste zyklisch ab, solange sie jemand braucht:
+  die neue Kachel **„Prüfling (XCP)“** (Start/Stopp, Werte, Fehler; Übersicht mit Zustand und letztem Wert) oder
+  ein Lauf, dessen Bedingungen bzw. Überwachen-Blöcke XCP-Messgrößen lesen – „Prüfling (XCP)“ ist dort jetzt eine
+  Quelle (Feld = A2L-Name), der Lauf schaltet die Abfrage für seine Dauer ein. Die Werte laufen außerdem in Verlauf
+  und Aufzeichnung (Gerät `xcp:dut`). Ein Lesefehler beendet die Abfrage mit Meldung. **Mock-verifiziert:** neue
+  Prüfung `tools/check_xcp_tile.py` (Kachel, ~10 Werte/s, Verlauf, Lauf mit XCP-Bedingung und Überwachen).
+
 ### Behoben
 - **XCP: Nullwerte erschienen als „-0“ (0.64.2, am Evalboard gesehen 14.11.2026).** Die RAT_FUNC-Umrechnung
   lieferte für 0 eine negative Null. **Mock-verifiziert:** `check_xcp`. **Hardware-verifiziert (PI-53 a,

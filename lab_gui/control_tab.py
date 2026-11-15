@@ -2802,6 +2802,8 @@ class ControlTab(QWidget):
     jlink_action_requested = Signal(str, str, str)
     # Pruefling-Kachel (FT-1): Befehl, Argumente -> MainWindow -> UdsService
     uds_command_requested = Signal(str, object)
+    # XCP-Kachel (FT-10, 0.64.3): Messliste abfragen ja/nein
+    xcp_polling_requested = Signal(bool)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
     # device_ids) -- MainWindow verdrahtet das mit Settings.
     # set_control_tile_order(), analog zu dashboard.py: panel_order_changed.
@@ -2948,6 +2950,10 @@ class ControlTab(QWidget):
         elif kind == "jlink":
             section = JLinkControlGroup(device_id, label)
             section.action_requested.connect(self.jlink_action_requested)
+        elif kind == "xcp":
+            from xcp_tile import XcpControlGroup   # Pruefling XCP (FT-10, 0.64.3)
+            section = XcpControlGroup(device_id, label)
+            section.polling_requested.connect(self.xcp_polling_requested)
         elif kind == "uds":
             from uds_tile import UdsControlGroup   # Pruefling (FT-1, 0.60.2)
             section = UdsControlGroup(device_id, label)
@@ -3559,6 +3565,20 @@ class ControlTab(QWidget):
 
     def set_uds_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_xcp_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)
+
+    def set_xcp_state(self, device_id: str, state: dict, module: str = "") -> None:
+        section = self._sections.get(device_id)
+        if section is not None and hasattr(section, "set_values"):
+            section.set_module(module)
+            section.set_state(state)
+
+    def set_xcp_values(self, device_id: str, payload: dict) -> None:
+        section = self._sections.get(device_id)
+        if section is not None and hasattr(section, "set_values"):
+            section.set_values(payload)
 
     def set_jlink_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)

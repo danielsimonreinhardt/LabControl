@@ -4,7 +4,9 @@ nicht diese Angaben."""
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import (
+    QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+)
 
 from i18n import tr
 from icons import IconButton
@@ -19,7 +21,7 @@ class DutEditor(QGroupBox):
         self._filling = False
         form = QFormLayout(self)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key", "a2l")}
+        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key", "a2l", "measure", "rate")}
         self._name = QLineEdit()
         self._name.setMinimumWidth(220)
         self._name.editingFinished.connect(self._emit)
@@ -52,6 +54,18 @@ class DutEditor(QGroupBox):
         a2l_row.addWidget(self._a2l, 1)
         a2l_row.addWidget(self._a2l_browse)
         form.addRow(self._labels["a2l"], a2l_row)
+        self._measure = QLineEdit()
+        self._measure.setMinimumWidth(320)
+        self._measure.setPlaceholderText("DemoSwc.MotorNtc_mV.MotorNtc_mV, PC_Command.Qlf")
+        self._measure.editingFinished.connect(self._emit)
+        form.addRow(self._labels["measure"], self._measure)
+        self._rate = QDoubleSpinBox()
+        self._rate.setRange(0.5, 50.0)
+        self._rate.setDecimals(1)
+        self._rate.setSuffix(" Hz")
+        self._rate.setValue(10.0)
+        self._rate.editingFinished.connect(self._emit)
+        form.addRow(self._labels["rate"], self._rate)
         self._status = QLabel()
         self._status.setWordWrap(True)
         form.addRow("", self._status)
@@ -61,7 +75,8 @@ class DutEditor(QGroupBox):
     def retranslate(self) -> None:
         self.setTitle(tr("Prüfling (UDS/XCP)"))
         for key, text in (("name", tr("Name:")), ("can", tr("CAN-Interface:")), ("odx", tr("ODX/PDX:")),
-                          ("key", tr("Schlüssel:")), ("a2l", tr("A2L (XCP):"))):
+                          ("key", tr("Schlüssel:")), ("a2l", tr("A2L (XCP):")), ("measure", tr("Messliste (XCP):")),
+                          ("rate", tr("Abfragerate:"))):
             self._labels[key].setText(text)
         self._odx.setToolTip(tr("Export von neXtBSW: python -m tools.diaggen pdx <projekt> -o <datei>.pdx; "
                                 "leer im Simulationsmodus = nachgebildetes Steuergerät"))
@@ -83,6 +98,8 @@ class DutEditor(QGroupBox):
         self._odx.setText(config.get("odx", ""))
         self._key.setText(config.get("key", ""))
         self._a2l.setText(config.get("a2l", ""))
+        self._measure.setText(config.get("xcp_measure", ""))
+        self._rate.setValue(float(config.get("xcp_rate_hz", 10.0) or 10.0))
         self._fill_can(config.get("can_device", ""))
         self._filling = False
 
@@ -120,4 +137,5 @@ class DutEditor(QGroupBox):
             return
         self.config_edited.emit({"name": self._name.text().strip(), "can_device": self._can.currentData() or "",
                                  "odx": self._odx.text().strip(), "key": self._key.text().strip(),
-                                 "a2l": self._a2l.text().strip()})
+                                 "a2l": self._a2l.text().strip(), "xcp_measure": self._measure.text().strip(),
+                                 "xcp_rate_hz": self._rate.value()})
