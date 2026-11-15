@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -427,6 +427,111 @@ class _ReadonlyCellOverlay(QWidget):
         super().mousePressEvent(event)
 
 
+class _RowDragHandler(QObject):
+    """Zeilen mit der Maus verschieben (1.0.1): an der Spalte "#" greifen, ziehen, loslassen.
+
+    Die Zellen-Widgets machen Qts eingebautes InternalMove unbrauchbar (es verschiebt nur Items). Deshalb
+    zeigt der Handler beim Ziehen nur eine Einfuegelinie und fuehrt beim Loslassen die Pfeil-Logik
+    (TestcaseTab._move_selected_row) so oft aus, bis die Zeile an der Luecke steht -- Bausteine wandern so
+    als Ganzes, fremde Bausteine werden uebersprungen, Mitgliederzeilen bleiben in ihrem Baustein.
+    """
+
+    AUTOSCROLL_PX = 24
+
+    def __init__(self, tab: "TestcaseTab", table: QTableWidget) -> None:
+        super().__init__(tab)
+        self._tab = tab
+        self._table = table
+        self._press_row = -1
+        self._press_pos = None
+        self._dragging = False
+        self._gap = -1
+        self._line = QFrame(table.viewport())
+        self._line.setFixedHeight(3)
+        self._line.hide()
+        self._line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        table.viewport().installEventFilter(self)
+
+    def is_dragging(self) -> bool:
+        return self._dragging
+
+    def gap(self) -> int:
+        return self._gap
+
+    def gap_at(self, y: int) -> int:
+        """Luecke (Einfuegeindex 0..rowCount) unter der Viewport-Hoehe y; eingeklappte Bausteine zaehlen als
+        eine Zeile."""
+        table = self._table
+        row = table.rowAt(y)
+        if row < 0:
+            return table.rowCount() if y >= 0 else 0
+        rect = table.visualRect(table.model().index(row, COL_NUM))
+        if y < rect.center().y():
+            return row
+        group = self._tab._group_at_header(row)
+        if group is not None and group.collapsed:
+            return group.start + group.count
+        return row + 1
+
+    def _gap_y(self, gap: int) -> int:
+        table = self._table
+        for row in range(min(gap, table.rowCount() - 1), -1, -1):
+            if table.isRowHidden(row):
+                continue
+            rect = table.visualRect(table.model().index(row, COL_NUM))
+            return rect.top() if row >= gap else rect.bottom() + 1
+        return 0
+
+    def _show_line(self) -> None:
+        self._line.setStyleSheet(f"background: {current_palette().accent}; border: none;")
+        self._line.setGeometry(0, self._gap_y(self._gap) - 1, self._table.viewport().width(), 3)
+        self._line.show()
+        self._line.raise_()
+
+    def _reset(self) -> None:
+        self._press_row = -1
+        self._press_pos = None
+        self._dragging = False
+        self._gap = -1
+        self._line.hide()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt-Override)
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            index = self._table.indexAt(event.position().toPoint())
+            self._reset()
+            if index.isValid() and index.column() == COL_NUM and self._table.isEnabled():
+                self._press_row = index.row()
+                self._press_pos = event.position().toPoint()
+            return False
+        if kind == QEvent.Type.MouseMove and self._press_row >= 0:
+            pos = event.position().toPoint()
+            if not self._dragging:
+                if (pos - self._press_pos).manhattanLength() < QApplication.startDragDistance():
+                    return False
+                self._dragging = True
+                self._table.selectRow(self._press_row)
+                self._table.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            bar = self._table.verticalScrollBar()
+            if pos.y() < self.AUTOSCROLL_PX:
+                bar.setValue(bar.value() - 1)
+            elif pos.y() > self._table.viewport().height() - self.AUTOSCROLL_PX:
+                bar.setValue(bar.value() + 1)
+            self._gap = self.gap_at(pos.y())
+            self._show_line()
+            return True
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            if not self._dragging:
+                self._reset()
+                return False
+            row, gap = self._press_row, self._gap
+            self._reset()
+            self._table.viewport().unsetCursor()
+            self._tab.move_row_to_gap(row, gap)
+            return True
+        return False
+
+
 class TestcaseTab(QWidget):
     run_requested = Signal()
     # FT-12 (PI-58 a): Debuggen
@@ -655,6 +760,7 @@ class TestcaseTab(QWidget):
         header.sectionResized.connect(lambda *_: self._apply_member_row_shifts())
         self._table.verticalScrollBar().valueChanged.connect(lambda *_: self._apply_member_row_shifts())
         layout.addWidget(self._table)
+        self._row_drag = _RowDragHandler(self, self._table)
 
         run_row = QHBoxLayout()
         # Nur Symbol wie die uebrige Werkzeugleiste (Review KN-5 b)
@@ -731,6 +837,7 @@ class TestcaseTab(QWidget):
 
     def _retranslate(self) -> None:
         self._table.setHorizontalHeaderLabels([tr(c) if c != "#" else c for c in BASE_COLUMNS])
+        self._table.horizontalHeaderItem(COL_NUM).setToolTip(tr("Zeile an der Nummer greifen und verschieben"))
         self._add_button.setToolTip(tr("Zeile hinzufügen"))
         self._remove_button.setToolTip(tr("Zeile entfernen"))
         self._up_button.setToolTip(tr("Nach oben"))
@@ -1755,6 +1862,29 @@ class TestcaseTab(QWidget):
         self._table.blockSignals(False)
         self._resync_selection()
         self._revalidate_structure()
+
+    def move_row_to_gap(self, row: int, gap: int) -> None:
+        """Ziehen mit der Maus (_RowDragHandler): Zeile bzw. Baustein (Kopfzeile) an die Luecke `gap`
+        (Einfuegeindex) bringen -- schrittweise ueber _move_selected_row, damit dieselben Regeln wie bei den
+        Pfeil-Knoepfen gelten. Endet, sobald die Luecke erreicht ist oder kein Schritt mehr moeglich ist."""
+        if not (0 <= row < self._table.rowCount()):
+            return
+        group = self._group_at_header(row)
+        count = group.count if group is not None else 1
+        if row <= gap <= row + count:
+            return
+        self._table.selectRow(row)
+        self._resync_selection()
+        offset = -1 if gap < row else 1
+        for _ in range(self._table.rowCount() + 1):
+            current = self._selected_row
+            if current < 0:
+                break
+            if (offset < 0 and current <= gap) or (offset > 0 and current + count >= gap):
+                break
+            self._move_selected_row(offset)
+            if self._selected_row == current:
+                break
 
     def _move_block(self, group: _BlockGroup, offset: int) -> None:
         """Verschiebt einen kompletten Baustein (Kopf- plus Mitgliederzeilen)

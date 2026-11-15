@@ -271,7 +271,8 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   row type (see below). Clicking the button itself inserts a new action
   step directly.
 - **"–" button**: removes the selected row.
-- **Up/down arrows**: move the selected row.
+- **Up/down arrows**: move the selected row. With the mouse: grab a row by its
+  number (column “#”) and drag it to the new position.
 - **Puzzle piece with plus** ("Save block…"): saves a selected,
   contiguous range of rows as a reusable **block** in its own file
   (folder `blocks/`). The dialog checks that the chosen range is

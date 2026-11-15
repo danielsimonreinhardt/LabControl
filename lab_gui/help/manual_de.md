@@ -285,7 +285,8 @@ ist), **Laden** und **Speichern**.
   einfügbaren Zeilentypen (siehe unten). Ein Klick auf den Button selbst
   fügt direkt einen neuen Aktionsschritt ein.
 - **„–“-Button**: entfernt die markierte Zeile.
-- **Pfeil hoch/runter**: verschiebt die markierte Zeile.
+- **Pfeil hoch/runter**: verschiebt die markierte Zeile. Mit der Maus geht es auch:
+  Zeile an der Nummer (Spalte „#“) greifen und an die neue Stelle ziehen.
 - **Puzzleteil mit Plus** („Baustein speichern…“): speichert einen
   markierten, zusammenhängenden Zeilenbereich als wiederverwendbaren
   **Baustein** in einer eigenen Datei (Ordner `blocks/`). Der Dialog

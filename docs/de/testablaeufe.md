@@ -34,7 +34,7 @@ Werkzeugleiste (Symbole, Name im Tooltip):
 | Knopf (Tooltip) | Wirkung |
 |---|---|
 | **Zeile hinzufügen** (+) | neuer Aktionsschritt hinter der markierten Zeile; der Pfeil daneben bietet **Aktionsschritt**, **Schleife (n×) … Ende**, **Solange … Ende**, **Wenn … Ende**, **Überwachen … Ende**, **Sonst**, **Ende**, **Variable setzen**, **Variable erhöhen**, **Warten** (Blöcke gleich mit „Ende“) |
-| **Zeile entfernen** (−), **Nach oben**, **Nach unten** | markierte Zeile entfernen bzw. verschieben |
+| **Zeile entfernen** (−), **Nach oben**, **Nach unten** | markierte Zeile entfernen bzw. verschieben; mit der Maus: Zeile an der Nummer (#) greifen und ziehen |
 | **Alle Zeilen löschen** | leert den Ablauf nach Rückfrage, nicht rückgängig zu machen |
 | **Baustein speichern…**, **Baustein einfügen…**, **Verknüpfung zum Baustein lösen** | siehe [Bausteine](#bausteine) |
 | Auswahlliste rechts, **Varianten bearbeiten…** | Variante für den nächsten Lauf oder „(keine Variante)“, siehe [Varianten](#varianten-und-parametersatze) |

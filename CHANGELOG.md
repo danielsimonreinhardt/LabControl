@@ -8,6 +8,14 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [1.0.1] – 2026-11-15
 
+### Hinzugefügt
+- **Ablaufzeilen mit der Maus verschieben.** Im Testablauf-Editor lässt sich eine Zeile an ihrer Nummer
+  (Spalte „#“) greifen und an eine neue Stelle ziehen; eine Linie zeigt beim Ziehen die Einfügestelle. Es gelten
+  dieselben Regeln wie bei den Pfeil-Knöpfen: ein Baustein wandert über seine Kopfzeile als Ganzes, eine Zeile
+  landet nie mitten in einem fremden Baustein, Mitgliederzeilen bleiben in ihrem Baustein. Ein Klick auf „#“ der
+  Kopfzeile klappt den Baustein weiter ein und aus. Mock-verifiziert (`check_row_drag`, echte Mausereignisse
+  offscreen); in der laufenden App am PC noch nicht ausprobiert.
+
 ### Behoben
 - **Falsche OVP/OCP-Warnung in der Kachel eines Partner-Netzteils.** Am PC zeigte die Kachel eines Netzteils am Pi
   „Spannung (12V) liegt über der OVP-Schwelle (1V) … Strom (0.5A) liegt über der OCP-Schwelle (0A)“, obwohl das

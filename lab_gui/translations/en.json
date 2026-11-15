@@ -1094,5 +1094,6 @@
   "Rolle": "Role",
   "Name": "Name",
   "Variante „{name}“ löschen?": "Delete variant “{name}”?",
-  "Kopie": "Copy"
+  "Kopie": "Copy",
+  "Zeile an der Nummer greifen und verschieben": "Grab a row by its number to move it"
 }
