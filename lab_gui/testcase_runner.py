@@ -122,6 +122,8 @@ class TestRunner(QObject):
     execute_can_send = Signal(str, int, str, bool)
     # device_id, Aktion, Datei -- J-Link (PI-31 a), ausgefuehrt vom JLinkService
     execute_jlink = Signal(str, str, str)
+    # Restbus (FT-6): device_id, Aktion, Botschaft, Signal, Wert (Text)
+    execute_restbus = Signal(str, str, str, str, str)
     # Schrittindex, TestStep -- UDS am Pruefling (FT-1), ausgefuehrt von RunSession/UdsService
     execute_uds = Signal(int, object)
     # Schrittindex, TestStep -- XCP am Pruefling (FT-10), ausgefuehrt von RunSession/XcpService
@@ -540,6 +542,12 @@ class TestRunner(QObject):
                     self._start_arb(step)
                 elif step.action == "CAN_SEND":
                     self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
+                elif step.action.startswith("RESTBUS_"):
+                    params = step.params or {}
+                    value = params.get("value", step.value)
+                    self.execute_restbus.emit(step.device_id, step.action, str(params.get("message", "")),
+                                              str(params.get("signal", "")),
+                                              f"{value:g}" if isinstance(value, (int, float)) else str(value))
                 elif step.device_kind == "jlink":
                     # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
                     self.execute_jlink.emit(step.device_id, step.action, step.file_path)

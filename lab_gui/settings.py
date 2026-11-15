@@ -71,6 +71,7 @@ class Settings(QObject):
     panel_colors_enabled_changed = Signal(bool)
     panel_color_changed = Signal(str, object)  # device_id, color_key (str | None)
     can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label/dbc_path
+    restbus_configs_changed = Signal(dict)  # FT-6: {can_id: {"dbc", "messages"}}
     # Ein grobes Signal statt sechs feinen (Praezedenzfall can_configs_changed):
     # der HTTP-Server hat EINEN Lebenszyklus, sechs getrennte Neustart-Pfade
     # waeren nur fehleranfaelliger. Traegt den kompletten Freigabe-Block.
@@ -667,6 +668,23 @@ class Settings(QObject):
         self._data["requirement_registers"] = clean
         self._save()
         self.requirement_registers_changed.emit(clean)
+
+    # -- Restbus je CAN-Interface (FT-6, can_bus/restbus.py) -------------------------
+
+    @property
+    def restbus_configs(self) -> dict:
+        """{can_id: {"dbc": Pfad oder "", "messages": [...]}}"""
+        stored = self._data.get("restbus")
+        return {str(k): dict(v) for k, v in stored.items() if isinstance(v, dict)} if isinstance(stored, dict) else {}
+
+    def set_restbus_config(self, can_id: str, config: dict) -> None:
+        configs = self.restbus_configs
+        if configs.get(can_id) == config:
+            return
+        configs[can_id] = dict(config)
+        self._data["restbus"] = configs
+        self._save()
+        self.restbus_configs_changed.emit(configs)
 
     # -- Variante fuer den naechsten Lauf (FT-5, variants.py) -------------------
 

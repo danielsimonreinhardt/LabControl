@@ -168,6 +168,7 @@ class RunSession(QObject):
     # An den DeviceWorker (Queued Connection in dessen Thread)
     dispatch_action = Signal(str, str, str, float, int)   # device_id, kind, action, value, channel
     dispatch_can_send = Signal(str, int, str, bool)
+    dispatch_restbus = Signal(str, str, str, str, str)   # FT-6: can_id, Aktion, Botschaft, Signal, Wert
     picoscope_test_running = Signal(bool)
     close_picoscope_sessions = Signal()
     # Lauf zu Ende (nachdem die Laufaufzeichnung ihr Ergebnis hat): outcome wie RunRecord.outcome
@@ -206,6 +207,8 @@ class RunSession(QObject):
         runner.setParent(self)
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
+        runner.execute_restbus.connect(self._on_execute_restbus)
+        self.dispatch_restbus.connect(worker.execute_restbus)
         runner.execute_uds.connect(self._on_execute_uds)
         runner.execute_xcp.connect(self._on_execute_xcp)
         self.xcp = None
@@ -461,6 +464,15 @@ class RunSession(QObject):
             return
         self._pending_switch = None
         self.dispatch_can_send.emit(resolved_id, arbitration_id, data_hex, extended)
+
+    @Slot(str, str, str, str, str)
+    def _on_execute_restbus(self, device_id: str, action: str, message: str, signal: str, value: str) -> None:
+        resolved_id, error = self.directory.resolve("can", device_id)
+        if resolved_id is None:
+            self.runner.on_action_completed(False, error, 0.0)
+            return
+        self._pending_switch = None
+        self.dispatch_restbus.emit(resolved_id, action, message, signal, value)
 
     @Slot(bool, str, float)
     def _on_action_completed(self, success: bool, message: str, value: float) -> None:

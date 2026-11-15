@@ -7,6 +7,23 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Restbus aus DBC mit E2E (0.67.0, FT-6, PI-56 c).** Je CAN-Interface ein Restbus: Botschaften aus der DBC
+  (eigene DBC-Angabe möglich, sonst die des Interfaces) zyklisch senden (Zyklus aus `GenMsgCycleTime`, änderbar),
+  Signale per Name und physikalischem Wert (Grenzen und Wertetabelle der DBC). E2E je Botschaft nach AUTOSAR
+  Profil **P01, P02, P11** (Data-ID-Modi BOTH/ALT/LOW/NIBBLE) oder nur Zähler, eigene Umsetzung in
+  `can_bus/e2e.py`, Angaben wie in neXtBSW `rte.yaml` (`can.qualifiers.<Botschaft>.e2e`) und von dort per Knopf
+  übernehmbar (gelesen mit dem Python des neXtBSW-Ordners). CAN-Kachel: **Restbus starten/stoppen** und
+  **„Restbus…“** (Botschaften wählen, Werte live setzen, E2E). Ablaufschritte am CAN-Interface: „Restbus
+  starten“, „Restbus stoppen“, „Restbus-Signal setzen“ (Wert auch aus einem Parameter, FT-5). ALLE AUS stoppt den
+  Restbus; beim Verbinden steht er, bis er gestartet wird. **Mock-verifiziert:** neue Prüfung
+  `tools/check_restbus.py` (Prüfwerte CRC8/CRC8H2F, Zähler und Data-ID-Varianten je Profil, Zyklen, Grenzen,
+  simulierter Bus, ALLE AUS, Abläufe, Editor, Ansicht, Kachel); die CRCs zusätzlich einmalig gegen das
+  neXtBSW-Referenzmodell gegengeprüft (15 000 Fälle, keine Abweichung; nichts davon im Repo).
+  **Hardware-verifiziert (15.11.2026, Evalboard am PC/A-CAN):** Restbus mit `EvalBoard.dbc`, `PC_Command`
+  (0x210, 100 ms) mit E2E P01 aus der `rte.yaml` des Demo-Projekts; Qualifier `PC_Command.Qlf` am Board über XCP:
+  vor dem Start 8 (QLF_ERROR_TIMEOUT), mit Restbus 1 (QLF_OK, auch nach „Restbus-Signal setzen“ Setpoint_mV =
+  4000), nach dem Stopp wieder 8 – Ablauf „PI-56 Restbus PC_Command Evalboard“, Exit 0. Gegenprobe mit falscher
+  Data ID 0x0211: 4 (QLF_ERROR_CRC), Ablauf „PI-56 Restbus falsche Data ID“.
 - **Varianten und Parametersätze (0.66.0, FT-5, PI-55 a).** Variantendateien im gemeinsamen Ordner
   `varianten/` (`{"name", "description", "roles": {Rolle: Geräte-ID}, "vars": {Name: Zahl}}`), bearbeitet über
   den neuen Knopf **„Varianten bearbeiten…“** in der Ablauf-Leiste (Liste, Rollen mit Geräteauswahl, Parameter).

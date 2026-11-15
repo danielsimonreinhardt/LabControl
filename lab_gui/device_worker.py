@@ -48,6 +48,7 @@ from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE
 from can_bus.mock import MockCanBus
 from can_bus.dbc import DbcError, decode_frame, load_dbc
 from can_bus.node import CanNode, CanScheduler
+from can_bus.restbus import RestbusError, RestbusNode
 from battsim.driver import (
     CELL_COUNT as BATTSIM_CELL_COUNT,
     CONTROL_ID as BATTSIM_CONTROL_ID,
@@ -447,6 +448,8 @@ class DeviceWorker(QObject):
     can_connected = Signal(str, bool)        # device_id, online
     # PI-54 (0.65.0): CAN-Kanal fuer canflash freigegeben (True) bzw. wieder geoeffnet (False)
     can_hold_changed = Signal(str, bool)
+    # FT-6 (PI-56 c): Restbus eines Interfaces {"running", "errors", "messages": {...}}
+    restbus_state = Signal(str, dict)
     # device_id, Fehlertext -- ein konfiguriertes CAN-Interface konnte (noch)
     # nicht verbunden werden bzw. wurde waehrend des Betriebs getrennt (siehe
     # _reconnect_can()/_poll()). Vorher landete das AUSSCHLIESSLICH im
@@ -586,6 +589,12 @@ class DeviceWorker(QObject):
         self._can_schedulers: dict[str, CanScheduler] = {}
         # PI-54: Kanaele, die gerade ein anderes Programm (canflash) braucht -- nicht wieder verbinden
         self._can_held: set[str] = set()
+        # FT-6: Restbus je Interface (Einstellungen "restbus"), Knoten am CanScheduler wie der Batterie-Simulator
+        self._restbus_configs: dict[str, dict] = {}
+        self._restbus: dict[str, RestbusNode] = {}
+        self._restbus_dbc: dict[str, str] = {}
+        self._restbus_problems: dict[str, list[str]] = {}
+        self._restbus_emitted = 0.0
         self._battsims: dict[str, BattSim] = {}
         self._battsim_bus: dict[str, str] = {}      # battsim-ID -> CAN-Interface-ID
         self._battsim_online: dict[str, bool] = {}
@@ -819,6 +828,125 @@ class DeviceWorker(QObject):
     # can_bus/README.md: keine sichere Autodiscovery ohne bekannte Bitrate).
 
     @Slot(list)
+    # -- Restbus (FT-6, PI-56 c) ----------------------------------------------------------------
+
+    @Slot(dict)
+    def set_restbus_configs(self, configs: dict) -> None:
+        self._restbus_configs = {str(k): dict(v or {}) for k, v in (configs or {}).items()}
+        for can_id in set(self._can_buses) | set(self._restbus):
+            self._sync_restbus(can_id)
+
+    def _restbus_db_path(self, can_id: str) -> str:
+        path = (self._restbus_configs.get(can_id) or {}).get("dbc") or ""
+        if not path:
+            for cfg in self._can_configs:
+                if can_device_id(cfg) == can_id:
+                    path = cfg.get("dbc_path") or ""
+        return path
+
+    def _sync_restbus(self, can_id: str) -> None:
+        """Restbus-Knoten an ein offenes Interface haengen bzw. neu konfigurieren (laeuft danach weiter, wenn er
+        lief; ein neu angehaengter Knoten steht, bis er gestartet wird)."""
+        config = self._restbus_configs.get(can_id) or {}
+        node = self._restbus.get(can_id)
+        if can_id not in self._can_buses or not config.get("messages"):
+            if node is not None:
+                self._drop_restbus(can_id)
+            self._restbus_problems.pop(can_id, None)
+            self._emit_restbus(can_id)
+            return
+        path = self._restbus_db_path(can_id)
+        if node is not None and self._restbus_dbc.get(can_id) != path:
+            self._drop_restbus(can_id)
+            node = None
+        if node is None:
+            try:
+                db = self._can_dbcs.get(can_id) if path and path == self._can_dbc_paths.get(can_id) else \
+                    (load_dbc(path) if path else None)
+            except DbcError as exc:
+                db = None
+                self._restbus_problems[can_id] = [str(exc)]
+            if db is None:
+                self._restbus_problems.setdefault(can_id, ["Keine DBC für den Restbus"])
+                self._emit_restbus(can_id)
+                return
+            node = RestbusNode(db)
+            self._restbus[can_id] = node
+            self._restbus_dbc[can_id] = path
+            scheduler = self._can_schedulers.get(can_id)
+            if scheduler is None:
+                scheduler = CanScheduler(self._can_buses[can_id], name=can_id)
+                self._can_schedulers[can_id] = scheduler
+            scheduler.attach(node)
+            logger.info("Restbus an %s angehaengt (%s)", can_id, path)
+        self._restbus_problems[can_id] = node.configure(config)
+        for problem in self._restbus_problems[can_id]:
+            logger.warning("Restbus %s: %s", can_id, problem)
+        self._emit_restbus(can_id)
+
+    def _drop_restbus(self, can_id: str) -> None:
+        node = self._restbus.pop(can_id, None)
+        self._restbus_dbc.pop(can_id, None)
+        scheduler = self._can_schedulers.get(can_id)
+        if node is not None and scheduler is not None:
+            scheduler.detach(node, send_shutdown=False)
+            if not scheduler.nodes:
+                scheduler.stop(send_shutdown=False)
+                del self._can_schedulers[can_id]
+
+    def _emit_restbus(self, can_id: str) -> None:
+        node = self._restbus.get(can_id)
+        state = node.state() if node is not None else {"running": False, "messages": {}, "errors": [],
+                                                       "tx_error": ""}
+        state["errors"] = list(dict.fromkeys(self._restbus_problems.get(can_id, []) + state.get("errors", [])))
+        state["available"] = node is not None
+        self.restbus_state.emit(can_id, state)
+
+    def _restbus_do(self, can_id: str, command: str, message: str, signal: str, value: str) -> str:
+        """Befehl an den Restbus; "" = ok, sonst die Meldung."""
+        node = self._restbus.get(can_id)
+        if node is None:
+            problems = self._restbus_problems.get(can_id) or ["kein Restbus eingerichtet"]
+            return f"Restbus {can_id}: {problems[0]}"
+        try:
+            if command in ("start", "RESTBUS_START"):
+                node.set_running(True)
+            elif command in ("stop", "RESTBUS_STOP"):
+                node.set_running(False)
+            elif command in ("set", "RESTBUS_SET"):
+                node.set_signal(message, signal, value)
+            elif command in ("enable", "disable"):
+                node.set_enabled(message, command == "enable")
+            else:
+                return f"Restbus: Befehl {command} unbekannt"
+        except RestbusError as exc:
+            return f"Restbus: {exc}"
+        return ""
+
+    @Slot(str, str, str, str, str)
+    def restbus_command(self, can_id: str, command: str, message: str, signal: str, value: str) -> None:
+        """Kachel/Restbus-Ansicht (wie Bedienung von Hand, mit Log-Eintrag)."""
+        error = self._restbus_do(can_id, command, message, signal, value)
+        target = f" {message}.{signal}={value}" if command == "set" else (f" {message}" if message else "")
+        if error:
+            logger.warning("Restbus %s %s%s -> %s", can_id, command, target, error)
+            problems = self._restbus_problems.setdefault(can_id, [])
+            if error not in problems:
+                problems.append(error)
+                del problems[:-5]
+        else:
+            logger.info("Restbus %s %s%s", can_id, command, target)
+        self._emit_restbus(can_id)
+
+    @Slot(str, str, str, str, str)
+    def execute_restbus(self, device_id: str, action: str, message: str, signal: str, value: str) -> None:
+        """Ablaufschritt (Ergebnis ueber action_completed)."""
+        error = self._restbus_do(device_id, action, message, signal, value)
+        logger.info("Restbus %s %s %s.%s=%s (Testablauf) -> %s", device_id, action, message, signal, value,
+                    error or "ok")
+        self._emit_restbus(device_id)
+        self.action_completed.emit(not error, error, 0.0)
+
     @Slot(str, bool)
     def hold_can(self, device_id: str, on: bool) -> None:
         """CAN-Kanal fuer ein anderes Programm freigeben (canflash, PI-54) bzw. wieder oeffnen. Knoten am Bus
@@ -1036,6 +1164,7 @@ class DeviceWorker(QObject):
         self.device_added.emit("can", SIM_CAN_ID)
         self.can_connected.emit(SIM_CAN_ID, True)
         self._sync_can_nodes(SIM_CAN_ID)
+        self._sync_restbus(SIM_CAN_ID)
 
     # -- CAN-Lese-Thread (CanReader, 0.57.1) -----------------------------------
 
@@ -1152,6 +1281,9 @@ class DeviceWorker(QObject):
         oder ist ausgefallen). Abschiedsframes nur, wenn der Bus noch geht."""
         for battsim_id in [b for b, c in self._battsim_bus.items() if c == can_id]:
             self._drop_battsim(battsim_id, send_shutdown=send_shutdown)
+        if self._restbus.pop(can_id, None) is not None:     # FT-6: Restbus endet mit dem Interface
+            self._restbus_dbc.pop(can_id, None)
+            self._emit_restbus(can_id)
         scheduler = self._can_schedulers.pop(can_id, None)
         if scheduler is not None:
             scheduler.stop(send_shutdown=send_shutdown)
@@ -1520,6 +1652,7 @@ class DeviceWorker(QObject):
             self.device_added.emit("can", device_id)
             self.can_connected.emit(device_id, True)
             self._sync_can_nodes(device_id)
+            self._sync_restbus(device_id)
 
     def _reload_can_dbcs(self) -> None:
         """Haelt self._can_dbcs/self._can_dbc_paths mit der aktuellen
@@ -2054,6 +2187,11 @@ class DeviceWorker(QObject):
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []
+        for can_id, node in list(self._restbus.items()):   # FT-6: Restbus kann den Pruefling ansteuern
+            if node.running:
+                node.set_running(False)
+                logger.info("Restbus %s gestoppt (ALLE AUS)", can_id)
+                self._emit_restbus(can_id)
         for device_id, load in list(self._loads.items()):
             try:
                 if not self._kill_load(device_id, load):

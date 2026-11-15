@@ -138,6 +138,8 @@ def resolve_refs(step, variables: dict[str, float]) -> str:
         if name not in variables:
             return tr("Parameter '{name}' ist nicht gesetzt", name=name)
         setattr(step, attr, float(variables[name]))
+        if attr == "value" and "value" in (step.params or {}):
+            step.params = {**step.params, "value": float(variables[name])}   # Restbus-Signal (FT-6)
     return ""
 
 

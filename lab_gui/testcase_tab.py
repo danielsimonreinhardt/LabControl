@@ -1201,10 +1201,19 @@ class TestcaseTab(QWidget):
         uds_button = IconButton("mdi.car-connected", tr("UDS-Parameter…"))
         uds_layout.addWidget(uds_label, 1)
         uds_layout.addWidget(uds_button)
-        uds_page._params = dict(step.params) if step.device_kind in ("uds", "xcp") else {}
+        uds_page._params = dict(step.params) if step.device_kind in ("uds", "xcp") \
+            or step.action == "RESTBUS_SET" else {}
 
         def refresh_uds_label() -> None:
-            # dieselbe Seite fuer UDS (FT-1) und XCP (FT-10): Zusammenfassung + Knopf fuer den Dialog
+            # dieselbe Seite fuer UDS (FT-1), XCP (FT-10) und Restbus (FT-6): Zusammenfassung + Knopf
+            if (action_combo.currentData() or "") == "RESTBUS_SET":
+                from types import SimpleNamespace
+
+                from testcase_model import restbus_summary
+                uds_label.setText(restbus_summary(SimpleNamespace(action="RESTBUS_SET", params=uds_page._params,
+                                                                  value=0.0)))
+                uds_button.setToolTip(tr("Restbus-Signal…"))
+                return
             if (action_combo.currentData() or "").startswith("XCP_"):
                 import xcp_steps
                 uds_label.setText(xcp_steps.summary(action_combo.currentData() or "", uds_page._params) or "–")
@@ -1216,7 +1225,12 @@ class TestcaseTab(QWidget):
 
         def open_uds_dialog() -> None:
             action = action_combo.currentData() or ""
-            if action.startswith("XCP_"):
+            if action == "RESTBUS_SET":
+                from restbus_dialog import RestbusStepDialog
+                provider = getattr(self, "_restbus_db_provider", None)
+                device_id = _parse_device_key(device_combo.currentData())[1]
+                dialog = RestbusStepDialog(uds_page._params, provider(device_id) if provider else None, self)
+            elif action.startswith("XCP_"):
                 from xcp_step_dialog import XcpStepDialog
                 dialog = XcpStepDialog(action, uds_page._params, self._xcp_a2l(), self)
             else:
@@ -1450,6 +1464,9 @@ class TestcaseTab(QWidget):
             elif code == "CAN_SEND":
                 refresh_can_summary()
                 value_stack.setCurrentIndex(2)
+            elif code == "RESTBUS_SET":
+                refresh_uds_label()
+                value_stack.setCurrentIndex(6)
             elif kind in ("hil", "fg", "battsim"):
                 channels = HIL_CHANNEL_COUNTS.get(code, 8)
                 hil_channel_spin.setRange(1, max(1, channels))
@@ -2198,7 +2215,7 @@ class TestcaseTab(QWidget):
             # params["monitor"] pflegt der Dialog der Zeile; er ist massgeblich (andere params bleiben)
             step.params = {**step.params, "monitor": dict(self._table.cellWidget(row, COL_VALUE)._cond_params
                                                              .get("monitor") or {})}
-        if step_type == STEP_TYPE_ACTION and step.device_kind in ("uds", "xcp"):
+        if step_type == STEP_TYPE_ACTION and (step.device_kind in ("uds", "xcp") or step.action == "RESTBUS_SET"):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
             step.params = dict(getattr(uds_page, "_params", {}))
@@ -2213,6 +2230,10 @@ class TestcaseTab(QWidget):
             if refs:
                 step.params["refs"] = refs
         return step
+
+    def set_restbus_db_provider(self, provider) -> None:
+        """Restbus (FT-6): (can_id) -> cantools-Datenbank oder None (Auswahl im Schrittdialog)."""
+        self._restbus_db_provider = provider
 
     def set_xcp_a2l_provider(self, provider) -> None:
         """XCP (FT-10): () -> A2l des Prueflings oder None (Objektauswahl im XCP-Dialog)."""
@@ -2683,6 +2704,9 @@ class TestcaseTab(QWidget):
         text = f"{device} – {action_label(step.device_kind, step.action)}"
         if step.action == "CAN_SEND":
             text += f" (0x{step.can_id:X}: {step.can_data or '–'})"
+        elif step.action == "RESTBUS_SET":
+            from testcase_model import restbus_summary
+            text += f" ({restbus_summary(step)})"
         elif not is_arb_action(step.action) and step.value:
             text += f" ({step.value:g})"
         if step.duration and step.step_type == STEP_TYPE_ACTION:
@@ -3023,6 +3047,9 @@ class TestcaseTab(QWidget):
         elif step.action == "CAN_SEND":
             id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
             detail = f"ID {id_text}: {step.can_data or '–'}"
+        elif step.action.startswith("RESTBUS_"):
+            from testcase_model import restbus_summary
+            detail = restbus_summary(step)
         elif step.device_kind == "hil":
             if step.action == "HIL_AOUT":
                 detail = tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)

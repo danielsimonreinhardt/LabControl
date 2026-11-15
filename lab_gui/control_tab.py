@@ -1662,6 +1662,8 @@ class CanControlGroup(QGroupBox):
     send_frame = Signal(str, int, str, bool)  # device_id, arbitration_id, data (Hex-String), extended
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    restbus_run_requested = Signal(str, bool)   # FT-6: device_id, an/aus
+    restbus_open_requested = Signal(str)        # FT-6: Restbus-Ansicht oeffnen
 
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
@@ -1758,10 +1760,19 @@ class CanControlGroup(QGroupBox):
         self._clear_button.clicked.connect(self.clear_traffic)
         # Touch-Profil: kurze Texte statt Tooltips
         # Am Pi ohne Text, nur Symbol wie am PC (Review KN-8 b)
+        # Restbus aus DBC (FT-6, PI-56 c): starten/stoppen und Ansicht (Botschaften, Werte, E2E)
+        self._restbus_button = IconButton("mdi.bus-multiple", "")
+        self._restbus_button.setCheckable(True)
+        self._restbus_button.toggled.connect(lambda on: self.restbus_run_requested.emit(self._device_id, on))
+        self._restbus_edit_button = IconButton("mdi.tune-variant", "")
+        self._restbus_edit_button.clicked.connect(lambda: self.restbus_open_requested.emit(self._device_id))
+        self._restbus_state: dict = {}
         view_row = QHBoxLayout()
         view_row.addWidget(self._delta_button)
         view_row.addWidget(self._clear_button)
         view_row.addStretch(1)
+        view_row.addWidget(self._restbus_button)
+        view_row.addWidget(self._restbus_edit_button)
         outer.addLayout(view_row)
         outer.addWidget(self._table_stack, 1)
 
@@ -1787,6 +1798,26 @@ class CanControlGroup(QGroupBox):
         )
         self._reset_column_widths()
         self._clear_button.setToolTip(tr("Anzeige leeren"))
+        self._restbus_edit_button.setToolTip(tr("Restbus…"))
+        self.set_restbus_state(self._restbus_state)
+
+    def set_restbus_state(self, state: dict) -> None:
+        """Zustand des Restbus dieses Interfaces (DeviceWorker.restbus_state)."""
+        self._restbus_state = dict(state or {})
+        running = bool(self._restbus_state.get("running"))
+        self._restbus_button.blockSignals(True)
+        self._restbus_button.setChecked(running)
+        self._restbus_button.blockSignals(False)
+        self._restbus_button.setEnabled(bool(self._restbus_state.get("available")))
+        count = sum(1 for m in (self._restbus_state.get("messages") or {}).values() if m.get("enabled"))
+        if not self._restbus_state.get("available"):
+            tip = tr("Restbus: keine Botschaften eingerichtet")
+        elif running:
+            tip = tr("Restbus stoppen ({n} Botschaften)", n=count)
+        else:
+            tip = tr("Restbus starten ({n} Botschaften)", n=count)
+        errors = self._restbus_state.get("errors") or []
+        self._restbus_button.setToolTip(tip + ("\n" + "\n".join(errors[-3:]) if errors else ""))
 
     def _on_extended_toggled(self, extended: bool) -> None:
         self._id_spin.setRange(0, CAN_EXTENDED_ID_MAX if extended else CAN_STANDARD_ID_MAX)
@@ -2803,6 +2834,8 @@ class ControlTab(QWidget):
     # Pruefling-Kachel (FT-1): Befehl, Argumente -> MainWindow -> UdsService
     uds_command_requested = Signal(str, object)
     # XCP-Kachel (FT-10, 0.64.3): Messliste abfragen ja/nein
+    restbus_run_requested = Signal(str, bool)   # FT-6: can_id, an/aus
+    restbus_open_requested = Signal(str)        # FT-6: can_id
     xcp_polling_requested = Signal(bool)
     # Neue Kachel-Reihenfolge nach einem Drag&Drop im Raster (Liste von
     # device_ids) -- MainWindow verdrahtet das mit Settings.
@@ -2962,6 +2995,8 @@ class ControlTab(QWidget):
                 section.set_odx(self._uds_odx)
         else:
             section = CanControlGroup(device_id, label)
+            section.restbus_run_requested.connect(self.restbus_run_requested)
+            section.restbus_open_requested.connect(self.restbus_open_requested)
         # Sofort in den Raster-Container haengen: ohne Eltern wird eine Sektion
         # beim setVisible(True) in _set_online kurz ein eigenes Fenster, und das
         # spaetere addWidget haengt sie um -- was sie wieder versteckt, bis Qt
@@ -3568,6 +3603,11 @@ class ControlTab(QWidget):
 
     def set_xcp_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_restbus_state(self, device_id: str, state: dict) -> None:
+        section = self._sections.get(device_id)
+        if isinstance(section, CanControlGroup):
+            section.set_restbus_state(state)
 
     def set_xcp_state(self, device_id: str, state: dict, module: str = "") -> None:
         section = self._sections.get(device_id)

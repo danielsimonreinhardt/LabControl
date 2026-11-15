@@ -169,6 +169,7 @@ class _Rig:
         self.worker.can_hold_changed.connect(self.flasher.on_can_hold_changed)
         self.flasher.progress.connect(lambda _r, _p, line: _say(f"  {line.strip()}"))
         self.session.set_flasher(self.flasher)
+        self.worker.set_restbus_configs(settings.restbus_configs)   # FT-6: vor dem Start, noch kein Thread
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 

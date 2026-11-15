@@ -39,7 +39,24 @@ PSU_ACTIONS = {
 
 CAN_ACTIONS = {
     "CAN_SEND": "CAN-Frame senden",
+    # Restbus aus DBC (FT-6, PI-56 c): Botschaften/E2E stehen in den Einstellungen des Interfaces,
+    # RESTBUS_SET traegt Botschaft, Signal und Wert in params (Wert auch aus einem Parameter, FT-5)
+    "RESTBUS_START": "Restbus starten",
+    "RESTBUS_STOP": "Restbus stoppen",
+    "RESTBUS_SET": "Restbus-Signal setzen",
 }
+RESTBUS_ACTIONS = ("RESTBUS_START", "RESTBUS_STOP", "RESTBUS_SET")
+
+
+def restbus_summary(step) -> str:
+    """Kurztext eines Restbus-Schritts fuer Editor, Ablaufansicht und Bericht."""
+    if step.action != "RESTBUS_SET":
+        return "–"
+    p = step.params or {}
+    value = p.get("value", step.value)
+    value_text = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+    ref = ((p.get("refs") or {}).get("value"))
+    return f"{p.get('message', '?')}.{p.get('signal', '?')} = " + (f"⟨{ref}⟩" if ref else value_text)
 
 # microHIL-Aktionen (siehe microhil/driver.py). Jede Aktion bezieht sich auf
 # genau EINEN Kanal (device_worker.MicroHIL-Methoden nehmen alle einen
@@ -321,7 +338,7 @@ _LEGACY_DEVICE_KIND = {"Last": "load", "Netzteil": "psu"}
 VALUELESS_ACTIONS = {
     "OUT_ON", "OUT_OFF", "PSU_OUT_ON", "PSU_OUT_OFF",
     "ARB", "PSU_ARB",
-    "CAN_SEND",
+    "CAN_SEND", "RESTBUS_START", "RESTBUS_STOP", "RESTBUS_SET",
     "HIL_OUT_ON", "HIL_OUT_OFF", "HIL_RELAY_ON", "HIL_RELAY_OFF",
     "HIL_IN_READ", "HIL_AIN_READ",
     "PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS",
@@ -354,6 +371,9 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "ARB": ("", 0, 0),
     "PSU_ARB": ("", 0, 0),
     "CAN_SEND": ("", 0, 0),
+    "RESTBUS_START": ("", 0, 0),
+    "RESTBUS_STOP": ("", 0, 0),
+    "RESTBUS_SET": ("", 0, 0),
     "HIL_OUT_ON": ("", 0, 0),
     "HIL_OUT_OFF": ("", 0, 0),
     "HIL_RELAY_ON": ("", 0, 0),

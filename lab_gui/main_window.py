@@ -117,6 +117,8 @@ class MainWindow(QMainWindow):
     # demselben Grund wie _dispatch_share_action (Queued Connection in den
     # Worker-Thread).
     _request_all_off = Signal(str)  # reason
+    _restbus_cmd = Signal(str, str, str, str, str)   # FT-6: an DeviceWorker.restbus_command
+    _restbus_push = Signal(dict)                     # FT-6: Restbus-Einstellungen an den Worker
     # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
     _request_devices_off = Signal(list, str)
     # PI-28: Partner fuehrt einen Batterie-Simulator -> hier kein 0x130 von Hand/aus Ablaeufen
@@ -420,6 +422,17 @@ class MainWindow(QMainWindow):
         self._uds.configure(self._settings.dut_config, self._settings.simulation_mode)
         self._settings.dut_config_changed.connect(
             lambda cfg: self._uds.configure(cfg, self._settings.simulation_mode))
+        # Restbus aus DBC (FT-6, PI-56 c): Einstellungen -> Worker, Kachel/Ansicht -> Worker -> Kachel/Ansicht
+        self._restbus_dialogs: dict = {}
+        self._restbus_states: dict[str, dict] = {}
+        self._restbus_cmd.connect(self._worker.restbus_command)
+        self._restbus_push.connect(self._worker.set_restbus_configs)
+        self._settings.restbus_configs_changed.connect(self._worker.set_restbus_configs)
+        self._restbus_push.emit(self._settings.restbus_configs)
+        self._worker.restbus_state.connect(self._on_restbus_state)
+        self.control_tab.restbus_run_requested.connect(
+            lambda can_id, on: self._restbus_cmd.emit(can_id, "start" if on else "stop", "", "", ""))
+        self.control_tab.restbus_open_requested.connect(self._open_restbus)
         # Flashen ueber CAN (PI-54): canflash als Unterprozess, der Worker gibt den Kanal dafuer frei
         from canflash_service import CanFlashService
         self._flasher = CanFlashService(self)
@@ -760,6 +773,53 @@ class MainWindow(QMainWindow):
         self._uds_state.update(busy=True, last=tr("läuft …"))
         self._push_uds_state()
         self._uds_tile_requests[self._uds.submit(command, dict(args or {}))] = (command, dict(args or {}))
+
+    # -- Restbus (FT-6) -----------------------------------------------------------------------------
+
+    def _on_restbus_state(self, can_id: str, state: dict) -> None:
+        self._restbus_states[can_id] = dict(state)
+        self.control_tab.set_restbus_state(can_id, state)
+        dialog = self._restbus_dialogs.get(can_id)
+        if dialog is not None:
+            dialog.set_state(state)
+
+    def _open_restbus(self, can_id: str) -> None:
+        from restbus_dialog import RestbusDialog
+        dialog = self._restbus_dialogs.get(can_id)
+        if dialog is not None:
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        interface = next((c for c in self._settings.can_configs
+                          if f"can:{c.get('interface')}:{c.get('channel')}" == can_id), {})
+        interface_dbc = interface.get("dbc_path") or ""
+        dut = self._settings.dut_config
+        label = interface.get("label") or can_id
+        dialog = RestbusDialog(can_id, label, self._settings.restbus_configs.get(can_id, {}), interface_dbc,
+                               (dut.get("nextbsw_dir", ""), dut.get("flash_ecu", "")), self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.config_saved.connect(self._settings.set_restbus_config)
+        dialog.signal_set.connect(lambda cid, msg, sig, val: self._restbus_cmd.emit(cid, "set", msg, sig, val))
+        dialog.running_requested.connect(
+            lambda cid, on: self._restbus_cmd.emit(cid, "start" if on else "stop", "", "", ""))
+        dialog.destroyed.connect(lambda _obj=None, cid=can_id: self._restbus_dialogs.pop(cid, None))
+        self._restbus_dialogs[can_id] = dialog
+        dialog.set_state(self._restbus_states.get(can_id, {}))
+        dialog.show()
+
+    def _restbus_db(self, can_id: str):
+        """DBC des Restbus eines Interfaces (Auswahl im Schrittdialog "Restbus-Signal setzen")."""
+        from restbus_dialog import load_db
+        configs = self._settings.restbus_configs
+        if not can_id:
+            can_id = next(iter(configs), "")
+        path = (configs.get(can_id) or {}).get("dbc") or next(
+            (c.get("dbc_path") or "" for c in self._settings.can_configs
+             if f"can:{c.get('interface')}:{c.get('channel')}" == can_id), "")
+        try:
+            return load_db(path)
+        except Exception:  # noqa: BLE001 -- ohne DBC freie Eingabe
+            return None
 
     def _on_flash_state(self, state: dict) -> None:
         if state.get("busy"):
@@ -2171,6 +2231,7 @@ class MainWindow(QMainWindow):
         self._run_session.set_flasher(self._flasher)   # Firmware flashen (CAN), PI-54
         self._run_session.set_xcp(self._xcp)   # XCP-Schritte (FT-10)
         self.testcase_tab.set_uds_odx_provider(self._uds.odx)
+        self.testcase_tab.set_restbus_db_provider(self._restbus_db)   # FT-6
         # Varianten (FT-5): Auswahl merken, Liste aus dem gemeinsamen Ordner
         self.testcase_tab.set_variant(self._settings.selected_variant)
         self.testcase_tab.variant_changed.connect(self._settings.set_selected_variant)

@@ -186,6 +186,9 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     if step.action == "CAN_SEND":
         id_text = f"0x{step.can_id:X}" if step.can_extended else f"0x{step.can_id:03X}"
         detail = f"ID {id_text}: {step.can_data or '–'}"
+    elif step.action.startswith("RESTBUS_"):
+        from testcase_model import restbus_summary
+        detail = restbus_summary(step)
     elif step.device_kind == "hil":
         detail = (
             tr("Kanal {ch}: {value:g} mV", ch=step.hil_channel, value=step.value)
