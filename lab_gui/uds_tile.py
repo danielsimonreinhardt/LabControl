@@ -90,9 +90,14 @@ class UdsControlGroup(QGroupBox):
         self._dtc_clear_button.clicked.connect(self._on_clear_clicked)
         self._reset_button = IconButton("mdi.restart", "")
         self._reset_button.clicked.connect(self._on_reset_clicked)
+        # PI-54 b: Firmware ueber CAN flashen (canflash), Datei waehlen + Rueckfrage
+        self._flash_button = IconButton("mdi.chip", "")
+        self._flash_button.clicked.connect(self._on_flash_clicked)
+        self._flash_file = ""
         dtc_row.addWidget(self._dtc_read_button)
         dtc_row.addWidget(self._dtc_clear_button)
         dtc_row.addStretch(1)
+        dtc_row.addWidget(self._flash_button)
         dtc_row.addWidget(self._reset_button)
         outer.addLayout(dtc_row)
         self._dtc_label = QLabel()
@@ -130,9 +135,11 @@ class UdsControlGroup(QGroupBox):
         self._dtc_read_button.setToolTip(tr("Fehlerspeicher lesen"))
         self._dtc_clear_button.setToolTip(tr("Fehlerspeicher löschen"))
         self._reset_button.setToolTip(tr("Steuergerät zurücksetzen (Reset)"))
+        self._flash_button.setToolTip(tr("Firmware über CAN flashen…"))
         busy = bool(state.get("busy"))
         for button in self._buttons:
             button.setEnabled(not busy and self._odx is not None)
+        self._flash_button.setEnabled(not busy)
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
@@ -161,6 +168,20 @@ class UdsControlGroup(QGroupBox):
         if QMessageBox.question(self, tr("Fehlerspeicher löschen"),
                                 tr("Alle Einträge im Fehlerspeicher des Prüflings löschen?")) == QMessageBox.StandardButton.Yes:
             self.command_requested.emit("clear_dtcs", {})
+
+    def _on_flash_clicked(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(self, tr("Firmware-Datei wählen"), self._flash_file,
+                                              tr("Firmware (*.hex *.srec *.s19 *.mot);;Alle Dateien (*)"))
+        if not path:
+            return
+        self._flash_file = path
+        name = path.replace("\\", "/").rsplit("/", 1)[-1]
+        if QMessageBox.question(self, tr("Firmware flashen"),
+                                tr("{file} über CAN auf den Prüfling flashen?", file=name)) \
+                == QMessageBox.StandardButton.Yes:
+            self.command_requested.emit("flash", {"file": path})
 
     def _on_reset_clicked(self) -> None:
         if QMessageBox.question(self, tr("Reset"), tr("Steuergerät zurücksetzen?")) == QMessageBox.StandardButton.Yes:

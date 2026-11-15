@@ -7,6 +7,25 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Firmware über CAN flashen (0.65.0, PI-54 b).** Neue UDS-Aktion **„Firmware flashen (CAN)“** im Testablauf
+  (Datei, Warten auf den Bootloader, Steuergerät bei mehreren am Bus), ein Knopf **„Firmware über CAN
+  flashen…“** in der Prüfling-Kachel und `main.py flash <datei> [--wait S] [--ecu NAME]` (ein Lauf mit genau
+  diesem Schritt: Sperre, laufende Instanz, Bericht, JUnit und Exit-Codes wie bei `run`). LabControl startet
+  dafür `canflash` aus neXtBSW als Unterprozess (neuer Eintrag Einstellungen → Prüfling → **„Flashen
+  (canflash)“** = neXtBSW-Ordner mit `tools/canflash` und `.venv`, **„Projekt (canflash)“** = Projektname für
+  `--ecu`, daraus Speicher-Layout und Diagnose-Adressen; der Schritt kann ein anderes Projekt nennen) und gibt den
+  CAN-Kanal des Prüflings für die
+  Dauer frei (`DeviceWorker.hold_can`; vorher musste LabControl geschlossen werden); danach öffnet es den Kanal
+  wieder, UDS/XCP verbinden sich neu. Vector-Kanäle werden auf den globalen Kanalindex von canflash umgerechnet.
+  Fortschritt in Log, Statusleiste und Kachel, Datei mit SHA-256 im Log; Stopp beendet canflash. Im
+  Simulationsmodus ohne neXtBSW-Ordner wird das Flashen nachgebildet. **Mock-verifiziert:** neue Prüfung
+  `tools/check_canflash.py` (Ersatz-canflash: Ablauf mit Kanal-Freigabe, Fortschritt, Fehler, Abbruch,
+  Zeitüberschreitung, Projekt-Vorgabe, `labcontrol flash` in der Simulation). **Hardware-verifiziert (15.11.2026,
+  Evalboard am PC/A-CAN, HCS16 12 V):** Ablauf „PI-54 Flashen ueber CAN Evalboard“ per `main.py run` über die
+  laufende Instanz – UDS lesen, Demo-Firmware neXtBSW `dev` 3cba3467 (neu gebaut, A2L byte-gleich mit der im
+  gemeinsamen Ordner; Hex jetzt unter `firmware/`) über LabControl geflasht: Kanal freigegeben, canflash 267 kB in
+  21 s (Bootloader 0.3.13, CRC OK), Kanal nach 0,1 s wieder verbunden, 3 s später UDS-Versorgung 12 004 mV,
+  Exit 0. Vorversuch ohne Projektangabe endete wie vorgesehen mit der canflash-Meldung im Bericht und Kanal zurück.
 - **Zeitprüfungen: beobachteten microHIL-Kanal schneller abfragen (0.64.5, FT-7, FP-18 b).** Solange ein
   Überwachen-Block einen Analog- oder Digitaleingang des microHIL beobachtet, liest der Worker genau diesen Kanal
   im 100-ms-Takt mit (sonst nur im 1-s-Vollzyklus); am Blockende, bei Abbruch oder Stopp endet das. Die Auflösung

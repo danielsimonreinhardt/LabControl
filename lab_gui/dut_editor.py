@@ -21,7 +21,8 @@ class DutEditor(QGroupBox):
         self._filling = False
         form = QFormLayout(self)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key", "a2l", "measure", "rate")}
+        self._labels = {key: QLabel() for key in ("name", "can", "odx", "key", "a2l", "measure", "rate",
+                                                  "nextbsw", "flash_ecu")}
         self._name = QLineEdit()
         self._name.setMinimumWidth(220)
         self._name.editingFinished.connect(self._emit)
@@ -66,6 +67,20 @@ class DutEditor(QGroupBox):
         self._rate.setValue(10.0)
         self._rate.editingFinished.connect(self._emit)
         form.addRow(self._labels["rate"], self._rate)
+        nextbsw_row = QHBoxLayout()
+        self._nextbsw = QLineEdit()
+        self._nextbsw.setMinimumWidth(320)
+        self._nextbsw.setPlaceholderText("C:/WORK/…/neXtBSW")
+        self._nextbsw.editingFinished.connect(self._emit)
+        self._nextbsw_browse = IconButton("mdi.folder-open-outline", "")
+        self._nextbsw_browse.clicked.connect(self._browse_nextbsw)
+        nextbsw_row.addWidget(self._nextbsw, 1)
+        nextbsw_row.addWidget(self._nextbsw_browse)
+        form.addRow(self._labels["nextbsw"], nextbsw_row)
+        self._flash_ecu = QLineEdit()
+        self._flash_ecu.setPlaceholderText("evalboard_s32k144_demo")
+        self._flash_ecu.editingFinished.connect(self._emit)
+        form.addRow(self._labels["flash_ecu"], self._flash_ecu)
         self._status = QLabel()
         self._status.setWordWrap(True)
         form.addRow("", self._status)
@@ -76,7 +91,8 @@ class DutEditor(QGroupBox):
         self.setTitle(tr("Prüfling (UDS/XCP)"))
         for key, text in (("name", tr("Name:")), ("can", tr("CAN-Interface:")), ("odx", tr("ODX/PDX:")),
                           ("key", tr("Schlüssel:")), ("a2l", tr("A2L (XCP):")), ("measure", tr("Messliste (XCP):")),
-                          ("rate", tr("Abfragerate:"))):
+                          ("rate", tr("Abfragerate:")), ("nextbsw", tr("Flashen (canflash):")),
+                          ("flash_ecu", tr("Projekt (canflash):"))):
             self._labels[key].setText(text)
         self._odx.setToolTip(tr("Export von neXtBSW: python -m tools.diaggen pdx <projekt> -o <datei>.pdx; "
                                 "leer im Simulationsmodus = nachgebildetes Steuergerät"))
@@ -85,6 +101,11 @@ class DutEditor(QGroupBox):
         self._a2l.setToolTip(tr("A2L von neXtBSW tools/a2lgen (app.ecu.a2l im Build-Ordner); leer im "
                                 "Simulationsmodus = nachgebildetes Steuergerät"))
         self._a2l_browse.setToolTip(tr("A2L-Datei wählen…"))
+        self._nextbsw.setToolTip(tr("neXtBSW-Ordner mit tools/canflash und .venv; Flashen über CAN gibt den "
+                                    "CAN-Kanal des Prüflings dafür kurz frei"))
+        self._nextbsw_browse.setToolTip(tr("neXtBSW-Ordner wählen…"))
+        self._flash_ecu.setToolTip(tr("Projektname aus <neXtBSW>/projects (canflash --ecu): Speicher-Layout und "
+                                      "Diagnose-Adressen des Prüflings"))
         self._fill_can(self._can.currentData() or "")
 
     def on_device_known(self, kind: str, device_id: str, label: str) -> None:
@@ -100,6 +121,8 @@ class DutEditor(QGroupBox):
         self._a2l.setText(config.get("a2l", ""))
         self._measure.setText(config.get("xcp_measure", ""))
         self._rate.setValue(float(config.get("xcp_rate_hz", 10.0) or 10.0))
+        self._nextbsw.setText(config.get("nextbsw_dir", ""))
+        self._flash_ecu.setText(config.get("flash_ecu", ""))
         self._fill_can(config.get("can_device", ""))
         self._filling = False
 
@@ -132,10 +155,17 @@ class DutEditor(QGroupBox):
             self._a2l.setText(path)
             self._emit()
 
+    def _browse_nextbsw(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, tr("neXtBSW-Ordner wählen…"), self._nextbsw.text())
+        if path:
+            self._nextbsw.setText(path)
+            self._emit()
+
     def _emit(self) -> None:
         if self._filling:
             return
         self.config_edited.emit({"name": self._name.text().strip(), "can_device": self._can.currentData() or "",
                                  "odx": self._odx.text().strip(), "key": self._key.text().strip(),
                                  "a2l": self._a2l.text().strip(), "xcp_measure": self._measure.text().strip(),
-                                 "xcp_rate_hz": self._rate.value()})
+                                 "xcp_rate_hz": self._rate.value(), "nextbsw_dir": self._nextbsw.text().strip(),
+                                 "flash_ecu": self._flash_ecu.text().strip()})

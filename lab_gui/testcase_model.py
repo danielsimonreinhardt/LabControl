@@ -179,6 +179,7 @@ UDS_ACTIONS = {
     "UDS_ROUTINE": "Routine",
     "UDS_RESET": "Reset",
     "UDS_RAW": "Rohe Anfrage",
+    "UDS_FLASH": "Firmware flashen (CAN)",   # PI-54: canflash als Unterprozess (canflash_service.py)
 }
 UDS_READ_ACTIONS = {"UDS_READ_DID"}
 # XCP am Pruefling (0.64.0, FT-10): Parameter in params (xcp_steps.py); Schreiben nur aus GUI/Ablauf (FP-29 b)

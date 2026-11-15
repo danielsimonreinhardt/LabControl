@@ -445,6 +445,8 @@ class DeviceWorker(QObject):
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
 
     can_connected = Signal(str, bool)        # device_id, online
+    # PI-54 (0.65.0): CAN-Kanal fuer canflash freigegeben (True) bzw. wieder geoeffnet (False)
+    can_hold_changed = Signal(str, bool)
     # device_id, Fehlertext -- ein konfiguriertes CAN-Interface konnte (noch)
     # nicht verbunden werden bzw. wurde waehrend des Betriebs getrennt (siehe
     # _reconnect_can()/_poll()). Vorher landete das AUSSCHLIESSLICH im
@@ -582,6 +584,8 @@ class DeviceWorker(QObject):
         # sobald sein Interface offen ist, und gilt erst als verbunden, wenn er
         # antwortet (_battsim_online).
         self._can_schedulers: dict[str, CanScheduler] = {}
+        # PI-54: Kanaele, die gerade ein anderes Programm (canflash) braucht -- nicht wieder verbinden
+        self._can_held: set[str] = set()
         self._battsims: dict[str, BattSim] = {}
         self._battsim_bus: dict[str, str] = {}      # battsim-ID -> CAN-Interface-ID
         self._battsim_online: dict[str, bool] = {}
@@ -815,6 +819,22 @@ class DeviceWorker(QObject):
     # can_bus/README.md: keine sichere Autodiscovery ohne bekannte Bitrate).
 
     @Slot(list)
+    @Slot(str, bool)
+    def hold_can(self, device_id: str, on: bool) -> None:
+        """CAN-Kanal fuer ein anderes Programm freigeben (canflash, PI-54) bzw. wieder oeffnen. Knoten am Bus
+        (Batterie-Simulator) bekommen vorher ihre Abschalt-Frames wie beim Trennen."""
+        if on:
+            self._can_held.add(device_id)
+            if device_id in self._can_buses:
+                logger.info("CAN-Interface %s für ein anderes Programm freigegeben", device_id)
+                self._close_can(device_id)
+        else:
+            self._can_held.discard(device_id)
+            self._reconnect_can()
+            logger.info("CAN-Interface %s wieder übernommen (%s)", device_id,
+                        "verbunden" if device_id in self._can_buses else "noch nicht erreichbar")
+        self.can_hold_changed.emit(device_id, on)
+
     def set_can_configs(self, configs: list) -> None:
         self._can_configs = list(configs)
         wanted_ids = {can_device_id(cfg) for cfg in self._can_configs}
@@ -1475,7 +1495,7 @@ class DeviceWorker(QObject):
         self._reload_can_dbcs()
         for cfg in self._can_configs:
             device_id = can_device_id(cfg)
-            if device_id in self._can_buses:
+            if device_id in self._can_buses or device_id in self._can_held:
                 continue
             try:
                 bus = CanBus(

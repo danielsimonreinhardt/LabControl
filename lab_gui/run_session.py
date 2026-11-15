@@ -195,6 +195,9 @@ class RunSession(QObject):
         # UDS am Pruefling (FT-1): uds_service.UdsService, siehe set_uds
         self.uds = None
         self._uds_pending: tuple[int, TestStep] | None = None
+        # Flashen ueber CAN (PI-54): canflash_service.CanFlashService, siehe set_flasher
+        self.flasher = None
+        self._flash_pending: int | None = None
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
@@ -255,9 +258,14 @@ class RunSession(QObject):
             return tr("Sicherheitsabschaltung zuerst quittieren")
         if self.runner.is_running():
             return tr("Es läuft bereits ein Ablauf")
-        if any(s.enabled and s.step_type == "action" and s.device_kind == "uds" for s in steps) and (
-                self.uds is None or not self.uds.configured()):
+        uds_steps_used = [s for s in steps if s.enabled and s.step_type == "action" and s.device_kind == "uds"]
+        if any(s.action != "UDS_FLASH" for s in uds_steps_used) and (self.uds is None or not self.uds.configured()):
             return tr("Kein Prüfling (UDS) eingestellt")
+        if any(s.action == "UDS_FLASH" for s in uds_steps_used):
+            problem = tr("Flashen über CAN ist hier nicht eingerichtet") if self.flasher is None \
+                else self.flasher.problem()
+            if problem:
+                return problem
         if any(s.enabled and s.step_type == "action" and s.device_kind == "xcp" for s in steps) and (
                 self.xcp is None or not self.xcp.configured()):
             return tr("Keine A2L beim Prüfling eingestellt (XCP)")
@@ -311,11 +319,39 @@ class RunSession(QObject):
         self.uds = uds
         uds.finished.connect(self._on_uds_finished)
 
+    def set_flasher(self, flasher) -> None:
+        self.flasher = flasher
+        flasher.finished.connect(self._on_flash_finished)
+
+    def _start_flash(self, step: TestStep) -> None:
+        import uds_steps
+
+        if self.flasher is None:
+            self.runner.on_action_completed(False, tr("Flashen über CAN ist hier nicht eingerichtet"), 0.0)
+            return
+        try:
+            args = uds_steps.flash_args(step.params)
+        except (ValueError, TypeError) as exc:
+            self.runner.on_action_completed(False, tr("Flash-Parameter: {error}", error=str(exc)), 0.0)
+            return
+        self._flash_pending = self.flasher.start(args["file"], args["wait"], args["ecu"], source="Testablauf")
+
+    @Slot(int, bool, str)
+    def _on_flash_finished(self, request: int, ok: bool, message: str) -> None:
+        if self._flash_pending != request:
+            return   # Kachel oder abgebrochener Lauf
+        self._flash_pending = None
+        if self._active:
+            self.runner.on_action_completed(ok, message, 0.0)
+
     @Slot(int, object)
     def _on_execute_uds(self, _index: int, step: TestStep) -> None:
         import uds_steps
 
         self._uds_pending = None
+        if step.action == "UDS_FLASH":
+            self._start_flash(step)
+            return
         if self.uds is None or not self.uds.configured():
             self.runner.on_action_completed(False, tr("Kein Prüfling (UDS) eingestellt"), 0.0)
             return
@@ -441,6 +477,9 @@ class RunSession(QObject):
         self._active = False
         if self.xcp is not None:
             self.xcp.set_polling("run", False)
+        if self._flash_pending is not None and self.flasher is not None:
+            self._flash_pending = None
+            self.flasher.cancel()     # Stopp/Fehler: canflash beenden, Kanal kommt wieder zurueck
         # Reihenfolge wie frueher in MainWindow: Watchdog aus, PicoScope-Reconnect wieder frei, Netzwerk-
         # Sperre aus, DANN Sitzungen schliessen (der Worker arbeitet die Signale in dieser Reihenfolge ab)
         self.safety.end_run_supervision()

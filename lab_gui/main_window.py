@@ -420,6 +420,14 @@ class MainWindow(QMainWindow):
         self._uds.configure(self._settings.dut_config, self._settings.simulation_mode)
         self._settings.dut_config_changed.connect(
             lambda cfg: self._uds.configure(cfg, self._settings.simulation_mode))
+        # Flashen ueber CAN (PI-54): canflash als Unterprozess, der Worker gibt den Kanal dafuer frei
+        from canflash_service import CanFlashService
+        self._flasher = CanFlashService(self)
+        self._flasher.configure(self._settings.dut_config, self._settings.simulation_mode)
+        self._settings.dut_config_changed.connect(
+            lambda cfg: self._flasher.configure(cfg, self._settings.simulation_mode))
+        self._flasher.hold_requested.connect(self._worker.hold_can)
+        self._worker.can_hold_changed.connect(self._flasher.on_can_hold_changed)
         # XCP am Pruefling (FT-10): eigener Thread, Bus ueber CanTap wie UDS, A2L aus Einstellungen -> Pruefling
         from xcp_service import XcpService
         self._xcp = XcpService(self._worker, self)
@@ -642,6 +650,9 @@ class MainWindow(QMainWindow):
         self._uds_tile_requests: dict[int, tuple[str, dict]] = {}
         self.control_tab.uds_command_requested.connect(self._on_uds_tile_command)
         self._uds.finished.connect(self._on_uds_finished)
+        self._flash_tile_request = 0
+        self._flasher.state_changed.connect(self._on_flash_state)
+        self._flasher.finished.connect(self._on_flash_finished)
         self._uds.state_changed.connect(lambda _text: self._update_uds_presence())
         # CAN-Interface verbunden/getrennt: _on_can_connected ruft _update_uds_presence (eine eigene Verbindung
         # an can_connected kaeme hier zu spaet -- der simulierte Bus meldet sich schon beim Start des Workers)
@@ -743,9 +754,26 @@ class MainWindow(QMainWindow):
         if self._test_runner.is_running():
             self.statusBar().showMessage(tr("UDS von Hand ist während eines Testlaufs gesperrt"), 5000)
             return
+        if command == "flash":       # PI-54 b: nicht ueber den UdsService, sondern canflash
+            self._flash_tile_request = self._flasher.start(str((args or {}).get("file", "")), source="Kachel")
+            return
         self._uds_state.update(busy=True, last=tr("läuft …"))
         self._push_uds_state()
         self._uds_tile_requests[self._uds.submit(command, dict(args or {}))] = (command, dict(args or {}))
+
+    def _on_flash_state(self, state: dict) -> None:
+        if state.get("busy"):
+            self._uds_state.update(busy=True, last=tr("Flashen: {message}", message=state.get("message", "")))
+            self._push_uds_state()
+            self.statusBar().showMessage(tr("Flashen: {message}", message=state.get("message", "")), 3000)
+
+    def _on_flash_finished(self, request: int, ok: bool, message: str) -> None:
+        self._uds_state.update(busy=False, ok=ok, last=f"{time.strftime('%H:%M:%S')} {message}",
+                               last_short=("✓ " if ok else "✕ ") + time.strftime("%H:%M:%S"))
+        self._push_uds_state()
+        if request == self._flash_tile_request:
+            self._flash_tile_request = 0
+            self.statusBar().showMessage(message, 10000)
 
     def _on_uds_finished(self, request_id: int, result) -> None:
         from uds_tile import format_values
@@ -2140,6 +2168,7 @@ class MainWindow(QMainWindow):
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
         self._run_session.set_uds(self._uds)   # UDS-Schritte (FT-1)
+        self._run_session.set_flasher(self._flasher)   # Firmware flashen (CAN), PI-54
         self._run_session.set_xcp(self._xcp)   # XCP-Schritte (FT-10)
         self.testcase_tab.set_uds_odx_provider(self._uds.odx)
         self.testcase_tab.set_xcp_a2l_provider(self._xcp.a2l)

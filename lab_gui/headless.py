@@ -26,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = ("run", "devices", "coverage", "timing")
+COMMANDS = ("run", "devices", "coverage", "timing", "flash")
 DEFAULT_WAIT_DEVICES_S = 15.0
 REASON_CLI_END = "cli: Lauf beendet"
 
@@ -50,6 +50,17 @@ def _parser() -> argparse.ArgumentParser:
                      help="so lange auf die Geräte des Ablaufs warten (Standard 15 s)")
     run.add_argument("--timeout", type=float, default=0.0, metavar="S",
                      help="Lauf nach S Sekunden abbrechen (0 = ohne)")
+    flash = sub.add_parser("flash", help="Firmware über CAN flashen (canflash, PI-54)")
+    flash.add_argument("firmware", help="Firmware-Datei (.hex/.srec)")
+    flash.add_argument("--wait", type=float, default=0.0, metavar="S",
+                       help="so lange auf den Bootloader warten (nach Reset/Aus-Ein von Hand)")
+    flash.add_argument("--ecu", default="", help="Projektname bei mehreren Steuergeräten am Bus")
+    flash.add_argument("--report", help="HTML-Bericht hierhin schreiben")
+    flash.add_argument("--junit", help="JUnit-XML hierhin schreiben")
+    flash.add_argument("--json", help="run-result.json hierhin schreiben")
+    flash.add_argument("--simulation", action="store_true", help="simulierte Geräte statt Hardware")
+    flash.add_argument("--wait-devices", type=float, default=DEFAULT_WAIT_DEVICES_S, metavar="S",
+                       help="so lange auf das CAN-Interface warten (Standard 15 s)")
     devices = sub.add_parser("devices", help="verbundene Geräte auflisten")
     devices.add_argument("--simulation", action="store_true")
     devices.add_argument("--wait", type=float, default=5.0, metavar="S", help="Suchdauer (Standard 5 s)")
@@ -146,6 +157,14 @@ class _Rig:
         self.worker.can_connected.connect(self.xcp.on_can_connected)
         self.xcp.configure(settings.dut_config, simulation)
         self.session.set_xcp(self.xcp)
+        # Flashen ueber CAN (PI-54): canflash als Unterprozess, Kanal ueber den Worker freigeben
+        from canflash_service import CanFlashService
+        self.flasher = CanFlashService()
+        self.flasher.configure(settings.dut_config, simulation)
+        self.flasher.hold_requested.connect(self.worker.hold_can)
+        self.worker.can_hold_changed.connect(self.flasher.on_can_hold_changed)
+        self.flasher.progress.connect(lambda _r, _p, line: _say(f"  {line.strip()}"))
+        self.session.set_flasher(self.flasher)
         self.thread.started.connect(self.worker.start)
         self.thread.start()
 
@@ -220,6 +239,23 @@ def _prepare_steps(path: Path, rig: _Rig):
     if any(s.enabled and s.step_type == "action" and s.device_kind == "jlink" for s in steps):
         return steps, meta, "J-Link-Schritte gehen ohne Fenster noch nicht"
     return steps, meta, ""
+
+
+def _flash_as_run(args) -> Path:
+    """`flash` ist ein Lauf mit genau einem Schritt "Firmware flashen (CAN)" -- so gelten Sperre, laufende
+    Instanz (FP-2 c), Bericht, JUnit und Exit-Codes wie bei `run`. args wird dafuer umgeschrieben."""
+    import tempfile
+
+    from testcase_model import TestStep, save_steps
+
+    step = TestStep(device_kind="uds", device_id="uds:dut", action="UDS_FLASH",
+                    params={"file": str(Path(args.firmware).resolve()), "wait": max(0.0, args.wait), "ecu": args.ecu})
+    handle, name = tempfile.mkstemp(prefix="labcontrol_flash_", suffix=".json")
+    os.close(handle)
+    path = Path(name)
+    save_steps([step], path, meta={"description": f"Flashen {Path(args.firmware).name}"})
+    args.command, args.testcase, args.var, args.timeout = "run", str(path), [], 0.0
+    return path
 
 
 def _cmd_devices(args, settings) -> int:
@@ -416,6 +452,7 @@ def main(argv: list[str]) -> int:
     app_logging.setup_logging(settings.network_dir)
     data_store.setup(app_logging.effective_network_dir(settings.network_dir))
     logger.info("LAB CONTROL v%s Kommandozeile: %s", __version__, " ".join(argv[1:]))
+    temp_testcase = _flash_as_run(args) if args.command == "flash" else None
     if args.command in ("coverage", "timing"):   # liest nur Dateien, braucht weder Geraete noch Sperre
         try:
             return _cmd_coverage(args, settings) if args.command == "coverage" else _cmd_timing(args)
@@ -431,12 +468,16 @@ def main(argv: list[str]) -> int:
             import instance_cli   # erst hier: zieht run_session/cantools nach (Startzeit, 0.60.2)
             return instance_cli.main(args, settings)
         finally:
+            if temp_testcase is not None:
+                temp_testcase.unlink(missing_ok=True)
             app_logging.shutdown()
     try:
         if args.command == "devices":
             return _cmd_devices(args, settings)
         return _cmd_run(args, settings)
     finally:
+        if temp_testcase is not None:
+            temp_testcase.unlink(missing_ok=True)
         lock.release()
         data_store.store().stop()
         app_logging.shutdown()

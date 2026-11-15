@@ -640,7 +640,9 @@ class Settings(QObject):
             return min(max(value, 0.5), 50.0)
         return {"name": text("name", 60), "can_device": text("can_device", 120), "odx": text("odx"),
                 "key": text("key", 64), "request_id": can_id("request_id"), "response_id": can_id("response_id"),
-                "a2l": text("a2l"), "xcp_measure": text("xcp_measure", 4000), "xcp_rate_hz": rate()}
+                "a2l": text("a2l"), "xcp_measure": text("xcp_measure", 4000), "xcp_rate_hz": rate(),
+                # PI-54: canflash aus <nextbsw_dir>/tools/canflash, Projekt (--ecu) fuer Layout und Adressen
+                "nextbsw_dir": text("nextbsw_dir"), "flash_ecu": text("flash_ecu", 80)}
 
     def set_dut_config(self, **changes) -> None:
         current = self.dut_config

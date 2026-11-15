@@ -10,6 +10,7 @@ Parameter stehen in TestStep.params (Format v3):
   UDS_ROUTINE    {"routine": "LedSelfTest", "step": "start", "data": ""}
   UDS_RESET      {"type": 1}
   UDS_RAW        {"request": "22 F1 86"}
+  UDS_FLASH      {"file": "app.hex", "wait": 0, "ecu": ""}       PI-54: canflash, nicht ueber den UdsService
 und bei allen {"expect": "positive"} (Standard) oder {"expect": "nrc:0x33"}.
 
 Urteil: eine Abweichung von der Erwartung (falsche Antwort, fehlender/verbotener DTC) ist eine verletzte
@@ -25,7 +26,7 @@ from i18n import tr
 COMMANDS = {
     "UDS_SESSION": "session", "UDS_SECURITY": "unlock", "UDS_READ_DID": "read_did", "UDS_WRITE_DID": "write_did",
     "UDS_READ_DTC": "read_dtcs", "UDS_CLEAR_DTC": "clear_dtcs", "UDS_ROUTINE": "routine", "UDS_RESET": "reset",
-    "UDS_RAW": "raw",
+    "UDS_RAW": "raw", "UDS_FLASH": "flash",
 }
 RESET_TYPES = {1: "hardReset", 2: "keyOffOnReset", 3: "softReset"}
 
@@ -62,10 +63,23 @@ def command_for(action: str, params: dict) -> tuple[str, dict]:
         return command, {"group": _int(p.get("group"), 0xFFFFFF)}
     if action == "UDS_RESET":
         return command, {"type": _int(p.get("type"), 1)}
+    if action == "UDS_FLASH":
+        return command, flash_args(p)
     keep = {"UDS_SESSION": ("session",), "UDS_SECURITY": ("level",), "UDS_READ_DID": ("did",),
             "UDS_WRITE_DID": ("did", "values", "hex"), "UDS_ROUTINE": ("routine", "step", "data"),
             "UDS_RAW": ("request",)}[action]
     return command, {k: p[k] for k in keep if k in p and p[k] not in (None, "")}
+
+
+def flash_args(params: dict) -> dict:
+    """UDS_FLASH: Datei, Wartezeit auf den Bootloader (s), ECU-Name fuer canflash --ecu."""
+    file_path = str(params.get("file") or "").strip()
+    if not file_path:
+        raise ValueError(tr("Keine Firmware-Datei gewählt"))
+    wait = float(str(params.get("wait") or 0).replace(",", "."))
+    if not 0 <= wait <= 300:
+        raise ValueError(tr("Wartezeit 0–300 s"))
+    return {"file": file_path, "wait": wait, "ecu": str(params.get("ecu") or "").strip()}
 
 
 def _codes(items) -> list[int]:
@@ -155,6 +169,14 @@ def summary(action: str, params: dict) -> str:
         text = RESET_TYPES.get(reset, f"0x{reset:02X}")
     elif action == "UDS_RAW":
         text = str(p.get("request", "?"))
+    elif action == "UDS_FLASH":
+        name = str(p.get("file") or "?").replace("\\", "/").rsplit("/", 1)[-1]
+        try:
+            wait = float(str(p.get("wait") or 0).replace(",", "."))
+        except ValueError:
+            wait = 0.0
+        return (name + (f", {tr('Bootloader')} ≤ {wait:g} s" if wait else "")
+                + (f", {p['ecu']}" if p.get("ecu") else ""))
     else:
         text = ""
     nrc = parse_expect(p.get("expect"))

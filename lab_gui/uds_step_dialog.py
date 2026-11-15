@@ -4,7 +4,8 @@ Bedeutung der Parameter."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QVBoxLayout, QWidget,
 )
 
 import uds_steps
@@ -56,6 +57,9 @@ class UdsStepDialog(QDialog):
         self._form.addRow(tr("NRC:"), self._nrc)
         self._expect.currentIndexChanged.connect(lambda _i: self._nrc.setEnabled(self._expect.currentData() == "nrc"))
         self._nrc.setEnabled(expect_nrc is not None)
+        if action == "UDS_FLASH":          # canflash kennt keine Erwartung, nur Erfolg/Fehlschlag
+            self._form.setRowVisible(self._expect, False)
+            self._form.setRowVisible(self._nrc, False)
         self._error = QLabel()
         layout.addWidget(self._error)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -123,6 +127,34 @@ class UdsStepDialog(QDialog):
                 reset.addItem(f"{name} (0x{value:02X})", value)
             reset.setCurrentIndex(max(0, reset.findData(int(p.get("type", 1)))))
             self._add("type", tr("Art:"), reset)
+        elif a == "UDS_FLASH":
+            from icons import IconButton
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            file_edit = QLineEdit(str(p.get("file", "")))
+            file_edit.setMinimumWidth(360)
+            browse = IconButton("mdi.folder-open-outline", tr("Firmware-Datei wählen…"))
+
+            def choose() -> None:
+                path, _ = QFileDialog.getOpenFileName(self, tr("Firmware-Datei wählen"), file_edit.text(),
+                                                      tr("Firmware (*.hex *.srec *.s19 *.mot);;Alle Dateien (*)"))
+                if path:
+                    file_edit.setText(path)
+
+            browse.clicked.connect(choose)
+            row_layout.addWidget(file_edit, 1)
+            row_layout.addWidget(browse)
+            self._fields["file"] = file_edit
+            self._form.addRow(tr("Datei:"), row)
+            wait = QLineEdit(f"{float(p.get('wait') or 0):g}")
+            wait.setToolTip(tr("Sekunden, die canflash nach einem Reset/Aus-Ein auf den Bootloader wartet; "
+                               "0 = laufende Anwendung schaltet selbst in den Bootloader"))
+            self._add("wait", tr("Warten auf Bootloader (s):"), wait)
+            ecu = QLineEdit(str(p.get("ecu", "")))
+            ecu.setToolTip(tr("Projektname aus <neXtBSW>/projects (canflash --ecu); leer = Vorgabe aus "
+                              "Einstellungen → Prüfling"))
+            self._add("ecu", tr("Steuergerät:"), ecu)
         elif a == "UDS_RAW":
             raw = QLineEdit(str(p.get("request", "")))
             raw.setPlaceholderText("22 F1 86")
