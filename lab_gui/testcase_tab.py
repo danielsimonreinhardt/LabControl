@@ -54,6 +54,7 @@ import app_logging
 import data_store
 import variants
 import verbund_ids
+from testcase_model import NEW_TESTCASE_META
 from paths import app_dir
 from signal_dialog import SignalDialog
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
@@ -529,7 +530,7 @@ class TestcaseTab(QWidget):
         self._block_unlink_button.setEnabled(False)
         self._loaded_link_digests: dict = {}
         # Ablauf-Eigenschaften (Format v3 "meta", 0.58.0): Beschreibung, Anforderungen, Quelle/Senke
-        self._meta: dict = {}
+        self._meta: dict = dict(NEW_TESTCASE_META)   # neue Ablaeufe: "Am Ende ALLE AUS" an (DR-5)
         self._props_button = IconButton("mdi.tune-variant", "")
         # Varianten (FT-5, PI-55 a): Auswahl fuer den naechsten Lauf + Dialog zum Bearbeiten
         self._variant_name = ""
@@ -2657,7 +2658,7 @@ class TestcaseTab(QWidget):
         self._clear_block_groups()
         self._clear_all_row_colors()
         self._selected_row = -1   # sonst fuegt _add_row_clicked hinter der alten Auswahl ein (Zeile 1 leer)
-        self._meta = {}
+        self._meta = dict(NEW_TESTCASE_META)
         self._current_path = None
         self._file_digest = None
         self._add_row_clicked()

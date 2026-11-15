@@ -1,0 +1,61 @@
+site_name: LabControl
+site_description: Laborgeräte, Testabläufe und Prüfstand für Hobby-Elektronik – eine Oberfläche für alles
+site_url: https://danielsimonreinhardt.github.io/LabControl/
+repo_url: https://github.com/danielsimonreinhardt/LabControl
+repo_name: LabControl
+edit_uri: edit/master/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  language: de
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Dunkel
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Hell
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Start: index.md
+  - Deutsch:
+      - Überblick: de/index.md
+      - Schnellstart: de/schnellstart.md
+      - Geräte einrichten: de/geraete.md
+      - Bedienung: de/bedienung.md
+      - Testabläufe: de/testablaeufe.md
+      - Prüfling (UDS, XCP, Flashen, Restbus): de/pruefling.md
+      - Automatisierung: de/automatisierung.md
+      - Raspberry Pi und Verbund: de/pi-verbund.md
+      - Für Entwickler: de/entwickler.md

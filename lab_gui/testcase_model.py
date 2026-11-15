@@ -507,9 +507,11 @@ CHECK_FIELD_SYMBOLS = {
 FILE_FORMAT_VERSION = 3
 _V2 = 2
 
-# Ablauf-Eigenschaften (Datei "meta"): Beschreibung, Anforderungs-IDs des ganzen Ablaufs, und ob Netzteil
-# und Last trotz Verriegelung gleichzeitig eingeschaltet sein duerfen (Quelle/Senke, FP-7 b).
-TESTCASE_META_KEYS = ("description", "requirements", "source_sink")
+# Ablauf-Eigenschaften (Datei "meta"): Beschreibung, Anforderungs-IDs des ganzen Ablaufs, ob Netzteil
+# und Last trotz Verriegelung gleichzeitig eingeschaltet sein duerfen (Quelle/Senke, FP-7 b), und ob ein normal
+# beendeter Lauf aus dem Fenster am Ende ALLE AUS schaltet (0.70.0, Review DR-5; neue Ablaeufe: an).
+TESTCASE_META_KEYS = ("description", "requirements", "source_sink", "all_off_at_end")
+NEW_TESTCASE_META = {"all_off_at_end": True}
 
 _log = logging.getLogger(__name__)
 
@@ -846,7 +848,7 @@ def clean_meta(meta: dict | None) -> dict:
             value = [str(r).strip() for r in (value or []) if str(r).strip()]
         elif key == "description":
             value = str(value or "").strip()
-        elif key == "source_sink":
+        elif key in ("source_sink", "all_off_at_end"):
             value = bool(value)
         if value in ("", [], False, None, {}):
             continue

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Netzlaufwerk (SMB/CIFS) am Pi einhaengen und in LabControl eintragen.
 #
-#   bash ~/LabControl/tools/pi/netzlaufwerk_pi.sh [//server/freigabe] [unterordner] [benutzer]
-#   Standard: //192.168.178.1/data_exchange  LABCONTROL  labcontrol
+#   bash ~/LabControl/tools/pi/netzlaufwerk_pi.sh //server/freigabe [unterordner] [benutzer]
+#   Pflicht: die Freigabe; Standard fuer die anderen: LABCONTROL  labcontrol
 #
 # Fragt das Passwort verdeckt ab (oder liest es aus NETZ_PASSWORT). Es landet nur in
 # /etc/labcontrol/smb-credentials (root, 0600), nie im Repo oder in settings.json.
@@ -17,7 +17,11 @@
 # /etc/fstab.vor-netzlaufwerk), sudo systemctl daemon-reload, network_dir in LabControl leeren.
 set -euo pipefail
 
-SHARE="${1:-//192.168.178.1/data_exchange}"
+if [ $# -lt 1 ]; then
+    echo "Aufruf: $0 //server/freigabe [unterordner] [benutzer]" >&2
+    exit 2
+fi
+SHARE="$1"
 SUBDIR="${2:-LABCONTROL}"
 SMB_USER="${3:-labcontrol}"
 MOUNTPOINT="/mnt/$(basename "$SHARE")"

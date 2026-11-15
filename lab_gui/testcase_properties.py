@@ -40,6 +40,11 @@ class TestcasePropertiesDialog(QDialog):
                                         "der Bericht vermerkt das."))
         self._source_sink.setChecked(bool(self._meta.get("source_sink")))
         form.addRow("", self._source_sink)
+        self._all_off = QCheckBox(tr("Am Ende ALLE AUS"))
+        self._all_off.setToolTip(tr("Schaltet nach einem normal beendeten Lauf aus dem Fenster alle eigenen Geräte "
+                                    "ab; Fehler, Stopp und Läufe von der Kommandozeile schalten immer ab."))
+        self._all_off.setChecked(bool(self._meta.get("all_off_at_end")))
+        form.addRow("", self._all_off)
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -51,4 +56,5 @@ class TestcasePropertiesDialog(QDialog):
         meta["description"] = self._description.toPlainText()
         meta["requirements"] = split_requirements(self._requirements.text())
         meta["source_sink"] = self._source_sink.isChecked()
+        meta["all_off_at_end"] = self._all_off.isChecked()
         return clean_meta(meta)

@@ -505,5 +505,11 @@
   "Gekoppelte Programme": "Gekoppelte Programme",
   "keine": "keine",
   "Kopplung aufheben": "Kopplung aufheben",
-  "Programm „{name}“ ({ip}) möchte koppeln und steuern": "Programm „{name}“ ({ip}) möchte koppeln und steuern"
+  "Programm „{name}“ ({ip}) möchte koppeln und steuern": "Programm „{name}“ ({ip}) möchte koppeln und steuern",
+  "Fernsteuerung dieses Geräts erlauben (Claude (MCP) bzw. gekoppelte Programme)": "Fernsteuerung dieses Geräts erlauben (Claude (MCP) bzw. gekoppelte Programme)",
+  "Erfassungen über Netzwerk/MCP erlauben (schaltet nichts)": "Erfassungen über Netzwerk/MCP erlauben (schaltet nichts)",
+  "Am Ende ALLE AUS": "Am Ende ALLE AUS",
+  "Schaltet nach einem normal beendeten Lauf aus dem Fenster alle eigenen Geräte ab; Fehler, Stopp und Läufe von der Kommandozeile schalten immer ab.": "Schaltet nach einem normal beendeten Lauf aus dem Fenster alle eigenen Geräte ab; Fehler, Stopp und Läufe von der Kommandozeile schalten immer ab.",
+  "SIMULATION": "SIMULATION",
+  "Simulationsmodus: nachgebildete Geräte (Einstellungen → Allgemein)": "Simulationsmodus: nachgebildete Geräte (Einstellungen → Allgemein)"
 }

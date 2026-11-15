@@ -81,7 +81,7 @@ def main() -> int:
 
     form = QWidget()
     layout = QFormLayout(form)
-    addr = QLineEdit("192.168.178.95:8420")
+    addr = QLineEdit("192.168.1.95:8420")
     layout.addRow(QLabel("Adresse"), addr)
     ip = QLineEdit()
     ip.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{1,3}(\.\d{1,3}){3}")))
@@ -119,7 +119,7 @@ def main() -> int:
     def type_address(d) -> None:
         check("Kopfzeile = Feldname", d.windowTitle() == "Adresse", d.windowTitle())
         key(d, "Löschen").click()
-        for ch in "192.168.178.81:8420":
+        for ch in "192.168.1.81:8420":
             b = key(d, ch)
             if b is None:   # ":" liegt fest unten, Ziffern oben -- alles muss es geben
                 events.append(f"FEHLT {ch}")
@@ -128,8 +128,8 @@ def main() -> int:
         key(d, "Übernehmen").click()
     dlg = tap_and_run(app, addr, type_address)
     check("Tipp oeffnet die Texttastatur", dlg is not None)
-    check("Text uebernommen", addr.text() == "192.168.178.81:8420", addr.text())
-    check("meldet textEdited und editingFinished", events == ["edited:192.168.178.81:8420", "finished"], str(events))
+    check("Text uebernommen", addr.text() == "192.168.1.81:8420", addr.text())
+    check("meldet textEdited und editingFinished", events == ["edited:192.168.1.81:8420", "finished"], str(events))
 
     def shift_and_symbols(d) -> None:
         key(d, "Löschen").click()

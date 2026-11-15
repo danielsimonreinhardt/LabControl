@@ -7,6 +7,35 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Dokumentation (0.70.0, PI-60 b, PI-61 a, PI-62 b, PI-63 a, Review DR-1 b).** Deutsche Doku in `docs/de/`
+  (Überblick, Schnellstart, Geräte, Bedienung, Testabläufe, Prüfling, Automatisierung, Raspberry Pi und Verbund,
+  Für Entwickler) mit Mermaid-Diagrammen, als Website über GitHub Pages (MkDocs Material, `mkdocs.yml`, Workflow
+  `.github/workflows/docs.yml`, baut mit `--strict`). Screenshots erzeugt `tools/docs_screenshots.py` aus dem
+  Simulationsmodus (ohne echte Geräte, Datenordner im Bild als `<Datenordner>`). README neu (Englisch, kurz, mit
+  Links), `lab_gui/README.md` auf Start/Version/.exe-Bau gekürzt.
+- **Ablauf-Eigenschaft „Am Ende ALLE AUS“ (0.70.0, Review DR-5 b).** Im Dialog „Eigenschaften des Ablaufs“;
+  für neue Abläufe vorbelegt, bestehende Abläufe ohne die Angabe verhalten sich wie bisher. Ist sie an, schaltet
+  auch ein normal beendeter Lauf (aus dem Fenster, über REST/MCP) am Ende ALLE AUS; Fehler, Stopp und Läufe von der
+  Kommandozeile schalten wie bisher immer ab.
+
+### Geändert
+- **Simulationsmodus auch in der .exe (0.70.0, Review DR-3 b).** Bisher in Release-Builds gesperrt; jetzt
+  verfügbar, damit Hobbyisten LabControl ohne Geräte ausprobieren können. Solange er an ist, steht oben in der
+  Leiste der Chip **„SIMULATION“** (Warnfarbe). Umschalten stellt jetzt auch Prüfling (UDS/XCP), Flashen und J-Link
+  sofort um, nicht erst beim nächsten Start.
+- **Heimnetz-Angaben entfernt (0.70.0, Review DR-7 a).** `tools/pi/deploy_pi.ps1` verlangt `-PiHost`,
+  `tools/pi/netzlaufwerk_pi.sh` die Freigabe als Pflichtangabe; Beispiele in Handbuch, Platzhaltern und Prüfungen
+  nutzen `192.168.1.x`. Eingebautes Handbuch (de/en): Simulationsmodus und Farbschema aktualisiert.
+
+### Behoben
+- **ALLE AUS setzt die PWM-Kanäle des microHIL zurück (0.70.0, Review DR-4 a).** Bisher blieben sie stehen; die
+  Begründung „PWM ist in der Kachel nicht bedienbar“ galt nicht mehr. **Mock-verifiziert** (`check_review_doku`);
+  am microHIL noch nicht hardware-verifiziert.
+- Tooltips der Geräte-Freigaben (Einstellungen → Netzwerk) nannten noch den seit 0.57.0 entfernten Hauptschalter.
+
+Mock-verifiziert für 0.70.0: neue Prüfung `tools/check_review_doku.py` (Simulation in der .exe, Chip, PWM,
+„Am Ende ALLE AUS“). Flashen über CAN am Pi (SocketCAN) geht weiterhin nicht – canflash nimmt nur Kanalnummern;
+dafür ist in neXtBSW TOOL-289 angelegt (Review DR-6 a).
 - **Abläufe debuggen (0.69.0, FT-12, PI-58 a).** Neue Knöpfe in der Ablauf-Leiste: **Anhalten/Weiter**,
   **Einzelschritt**, **Haltepunkt an der markierten Zeile** (roter Punkt in der Nummernspalte, nur in der Sitzung,
   nicht in der Datei) und **Ab der markierten Zeile starten** (nur auf oberster Ebene, nicht innerhalb eines

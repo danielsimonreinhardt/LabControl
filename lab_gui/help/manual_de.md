@@ -503,12 +503,13 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
 
 ## 5. Reiter „Einstellungen“
 
-- **Simulationsmodus**: blendet ein virtuelles Netzteil und eine
-  virtuelle Last ein, um die Oberfläche ohne angeschlossene Hardware zu
-  testen. In der fertig gebauten `.exe` ist diese Option aus
-  Sicherheitsgründen nicht vorhanden.
-- **Dark Mode**: wechselt zwischen dem hellen „Modern Light“- und dem
-  dunklen „Amber Industrial“-Farbschema, ohne Neustart.
+- **Simulationsmodus**: blendet nachgebildete Geräte ein (Netzteil, Last,
+  microHIL, Funktionsgenerator, Oszilloskope, CAN-Bus mit Batterie-Simulator,
+  Prüfling mit UDS und XCP, J-Link), um LabControl ohne angeschlossene
+  Hardware auszuprobieren – auch in der `.exe`. Solange er an ist, steht oben
+  in der Leiste „SIMULATION“. Echte Geräte werden weiterhin erkannt.
+- **Dark Mode**: wechselt zwischen heller und dunkler Darstellung, ohne
+  Neustart.
 - **Touch-Bedienung**: für kleine Touch-Displays wie am Raspberry Pi
   (1024 × 600). Größere Schrift und Bedienelemente, größere Schaltflächen in
   der Navigation links, die Übersicht (Dashboard) als eigene Seite statt
@@ -813,7 +814,7 @@ keine neuen angenommen. Jede Erfassung liegt zusätzlich als CSV-Datei im Ordner
 
 **Verbund mit einem zweiten LabControl (z. B. Raspberry Pi und PC).** Ganz unten
 im Unterreiter „Netzwerk“ trägt man unter **„Verbund“** die Partner-Adresse
-(z. B. `192.168.178.181:8420`) und den Partner-Token ein und hakt **„Verbund
+(z. B. `192.168.1.81:8420`) und den Partner-Token ein und hakt **„Verbund
 aktivieren“** an. Auf beiden Rechnern muss die Freigabe für **alle Geräte
 im lokalen Netzwerk** laufen. Der Verbund ist von beiden Rechnern gleichwertig
 bedienbar: Der gekoppelte Partner sieht und bedient **alle** Geräte des anderen

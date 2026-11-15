@@ -1,7 +1,7 @@
 #!/bin/bash
 # Nachtlauf am Pi einrichten (0.59.0, FT-4). Als Benutzer labcontrol, kein root noetig.
 #
-#   bash ~/LabControl/tools/pi/nightly_pi.sh /mnt/data_exchange/LABCONTROL/testcases/nacht.json [02:00]
+#   bash ~/LabControl/tools/pi/nightly_pi.sh /mnt/<freigabe>/LABCONTROL/testcases/nacht.json [02:00]
 #   bash ~/LabControl/tools/pi/nightly_pi.sh --off      # abschalten
 #   bash ~/LabControl/tools/pi/nightly_pi.sh --now      # einmal sofort ausfuehren (Test)
 #

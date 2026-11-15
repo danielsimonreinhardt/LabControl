@@ -66,6 +66,7 @@ from microhil.driver import (
     IN_COUNT as HIL_IN_COUNT,
     MicroHIL,
     OUT_COUNT as HIL_OUT_COUNT,
+    PWM_COUNT as HIL_PWM_COUNT,
     PWR12_COUNT as HIL_PWR12_COUNT,
     RELAY_COUNT as HIL_RELAY_COUNT,
 )
@@ -2345,10 +2346,9 @@ class DeviceWorker(QObject):
 
     def _kill_hil(self, device_id: str, hil: MicroHIL) -> bool:
         """Schaltet alle vom Control-Tab aus steuerbaren microHIL-Ausgaenge ab:
-        Digitalausgaenge (OUT1-8), Relais (REL1-4), 12V-OUT (PWR12 1-2) und
-        Analogausgaenge (AOUT1-2, auf 0mV). NICHT PWM (kein Control-Tab-
-        Abschnitt dafuer, siehe microhil_panel.py-Modul-Docstring) -- die App
-        setzt dort ohnehin nie einen Zustand, den sie zuruecknehmen muesste.
+        Digitalausgaenge (OUT1-8), Relais (REL1-4), 12V-OUT (PWR12 1-2),
+        Analogausgaenge (AOUT1-2, auf 0mV) und seit 0.70.0 (Review DR-4) auch die
+        PWM-Kanaele (Duty Cycle 0) -- die Kachel hat inzwischen PWM-Regler.
 
         Ein einzelner fehlgeschlagener Kanal bricht NICHT die uebrigen Kanaele
         desselben Geraets ab (anders als bei Last/Netzteil, wo ein Fehler
@@ -2367,6 +2367,8 @@ class DeviceWorker(QObject):
                     hil.set_pwr12(ch, False)
                 for ch in range(1, HIL_AOUT_COUNT + 1):
                     hil.set_analog_output(ch, 0)
+                for ch in range(1, HIL_PWM_COUNT + 1):
+                    hil.set_pwm(ch, 0)
                 logger.info("ALL OFF: microHIL %s -> alle Ausgaenge AUS", device_id)
                 return True
             except HilError as exc:

@@ -11,7 +11,7 @@ MCP-Servers (labcontrol_mcp) auf einem anderen Rechner. In LabControl unter Eins
 "Gekoppelte Programme" laesst sich die Kopplung jederzeit wieder aufheben.
 
 Nur Standardbibliothek.  Aufruf:
-    python tools/labcontrol_pair.py 192.168.178.181:8420 "Messskript Laptop" [--save schluessel.txt]
+    python tools/labcontrol_pair.py 192.168.1.181:8420 "Messskript Laptop" [--save schluessel.txt]
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def pair(address: str, name: str) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Programm mit LabControl koppeln (eigener Schlüssel zum Steuern)")
-    parser.add_argument("address", help="Adresse von LabControl, z. B. 192.168.178.181:8420")
+    parser.add_argument("address", help="Adresse von LabControl, z. B. 192.168.1.181:8420")
     parser.add_argument("name", help="Name des Programms, so steht es in LabControl (max. 24 Zeichen)")
     parser.add_argument("--save", type=Path, help="Schlüssel in diese Datei schreiben statt ihn anzuzeigen")
     args = parser.parse_args(argv)

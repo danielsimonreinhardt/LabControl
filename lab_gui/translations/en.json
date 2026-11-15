@@ -893,5 +893,11 @@
   "Messliste": "Measurement list",
   "{n} Größen, {rate:g} Hz": "{n} quantities, {rate:g} Hz",
   "Kein aktueller XCP-Wert für '{name}' (Messliste)": "No current XCP value for '{name}' (measurement list)",
-  "Fehler": "Error"
+  "Fehler": "Error",
+  "Fernsteuerung dieses Geräts erlauben (Claude (MCP) bzw. gekoppelte Programme)": "Allow remote control of this device (Claude (MCP) or paired programs)",
+  "Erfassungen über Netzwerk/MCP erlauben (schaltet nichts)": "Allow captures over network/MCP (switches nothing)",
+  "Am Ende ALLE AUS": "ALL OFF at the end",
+  "Schaltet nach einem normal beendeten Lauf aus dem Fenster alle eigenen Geräte ab; Fehler, Stopp und Läufe von der Kommandozeile schalten immer ab.": "Switches off all own devices after a run from the window that ended normally; errors, stop and command-line runs always switch off.",
+  "SIMULATION": "SIMULATION",
+  "Simulationsmodus: nachgebildete Geräte (Einstellungen → Allgemein)": "Simulation mode: simulated devices (Settings → General)"
 }

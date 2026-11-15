@@ -277,8 +277,8 @@ def main() -> int:
           str(recorder.device_meta().get(partner_psu)))
 
     print("warn -- LAN-Oszilloskop doppelt, Uhren")
-    window_a._settings._data["scpi_scopes"] = ["192.168.178.250"]
-    server_b.set_lan_scopes(["192.168.178.250"])
+    window_a._settings._data["scpi_scopes"] = ["192.168.1.250"]
+    server_b.set_lan_scopes(["192.168.1.250"])
     warned = spin(app, 3.0, lambda: any("LAN-Oszilloskop" in w for w in window_a.verbund_warnings()))
     check("doppelt eingetragen -> Hinweis an A", warned, str(window_a.verbund_warnings()))
     check("... im Chip sichtbar", "⚠" in window_a._partner_chip.text(), window_a._partner_chip.text())

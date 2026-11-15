@@ -1,9 +1,9 @@
 # Bringt den lokalen Stand per SSH auf den Raspberry Pi und startet LabControl dort neu.
 # Geht direkt PC -> Pi (Bare-Repo ~/labcontrol.git am Pi), nicht ueber GitHub.
 #
-#   powershell -File tools\pi\deploy_pi.ps1 [-PiHost 192.168.178.181] [-User labcontrol]
+#   powershell -File tools\pi\deploy_pi.ps1 -PiHost <IP oder Name des Pi> [-User labcontrol] [-Key <ssh-schluessel>]
 param(
-    [string]$PiHost = "192.168.178.181",
+    [Parameter(Mandatory = $true)][string]$PiHost,
     [string]$User = "labcontrol",
     [string]$Key = "$env:USERPROFILE\.ssh\labpi_ed25519",
     [string]$Branch = "master"

@@ -54,7 +54,6 @@ from icons import ICON_SIZE, IconButton
 from dut_editor import DutEditor
 from instruments_editor import InstrumentsEditor
 from interlock_editor import InterlockEditor
-from paths import IS_FROZEN
 from remote_actions import CONTROL_KINDS, SCOPE_KINDS
 from safety import SAFETY_LIMIT_FIELDS
 from settings import (
@@ -603,13 +602,13 @@ class _ShareTable(QTableWidget):
     @staticmethod
     def _control_tooltip(kind: str) -> str:
         if kind in CONTROL_KINDS:
-            return tr("Fernsteuerung dieses Geräts erlauben (wirkt nur bei aktivem Hauptschalter)")
+            return tr("Fernsteuerung dieses Geräts erlauben (Claude (MCP) bzw. gekoppelte Programme)")
         return tr("Dieses Gerät lässt sich nicht fernsteuern")
 
     @staticmethod
     def _measure_tooltip(kind: str) -> str:
         if kind in SCOPE_KINDS:
-            return tr("Erfassungen über Netzwerk/MCP erlauben (braucht den Hauptschalter nicht)")
+            return tr("Erfassungen über Netzwerk/MCP erlauben (schaltet nichts)")
         return tr("Nur für Oszilloskope")
 
     def _checkbox(self, device_id: str, column: int, enabled: bool) -> QWidget:
@@ -781,18 +780,8 @@ class SettingsTab(QWidget):
         layout.addWidget(self._sim_checkbox)
 
 
-        # Simulationsmodus nur im Dev-Betrieb anbieten, in Release-.exe
-        # komplett ausgeblendet (nicht nur deaktiviert) -- siehe FEATURES.md
-        # Punkt 4. Der eigentliche Schutz liegt in Settings.simulation_mode
-        # (paths.IS_FROZEN); das Ausblenden hier verhindert nur, dass die
-        # nicht wirksame Option im Release-Build ueberhaupt sichtbar ist.
-        # Die Trennlinie darunter wird aus demselben Grund mit ausgeblendet,
-        # sonst stuende in der Release-.exe eine Linie ohne jeden Inhalt
-        # darueber ganz oben im Tab.
+        # Simulationsmodus seit 0.70.0 (Review DR-3) auch in der .exe; oben steht dann der Chip "SIMULATION"
         self._sim_separator = _separator()
-        if IS_FROZEN:
-            self._sim_checkbox.setVisible(False)
-            self._sim_separator.setVisible(False)
         layout.addWidget(self._sim_separator)
 
         # -- Darstellung/Verhalten -------------------------------------------
@@ -1247,7 +1236,7 @@ class SettingsTab(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self._partner_address_edit = QLineEdit()
         self._partner_address_edit.setMinimumWidth(260)
-        self._partner_address_edit.setPlaceholderText("192.168.178.181:8420")
+        self._partner_address_edit.setPlaceholderText("192.168.1.181:8420")
         self._partner_address_edit.editingFinished.connect(self._emit_partner_config)
         self._partner_address_label = QLabel()
         # Kopplung (pairing.py): Token austauschen statt abtippen

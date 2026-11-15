@@ -38,7 +38,7 @@ scheduler.stop(send_shutdown=True)     # Ausgang sperren, Fernsteuerung abgeben
 ```
 
 Prüfskript: `python tools/check_battsim.py` (Nachbildung + DeviceWorker im Simulationsmodus),
-`--hardware --interface vector --channel 59177:1` (nur lesen, Kanalbezeichnung `<Seriennummer>:<Hardware-Kanal>`, hier CANcaseXL Kanal 2),
+`--hardware --interface vector --channel <Seriennummer>:1` (nur lesen, Kanalbezeichnung `<Seriennummer>:<Hardware-Kanal>`, hier Kanal 2 eines CANcaseXL),
 zusätzlich `--remote --volts 3.7` (Folge am Gerät), mit `--hold 15` hält jede Stufe 15 s zum Ablesen am Multimeter.
 
 ## Protokoll in Kürze

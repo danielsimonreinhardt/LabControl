@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Signal
 
 from i18n import DEFAULT_LANGUAGE
 from live_state import DEFAULT_DEVICE_SHARE, default_share_config
-from paths import IS_FROZEN, app_dir
+from paths import app_dir
 from remote_actions import CONTROL_KINDS, SCOPE_KINDS
 from safety import SAFETY_LIMIT_FIELDS, default_device_limits, device_kind
 
@@ -108,16 +108,11 @@ class Settings(QObject):
 
     @property
     def simulation_mode(self) -> bool:
-        # In Release-Builds (PyInstaller-.exe) hart gesperrt, auch wenn eine
-        # aeltere settings.json (z.B. aus Dev-Betrieb) noch "true" enthaelt --
-        # siehe FEATURES.md Punkt 4.
-        if IS_FROZEN:
-            return False
+        # Seit 0.70.0 (Review DR-3) auch in der .exe: Hobbyisten sollen LabControl ohne Geraete ausprobieren
+        # koennen. Verwechslungsschutz ist der Chip "SIMULATION" oben in der Leiste (MainWindow._render_sim_chip).
         return bool(self._data.get("simulation_mode", False))
 
     def set_simulation_mode(self, enabled: bool) -> None:
-        if IS_FROZEN:
-            return
         if enabled == self.simulation_mode:
             return
         self._data["simulation_mode"] = enabled

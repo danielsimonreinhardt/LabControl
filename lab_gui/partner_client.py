@@ -62,7 +62,7 @@ class PartnerSnapshot:
 
 
 def normalize_url(address: str) -> str:
-    """'raspberrypi', '192.168.178.181:8420' oder 'http://pi:8420/' -> 'http://host:port'.
+    """'raspberrypi', '192.168.1.181:8420' oder 'http://pi:8420/' -> 'http://host:port'.
     Leere oder unbrauchbare Eingabe -> ''."""
     text = (address or "").strip().rstrip("/")
     if not text:

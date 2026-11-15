@@ -229,6 +229,10 @@ class MainWindow(QMainWindow):
         self._safety_status_label = QLabel()
         self._safety_status_label.installEventFilter(self)
         self._safety_status_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Chip "SIMULATION" (0.70.0, DR-3): solange der Simulationsmodus an ist, auch in der .exe
+        self._sim_chip = QLabel()
+        self._sim_chip.hide()
+        self._status_layout.addWidget(self._sim_chip)
         # Verbund-Chip "⇄ Pi" (verbunden/getrennt), nur mit eingetragenem Partner sichtbar
         self._partner_chip = QLabel()
         self._partner_chip.hide()
@@ -315,6 +319,7 @@ class MainWindow(QMainWindow):
             self.tabs.setTabText(self.tabs.indexOf(page), text)
         self._render_partner_chip()
         self._render_mcp_chip()
+        self._render_sim_chip()
         if self.tabs.indexOf(self._overview_page) >= 0:
             self.tabs.setTabText(self.tabs.indexOf(self._overview_page), tr("Übersicht"))
         self._nav.retranslate()
@@ -1176,6 +1181,32 @@ class MainWindow(QMainWindow):
             self.control_tab.set_lease(device_id, text)
         self._lease_view = view
 
+    def _render_sim_chip(self, *_args) -> None:
+        """Chip "SIMULATION" in Warnfarbe, solange der Simulationsmodus an ist (Verwechslungsschutz, DR-3)."""
+        chip = getattr(self, "_sim_chip", None)
+        if chip is None:
+            return
+        if not self._settings.simulation_mode:
+            chip.hide()
+            return
+        pal = ThemeManager.instance().palette
+        size = self._chip_icon_size()
+        icon = touch_icon_path("mdi.test-tube", pal.warning, size)
+        chip.setText(f'<img src="{icon}" width="{size}" height="{size}" style="vertical-align: middle"> '
+                     + tr("SIMULATION"))
+        chip.setToolTip(tr("Simulationsmodus: nachgebildete Geräte (Einstellungen → Allgemein)"))
+        self._style_chip(chip, pal.warning)
+        chip.show()
+
+    def _apply_simulation_to_services(self, simulation: bool) -> None:
+        """Simulationsmodus umgeschaltet: Pruefling-Dienste und J-Link sofort umstellen (nicht erst beim Neustart)."""
+        dut = self._settings.dut_config
+        self._uds.configure(dut, simulation)
+        self._xcp.configure(dut, simulation)
+        self._flasher.configure(dut, simulation)
+        self._jlink.apply(self._settings.jlink_config, simulation)
+        self._render_sim_chip()
+
     def _render_mcp_chip(self, *_args) -> None:
         """PI-39 b: Chip "MCP" -- grün, wenn Claude (MCP) an diesem Rechner steuern darf (Schalter in den
         Einstellungen oder Hauptschalter an), sonst grau (nur lesen). Ohne Netzwerk-Freigabe verborgen."""
@@ -1560,6 +1591,7 @@ class MainWindow(QMainWindow):
         self.settings_tab.set_simulation_mode(self._settings.simulation_mode)
         self.settings_tab.simulation_mode_toggled.connect(self._settings.set_simulation_mode)
         self._settings.simulation_mode_changed.connect(self._worker.set_simulation_mode)
+        self._settings.simulation_mode_changed.connect(self._apply_simulation_to_services)
 
         self.settings_tab.set_dark_mode(self._settings.dark_mode)
         self.settings_tab.dark_mode_toggled.connect(self._settings.set_dark_mode)
@@ -2009,6 +2041,7 @@ class MainWindow(QMainWindow):
         self._render_safety_status(self._safety.current_state())
         self._render_partner_chip()
         self._render_mcp_chip()
+        self._render_sim_chip()
         logger.info("Touch-Bedienung %s", "an" if on else "aus")
 
     def _repolish_top_down(self) -> None:
@@ -2548,11 +2581,14 @@ class MainWindow(QMainWindow):
     def _on_run_ended_register(self, outcome: str) -> None:
         """Lauf zu Ende: run-result.json, JUnit und Bericht in den Berichtsordner, Register nachfuehren."""
         run_id, self._run_id = self._run_id, None
+        record = self._run_recorder.record()
         if self._run_all_off_at_end:
             # Lauf von der Kommandozeile (FP-4 a): immer ALLE AUS, nur an diesem Rechner
             self._run_all_off_at_end = False
             self._request_all_off.emit("cli: Lauf beendet")
-        record = self._run_recorder.record()
+        elif record is not None and (record.meta or {}).get("all_off_at_end") and outcome != "stopped":
+            # Ablauf-Eigenschaft "Am Ende ALLE AUS" (0.70.0, DR-5); Fehler/Stopp schalten ohnehin ab
+            self._request_all_off.emit("Ablauf beendet (Am Ende ALLE AUS)")
         if run_id is None or record is None:
             return
         import run_report
@@ -2759,6 +2795,7 @@ class MainWindow(QMainWindow):
         self._render_safety_status(self._safety.current_state())
         self._render_partner_chip()
         self._render_mcp_chip()
+        self._render_sim_chip()
         self._style_safety_banner()
         self._style_all_off_button()
 

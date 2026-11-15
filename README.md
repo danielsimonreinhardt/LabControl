@@ -1,47 +1,53 @@
 # LabControl
 
-**LabControl** is a unified control platform for hobbyist lab equipment.
+**LabControl** controls hobbyist lab equipment – power supplies, electronic loads, oscilloscopes, function
+generators, I/O boxes and CAN devices – from one interface, on a Windows PC and on a Raspberry Pi with a touch
+display. On top of that it runs test sequences with checks and reports, talks to an ECU under test (UDS, XCP,
+flashing over CAN, rest-bus simulation from DBC with E2E) and can be automated from the command line, over REST
+or by an AI assistant through its MCP server.
 
-As an electronics hobbyist, I've accumulated a growing collection of lab gear — several power supplies, an electronic load, and more devices on the way. Most of this equipment can technically be remote-controlled over USB or Ethernet, but the software that ships with it is usually buggy, clunky, and barely usable — and controlling multiple devices together simply isn't supported at all.
+📖 **Documentation (currently in German): https://danielsimonreinhardt.github.io/LabControl/** –
+source in [`docs/de/`](docs/de/index.md). The user interface can be switched to English.
 
-LabControl aims to fix that by providing a single, reliable platform to control all your lab instruments — regardless of manufacturer — from one place, making it possible to coordinate multiple devices together instead of juggling a pile of incompatible, unreliable vendor tools.
+![Test sequence after a run](docs/de/bilder/testablauf_lauf.png)
 
-## Features
+## Highlights
 
-- **Unified control** — manage power supplies, electronic loads, and other bench equipment through one consistent interface instead of a separate app per device.
-- **Multi-device coordination** — drive several instruments together (e.g. sync a power supply and a load for automated test sequences), something vendor software typically can't do at all.
-- **Vendor-agnostic** — designed to support equipment from different manufacturers side by side, not locked to a single brand's ecosystem.
-- **Extensible** — new device types and protocols (USB, Ethernet, SCPI, …) can be added as drivers rather than requiring a rewrite.
-- **Network sharing and remote control** — selected tiles can be shown on other devices on the local network (e.g. an ESP32 display), and, if explicitly allowed, controlled remotely: token-protected, per-device opt-in, behind a master switch with a time limit, blocked during test runs and after a safety trip. An included [MCP server](labcontrol_mcp/README.md) lets an AI assistant such as Claude Code read and control the released devices.
+- **One interface for all devices** – vendor-agnostic drivers, live dashboard, presets, recording (CSV/MF4).
+- **Test sequences** – loops, conditions, checks with limits, reusable linked blocks, voltage profiles, timing
+  checks, variants and parameter sets, debugging with breakpoints, HTML/PDF reports, JUnit and JSON results.
+- **ECU under test** – UDS diagnostics from ODX/PDX, XCP measurement and calibration from A2L, flashing over CAN,
+  rest-bus simulation from DBC with AUTOSAR E2E profiles 1, 2 and 11.
+- **Automation** – `labcontrol run|flash|history|coverage|timing` with exit codes for CI, REST API, MCP server for
+  Claude, nightly runs on the Pi, result history with trends and flaky-check detection.
+- **Safety first** – limits and watchdog per device, ALL OFF across PC and Pi, interlock between power supply and
+  load, remote control only when explicitly allowed.
+- **PC + Raspberry Pi** – kiosk mode with touch UI on the Pi, both linked as one test bench with a shared folder.
 
-## Status
+## Supported devices
 
-LabControl is an early-stage hobby project, currently in active development. The core architecture and initial device drivers are being built out; expect rough edges and breaking changes.
+MANSON HCS-3xxx power supplies · KORAD KEL102 electronic load · Joy-IT JDS2915 (JDS66xx) function generator ·
+PicoScope 2204A/2205A · UNI-T MSO1000HD (SCPI over LAN) · microHIL I/O box · SEGGER J-Link · CAN interfaces
+(Vector, PCAN, SLCAN, SocketCAN) · self-built 14-cell battery simulator. Details per device in
+[Geräte einrichten](docs/de/geraete.md) and the driver READMEs in [`device-driver/`](device-driver/).
 
 ## Installation
 
-A new release is compiled after every master-push. Just download and run the .exe
+- **Windows:** download the `.exe` from the [latest release](https://github.com/danielsimonreinhardt/LabControl/releases/tag/latest)
+  (built after every push to `master`) and run it.
+- **From source:** Python 3.12, `pip install -r requirements.txt`, then `python lab_gui/main.py`.
+- **Raspberry Pi:** see [Raspberry Pi und Verbund](docs/de/pi-verbund.md).
 
+Everything can be tried without hardware when running from source: *Einstellungen → Allgemein →
+Simulationsmodus* (the option is hidden in the `.exe`).
 
-## Supported Devices
+## Status
 
-- KORAD KEL102 electronic load
-- MANSON HCS-3304 USB (all versions of the HCS family should work)
-- Joy-IT JDS2915 dual-channel function generator (JDS66xx protocol; see
-  `device-driver/jds66xx/README.md`)
-- PicoScope 2204A/2205A USB oscilloscope (dashboard and control tiles with
-  free/busy status, name/colour + a button to launch the PicoScope 7 app; LabControl deliberately
-  does not replicate its channel/trigger/waveform UI, see
-  `device-driver/picoscope2000/README.md`). An AI assistant can measure with it through the
-  MCP server via the vendor-neutral `scope_api/` layer (see `scope_api/README.md`)
-- UNI-T MSO1000HD series oscilloscope, e.g. MSO1154HD-S (SCPI over LAN via pyvisa-py, no NI-VISA
-  needed; same tiles and MCP measurement as the PicoScope). **Simulator-tested only so far** --
-  the hardware check is pending, see `device-driver/unit_mso1000hd/README.md`
-- Battery simulator (self-built, 14 isolated cell channels, Longboard project) controlled over CAN.
-  It has no bus of its own: it attaches as a CAN node to an interface already configured in
-  LabControl (column "Gerät am Bus"), shows up as its own device and can be driven from the GUI,
-  test sequences and MCP. **Mock-tested only so far**, see `device-driver/battsim/README.md`
+A hobby project in active development. What has been verified on real hardware and what only in simulation is
+recorded per change in the [CHANGELOG](CHANGELOG.md) (German).
 
 ## Contributing
 
-Contributions, ideas, and bug reports are welcome! If you own lab equipment that isn't supported yet, feel free to open an issue — especially if you're willing to help test a driver for it.
+Contributions, ideas and bug reports are welcome! If you own lab equipment that isn't supported yet, feel free to
+open an issue – especially if you're willing to help test a driver for it. See
+[Für Entwickler](docs/de/entwickler.md) and [NEUEN_TREIBER_ANLEGEN.md](NEUEN_TREIBER_ANLEGEN.md).

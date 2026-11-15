@@ -112,7 +112,7 @@ def section_client(app, state, executor, port) -> None:
     from share_server import client_label, is_verbund_client
 
     check("Adresse ohne Port -> 8420", normalize_url("raspberrypi") == "http://raspberrypi:8420")
-    check("Adresse mit Port", normalize_url(" 192.168.178.181:8421 ") == "http://192.168.178.181:8421")
+    check("Adresse mit Port", normalize_url(" 192.168.1.181:8421 ") == "http://192.168.1.181:8421")
     check("Adresse mit http:// und /", normalize_url("http://pi:8420/") == "http://pi:8420")
     check("unbrauchbare Adressen -> ''", normalize_url("") == "" and normalize_url("ftp://x") == ""
           and normalize_url("pi:99999") == "" and normalize_url("pi:8420/api") == "")

@@ -478,11 +478,13 @@ time-window-limited ring buffer of the live charts.
 
 ## 5. "Settings" tab
 
-- **Simulation mode**: shows a virtual power supply and a virtual load,
-  to test the interface without connected hardware. This option is not
-  present in the built `.exe`, for safety reasons.
-- **Dark mode**: switches between the light "Modern Light" and the dark
-  "Amber Industrial" color scheme, without restarting.
+- **Simulation mode**: shows simulated devices (power supply, load,
+  microHIL, function generator, oscilloscopes, CAN bus with battery
+  simulator, device under test with UDS and XCP, J-Link) to try LabControl
+  without connected hardware – also in the `.exe`. While it is on, the bar
+  at the top shows "SIMULATION". Real devices are still detected.
+- **Dark mode**: switches between the light and the dark look, without
+  restarting.
 - **Touch operation**: for small touch displays such as on the Raspberry Pi
   (1024 × 600). Larger text and controls, larger buttons in the navigation
   on the left, the overview (dashboard) as its own page instead of a fixed
@@ -772,7 +774,7 @@ to the program.
 
 **Link with a second LabControl (e.g. Raspberry Pi and PC).** At the bottom of
 the "Network" sub-tab, under **"Linked setup"**, enter the partner address
-(e.g. `192.168.178.181:8420`) and the partner token and tick **"Enable link"**.
+(e.g. `192.168.1.81:8420`) and the partner token and tick **"Enable link"**.
 On both computers the share must run for **all devices on the local network**.
 The link can be operated equally from both computers: the paired partner sees
 and operates **all** devices of the other computer, regardless of its share
