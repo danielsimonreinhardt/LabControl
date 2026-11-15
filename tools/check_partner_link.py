@@ -270,6 +270,11 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     check("nicht fernsteuerbar ausgeblendet (Handbedienung, OVP); Umbenennen da (geht an den Besitzer, PI-43 b)",
           section._manual_button.isHidden() and not section._ovp_row.isVisible()
           and not section._rename_button.isHidden())
+    # 1.0.1: OVP/OCP des Partners sind unbekannt (Felder auf 1 V / 0 A) -- keine OVP/OCP-Warnung, auch nach Eingabe
+    section._voltage_spin.setValue(12.0)
+    section._current_spin.setValue(0.5)
+    check("keine OVP/OCP-Warnung in der Partnerkachel (12 V / 0,5 A eingegeben)",
+          section._limit_warning.isHidden() and not section._limit_warning.text(), section._limit_warning.text())
     spin(app, 2.0, lambda: "12.0" in panel._values["voltage"].text() if hasattr(panel, "_values") else True)
     check("Messwert des Partners in der Uebersicht", any("12" in lbl.text() for lbl in panel.findChildren(QLabel)),
           str([lbl.text() for lbl in panel.findChildren(QLabel)][:8]))

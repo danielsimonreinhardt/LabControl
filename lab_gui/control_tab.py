@@ -724,6 +724,9 @@ class PsuControlGroup(QGroupBox):
         # -- dieser Hinweis vergleicht die Eingabefelder live, statt den
         # Nutzer erst beim Klick auf "Setzen" scheitern zu lassen.
         self._limit_warning = QLabel("")
+        # Partnerkachel (ControlTab.set_remote): OVP/OCP des Partners sind hier unbekannt, die Felder
+        # stehen auf ihrem Startwert (1 V / 0 A) -- dann keine Warnung, der Besitzer prueft selbst (1.0.1)
+        self._limits_known = True
         self._limit_warning.setWordWrap(True)
         self._limit_warning.setStyleSheet(f"color: {current_palette().warning}; background: transparent;")
         outer.addWidget(self._limit_warning)
@@ -854,8 +857,17 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.blockSignals(False)
         self._update_limit_warning()
 
+    def set_limits_unknown(self) -> None:
+        """Partnerkachel: OVP/OCP liegen beim Besitzer, die Warnung entfaellt (ControlTab.set_remote)."""
+        self._limits_known = False
+        self._update_limit_warning()
+
     def _update_limit_warning(self) -> None:
         messages = []
+        if not self._limits_known:
+            self._limit_warning.setText("")
+            self._limit_warning.setVisible(False)
+            return
         if self._voltage_spin.value() > self._ovp_spin.value():
             messages.append(
                 tr(
@@ -3089,6 +3101,8 @@ class ControlTab(QWidget):
             for widget in (found if isinstance(found, list) else [found]):
                 if isinstance(widget, QWidget):
                     _hide_form_row(widget)
+        if hasattr(section, "set_limits_unknown"):
+            section.set_limits_unknown()
         self._relayout_grid()
 
     def set_remote_controllable(self, device_id: str, allowed: bool) -> None:

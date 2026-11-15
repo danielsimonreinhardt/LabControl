@@ -6,6 +6,16 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+## [1.0.1] – 2026-11-15
+
+### Behoben
+- **Falsche OVP/OCP-Warnung in der Kachel eines Partner-Netzteils.** Am PC zeigte die Kachel eines Netzteils am Pi
+  „Spannung (12V) liegt über der OVP-Schwelle (1V) … Strom (0.5A) liegt über der OCP-Schwelle (0A)“, obwohl das
+  Netzteil mit 12 V lief. OVP/OCP des Partners sind am Leitstand unbekannt (die Felder sind dort ausgeblendet und
+  standen auf ihrem Startwert 1 V / 0 A); die Warnung schaltete sich trotzdem wieder sichtbar. Jetzt entfällt sie
+  in Partnerkacheln – Grenzwerte prüft der Besitzer. Mock-verifiziert (`check_partner_link`, Gegenprobe ohne
+  Korrektur schlägt fehl); am Gerät (HCS16 am Pi, PC-App) noch nicht, dafür braucht die PC-App den neuen Stand.
+
 ## [1.0.0] – 2026-11-15
 
 Erste Release-Version (PI-65). Sie fasst alle Stände seit 0.6.2 zusammen (die Einträge unten, chronologisch mit
