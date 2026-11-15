@@ -23,10 +23,12 @@ J-Link Software. Was welches Gerät braucht: [Geräte einrichten](geraete.md).
 
 ### Windows: fertige .exe
 
-GitHub baut nach jedem Stand auf `master` eine neue `.exe` und stellt sie als Release
-**„LabControl (latest master build)“** (Tag `latest`) bereit.
+Jede Release-Version (z. B. **„LabControl v1.0.0“**) steht mit ihrer `.exe` unter **Releases** auf GitHub. Den
+Entwicklungsstand aus `master` gibt es zusätzlich als Vorabversion **„LabControl (latest master build)“**
+(Tag `latest`).
 
-1. Auf der GitHub-Seite des Projekts **Releases** → **„LabControl (latest master build)“** öffnen.
+1. Auf der GitHub-Seite des Projekts **Releases** öffnen und die oberste Release-Version
+   (Markierung **Latest**) wählen.
 2. `LabControl_v<Version>.exe` herunterladen (eine Datei, keine Installation).
 3. Die `.exe` in einen **eigenen Ordner** legen, z. B. `LabControl` in deinen Dokumenten.
 4. Per Doppelklick starten. Erst kommt ein Startbild, dann das Hauptfenster.

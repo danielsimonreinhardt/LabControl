@@ -6,8 +6,22 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+## [1.0.0] – 2026-11-15
+
+Erste Release-Version (PI-65). Sie fasst alle Stände seit 0.6.2 zusammen (die Einträge unten, chronologisch mit
+der jeweiligen Zwischenversion). Download als `.exe` im GitHub-Release `v1.0.0`, Dokumentation unter
+https://danielsimonreinhardt.github.io/LabControl/.
+
 ### Hinzugefügt
-- **Doku: Verwandte Projekte (0.70.1).** Link auf [microHIL](https://github.com/danielsimonreinhardt/microHIL) im
+- **Englische Oberflächentexte vervollständigt (1.0.0, PI-64 a).** Alle Texte der Oberfläche haben jetzt einen
+  englischen Eintrag; die neue Prüfung `tools/check_translations.py` meldet künftig jeden Text ohne Übersetzung
+  und abweichende Platzhalter.
+- **Release-Workflow (1.0.0).** Ein Tag `v*` baut die `.exe` und veröffentlicht sie als eigenes Release mit
+  `release_notes.md`; der Build aus `master` heißt weiter „latest“, ist aber als Vorabversion markiert, damit
+  „Latest release“ auf GitHub die Release-Version zeigt.
+- **Doku: Verwandte Projekte (0.70.1, PI-66 b).** Links auf [microHIL](https://github.com/danielsimonreinhardt/microHIL),
+  [BatterySimulator](https://github.com/danielsimonreinhardt/BatterySimulator) und
+  [neXtBSW](https://github.com/danielsimonreinhardt/neXtBSW) (die beiden letzten noch nicht öffentlich) im
   Überblick, im Gerätekapitel und im README.
 - **Dokumentation (0.70.0, PI-60 b, PI-61 a, PI-62 b, PI-63 a, Review DR-1 b).** Deutsche Doku in `docs/de/`
   (Überblick, Schnellstart, Geräte, Bedienung, Testabläufe, Prüfling, Automatisierung, Raspberry Pi und Verbund,

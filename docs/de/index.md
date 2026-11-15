@@ -119,6 +119,11 @@ auf Deutsch.
 | Projekt | Worum es geht |
 |---|---|
 | [microHIL](https://github.com/danielsimonreinhardt/microHIL) | Selbst entwickelte I/O-Box für einfache Hardware-in-the-Loop-Tests; LabControl steuert sie als Gerät und nutzt ihren CAN-Ausgang als SLCAN-Interface |
+| [BatterySimulator](https://github.com/danielsimonreinhardt/BatterySimulator) | Selbst gebauter Batterie-Simulator mit 14 Zellkanälen (Hardware, Firmware); LabControl steuert ihn über CAN |
+| [neXtBSW](https://github.com/danielsimonreinhardt/neXtBSW) | Basissoftware für S32K-Steuergeräte; LabControl spricht mit ihr per UDS, XCP, Restbus mit E2E und flasht über ihren Bootloader |
+
+!!! note
+    BatterySimulator und neXtBSW sind noch nicht öffentlich; die Links funktionieren, sobald die Repos freigegeben sind.
 
 ## Wie geht es weiter?
 

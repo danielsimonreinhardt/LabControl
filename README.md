@@ -35,11 +35,16 @@ PicoScope 2204A/2205A · UNI-T MSO1000HD (SCPI over LAN) · microHIL I/O box · 
 
 - [microHIL](https://github.com/danielsimonreinhardt/microHIL) – self-built I/O box for simple hardware-in-the-loop
   tests; LabControl drives it as a device and uses its CAN port as an SLCAN interface.
+- [BatterySimulator](https://github.com/danielsimonreinhardt/BatterySimulator) – self-built 14-cell battery simulator
+  (hardware and firmware), controlled by LabControl over CAN. *Not public yet.*
+- [neXtBSW](https://github.com/danielsimonreinhardt/neXtBSW) – basic software for S32K ECUs; LabControl talks to it
+  via UDS, XCP and rest-bus with E2E and flashes it through its bootloader. *Not public yet.*
 
 ## Installation
 
-- **Windows:** download the `.exe` from the [latest release](https://github.com/danielsimonreinhardt/LabControl/releases/tag/latest)
-  (built after every push to `master`) and run it.
+- **Windows:** download `LabControl_v<version>.exe` from the [latest release](https://github.com/danielsimonreinhardt/LabControl/releases/latest)
+  and run it. A development build of the current `master` is available as the pre-release
+  [`latest`](https://github.com/danielsimonreinhardt/LabControl/releases/tag/latest).
 - **From source:** Python 3.12, `pip install -r requirements.txt`, then `python lab_gui/main.py`.
 - **Raspberry Pi:** see [Raspberry Pi und Verbund](docs/de/pi-verbund.md).
 
@@ -48,8 +53,8 @@ Simulationsmodus* (the option is hidden in the `.exe`).
 
 ## Status
 
-A hobby project in active development. What has been verified on real hardware and what only in simulation is
-recorded per change in the [CHANGELOG](CHANGELOG.md) (German).
+Version 1.0.0 is the first release. LabControl is a hobby project and keeps evolving; what has been verified on
+real hardware and what only in simulation is recorded per change in the [CHANGELOG](CHANGELOG.md) (German).
 
 ## Contributing
 

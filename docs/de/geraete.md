@@ -317,7 +317,8 @@ CAN-Interfaces verbindet LabControl nie automatisch: Eine falsche Bitrate kann e
 ## Batterie-Simulator
 
 Selbst gebautes Gerät: 14 galvanisch getrennte Zellkanäle (0–5 V, höchstens 0,5 A), zu einem Stapel kaskadiert,
-fernsteuerbar über CAN mit 500 kbit/s.
+fernsteuerbar über CAN mit 500 kbit/s. Projekt: [BatterySimulator](https://github.com/danielsimonreinhardt/BatterySimulator)
+(noch nicht öffentlich).
 
 **Einrichten:** CAN-Interface wie oben eintragen, bei **Gerät am Bus** „Batterie-Simulator“ wählen. Jedes
 Interface geht, den Bus kann er mit dem Prüfling teilen. Verbunden gilt er erst, wenn er antwortet.
