@@ -45,6 +45,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--json", help="run-result.json hierhin schreiben")
     run.add_argument("--var", action="append", default=[], metavar="NAME=WERT",
                      help="Laufvariable vorbelegen (mehrfach)")
+    run.add_argument("--variant", default="", metavar="NAME",
+                     help="Variante (Name im Ordner 'varianten' oder Datei): Rollen und Parameter (FT-5)")
+    run.add_argument("--matrix", metavar="CSV",
+                     help="eine Zeile = ein Lauf; Spalte 'variant' optional, sonst Parameter (FT-5)")
     run.add_argument("--simulation", action="store_true", help="simulierte Geräte statt Hardware")
     run.add_argument("--wait-devices", type=float, default=DEFAULT_WAIT_DEVICES_S, metavar="S",
                      help="so lange auf die Geräte des Ablaufs warten (Standard 15 s)")
@@ -255,7 +259,47 @@ def _flash_as_run(args) -> Path:
     path = Path(name)
     save_steps([step], path, meta={"description": f"Flashen {Path(args.firmware).name}"})
     args.command, args.testcase, args.var, args.timeout = "run", str(path), [], 0.0
+    args.variant, args.matrix = "", None
     return path
+
+
+MATRIX_SEVERITY = (130, 3, 2, 1, 0)   # schlimmster Exit-Code einer Matrix zuerst
+
+
+def _run_matrix(args, run_one) -> int:
+    """`run --matrix datei.csv` (FT-5): je Zeile ein Lauf mit Variante/Parametern der Zeile; Ausgabedateien
+    bekommen die Zeilennummer angehaengt. Exit-Code = schlimmster Lauf; Unterbrechen beendet die Matrix."""
+    import copy
+
+    import variants
+
+    try:
+        rows = variants.read_matrix(Path(args.matrix))
+        base_vars = _parse_vars(args.var)
+    except (OSError, ValueError) as exc:
+        _say(f"Fehler in der Matrix: {exc}")
+        return 3
+    results = []
+    for number, row in enumerate(rows, start=1):
+        row_args = copy.copy(args)
+        row_args.matrix = None
+        row_args.variant = row["variant"] or args.variant
+        row_args.var = [f"{k}={v!r}" for k, v in {**base_vars, **row["vars"]}.items()]
+        for option in ("json", "junit", "report"):
+            value = getattr(args, option)
+            if value:
+                path = Path(value)
+                setattr(row_args, option, str(path.with_name(f"{path.stem}_{number:02d}{path.suffix}")))
+        _say(f"=== Matrix {number}/{len(rows)}: {row['label']}")
+        code = run_one(row_args)
+        results.append((row["label"], code))
+        if code == 130:
+            break
+    _say("=== Matrix-Ergebnis")
+    for number, (label, code) in enumerate(results, start=1):
+        _say(f"  {number:2d}  Exit {code:3d}  {label}")
+    codes = {code for _label, code in results}
+    return next((c for c in MATRIX_SEVERITY if c in codes), max(codes) if codes else 3)
 
 
 def _cmd_devices(args, settings) -> int:
@@ -289,6 +333,22 @@ def _cmd_run(args, settings) -> int:
     rig = _Rig(settings, args.simulation)
     try:
         steps, meta, problem = _prepare_steps(path, rig)
+        variant = None
+        if not problem:
+            # FT-5 (PI-55 a): Variante laden, Rollen einsetzen, Parameter als Startvariablen
+            import data_store
+            import variants
+            if getattr(args, "variant", ""):
+                variant = variants.find_variant(args.variant, data_store.target_dir(variants.FOLDER))
+            problems = variants.apply_roles(steps, variant)
+            problem = problems[0] if problems else ""
+            variables = variants.run_variables(variant, variables)
+            meta = dict(meta)
+            if variant is not None:
+                meta["variant"] = variant.name
+                _say(f"Variante: {variant.name}")
+            if variables:
+                meta["parameters"] = dict(variables)
     except (OSError, ValueError, TypeError) as exc:
         rig.shutdown(REASON_CLI_END)
         _say(f"Fehler beim Laden: {exc}")
@@ -466,6 +526,8 @@ def main(argv: list[str]) -> int:
         logger.info("Kommandozeile über die laufende Instanz (%s)", holder or "?")
         try:
             import instance_cli   # erst hier: zieht run_session/cantools nach (Startzeit, 0.60.2)
+            if getattr(args, "matrix", None):
+                return _run_matrix(args, lambda row_args: instance_cli.main(row_args, settings))
             return instance_cli.main(args, settings)
         finally:
             if temp_testcase is not None:
@@ -474,6 +536,8 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "devices":
             return _cmd_devices(args, settings)
+        if getattr(args, "matrix", None):
+            return _run_matrix(args, lambda row_args: _cmd_run(row_args, settings))
         return _cmd_run(args, settings)
     finally:
         if temp_testcase is not None:

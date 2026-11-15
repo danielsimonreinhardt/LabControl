@@ -67,6 +67,7 @@ from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
 
 from device_worker import PICOSCOPE_RETRY_MESSAGE
 from i18n import tr
+from variants import resolve_refs
 from testcase_model import (
     ARB_RAMP,
     COND_FIELD_UNITS,
@@ -522,6 +523,13 @@ class TestRunner(QObject):
 
             step = self._steps[self._index]
             t = step.step_type
+            if step.enabled and (step.params or {}).get("refs"):
+                # FT-5 (PI-55 a): Sollwert/Dauer/Grenzen aus Parametern der Variante bzw. Laufvariablen
+                problem = resolve_refs(step, self._vars)
+                if problem:
+                    self.step_started.emit(self._index, step)
+                    self._fail_at(self._index, problem)
+                    return
 
             if t == "action":
                 if not step.enabled:

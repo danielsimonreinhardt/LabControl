@@ -98,6 +98,7 @@ def main(args, settings) -> int:
     while True:
         try:
             run_id = instance.request("POST", "/runs", {"path": str(path), "vars": variables,
+                                                        "variant": getattr(args, "variant", "") or "",
                                                         "all_off_at_end": True})["run"]
             break
         except InstanceError as exc:

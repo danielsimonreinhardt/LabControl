@@ -52,6 +52,7 @@ from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
 import app_logging
 import data_store
+import variants
 import verbund_ids
 from paths import app_dir
 from signal_dialog import SignalDialog
@@ -426,6 +427,7 @@ class _ReadonlyCellOverlay(QWidget):
 
 class TestcaseTab(QWidget):
     run_requested = Signal()
+    variant_changed = Signal(str)   # FT-5: gewaehlte Variante (Name, "" = keine)
     stop_requested = Signal()
     open_report_requested = Signal()
     export_report_pdf_to = Signal(object)  # Path
@@ -524,6 +526,15 @@ class TestcaseTab(QWidget):
         # Ablauf-Eigenschaften (Format v3 "meta", 0.58.0): Beschreibung, Anforderungen, Quelle/Senke
         self._meta: dict = {}
         self._props_button = IconButton("mdi.tune-variant", "")
+        # Varianten (FT-5, PI-55 a): Auswahl fuer den naechsten Lauf + Dialog zum Bearbeiten
+        self._variant_name = ""
+        self._variant_roles: dict[str, str] = {}     # Rolle -> Geraeteart (aus allen Varianten)
+        self._variant_vars: list[str] = []
+        self._variant_combo = QComboBox()
+        self._variant_combo.setMinimumWidth(150)
+        self._variant_combo.currentIndexChanged.connect(self._on_variant_selected)
+        self._variants_button = IconButton("mdi.tag-multiple-outline", "")
+        self._variants_button.clicked.connect(self._edit_variants)
         self._add_menu = QMenu(self._add_button)
         self._action_add_action = self._add_menu.addAction("")
         self._action_add_loop = self._add_menu.addAction("")
@@ -567,6 +578,8 @@ class TestcaseTab(QWidget):
         button_row.addWidget(self._block_insert_button)
         button_row.addWidget(self._block_unlink_button)
         button_row.addStretch()
+        button_row.addWidget(self._variant_combo)
+        button_row.addWidget(self._variants_button)
         button_row.addWidget(self._props_button)
         button_row.addWidget(self._new_button)
         button_row.addWidget(self._load_button)
@@ -702,6 +715,10 @@ class TestcaseTab(QWidget):
         self._block_insert_button.setToolTip(tr("Baustein einfügen…"))
         self._block_unlink_button.setToolTip(tr("Verknüpfung zum Baustein lösen"))
         self._props_button.setToolTip(tr("Eigenschaften des Ablaufs…"))
+        self._variants_button.setToolTip(tr("Varianten bearbeiten…"))
+        self._variant_combo.setToolTip(tr("Variante für den nächsten Lauf: Rollen → Geräte, Parameter → Werte"))
+        if self._variant_combo.count():
+            self._variant_combo.setItemText(0, tr("(keine Variante)"))
         self._action_add_action.setText(tr("Aktionsschritt"))
         self._action_add_loop.setText(tr("Schleife (n×) … Ende"))
         self._action_add_while.setText(tr("Solange … Ende"))
@@ -897,6 +914,9 @@ class TestcaseTab(QWidget):
             if kind not in COND_DEVICE_KINDS:
                 continue
             items.append((f"{label} ({kind_label(kind)})", kind, device_id))
+        for role, kind in sorted(self._variant_roles.items()):
+            if kind in COND_DEVICE_KINDS:
+                items.append((f"⟨{role}⟩ ({kind_label(kind)})", kind, variants.role_ref(role)))
         return items
 
     def _device_combo_items(self) -> list[tuple[str, str]]:
@@ -913,6 +933,9 @@ class TestcaseTab(QWidget):
                 # _populate_action_combo hat keinen .get()-Fallback).
                 continue
             items.append((f"{label} ({kind_label(kind)})", _device_key(kind, device_id)))
+        for role, kind in sorted(self._variant_roles.items()):
+            if kind in DEVICE_ACTIONS:     # FT-5: Rolle statt Geraet, die Variante belegt sie beim Start
+                items.append((f"⟨{role}⟩ ({kind_label(kind)})", _device_key(kind, variants.role_ref(role))))
         return items
 
     def _populate_device_combo(
@@ -928,7 +951,10 @@ class TestcaseTab(QWidget):
         index = combo.findData(selected_key)
         if index < 0:
             kind, device_id = selected
-            if device_id:
+            if variants.is_role(device_id):
+                combo.addItem(tr("⟨{role}⟩ (in keiner Variante)", role=variants.role_name(device_id)), selected_key)
+                index = combo.count() - 1
+            elif device_id:
                 # Aus einer gespeicherten Datei geladenes Geraet, das diese
                 # Session noch nicht gesehen hat -- Eintrag beibehalten statt
                 # die Auswahl stillschweigend zu verwerfen.
@@ -941,6 +967,8 @@ class TestcaseTab(QWidget):
         combo.currentIndexChanged.emit(index)
 
     def _device_display(self, kind: str, device_id: str) -> str:
+        if variants.is_role(device_id):
+            return f"⟨{variants.role_name(device_id)}⟩"
         if device_id in self._known_devices:
             return self._known_devices[device_id][1]
         base = kind_label(kind)
@@ -1230,6 +1258,10 @@ class TestcaseTab(QWidget):
         check_button = IconButton("mdi.checkbox-marked-circle-outline", tr("Prüfung…"))
         check_page_layout.addWidget(check_summary_label, 1)
         check_page_layout.addWidget(check_button)
+        # FT-5 (PI-55 a): Sollwert/Dauer/Grenzen aus Parametern der Variante
+        refs_button = IconButton("mdi.variable", tr("Werte aus Parametern…"))
+        check_page_layout.addWidget(refs_button)
+        check_page._refs = variants.step_refs(step)
         check_page._summary_label = check_summary_label
         check_page._check_button = check_button
         check_page._check_params = dict(
@@ -1256,7 +1288,11 @@ class TestcaseTab(QWidget):
                 summary = f"{summary} → {store_var}"
             if params.get("requirements"):
                 summary = f"{summary} · {', '.join(params['requirements'])}"
+            refs = getattr(check_page, "_refs", {})
+            if refs:
+                summary = f"{summary} · " + ", ".join(f"{tr(variants.REF_FIELDS[k])} ← {v}" for k, v in refs.items())
             check_summary_label.setText(summary)
+            refs_button.setStyleSheet("" if not refs else f"color: {current_palette().accent};")
 
         check_page._refresh_summary = refresh_check_summary
         refresh_check_summary()
@@ -1295,6 +1331,15 @@ class TestcaseTab(QWidget):
                 refresh_check_summary()
 
         check_button.clicked.connect(open_check_dialog)
+
+        def open_refs_dialog() -> None:
+            from variant_dialog import RefsDialog
+            dialog = RefsDialog(check_page._refs, self._parameter_names(), self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                check_page._refs = dialog.refs()
+                refresh_check_summary()
+
+        refs_button.clicked.connect(open_refs_dialog)
         self._table.setCellWidget(row_index, COL_CHECK, check_page)
 
         enabled_check = QCheckBox()
@@ -2163,6 +2208,10 @@ class TestcaseTab(QWidget):
             params = getattr(check_page, "_check_params", {})
             if "requirements" in params:
                 step.requirements = list(params["requirements"])
+            refs = dict(getattr(check_page, "_refs", {}) or {})
+            step.params = {k: v for k, v in (step.params or {}).items() if k != "refs"}
+            if refs:
+                step.params["refs"] = refs
         return step
 
     def set_xcp_a2l_provider(self, provider) -> None:
@@ -2738,6 +2787,59 @@ class TestcaseTab(QWidget):
 
     def current_testcase_name(self) -> str:
         return self._current_path.stem if self._current_path else tr("Unbenannt")
+
+    def current_variant(self) -> str:
+        """Gewaehlte Variante (FT-5, Name im Ordner "varianten"; "" = keine)."""
+        return getattr(self, "_variant_name", "")
+
+    def set_variant(self, name: str) -> None:
+        self._variant_name = name or ""
+        self.reload_variants()
+
+    def reload_variants(self) -> None:
+        """Variantenliste, Rollen und Parameternamen neu aus dem Ordner lesen (Start, nach dem Dialog)."""
+        try:
+            found, _problems = variants.list_variants(data_store.target_dir(variants.FOLDER))
+        except OSError:
+            found = []
+        self._variant_roles = variants.known_roles(found)
+        self._variant_vars = variants.known_vars(found)
+        combo = self._variant_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(tr("(keine Variante)"), "")
+        for variant in found:
+            combo.addItem(variant.name, variant.name)
+        if self._variant_name and combo.findData(self._variant_name) < 0:
+            combo.addItem(tr("{name} (fehlt)", name=self._variant_name), self._variant_name)
+        combo.setCurrentIndex(max(0, combo.findData(self._variant_name)))
+        combo.blockSignals(False)
+        self._refresh_device_combos()
+
+    def _on_variant_selected(self, _index: int) -> None:
+        name = self._variant_combo.currentData() or ""
+        if name != self._variant_name:
+            self._variant_name = name
+            self.variant_changed.emit(name)
+
+    def _edit_variants(self) -> None:
+        from variant_dialog import VariantDialog
+        dialog = VariantDialog(data_store.target_dir(variants.FOLDER), self._known_devices, self)
+        dialog.exec()
+        self.reload_variants()
+
+    def _parameter_names(self) -> list[str]:
+        """Parameter der Varianten und Variablen des Ablaufs (Auswahl im Dialog "Werte aus Parametern")."""
+        names = set(self._variant_vars)
+        for row in range(self._table.rowCount()):
+            try:
+                step = self._row_to_step(row)
+            except Exception:  # noqa: BLE001 -- halbfertige Zeile
+                continue
+            for name in (step.var_name, step.store_var, step.cond_var):
+                if name:
+                    names.add(name)
+        return sorted(names)
 
     def _pick_pdf_path(self) -> None:
         path_str, _ = QFileDialog.getSaveFileName(

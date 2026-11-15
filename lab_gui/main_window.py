@@ -2171,6 +2171,9 @@ class MainWindow(QMainWindow):
         self._run_session.set_flasher(self._flasher)   # Firmware flashen (CAN), PI-54
         self._run_session.set_xcp(self._xcp)   # XCP-Schritte (FT-10)
         self.testcase_tab.set_uds_odx_provider(self._uds.odx)
+        # Varianten (FT-5): Auswahl merken, Liste aus dem gemeinsamen Ordner
+        self.testcase_tab.set_variant(self._settings.selected_variant)
+        self.testcase_tab.variant_changed.connect(self._settings.set_selected_variant)
         self.testcase_tab.set_xcp_a2l_provider(self._xcp.a2l)
         self.settings_tab.instruments_editor.attach(self._instruments)
         # Anforderungsregister (FT-3): Titel fuer Bericht, IDs fuer die Vervollstaendigung im Pruefungsdialog
@@ -2199,6 +2202,8 @@ class MainWindow(QMainWindow):
         self._run_id: str | None = None          # Lauf im Register, solange er laeuft
         self._run_source = "gui"                  # naechster Start: Aufrufer (REST) oder Fenster
         self._run_vars: dict[str, float] = {}
+        self._run_variant = ""                    # FT-5: Variante eines REST-Starts ("" = Auswahl im Editor)
+        self._active_variant = None               # variants.Variant des startenden Laufs
         self._pending_run_id: str | None = None   # REST-Start wartet noch (z. B. auf Belegung beim Partner)
         self._last_refusal = ""
         self._run_all_off_at_end = False          # Lauf von der Kommandozeile: am Ende ALLE AUS
@@ -2229,7 +2234,13 @@ class MainWindow(QMainWindow):
     def _on_run_requested(self) -> None:
         self.testcase_tab.refresh_linked_blocks()   # geaenderte verknuepfte Bausteine (0.61.2, PI-49 b)
         steps = self.testcase_tab.steps()
+        spec, self._run_variant = (self._run_variant or self.testcase_tab.current_variant()), ""
         if not any(step.enabled and step.step_type == "action" for step in steps):
+            return
+        # FT-5 (PI-55 a): Rollen der gewaehlten Variante einsetzen, vor allen Pruefungen der Geraete
+        self._active_variant, problem = self._apply_variant(steps, spec)
+        if problem:
+            self._refuse_run(problem)
             return
         if self._safety.is_tripped():
             self.statusBar().showMessage(
@@ -2275,8 +2286,28 @@ class MainWindow(QMainWindow):
         name = self.testcase_tab.current_testcase_name()
         self._run_id = self._pending_run_id or self._runs.begin(name, self._run_source, len(steps))
         self._pending_run_id = None
-        variables, self._run_source, self._run_vars = self._run_vars, "gui", {}
-        self._run_session.start(steps, name, self.testcase_tab.meta(), variables)
+        overrides, self._run_source, self._run_vars = self._run_vars, "gui", {}
+        import variants
+        variant, self._active_variant = self._active_variant, None
+        variables = variants.run_variables(variant, overrides)
+        meta = dict(self.testcase_tab.meta())
+        if variant is not None:
+            meta["variant"] = variant.name
+        if variables:
+            meta["parameters"] = dict(variables)
+        self._run_session.start(steps, name, meta, variables)
+
+    def _apply_variant(self, steps: list[TestStep], spec: str):
+        """(variante | None, problem): Variante laden und ihre Rollen in `steps` einsetzen (FT-5)."""
+        import variants
+        variant = None
+        if spec:
+            try:
+                variant = variants.find_variant(spec, data_store.target_dir(variants.FOLDER))
+            except (OSError, ValueError) as exc:
+                return None, str(exc)
+        problems = variants.apply_roles(steps, variant)
+        return variant, problems[0] if problems else ""
 
     def _show_dut_status(self, *_args) -> None:
         odx = self._uds.odx()
@@ -2383,6 +2414,11 @@ class MainWindow(QMainWindow):
             answer(False, "invalid_testcase", error)
             return
         steps = self.testcase_tab.steps()
+        variant_spec = str(payload.get("variant") or "")
+        _variant, problem = self._apply_variant(steps, variant_spec or self.testcase_tab.current_variant())
+        if problem:
+            answer(False, "invalid_variant", problem)
+            return
         partner_host = self._partner_host_name
         missing = self._directory.missing(
             steps, skip=lambda d: verbund_ids.partner_device(d, partner_host) is not None)
@@ -2392,6 +2428,7 @@ class MainWindow(QMainWindow):
         self._last_refusal = ""
         self._run_source = client
         self._run_vars = dict(payload.get("vars") or {})
+        self._run_variant = variant_spec
         self._run_all_off_at_end = bool(payload.get("all_off_at_end"))
         self._pending_run_id = self._runs.begin(self.testcase_tab.current_testcase_name(), client, len(steps))
         run_id = self._pending_run_id

@@ -293,13 +293,17 @@ def list_testcases() -> dict:
 
 @server.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
-def run_testcase(testcase: str, variables: dict[str, float] | None = None) -> dict:
+def run_testcase(testcase: str, variables: dict[str, float] | None = None, variant: str | None = None) -> dict:
     """Startet einen gespeicherten Testablauf (Name aus list_testcases, z. B. 'ladetest.json'). Optional
-    Laufvariablen vorbelegen. Liefert die Lauf-ID ('run'); danach mit get_run den Stand abfragen. Schaltet
-    Geraete gemaess Ablauf -- nur auf Bitte des Nutzers starten."""
+    Laufvariablen vorbelegen und eine Variante waehlen (Name einer Variantendatei im gemeinsamen Ordner
+    'varianten'; belegt Rollen mit Geraeten und Parameter mit Werten; ohne Angabe die im Editor gewaehlte).
+    Liefert die Lauf-ID ('run'); danach mit get_run den Stand abfragen. Schaltet Geraete gemaess Ablauf -- nur
+    auf Bitte des Nutzers starten."""
     payload: dict = {"testcase": testcase}
     if variables:
         payload["vars"] = variables
+    if variant:
+        payload["variant"] = variant
     return _checked("POST", "/api/v1/runs", payload, timeout=TIMEOUT_S)
 
 

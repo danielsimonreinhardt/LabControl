@@ -37,7 +37,7 @@ from paths import app_dir
 logger = logging.getLogger(__name__)
 
 OUTBOX_KINDS = ("captures", "reports", "recordings")   # je Rechner, werden nachgeschoben
-SHARED_KINDS = ("testcases", "blocks")                  # gemeinsam, nur Ordner fuer Dialoge
+SHARED_KINDS = ("testcases", "blocks", "varianten")     # gemeinsam, nur Ordner fuer Dialoge (varianten: FT-5)
 LOCAL_LIMIT_BYTES = 200 * 1024 * 1024
 SYNC_INTERVAL_S = 60.0
 MIN_AGE_S = 30.0          # erst nachschieben, wenn die Datei fertig geschrieben (und geoeffnet) ist

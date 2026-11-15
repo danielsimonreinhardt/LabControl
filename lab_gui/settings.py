@@ -668,6 +668,20 @@ class Settings(QObject):
         self._save()
         self.requirement_registers_changed.emit(clean)
 
+    # -- Variante fuer den naechsten Lauf (FT-5, variants.py) -------------------
+
+    @property
+    def selected_variant(self) -> str:
+        value = self._data.get("selected_variant", "")
+        return value.strip()[:200] if isinstance(value, str) else ""
+
+    def set_selected_variant(self, name: str) -> None:
+        name = str(name or "").strip()[:200]
+        if name == self.selected_variant:
+            return
+        self._data["selected_variant"] = name
+        self._save()
+
     # -- Verbund-Partner (PI-23 a, siehe partner_link.py) ---------------------
 
     @property

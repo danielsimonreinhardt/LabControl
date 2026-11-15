@@ -7,6 +7,23 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Varianten und Parametersätze (0.66.0, FT-5, PI-55 a).** Variantendateien im gemeinsamen Ordner
+  `varianten/` (`{"name", "description", "roles": {Rolle: Geräte-ID}, "vars": {Name: Zahl}}`), bearbeitet über
+  den neuen Knopf **„Varianten bearbeiten…“** in der Ablauf-Leiste (Liste, Rollen mit Geräteauswahl, Parameter).
+  Daneben wählt eine Auswahlliste die Variante für den nächsten Lauf (gemerkt). Schritte und Bedingungen können
+  statt eines Geräts eine **Rolle** tragen (`role:<Name>`, in der Geräteauswahl als ⟨Rolle⟩); vor dem Lauf setzt
+  die Variante das Gerät ein (unbelegte Rolle oder falsche Geräteart = nicht gestartet). Je Aktionszeile holt
+  **„Werte aus Parametern…“** Sollwert, Dauer und Prüfgrenzen aus Parametern (`params["refs"]`); der Runner setzt
+  sie beim Ausführen ein, ein fehlender Parameter bricht ab. Startvariablen = Parameter der Variante, darüber
+  `--var`. Bericht und `run-result.json` nennen Variante und Parameter. Kommandozeile: `run --variant NAME` und
+  `run --matrix datei.csv` (eine Zeile = ein Lauf, Spalte `variant` optional, sonst Parameter; Ausgabedateien mit
+  Zeilennummer, Exit = schlimmster Lauf), auch über die laufende Instanz; REST `POST /runs` und MCP
+  `run_testcase` nehmen `variant`. **Mock-verifiziert:** neue Prüfung `tools/check_variants.py` (Dateien, Rollen,
+  Parameter, Matrix, Läufe in der Simulation, Editor und Dialoge). **Hardware-verifiziert (15.11.2026, PC mit
+  Evalboard, HCS16 am Pi):** Variante „Evalboard PC“ (Rolle Versorgung = `@raspberrypi/psu:HCS16`, U_nom 12 V,
+  Grenzen 11 500–12 500 mV), Ablauf „PI-55 Variante Evalboard“ per `main.py run --variant` über die laufende
+  Instanz: Netzteil des Pi über die Rolle auf den Parameterwert gesetzt, UDS-Versorgung 11 965 mV gegen die
+  Parametergrenzen bestanden, Variante und Parameter im Bericht, Exit 0.
 - **Firmware über CAN flashen (0.65.0, PI-54 b).** Neue UDS-Aktion **„Firmware flashen (CAN)“** im Testablauf
   (Datei, Warten auf den Bootloader, Steuergerät bei mehreren am Bus), ein Knopf **„Firmware über CAN
   flashen…“** in der Prüfling-Kachel und `main.py flash <datei> [--wait S] [--ecu NAME]` (ein Lauf mit genau

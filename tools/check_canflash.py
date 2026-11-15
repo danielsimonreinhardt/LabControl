@@ -223,6 +223,8 @@ def section_service(app) -> None:
 
 def section_worker(app) -> None:
     print("worker -- hold_can")
+    import no_hardware
+    no_hardware.block()
     from device_worker import DeviceWorker
 
     worker = DeviceWorker(simulation_mode=False, can_configs=[])
@@ -298,4 +300,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # Ergebnis steht fest; das Aufraeumen von Worker-/Prozess-Objekten am Interpreter-Ende stuerzte unter WSL
+    # gelegentlich ab (Bus error nach "ALLES OK")
+    os._exit(code)

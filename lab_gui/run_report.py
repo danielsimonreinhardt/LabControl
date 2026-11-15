@@ -318,6 +318,10 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
         overview.insert(0, (tr("Beschreibung:"), meta["description"]))
     if meta.get("requirements"):
         overview.append((tr("Anforderungen:"), ", ".join(meta["requirements"])))
+    if meta.get("variant"):
+        overview.append((tr("Variante:"), meta["variant"]))
+    if meta.get("parameters"):
+        overview.append((tr("Parameter:"), ", ".join(f"{k} = {v:g}" for k, v in sorted(meta["parameters"].items()))))
     if record.interlock_groups:
         groups = "; ".join(" / ".join(record.device_meta.get(d, ("", d))[1] for d in group)
                            for group in record.interlock_groups)
