@@ -580,7 +580,10 @@ time-window-limited ring buffer of the live charts.
   limits, read back afterwards). On connecting, LabControl compares the ECU's
   EPK with the A2L's; if they differ, nothing is read or written. Measuring by
   polling only (no DAQ), writing only from a testcase, not over the network.
-  Curves and maps are not supported yet. **Measurement list (XCP)**: A2L
+  Curves and maps appear as object `<name>` with all values (map: for each X
+  breakpoint the values over Y, as in memory), own breakpoints as `<name>_X`
+  or `<name>_Y`, shared ones as an axis object of their own. **Measurement
+  list (XCP)**: A2L
   names (comma-separated) and **polling rate** (default 10 Hz). The tile
   "Device under test (XCP)" starts and stops polling and shows the values;
   they also go to history and recording. In conditions (While/If) and

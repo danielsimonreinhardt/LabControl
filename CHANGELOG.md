@@ -7,6 +7,14 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **XCP: Kennlinien und Kennfelder (0.64.4, FT-10).** Der A2L-Leser kennt jetzt CHARACTERISTIC CURVE/MAP mit
+  AXIS_DESCR und AXIS_PTS im Format von neXtBSW a2lgen (RTE-26): Werte als Objekt `<Name>` in Speicher-Reihenfolge
+  (Kennfeld spaltenweise, je X-Stützstelle die Werte über Y), eigene Stützstellen (STD_AXIS, im Datensatz vor den
+  Werten) als `<Name>_X`/`<Name>_Y`, gemeinsame (COM_AXIS) als AXIS_PTS-Objekt; Datensatzteile nach MOD_COMMON
+  ALIGNMENT_* ausgerichtet. Lesen, Schreiben (Grenzen, Rückleseprobe) und Messliste wie bei Werten. Der Dialog
+  zeigt die Dimensionen. **Mock-verifiziert:** `check_xcp` Abschnitt „curves“ mit den Formen aus den
+  a2lgen-Tests (Kennfeld mit gemeinsamer X- und eigener Y-Achse samt Füllbyte, Kennlinien über gemeinsame und
+  eigene Stützstellen). Am Evalboard nicht geprüft (das Demo-Projekt hat keine Kennlinien).
 - **XCP-Messliste und Kachel (0.64.3, FT-10).** Einstellungen → Prüfling: **Messliste (XCP)** (A2L-Namen) und
   **Abfragerate** (Vorgabe 10 Hz, 0,5–50 Hz). `XcpService` fragt die Liste zyklisch ab, solange sie jemand braucht:
   die neue Kachel **„Prüfling (XCP)“** (Start/Stopp, Werte, Fehler; Übersicht mit Zustand und letztem Wert) oder

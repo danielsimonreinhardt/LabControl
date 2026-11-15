@@ -610,7 +610,9 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   den EPK des Steuergeräts mit dem der A2L; passt er nicht, wird nichts
   gelesen oder geschrieben. Messen nur per Abfrage (kein DAQ), Schreiben nur
   aus dem Testablauf, nicht über das Netzwerk. Kennlinien und Kennfelder
-  gehen noch nicht. **Messliste (XCP)**: A2L-Namen (durch Komma getrennt) und
+  erscheinen als Objekt `<Name>` mit allen Werten (Kennfeld: je X-Stützstelle
+  die Werte über Y, wie im Speicher), eigene Stützstellen als `<Name>_X` bzw.
+  `<Name>_Y`, gemeinsame als eigenes Achsenobjekt. **Messliste (XCP)**: A2L-Namen (durch Komma getrennt) und
   **Abfragerate** (Vorgabe 10 Hz). Die Kachel „Prüfling (XCP)“ startet und
   stoppt die Abfrage und zeigt die Werte; sie laufen zusätzlich in Verlauf
   und Aufzeichnung. In Bedingungen (Solange/Wenn) und Überwachen-Blöcken ist

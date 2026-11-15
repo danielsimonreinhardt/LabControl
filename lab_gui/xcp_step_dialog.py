@@ -55,7 +55,8 @@ class XcpStepDialog(QDialog):
         obj = self._a2l.get(name)
         kind = tr("Messgröße") if obj.kind == "measurement" else tr("Parameter")
         unit = f" {obj.unit}" if obj.unit else ""
-        self._info.setText(f"{kind} · {obj.datatype} × {obj.count} · {obj.lower:g}–{obj.upper:g}{unit}"
+        size = " × ".join(str(d) for d in obj.dims) if len(obj.dims) > 1 else str(obj.count)
+        self._info.setText(f"{kind} · {obj.datatype} × {size} · {obj.lower:g}–{obj.upper:g}{unit}"
                            + ("" if obj.writable else " · " + tr("nur lesbar")))
 
     def params(self) -> dict:

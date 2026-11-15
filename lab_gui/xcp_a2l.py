@@ -4,7 +4,11 @@ Gelesen werden MOD_PAR (EPK, ADDR_EPK), MOD_COMMON (BYTE_ORDER), IF_DATA XCP (PR
 XCP_ON_CAN: CAN_ID_MASTER/SLAVE, Bit 31 = 29-Bit-ID, BAUDRATE), COMPU_METHOD (IDENTICAL, LINEAR, RAT_FUNC mit
 a = d = 0, TAB_VERB), COMPU_VTAB, RECORD_LAYOUT (FNC_VALUES), MEASUREMENT (Datentyp, Umrechnung, Grenzen,
 ECU_ADDRESS, ARRAY_SIZE/MATRIX_DIM, PHYS_UNIT, READ_WRITE) und CHARACTERISTIC VALUE/VAL_BLK (Adresse, Ablage,
-Umrechnung, Grenzen, NUMBER/MATRIX_DIM, READ_ONLY). Kennlinien/Kennfelder (CURVE/MAP/AXIS_PTS) noch nicht.
+Umrechnung, Grenzen, NUMBER/MATRIX_DIM, READ_ONLY). Seit 0.64.4 auch Kennlinien/Kennfelder: CHARACTERISTIC
+CURVE/MAP mit AXIS_DESCR (STD_AXIS: eigene Stuetzstellen im selben Datensatz vor den Werten -> Objekte
+<Name>_X/<Name>_Y; COM_AXIS: Stuetzstellen in einem AXIS_PTS-Objekt) und AXIS_PTS. Die Werte einer Kennlinie/eines
+Kennfelds sind ein Objekt <Name> in Speicher-Reihenfolge (MAP von a2lgen: COLUMN_DIR, je X-Stuetzstelle die Werte
+ueber Y). Die Datensatzteile liegen nach MOD_COMMON ALIGNMENT_* (sonst ASAM-Vorgabe) ausgerichtet.
 Qt-frei.
 """
 from __future__ import annotations
@@ -129,6 +133,7 @@ class A2lObject:
     unit: str = ""
     writable: bool = False
     description: str = ""
+    dims: tuple = ()              # Kennlinie (nx,), Kennfeld (nx, ny); sonst leer
 
     @property
     def size(self) -> int:
@@ -208,6 +213,8 @@ def parse(text: str) -> A2l:
     if module is None:
         raise A2lError("Keine A2L-Datei (MODULE fehlt)")
     a2l = A2l(module=module.args[0] if module.args else "")
+    alignment = {"UBYTE": 1, "SBYTE": 1, "UWORD": 2, "SWORD": 2, "ULONG": 4, "SLONG": 4, "A_UINT64": 8,
+                 "A_INT64": 8, "FLOAT32_IEEE": 4, "FLOAT64_IEEE": 8}   # ASAM-Vorgabe
     mod_par = module.child("MOD_PAR")
     if mod_par is not None:
         a2l.epk = _keyword(mod_par.args, "EPK") or ""
@@ -216,6 +223,14 @@ def parse(text: str) -> A2l:
     mod_common = module.child("MOD_COMMON")
     if mod_common is not None:
         a2l.little_endian = (_keyword(mod_common.args, "BYTE_ORDER") or "MSB_LAST") == "MSB_LAST"
+        for key, types in (("ALIGNMENT_BYTE", ("UBYTE", "SBYTE")), ("ALIGNMENT_WORD", ("UWORD", "SWORD")),
+                           ("ALIGNMENT_LONG", ("ULONG", "SLONG")), ("ALIGNMENT_INT64", ("A_UINT64", "A_INT64")),
+                           ("ALIGNMENT_FLOAT32_IEEE", ("FLOAT32_IEEE",)),
+                           ("ALIGNMENT_FLOAT64_IEEE", ("FLOAT64_IEEE",))):
+            value = _keyword(mod_common.args, key)
+            if value is not None:
+                for t in types:
+                    alignment[t] = max(1, _int(value))
     for if_data in module.all("IF_DATA"):
         if not if_data.args or if_data.args[0] != "XCP":
             continue
@@ -252,10 +267,19 @@ def parse(text: str) -> A2l:
             compu.table = vtabs.get(_keyword(args, "COMPU_TAB_REF") or "", {})
         compus[name] = compu
     layouts = {}
+    record_parts: dict[str, list] = {}       # Layout -> [(Position, Teil "X"/"Y"/"V", Datentyp)]
     for block in module.all("RECORD_LAYOUT"):
-        datatype = _keyword(block.args, "FNC_VALUES", 2)
+        args = block.args
+        datatype = _keyword(args, "FNC_VALUES", 2)
         if datatype:
-            layouts[block.args[0]] = datatype[1]
+            layouts[args[0]] = datatype[1]
+        parts = []
+        for i, token in enumerate(args):
+            if token == "FNC_VALUES":
+                parts.append((_int(args[i + 1]), "V", args[i + 2]))
+            elif token in ("AXIS_PTS_X", "AXIS_PTS_Y"):
+                parts.append((_int(args[i + 1]), token[-1], args[i + 2]))
+        record_parts[args[0]] = sorted(parts)
 
     def compu_of(name: str) -> Compu:
         return compus.get(name, Compu(name=name))
@@ -271,9 +295,23 @@ def parse(text: str) -> A2l:
             name=name, kind="measurement", address=_int(address), datatype=datatype, count=_count(args),
             compu=compu, lower=_num(args[6]), upper=_num(args[7]),
             unit=_keyword(args, "PHYS_UNIT") or compu.unit, writable="READ_WRITE" in args, description=args[1])
+    for block in module.all("AXIS_PTS"):
+        args = block.args            # Name, Text, Adresse, Eingang, Ablage, MaxDiff, Umrechnung, Anzahl, Min, Max
+        parts = record_parts.get(args[4], [])
+        datatype = parts[0][2] if parts else ""
+        if datatype not in DATATYPES:
+            continue
+        compu = compu_of(args[6])
+        a2l.objects[args[0]] = A2lObject(
+            name=args[0], kind="characteristic", address=_int(args[2]), datatype=datatype, count=_int(args[7]),
+            compu=compu, lower=_num(args[8]), upper=_num(args[9]), unit=_keyword(args, "PHYS_UNIT") or compu.unit,
+            writable="READ_ONLY" not in args, description=args[1], dims=(_int(args[7]),))
     for block in module.all("CHARACTERISTIC"):
         args = block.args
         name, ctype = args[0], args[2]
+        if ctype in ("CURVE", "MAP"):
+            _add_curve_map(a2l, block, record_parts.get(args[4], []), compu_of, alignment)
+            continue
         if ctype not in ("VALUE", "VAL_BLK"):
             continue
         datatype = layouts.get(args[4], "")
@@ -285,6 +323,45 @@ def parse(text: str) -> A2l:
             count=_count(args) if ctype == "VAL_BLK" else 1, compu=compu, lower=_num(args[7]), upper=_num(args[8]),
             unit=_keyword(args, "PHYS_UNIT") or compu.unit, writable="READ_ONLY" not in args, description=args[1])
     return a2l
+
+
+def _add_curve_map(a2l: A2l, block: _Block, parts: list, compu_of, alignment: dict) -> None:
+    """Kennlinie/Kennfeld: Datensatz ab der Adresse, Teile in Positionsreihenfolge, je Teil ausgerichtet."""
+    args = block.args                # Name, Text, CURVE/MAP, Adresse, Ablage, MaxDiff, Umrechnung, Min, Max
+    name, address = args[0], _int(args[3])
+    axes = [c for c in block.children if c.name == "AXIS_DESCR"]
+    counts = [_int(a.args[3]) for a in axes]
+    if not counts or not parts:
+        return
+    offset = 0
+    total = 1
+    for count in counts:
+        total *= max(1, count)
+    for _position, part, datatype in parts:
+        if datatype not in DATATYPES:
+            return
+        align = alignment.get(datatype, DATATYPES[datatype][1])
+        offset = (offset + align - 1) // align * align
+        if part == "V":
+            compu = compu_of(args[6])
+            a2l.objects[name] = A2lObject(
+                name=name, kind="characteristic", address=address + offset, datatype=datatype, count=total,
+                compu=compu, lower=_num(args[7]), upper=_num(args[8]), unit=_keyword(args, "PHYS_UNIT") or compu.unit,
+                writable="READ_ONLY" not in args, description=args[1], dims=tuple(counts))
+            offset += total * DATATYPES[datatype][1]
+        else:
+            index = 0 if part == "X" else 1
+            if index >= len(axes):
+                return
+            axis = axes[index]
+            count = counts[index]
+            compu = compu_of(axis.args[2])
+            a2l.objects[f"{name}_{part}"] = A2lObject(
+                name=f"{name}_{part}", kind="characteristic", address=address + offset, datatype=datatype,
+                count=count, compu=compu, lower=_num(axis.args[4]), upper=_num(axis.args[5]),
+                unit=_keyword(axis.args, "PHYS_UNIT") or compu.unit, writable="READ_ONLY" not in args,
+                description=f"Stützstellen {part} von {name}", dims=(count,))
+            offset += count * DATATYPES[datatype][1]
 
 
 def load(path) -> A2l:

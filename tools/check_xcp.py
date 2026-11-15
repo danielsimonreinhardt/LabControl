@@ -116,6 +116,77 @@ def section_a2l() -> None:
           and not other.get("Par").writable)
 
 
+CURVES = """ASAP2_VERSION 1 61
+/begin PROJECT p ""
+ /begin MODULE m ""
+  /begin MOD_COMMON "" BYTE_ORDER MSB_LAST ALIGNMENT_BYTE 1 ALIGNMENT_WORD 2 ALIGNMENT_LONG 4 /end MOD_COMMON
+  /begin COMPU_METHOD CM_RAT_0_1_10 "" RAT_FUNC "%6.1" "Nm" COEFFS 0 10 0 0 0 1 /end COMPU_METHOD
+  /begin RECORD_LAYOUT RL_AXIS_UWORD AXIS_PTS_X 1 UWORD INDEX_INCR DIRECT /end RECORD_LAYOUT
+  /begin RECORD_LAYOUT RL_UWORD FNC_VALUES 1 UWORD ROW_DIR DIRECT /end RECORD_LAYOUT
+  /begin RECORD_LAYOUT RL_MAP_Y3SBYTE_V15SWORD
+    FIX_NO_AXIS_PTS_Y 3
+    AXIS_PTS_Y 1 SBYTE INDEX_INCR DIRECT
+    FNC_VALUES 2 SWORD COLUMN_DIR DIRECT
+  /end RECORD_LAYOUT
+  /begin RECORD_LAYOUT RL_STD_X4SWORD_V4UBYTE
+    FIX_NO_AXIS_PTS_X 4
+    AXIS_PTS_X 1 SWORD INDEX_INCR DIRECT
+    FNC_VALUES 2 UBYTE ROW_DIR DIRECT
+  /end RECORD_LAYOUT
+  /begin AXIS_PTS C.SpeedAxis_rpm "Speed breakpoints"
+    0x20000100 NO_INPUT_QUANTITY RL_AXIS_UWORD 0 CM_IDENTITY 5 0 8000
+    EXTENDED_LIMITS 0 65535
+    PHYS_UNIT "rpm"
+  /end AXIS_PTS
+  /begin CHARACTERISTIC C.TorqueLimit_Nm "x"
+    MAP 0x20000200 RL_MAP_Y3SBYTE_V15SWORD 0 CM_RAT_0_1_10 0 250
+    /begin AXIS_DESCR COM_AXIS NO_INPUT_QUANTITY CM_IDENTITY 5 0 8000
+      AXIS_PTS_REF C.SpeedAxis_rpm
+    /end AXIS_DESCR
+    /begin AXIS_DESCR STD_AXIS NO_INPUT_QUANTITY CM_IDENTITY 3 -40 125
+      PHYS_UNIT "degC"
+    /end AXIS_DESCR
+    EXTENDED_LIMITS -3276.8 3276.7
+  /end CHARACTERISTIC
+  /begin CHARACTERISTIC C.BoostCurve "x"
+    CURVE 0x20000300 RL_UWORD 0 CM_IDENTITY 0 2500
+    /begin AXIS_DESCR COM_AXIS NO_INPUT_QUANTITY CM_IDENTITY 5 0 8000
+      AXIS_PTS_REF C.SpeedAxis_rpm
+    /end AXIS_DESCR
+  /end CHARACTERISTIC
+  /begin CHARACTERISTIC C.DerateCurve "x"
+    CURVE 0x20000400 RL_STD_X4SWORD_V4UBYTE 0 CM_IDENTITY 0 100
+    /begin AXIS_DESCR STD_AXIS NO_INPUT_QUANTITY CM_RAT_0_1_10 4 -40 150 /end AXIS_DESCR
+  /end CHARACTERISTIC
+ /end MODULE
+/end PROJECT
+"""
+
+
+def section_curves() -> None:
+    print("curves (0.64.4, Format von a2lgen RTE-26)")
+    import xcp_a2l
+    a2l = xcp_a2l.parse(CURVES)
+    axis = a2l.get("C.SpeedAxis_rpm")
+    check("AXIS_PTS: 5 x UWORD, 0–8000 rpm", axis.count == 5 and axis.datatype == "UWORD" and axis.upper == 8000
+          and axis.unit == "rpm")
+    y = a2l.get("C.TorqueLimit_Nm_Y")
+    tmap = a2l.get("C.TorqueLimit_Nm")
+    check("MAP: eigene Y-Achse 3 x SBYTE am Datensatzanfang", y.address == 0x20000200 and y.count == 3
+          and y.datatype == "SBYTE" and y.lower == -40 and y.unit == "degC")
+    check("MAP: 5 x 3 SWORD nach einem Byte Fuellung, Faktor 1/10", tmap.address == 0x20000204 and tmap.count == 15
+          and tmap.dims == (5, 3) and abs(tmap.compu.to_phys(123) - 12.3) < 1e-9, hex(tmap.address))
+    boost = a2l.get("C.BoostCurve")
+    check("CURVE ueber gemeinsame Achse: 5 Werte ab Datensatzanfang", boost.address == 0x20000300 and boost.count == 5
+          and "C.BoostCurve_X" not in a2l.objects)
+    dx, dv = a2l.get("C.DerateCurve_X"), a2l.get("C.DerateCurve")
+    check("CURVE mit eigenen Stuetzstellen: X 4 x SWORD (1/10), Werte 4 x UBYTE dahinter",
+          dx.address == 0x20000400 and dx.count == 4 and abs(dx.compu.to_phys(-400) + 40) < 1e-9
+          and dv.address == 0x20000408 and dv.count == 4 and dv.datatype == "UBYTE")
+    data = a2l.encode(tmap, [float(i) for i in range(15)])
+    check("Kennfeld kodieren/dekodieren (15 Werte)", a2l.decode(tmap, data) == [float(i) for i in range(15)])
+
+
 def section_client() -> None:
     print("client")
     import xcp_a2l
@@ -228,6 +299,7 @@ def main() -> int:
     import no_hardware
     no_hardware.block()
     section_a2l()
+    section_curves()
     section_client()
     section_service()
     section_steps()
