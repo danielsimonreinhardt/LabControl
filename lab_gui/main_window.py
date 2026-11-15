@@ -186,6 +186,11 @@ class MainWindow(QMainWindow):
         self.control_tab = ControlTab(self._presets)
         self.testcase_tab = TestcaseTab()
         self.timeline_tab = TimelineTab()
+        # Ergebnis-Uebersicht und Trends (FT-11, PI-57 a)
+        from results_tab import ResultsTab
+        self.results_tab = ResultsTab(self._result_folders)
+        self.results_tab.open_report_requested.connect(
+            lambda path: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
         self.settings_tab = SettingsTab()
         # Verbund Pi + PC (PI-23 a): Verbindung zur Partner-Instanz. Seit 0.52.0 ohne eigenen Reiter: die
         # Partnergeraete stehen in Uebersicht und Steuerung wie eigene, mit Symbol (partner_devices.py).
@@ -194,6 +199,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.control_tab, "")
         self.tabs.addTab(self.testcase_tab, "")
         self.tabs.addTab(self.timeline_tab, "")
+        self.tabs.addTab(self.results_tab, "")
         self.tabs.addTab(self.settings_tab, "")
         # Stretch 1: ueberschuessige Fensterhoehe geht komplett an die Tabs,
         # nie an Dashboard oder Sicherheitsbanner darueber.
@@ -304,7 +310,8 @@ class MainWindow(QMainWindow):
 
     def _retranslate(self) -> None:
         for page, text in ((self.control_tab, tr("Steuerung")), (self.testcase_tab, tr("Testablauf")),
-                           (self.timeline_tab, tr("Verlauf")), (self.settings_tab, tr("Einstellungen"))):
+                           (self.timeline_tab, tr("Verlauf")), (self.results_tab, tr("Ergebnisse")),
+                           (self.settings_tab, tr("Einstellungen"))):
             self.tabs.setTabText(self.tabs.indexOf(page), text)
         self._render_partner_chip()
         self._render_mcp_chip()
@@ -1512,6 +1519,12 @@ class MainWindow(QMainWindow):
             return
         self.timeline_tab.show_export_success(path)
 
+    def _result_folders(self) -> list:
+        """Berichtsordner aller Rechner im gemeinsamen Ordner und der lokale (FT-11)."""
+        import run_history
+        return run_history.default_folders(app_logging.effective_network_dir(self._settings.network_dir),
+                                           data_store.store().local_dir("reports"))
+
     def _on_open_report(self) -> None:
         record = self._run_recorder.record()
         if record is None:
@@ -1919,6 +1932,7 @@ class MainWindow(QMainWindow):
         self._nav.add_page(self.control_tab, "mdi.tune-variant", lambda: tr("Steuerung"))
         self._nav.add_page(self.testcase_tab, "mdi.playlist-play", lambda: tr("Testablauf"))
         self._nav.add_page(self.timeline_tab, "mdi.chart-line", lambda: tr("Verlauf"))
+        self._nav.add_page(self.results_tab, "mdi.chart-timeline-variant", lambda: tr("Ergebnisse"))
         self._nav.add_page(self.settings_tab, "mdi.cog-outline", lambda: tr("Einstellungen"))
         self._nav.selected.connect(self.tabs.setCurrentWidget)
         self.tabs.currentChanged.connect(lambda index: self._nav.set_current(self.tabs.widget(index)))

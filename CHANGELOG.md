@@ -7,6 +7,17 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Ergebnis-Übersicht und Trends (0.68.0, FT-11, PI-57 a).** Neuer Reiter **„Ergebnisse“**: alle Läufe von PC
+  und Pi aus den Berichtsordnern im gemeinsamen Ordner (`<rechner>/reports/run_*.json`) und dem lokalen, je Ablauf
+  mit Start, Rechner, Variante, Ergebnis und Prüfungen (neueste zuerst, Bestanden-Quote), dazu **wackelnde
+  Prüfungen** (dieselbe Prüfung mal bestanden, mal nicht, mit Anzahl der Wechsel), **Trend** je Prüfung (letzter
+  Messwert je Lauf mit Grenzen, Punkte grün/rot) und **Vergleich** zweier markierter Läufe Prüfung für Prüfung;
+  der HTML-Bericht eines Laufs lässt sich öffnen. Liest neu ein beim Öffnen und jede Minute. Kommandozeile:
+  `main.py history [--testcase NAME] [--last N] [--html datei]`. Läufe ohne Fenster legen ihr Ergebnis
+  (run-result.json, JUnit, Bericht) jetzt auch im Berichtsordner ab, damit Nachtläufe ohne `--json` in der
+  Übersicht erscheinen. **Mock-verifiziert:** neue Prüfung `tools/check_history.py`. **Mit echten Daten geprüft
+  (15.11.2026):** `history` über die Berichtsordner von PC und Pi – 10 Abläufe, darunter alle Läufe dieser
+  Woche; Reiter offscreen mit diesen Daten gerendert (Trend der UDS-Versorgung aus PI-46).
 - **Restbus aus DBC mit E2E (0.67.0, FT-6, PI-56 c).** Je CAN-Interface ein Restbus: Botschaften aus der DBC
   (eigene DBC-Angabe möglich, sonst die des Interfaces) zyklisch senden (Zyklus aus `GenMsgCycleTime`, änderbar),
   Signale per Name und physikalischem Wert (Grenzen und Wertetabelle der DBC). E2E je Botschaft nach AUTOSAR

@@ -26,7 +26,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-COMMANDS = ("run", "devices", "coverage", "timing", "flash")
+COMMANDS = ("run", "devices", "coverage", "timing", "flash", "history")
 DEFAULT_WAIT_DEVICES_S = 15.0
 REASON_CLI_END = "cli: Lauf beendet"
 
@@ -75,6 +75,12 @@ def _parser() -> argparse.ArgumentParser:
                           help="Anforderungsregister (.sdoc/.csv/.md); Standard: aus den Einstellungen")
     coverage.add_argument("--csv", help="als CSV schreiben")
     coverage.add_argument("--md", help="als Markdown schreiben")
+    history = sub.add_parser("history", help="Ergebnis-Übersicht und Trends aus den Laufergebnissen (FT-11)")
+    history.add_argument("--results", action="append", default=[], metavar="ORDNER",
+                         help="Ordner mit run_*.json (mehrfach); Standard: Berichtsordner aller Rechner")
+    history.add_argument("--testcase", help="nur dieser Ablauf (Name wie im Bericht)")
+    history.add_argument("--last", type=int, default=50, metavar="N", help="je Ablauf die letzten N Läufe")
+    history.add_argument("--html", help="Übersicht mit Trends als HTML schreiben")
     timing = sub.add_parser("timing", help="Zeitprüfung auf einer Aufzeichnung oder Oszi-Erfassung (FT-7)")
     timing.add_argument("file", help="LabControl-Aufzeichnung (.csv/.mf4) oder Oszi-Erfassung (.csv)")
     timing.add_argument("--channel", help="Kanal, z. B. 'Netzteil 1/Spannung' oder 'A' (bei mehreren nötig)")
@@ -412,9 +418,31 @@ def _cmd_run(args, settings) -> int:
     record = rig.recorder.record()
     code = exit_code(record, state["interrupted"]) if record is not None else EXIT_ABORTED
     _write_outputs(args, record, state["interrupted"])
+    _write_reports(record, state["interrupted"])
     verdict = {0: "BESTANDEN", 1: "NICHT BESTANDEN", 2: "ABGEBROCHEN", 130: "UNTERBROCHEN"}.get(code, str(code))
     _say(f"Ergebnis: {verdict} (Exit {code})")
     return code
+
+
+def _write_reports(record, interrupted: bool) -> None:
+    """Wie im Fenster (FT-11): run-result.json, JUnit und Bericht in den Berichtsordner, der sie in den
+    gemeinsamen Ordner schiebt -- so erscheinen auch Nachtlaeufe ohne --json in Uebersicht und Trends."""
+    if record is None:
+        return
+    import data_store
+    import run_report
+    import run_results
+
+    folder = data_store.store().local_dir("reports")
+    stem = f"run_{time.strftime('%Y%m%d-%H%M%S')}-cli"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        run_results.write_json(record, folder / f"{stem}.json", interrupted)
+        run_results.write_junit(record, folder / f"{stem}.xml", interrupted)
+        run_report.write_html_report(record, folder / f"{stem}.html")
+        data_store.store().sync_now()
+    except OSError as exc:
+        _say(f"Ergebnis nicht im Berichtsordner abgelegt: {exc}")
 
 
 def _write_outputs(args, record, interrupted: bool) -> None:
@@ -460,6 +488,40 @@ def _cmd_coverage(args, settings) -> int:
     counts = {v: sum(1 for r in rows if r.get("verdict") == v) for v in requirements.VERDICT_DE}
     _say(f"{len(rows)} Anforderungen aus {len(results)} Läufen: "
          + ", ".join(f"{counts[v]} {requirements.VERDICT_DE[v]}" for v in requirements.VERDICT_DE))
+    return 0
+
+
+def _cmd_history(args, settings) -> int:
+    """Ergebnis-Uebersicht (FT-11): je Ablauf Laeufe, Quote, letztes Ergebnis, wackelnde Pruefungen; --html."""
+    import app_logging
+    import data_store
+    import run_history
+
+    folders = [Path(f) for f in args.results] or run_history.default_folders(
+        app_logging.effective_network_dir(settings.network_dir), data_store.store().local_dir("reports"))
+    runs = run_history.load_runs(folders)
+    names = [name for name, _n in run_history.testcases(runs)]
+    if args.testcase:
+        if args.testcase not in names:
+            _say(f"Keine Läufe von '{args.testcase}' gefunden ({len(runs)} Läufe in {len(folders)} Ordnern)")
+            return 3
+        names = [args.testcase]
+    if not names:
+        _say(f"Keine Laufergebnisse in {len(folders)} Ordnern")
+    for name in names:
+        selected = run_history.for_testcase(runs, name)[-max(1, args.last):]
+        last = selected[-1]
+        rate = run_history.pass_rate(selected) or 0.0
+        outcome = run_history.OUTCOME_DE.get(last.outcome, last.outcome)
+        _say(f"{name}: {len(selected)} Läufe, {rate * 100:.0f} % bestanden; zuletzt {outcome} "
+             f"({last.started[:16].replace('T', ' ')}, {last.host}{', ' + last.variant if last.variant else ''})")
+        for entry in run_history.flaky_checks(selected):
+            _say(f"  wackelt: {entry['label']} ({entry['flips']} Wechsel, {entry['passed']}× bestanden, "
+                 f"{entry['failed']}× nicht)")
+    if args.html:
+        Path(args.html).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.html).write_text(run_history.html_overview(runs, args.testcase, max(1, args.last)), encoding="utf-8")
+        _say(f"Geschrieben: {args.html}")
     return 0
 
 
@@ -514,8 +576,10 @@ def main(argv: list[str]) -> int:
     data_store.setup(app_logging.effective_network_dir(settings.network_dir))
     logger.info("LAB CONTROL v%s Kommandozeile: %s", __version__, " ".join(argv[1:]))
     temp_testcase = _flash_as_run(args) if args.command == "flash" else None
-    if args.command in ("coverage", "timing"):   # liest nur Dateien, braucht weder Geraete noch Sperre
+    if args.command in ("coverage", "timing", "history"):   # liest nur Dateien, weder Geraete noch Sperre
         try:
+            if args.command == "history":
+                return _cmd_history(args, settings)
             return _cmd_coverage(args, settings) if args.command == "coverage" else _cmd_timing(args)
         finally:
             data_store.store().stop()

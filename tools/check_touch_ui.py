@@ -96,9 +96,9 @@ def main() -> int:
     check("PC: ohne 'Anordnen' (Kacheln direkt ziehen), Navigation ohne 'Übersicht'",
           not w._top_bar._arrange_button.isVisible()
           and [b.text() for b in w._nav.findChildren(QToolButton) if b.isVisible()]
-          == ["Steuerung", "Testablauf", "Verlauf", "Einstellungen"])
-    check("vier Seiten, Dashboard als Streifen ueber den Seiten", visible_tabs(w) == 4
-          and w.dashboard.parent() is w.tabs.parent() and w.dashboard.isVisible())
+          == ["Steuerung", "Testablauf", "Verlauf", "Ergebnisse", "Einstellungen"])
+    check("fuenf Seiten, Dashboard als Streifen ueber den Seiten", visible_tabs(w) == 5
+          and w.dashboard.parent() is w.tabs.parent() and w.dashboard.isVisible(), str(visible_tabs(w)))
     w.statusBar().showMessage("Testmeldung", 2000)
     app.processEvents()
     check("PC: Meldungen erscheinen als Hinweis unten", w._toast.isVisible() and w._toast.text() == "Testmeldung")
@@ -120,7 +120,7 @@ def main() -> int:
     app.processEvents()
     check("gespeichert", json.loads((DATA / "settings.json").read_text(encoding="utf-8")).get("touch_mode") is True)
     check("Navigation links sichtbar, Reiterleiste verborgen", w._nav.isVisible() and not w.tabs.tabBar().isVisible())
-    check("Uebersicht ist eigener Reiter und gewaehlt", visible_tabs(w) == 5 and w.tabs.currentWidget() is w._overview_page
+    check("Uebersicht ist eigener Reiter und gewaehlt", visible_tabs(w) == 6 and w.tabs.currentWidget() is w._overview_page
           and w._overview_page.isAncestorOf(w.dashboard))
     check("Leiste oben mit ALLE AUS, Statusleiste verborgen", w._top_bar.isVisible() and not w.statusBar().isVisible()
           and w._all_off_button.isVisible() and w._top_bar.isAncestorOf(w._all_off_button))
@@ -465,8 +465,8 @@ def main() -> int:
           w._top_bar.isVisible() and w._top_bar.isAncestorOf(w._all_off_button) and w._all_off_button.isVisible()
           and w._top_bar.height() < 52 and not w._top_bar._arrange_button.isVisible()
           and not w.statusBar().isVisible())
-    check("Dashboard wieder als Streifen ueber den Seiten, vier Seiten, Navigation schmal",
-          w.dashboard.parent() is w.tabs.parent() and visible_tabs(w) == 4 and not w.tabs.tabBar().isVisible()
+    check("Dashboard wieder als Streifen ueber den Seiten, fuenf Seiten, Navigation schmal",
+          w.dashboard.parent() is w.tabs.parent() and visible_tabs(w) == 5 and not w.tabs.tabBar().isVisible()
           and w._nav.isVisible() and w._nav.width() < 124 and w.dashboard.isVisible())
     check("Schrift wie vorher", abs(app.font().pointSizeF() - base_font) < 0.01)
     check("Stylesheet ohne Touch-Regeln", not ThemeManager.instance().touch and "SPIN" not in app.styleSheet()
