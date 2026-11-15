@@ -207,6 +207,7 @@ Testablauf-Aktionen wie beim PicoScope gibt es noch nicht.
 
 ## microHIL
 
+- **Projekt:** eigene Entwicklung, Projektseite auf GitHub: [microHIL](https://github.com/danielsimonreinhardt/microHIL).
 - **Anschluss:** USB mit **zwei** COM-Ports (VID:PID `0483:5740`): Steuerung und CAN-Adapter (SLCAN, siehe
   [CAN-Interfaces](#can-interfaces)). LabControl unterscheidet beide selbst.
 

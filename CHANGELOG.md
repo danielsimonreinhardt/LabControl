@@ -7,6 +7,8 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Doku: Verwandte Projekte (0.70.1).** Link auf [microHIL](https://github.com/danielsimonreinhardt/microHIL) im
+  Überblick, im Gerätekapitel und im README.
 - **Dokumentation (0.70.0, PI-60 b, PI-61 a, PI-62 b, PI-63 a, Review DR-1 b).** Deutsche Doku in `docs/de/`
   (Überblick, Schnellstart, Geräte, Bedienung, Testabläufe, Prüfling, Automatisierung, Raspberry Pi und Verbund,
   Für Entwickler) mit Mermaid-Diagrammen, als Website über GitHub Pages (MkDocs Material, `mkdocs.yml`, Workflow

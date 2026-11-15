@@ -31,6 +31,11 @@ PicoScope 2204A/2205A · UNI-T MSO1000HD (SCPI over LAN) · microHIL I/O box · 
 (Vector, PCAN, SLCAN, SocketCAN) · self-built 14-cell battery simulator. Details per device in
 [Geräte einrichten](docs/de/geraete.md) and the driver READMEs in [`device-driver/`](device-driver/).
 
+## Related projects
+
+- [microHIL](https://github.com/danielsimonreinhardt/microHIL) – self-built I/O box for simple hardware-in-the-loop
+  tests; LabControl drives it as a device and uses its CAN port as an SLCAN interface.
+
 ## Installation
 
 - **Windows:** download the `.exe` from the [latest release](https://github.com/danielsimonreinhardt/LabControl/releases/tag/latest)

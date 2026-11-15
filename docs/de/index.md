@@ -114,6 +114,12 @@ Testabläufe gefahrlos aus; alle Bildschirmfotos dieser Doku stammen daraus.
 Oberfläche auf Deutsch und Englisch (Einstellungen → Allgemein → **Sprache:**); diese Dokumentation zunächst nur
 auf Deutsch.
 
+## Verwandte Projekte
+
+| Projekt | Worum es geht |
+|---|---|
+| [microHIL](https://github.com/danielsimonreinhardt/microHIL) | Selbst entwickelte I/O-Box für einfache Hardware-in-the-Loop-Tests; LabControl steuert sie als Gerät und nutzt ihren CAN-Ausgang als SLCAN-Interface |
+
 ## Wie geht es weiter?
 
 1. [Schnellstart](schnellstart.md): installieren, Simulationsmodus, erstes Gerät, erster Testablauf.
