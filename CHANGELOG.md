@@ -7,6 +7,15 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Abläufe debuggen (0.69.0, FT-12, PI-58 a).** Neue Knöpfe in der Ablauf-Leiste: **Anhalten/Weiter**,
+  **Einzelschritt**, **Haltepunkt an der markierten Zeile** (roter Punkt in der Nummernspalte, nur in der Sitzung,
+  nicht in der Datei) und **Ab der markierten Zeile starten** (nur auf oberster Ebene, nicht innerhalb eines
+  Blocks). Angehalten wird an Schrittgrenzen; eine laufende Wartezeit hält sofort an und läuft mit dem Rest
+  weiter (ein laufendes Arbiträrsignal endet erst). Während der Pause zeigt der Editor Variablen und letzte
+  Messwerte; Geräte bleiben, wie sie sind, Grenzwerte, Watchdog und Überwachen-Blöcke laufen weiter, Stopp und
+  ALLE AUS wirken wie sonst. Haltepunkte gelten nur für Läufe aus dem Fenster, nie für REST, MCP oder
+  Kommandozeile. **Mock-verifiziert:** neue Prüfung `tools/check_debug.py` (Runner, Editor, Hauptfenster mit
+  simuliertem Netzteil). Am Gerät nicht von Hand bedient (reine Oberfläche).
 - **Ergebnis-Übersicht und Trends (0.68.0, FT-11, PI-57 a).** Neuer Reiter **„Ergebnisse“**: alle Läufe von PC
   und Pi aus den Berichtsordnern im gemeinsamen Ordner (`<rechner>/reports/run_*.json`) und dem lokalen, je Ablauf
   mit Start, Rechner, Variante, Ergebnis und Prüfungen (neueste zuerst, Bestanden-Quote), dazu **wackelnde

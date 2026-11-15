@@ -382,7 +382,7 @@ class RunSession(QObject):
             self.runner.on_action_completed(False, verdict.message, 0.0)
 
     def start(self, steps: list[TestStep], testcase_name: str, meta: dict | None = None,
-              variables: dict[str, float] | None = None) -> None:
+              variables: dict[str, float] | None = None, start_index: int = 0) -> None:
         """Startet den Lauf (vorher refusal() pruefen). Der erste Schritt startet noch in diesem Aufruf."""
         self.meta = dict(meta or {})
         self.testcase_name = testcase_name
@@ -434,7 +434,7 @@ class RunSession(QObject):
         needed = self.xcp_names_needed(steps)
         if needed and self.xcp is not None:   # XCP-Messliste fuer Bedingungen/Ueberwachen abfragen (0.64.3)
             self.xcp.set_polling("run", True, needed)
-        self.runner.start(steps, variables)
+        self.runner.start(steps, variables, start_index)
 
     # -- Aktionen ------------------------------------------------------------------
 

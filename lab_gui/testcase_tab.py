@@ -120,6 +120,7 @@ logger = logging.getLogger(__name__)
 COL_NUM, COL_DEVICE, COL_ACTION, COL_VALUE, COL_DURATION, COL_CHECK, COL_ENABLED = range(7)
 # Datenrolle der Nummernzelle mit den Format-v3-Feldern eines Schritts (siehe _insert_row)
 ROLE_V3_FIELDS = Qt.ItemDataRole.UserRole + 1
+ROLE_BREAKPOINT = Qt.ItemDataRole.UserRole + 2   # FT-12: Haltepunkt an dieser Zeile (nur in der Sitzung)
 
 # Kehrwert von PICO_VOLTAGE_RANGE_CODES -- fuer die Lauf-Statuszeile
 # (_set_step_status), die aus TestStep.value (Zahlencode) wieder den
@@ -427,6 +428,10 @@ class _ReadonlyCellOverlay(QWidget):
 
 class TestcaseTab(QWidget):
     run_requested = Signal()
+    # FT-12 (PI-58 a): Debuggen
+    pause_requested = Signal()
+    resume_requested = Signal(bool)       # True = Einzelschritt
+    run_from_requested = Signal(int)      # ab dieser Zeile starten
     variant_changed = Signal(str)   # FT-5: gewaehlte Variante (Name, "" = keine)
     stop_requested = Signal()
     open_report_requested = Signal()
@@ -660,8 +665,24 @@ class TestcaseTab(QWidget):
         self._status_label = QLabel()
         self._status_kind = "info"  # "info" | "success" | "error", siehe _set_status
         self._status_label.setStyleSheet(f"color: {current_palette().text_muted};")
+        # Debuggen (FT-12, PI-58 a): Anhalten/Weiter, Einzelschritt, Haltepunkt, ab markierter Zeile starten
+        self._pause_button = IconButton("mdi.pause", "")
+        self._pause_button.setEnabled(False)
+        self._pause_button.clicked.connect(self._on_pause_clicked)
+        self._step_button = IconButton("mdi.debug-step-over", "")
+        self._step_button.setEnabled(False)
+        self._step_button.clicked.connect(lambda: self.resume_requested.emit(True))
+        self._break_button = IconButton("mdi.record-circle-outline", "")
+        self._break_button.clicked.connect(self._toggle_breakpoint)
+        self._run_from_button = IconButton("mdi.play-box-outline", "")
+        self._run_from_button.clicked.connect(self._on_run_from_clicked)
+        self._paused = False
         run_row.addWidget(self._run_button)
         run_row.addWidget(self._stop_button)
+        run_row.addWidget(self._pause_button)
+        run_row.addWidget(self._step_button)
+        run_row.addWidget(self._break_button)
+        run_row.addWidget(self._run_from_button)
         run_row.addWidget(self._status_label)
         run_row.addStretch()
 
@@ -675,6 +696,12 @@ class TestcaseTab(QWidget):
         self._report_button.setMenu(self._report_menu)
         run_row.addWidget(self._report_button)
         layout.addLayout(run_row)
+        # Waehrend einer Pause: Variablen und letzte Messwerte (FT-12)
+        self._debug_label = QLabel()
+        self._debug_label.setWordWrap(True)
+        self._debug_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._debug_label.setVisible(False)
+        layout.addWidget(self._debug_label)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
 
@@ -731,6 +758,10 @@ class TestcaseTab(QWidget):
         self._action_add_wait.setText(tr("Warten"))
         self._run_button.setToolTip(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
+        self._pause_button.setToolTip(tr("Weiter") if getattr(self, "_paused", False) else tr("Anhalten"))
+        self._step_button.setToolTip(tr("Einzelschritt"))
+        self._break_button.setToolTip(tr("Haltepunkt an der markierten Zeile an/aus"))
+        self._run_from_button.setToolTip(tr("Ab der markierten Zeile starten"))
         self._report_button.setToolTip(tr("Report…"))
         self._action_report_html.setText(tr("Report öffnen (HTML)"))
         self._action_report_pdf.setText(tr("Als PDF exportieren…"))
@@ -2980,6 +3011,12 @@ class TestcaseTab(QWidget):
     def set_running(self, running: bool) -> None:
         self._is_running = running
         self._stop_button.setEnabled(running)
+        self._pause_button.setEnabled(running)
+        self._step_button.setEnabled(running)
+        self._break_button.setEnabled(not running)
+        self._run_from_button.setEnabled(not running)
+        if not running:
+            self._set_paused_ui(False)
         self._table.setEnabled(not running)
         for button in (
             self._add_button,
@@ -2997,6 +3034,76 @@ class TestcaseTab(QWidget):
         self._update_unlink_enabled()
         self._report_button.setEnabled(self._report_available and not running)
         self._update_run_enabled()
+
+    # -- Debuggen (FT-12) ------------------------------------------------------------
+
+    def breakpoints(self) -> set[int]:
+        rows = set()
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, COL_NUM)
+            if item is not None and item.data(ROLE_BREAKPOINT):
+                rows.add(row)
+        return rows
+
+    def set_breakpoint(self, row: int, on: bool) -> None:
+        item = self._table.item(row, COL_NUM)
+        if item is None:
+            return
+        item.setData(ROLE_BREAKPOINT, bool(on))
+        item.setIcon(qta.icon("mdi.circle", color=current_palette().danger) if on else QIcon())
+        item.setToolTip(tr("Haltepunkt") if on else "")
+
+    def _toggle_breakpoint(self) -> None:
+        row = self._selected_row
+        if row < 0 or row >= self._table.rowCount():
+            self._set_status("Erst eine Zeile markieren", "error")
+            return
+        self.set_breakpoint(row, row not in self.breakpoints())
+
+    def _on_run_from_clicked(self) -> None:
+        row = self._selected_row
+        if row < 0:
+            self._set_status("Erst eine Zeile markieren", "error")
+            return
+        self.run_from_requested.emit(row)
+
+    def _on_pause_clicked(self) -> None:
+        if self._paused:
+            self.resume_requested.emit(False)
+        else:
+            self.pause_requested.emit()
+
+    def _set_paused_ui(self, paused: bool) -> None:
+        self._paused = paused
+        self._pause_button.set_icon("mdi.play" if paused else "mdi.pause")
+        self._pause_button.setToolTip(tr("Weiter") if paused else tr("Anhalten"))
+        if not paused:
+            self._debug_label.setVisible(False)
+
+    def on_paused(self, index: int, snapshot: dict) -> None:
+        """Runner angehalten vor Schritt `index`: Zeile zeigen, Variablen und letzte Messwerte darunter."""
+        self._set_paused_ui(True)
+        if 0 <= index < self._table.rowCount():
+            self._reveal_row(index)
+        self._set_status("Angehalten vor Schritt {index}", index=index + 1)
+        variables = snapshot.get("vars") or {}
+        values = snapshot.get("values") or {}
+        lines = []
+        if variables:
+            lines.append(tr("Variablen: ") + ", ".join(f"{k} = {v:g}" for k, v in sorted(variables.items())))
+        else:
+            lines.append(tr("Variablen: keine"))
+        if values:
+            shown = sorted(values.items())[:24]
+            lines.append(tr("Letzte Messwerte: ") + "; ".join(
+                f"{name} = {value:g}{(' ' + unit) if unit else ''} ({age:.1f} s)" for name, (value, unit, age)
+                in shown) + (" …" if len(values) > len(shown) else ""))
+        self._debug_label.setText("\n".join(lines))
+        self._debug_label.setVisible(True)
+
+    def on_resumed(self) -> None:
+        self._set_paused_ui(False)
+        self._set_status("Läuft…")
 
     def on_run_started(self) -> None:
         self._clear_all_row_colors()

@@ -2303,6 +2303,14 @@ class MainWindow(QMainWindow):
         )
 
         self.testcase_tab.run_requested.connect(self._on_run_requested)
+        # Debuggen (FT-12, PI-58 a): nur fuer Laeufe aus dem Fenster
+        self._run_start_index = 0
+        self.testcase_tab.pause_requested.connect(self._test_runner.pause)
+        self.testcase_tab.resume_requested.connect(self._test_runner.resume)
+        self.testcase_tab.run_from_requested.connect(self._on_run_from)
+        self._test_runner.paused.connect(
+            lambda index: self.testcase_tab.on_paused(index, self._test_runner.debug_snapshot()))
+        self._test_runner.resumed.connect(self.testcase_tab.on_resumed)
         self.testcase_tab.stop_requested.connect(self._test_runner.stop)
         self.testcase_tab.stop_requested.connect(lambda: self._safe_stop("stop button"))
 
@@ -2312,6 +2320,8 @@ class MainWindow(QMainWindow):
         spec, self._run_variant = (self._run_variant or self.testcase_tab.current_variant()), ""
         if not any(step.enabled and step.step_type == "action" for step in steps):
             return
+        # FT-12: Haltepunkte gelten nur fuer Laeufe aus dem Fenster, nie fuer REST/MCP/Kommandozeile
+        self._test_runner.set_breakpoints(self.testcase_tab.breakpoints() if self._run_source == "gui" else ())
         # FT-5 (PI-55 a): Rollen der gewaehlten Variante einsetzen, vor allen Pruefungen der Geraete
         self._active_variant, problem = self._apply_variant(steps, spec)
         if problem:
@@ -2370,7 +2380,20 @@ class MainWindow(QMainWindow):
             meta["variant"] = variant.name
         if variables:
             meta["parameters"] = dict(variables)
-        self._run_session.start(steps, name, meta, variables)
+        start_index, self._run_start_index = self._run_start_index, 0
+        self._run_session.start(steps, name, meta, variables, start_index)
+
+    def _on_run_from(self, row: int) -> None:
+        """FT-12: "Ab der markierten Zeile starten" (nur oberste Ebene)."""
+        from testcase_runner import TestRunner
+        refusal = TestRunner.start_refusal(self.testcase_tab.steps(), row)
+        if refusal:
+            self._refuse_run(refusal)
+            return
+        self._run_start_index = row
+        self._on_run_requested()
+        if not self._test_runner.is_running() and self._pending_run_steps is None:
+            self._run_start_index = 0   # nicht gestartet
 
     def _apply_variant(self, steps: list[TestStep], spec: str):
         """(variante | None, problem): Variante laden und ihre Rollen in `steps` einsetzen (FT-5)."""

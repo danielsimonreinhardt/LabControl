@@ -146,6 +146,9 @@ class TestRunner(QObject):
     # Block-Start-Index, aktueller Durchlauf (1-basiert), Gesamtzahl
     # (0 = unbegrenzt/While) -- fuer die Fortschrittsanzeige im Editor.
     iteration_changed = Signal(int, int, int)
+    # FT-12 (PI-58 a): angehalten vor Schritt (Index) bzw. weiter
+    paused = Signal(int)
+    resumed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -201,6 +204,16 @@ class TestRunner(QObject):
         self._monitor_timer.setInterval(50)
         self._monitor_timer.timeout.connect(self._tick_monitors)
 
+        # -- Debuggen (FT-12, PI-58 a): Haltepunkte (Zeilenindizes, nur in der Sitzung), Anhalten/Weiter/
+        # Einzelschritt. Angehalten wird an Schrittgrenzen; eine laufende Wartezeit haelt an und laeuft mit dem
+        # Rest weiter. Geraete, Grenzwerte, Watchdog und Ueberwachen-Bloecke laufen waehrenddessen weiter.
+        self._breakpoints: set[int] = set()
+        self._pause_requested = False
+        self._paused = False
+        self._step_mode = False
+        self._skip_break_at = -1
+        self._held_timers: list[tuple[QTimer, int]] = []
+
         # -- Ablaufsteuerung ---------------------------------------------
         self._matching: dict[int, BlockMatch] = {}
         self._frames: list[_Frame] = []
@@ -234,11 +247,13 @@ class TestRunner(QObject):
     def is_running(self) -> bool:
         return self._running
 
-    def start(self, steps: list[TestStep], variables: dict[str, float] | None = None) -> None:
-        """variables: Startwerte der Laufvariablen (Kommandozeile --var name=wert, 0.58.0)."""
+    def start(self, steps: list[TestStep], variables: dict[str, float] | None = None, start_index: int = 0) -> None:
+        """variables: Startwerte der Laufvariablen (Kommandozeile --var name=wert, 0.58.0). start_index: ab
+        dieser Zeile (FT-12 "Ab hier starten", nur auf oberster Ebene, siehe start_refusal)."""
         if self._running:
             return
         self._steps = steps
+        self._reset_debug()
         matching, _depths, errors = validate_structure(steps)
         if errors:
             # Backstop: der Editor sperrt den Start-Button bereits bei
@@ -252,13 +267,97 @@ class TestRunner(QObject):
         self._vars = {str(k): float(v) for k, v in (variables or {}).items()}
         self._pending_check = None
         self._run_started = monotonic()
-        self._index = -1
+        self._index = max(0, min(int(start_index), len(steps))) - 1
         self._running = True
         self._advance()
+
+    # -- Debuggen (FT-12) ------------------------------------------------------------
+
+    @staticmethod
+    def start_refusal(steps: list[TestStep], start_index: int) -> str:
+        """"" = ab dieser Zeile startbar; sonst der Grund (innerhalb eines Blocks fehlte dessen Anfang)."""
+        if not 0 <= start_index < len(steps):
+            return tr("Keine Zeile gewählt")
+        _matching, depths, errors = validate_structure(steps)
+        if errors:
+            return errors[0][1]
+        if depths[start_index] != 0 or steps[start_index].step_type in ("else", "end"):
+            return tr("Ab hier starten geht nur auf oberster Ebene, nicht innerhalb eines Blocks")
+        return ""
+
+    def set_breakpoints(self, indices) -> None:
+        self._breakpoints = {int(i) for i in indices}
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Anhalten: eine laufende Wartezeit sofort (Rest wird gemerkt), sonst vor dem naechsten Schritt."""
+        if not self._running or self._paused:
+            return
+        held = []
+        if not self._arb_active:
+            for timer in (self._timer, self._wait_timer):
+                if timer.isActive():
+                    held.append((timer, max(0, timer.remainingTime())))
+                    timer.stop()
+        if held:
+            self._held_timers = held
+            self._paused = True
+            self.paused.emit(max(self._index, 0))
+            return
+        self._pause_requested = True
+
+    def resume(self, single_step: bool = False) -> None:
+        """Weiter (single_step: nur den naechsten Schritt, dann wieder anhalten)."""
+        if not self._running or not self._paused:
+            if single_step and self._running:
+                self._step_mode = True
+            return
+        self._paused = False
+        self._step_mode = single_step
+        self.resumed.emit()
+        if self._held_timers:
+            held, self._held_timers = self._held_timers, []
+            for timer, remaining in held:
+                timer.start(remaining)
+            return
+        self._skip_break_at = self._index
+        self._index -= 1
+        self._advance()
+
+    def debug_snapshot(self) -> dict:
+        """Variablen und letzte Messwerte fuer die Anzeige waehrend einer Pause."""
+        now = monotonic()
+        values: dict[str, tuple[float, str, float]] = {}
+        for device_id, (voltage, current, power, ts) in self._measurements.items():
+            for name, value, unit in (("U", voltage, "V"), ("I", current, "A"), ("P", power, "W")):
+                values[f"{device_id} {name}"] = (value, unit, now - ts)
+        for device_id, (ain, inputs, ts) in self._hil_measurements.items():
+            for i, mv in enumerate(ain, start=1):
+                values[f"{device_id} AIN{i}"] = (mv, "mV", now - ts)
+            values[f"{device_id} IN"] = (float(sum(1 << i for i, on in enumerate(inputs) if on)), "", now - ts)
+        for key, (value, ts) in list(self._can_signals.items()) + list(self._xcp_values.items()):
+            values[key] = (value, "", now - ts)
+        return {"vars": dict(self._vars), "values": values, "index": self._index}
+
+    def _reset_debug(self) -> None:
+        self._pause_requested = False
+        self._paused = False
+        self._step_mode = False
+        self._skip_break_at = -1
+        self._held_timers = []
+
+    def _should_pause(self, index: int) -> bool:
+        if index == self._skip_break_at:
+            self._skip_break_at = -1
+            return False
+        return self._pause_requested or self._step_mode or index in self._breakpoints
 
     def stop(self) -> None:
         if not self._running:
             return
+        self._reset_debug()
         self._timer.stop()
         self._wait_timer.stop()
         self._check_timeout.stop()
@@ -404,6 +503,7 @@ class TestRunner(QObject):
         self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value, step.hil_channel)
 
     def _fail_at(self, index: int, message: str) -> None:
+        self._reset_debug()
         self._clear_monitors()
         self._running = False
         self._arb_active = False
@@ -525,6 +625,13 @@ class TestRunner(QObject):
 
             step = self._steps[self._index]
             t = step.step_type
+            if step.enabled and self._should_pause(self._index):
+                # FT-12: vor diesem Schritt anhalten (Haltepunkt, Anhalten oder Einzelschritt)
+                self._pause_requested = False
+                self._step_mode = False
+                self._paused = True
+                self.paused.emit(self._index)
+                return
             if step.enabled and (step.params or {}).get("refs"):
                 # FT-5 (PI-55 a): Sollwert/Dauer/Grenzen aus Parametern der Variante bzw. Laufvariablen
                 problem = resolve_refs(step, self._vars)
