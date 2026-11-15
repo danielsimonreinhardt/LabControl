@@ -217,6 +217,7 @@ class RunSession(QObject):
         worker.hil_digital_state.connect(runner.on_hil_digital_state)
         worker.can_signals_decoded.connect(runner.on_can_signals_decoded)
         worker.can_frame_received.connect(runner.on_can_frame)
+        runner.hil_focus_requested.connect(worker.set_hil_focus)   # FP-18 b: beobachteten Kanal schneller
         worker.device_removed.connect(runner.on_device_removed)
         worker.psu_output_state.connect(interlock.on_output_state)
         worker.load_input_state.connect(interlock.on_output_state)

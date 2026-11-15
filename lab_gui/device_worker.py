@@ -595,6 +595,10 @@ class DeviceWorker(QObject):
         self._sim_ecu = None   # nachgebildetes UDS-Steuergeraet am simulierten Bus (uds_sim.SimEcu, FT-1)
         self._sim_xcp = None   # nachgebildeter XCP-Slave am simulierten Bus (xcp_sim.SimXcpEcu, FT-10)
         self._hils: dict[str, MicroHIL] = {}
+        # FP-18 b (0.64.5): microHIL-Kanaele, die ein Ueberwachen-Block gerade beobachtet -- im 100-ms-Takt statt
+        # nur mit dem 1-s-Vollzyklus. (device_id, "hil_ain"/"hil_in", Kanal) -> Anzahl Anfragen
+        self._hil_focus: dict[tuple, int] = {}
+        self._hil_last: dict[str, dict] = {}       # letzter Vollzyklus je microHIL (ain, outputs)
         # Kein dict wie bei den anderen Geraeten: es wird nie ein offenes
         # Handle gehalten (siehe _reconnect_picoscope), daher reicht reiner
         # Zustand statt eines Treiber-Objekts.
@@ -1741,10 +1745,42 @@ class DeviceWorker(QObject):
         except PowerSupplyError:
             pass  # naechster erfolgreicher Poll-Zyklus deckt einen echten Verbindungsabbruch ohnehin auf
 
+    @Slot(str, str, int, bool)
+    def set_hil_focus(self, device_id: str, field: str, channel: int, on: bool) -> None:
+        """Ueberwachen-Block (FT-7, FP-18 b): diesen microHIL-Kanal schneller abfragen, solange on."""
+        key = (device_id, field, int(channel))
+        count = self._hil_focus.get(key, 0) + (1 if on else -1)
+        if count > 0:
+            self._hil_focus[key] = count
+        else:
+            self._hil_focus.pop(key, None)
+
+    def _poll_hil_focus(self) -> None:
+        for device_id in {k[0] for k in self._hil_focus}:
+            hil = self._hils.get(device_id)
+            last = self._hil_last.get(device_id)
+            if hil is None or last is None:
+                continue
+            fields = {(f, ch) for d, f, ch in self._hil_focus if d == device_id}
+            try:
+                if any(f == "hil_ain" for f, _ch in fields):
+                    ain = list(last["ain"])
+                    for f, ch in fields:
+                        if f == "hil_ain" and 1 <= ch <= len(ain):
+                            ain[ch - 1] = hil.get_analog_input(ch)
+                    last["ain"] = ain
+                    self.hil_analog_input.emit(device_id, ain)
+                if any(f == "hil_in" for f, _ch in fields):
+                    self.hil_digital_state.emit(device_id, hil.get_inputs(), list(last["outputs"]))
+            except HilError as exc:
+                logger.debug("microHIL %s Schnellabfrage: %s", device_id, exc)   # der Vollzyklus trennt
+
     def _poll(self) -> None:
         t_start = time.monotonic()
         timings: dict[str, float] = {}
         self._poll_devices(timings)
+        if self._hil_focus:
+            self._poll_hil_focus()
         total = time.monotonic() - t_start
         if total > POLL_SLOW_S and t_start - self._last_slow_poll_log >= POLL_SLOW_LOG_EVERY_S:
             self._last_slow_poll_log = t_start
@@ -1884,6 +1920,7 @@ class DeviceWorker(QObject):
             self.hil_connected.emit(device_id, False)
             self.device_removed.emit("hil", device_id)
             return
+        self._hil_last[device_id] = {"ain": list(ain_mv), "outputs": list(outputs)}
         self.hil_digital_state.emit(device_id, inputs, outputs)
         self.hil_relay_state.emit(device_id, relays)
         self.hil_analog_input.emit(device_id, ain_mv)

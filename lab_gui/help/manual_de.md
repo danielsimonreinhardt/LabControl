@@ -385,7 +385,9 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
   im angegebenen Abstand). Eine Verletzung zählt als nicht bestandene
   Prüfung; mit **Bei Verletzung abbrechen** endet der Lauf sofort. Der
   Bericht zeigt je Zeitprüfung Ergebnis, Messwert, die **Auflösung** der
-  Quelle (mittlerer Abstand der Messwerte, z. B. ~500 ms beim Netzteil) und
+  Quelle (mittlerer Abstand der Messwerte, z. B. ~200 ms beim Netzteil; einen
+  beobachteten microHIL-Kanal fragt LabControl während des Blocks alle 100 ms
+  statt jede Sekunde ab) und
   einen Kurvenausschnitt mit den Grenzen; ist die Auflösung für eine Frist zu
   grob (mehr als die halbe Frist), gilt die Prüfung als verletzt.
   `run-result.json` führt sie unter `timing_checks`, JUnit als eigene

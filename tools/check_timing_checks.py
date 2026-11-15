@@ -275,6 +275,24 @@ def section_cli() -> None:
                          "--simulation", "--wait-devices", "20")
     check("Kommandozeile: Schwelle nie erreicht -> Exit 1", code == 1, f"{code}: {text[-300:]}")
 
+    # FP-18 b (0.64.5): ein beobachteter microHIL-Kanal wird im 100-ms-Takt statt nur jede Sekunde abgefragt
+    hil_case = DATA / "hil_fokus.json"
+    tm.save_steps([tm.TestStep(**psu, action="PSU_VOLT", value=5.0, duration=0.2),
+                   tm.TestStep(step_type="monitor", cond_device_kind="hil", cond_device_id=dw.SIM_HIL_ID,
+                               cond_field="hil_ain", hil_channel=1,
+                               params={"monitor": {"mode": "band", "min": -1.0, "max": 100000.0}}),
+                   tm.TestStep(step_type="wait", duration=3.0),
+                   tm.TestStep(step_type="end")], hil_case)
+    out = DATA / "hil_fokus.out.json"
+    code, text = run_cli("run", str(hil_case), "--simulation", "--wait-devices", "20", "--json", str(out))
+    try:
+        rows = json.loads(out.read_text(encoding="utf-8")).get("timing_checks", [])
+    except (OSError, ValueError):
+        rows = []
+    resolution = rows[0].get("resolution_ms") if rows else None
+    check("microHIL-Kanal im Ueberwachen-Block schneller abgefragt (Aufloesung < 300 ms statt ~1 s)",
+          code == 0 and resolution is not None and resolution < 300, f"{code} {rows[:1]} {text[-300:]}")
+
 
 def section_files() -> None:
     print("files (0.63.1)")

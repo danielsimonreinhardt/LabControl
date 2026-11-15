@@ -7,6 +7,11 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Zeitprüfungen: beobachteten microHIL-Kanal schneller abfragen (0.64.5, FT-7, FP-18 b).** Solange ein
+  Überwachen-Block einen Analog- oder Digitaleingang des microHIL beobachtet, liest der Worker genau diesen Kanal
+  im 100-ms-Takt mit (sonst nur im 1-s-Vollzyklus); am Blockende, bei Abbruch oder Stopp endet das. Die Auflösung
+  im Bericht fällt dadurch von ~1 s auf ~100 ms. **Mock-verifiziert:** `check_timing_checks` (Kommandozeile mit
+  simuliertem microHIL: Auflösung < 300 ms).
 - **XCP: Kennlinien und Kennfelder (0.64.4, FT-10).** Der A2L-Leser kennt jetzt CHARACTERISTIC CURVE/MAP mit
   AXIS_DESCR und AXIS_PTS im Format von neXtBSW a2lgen (RTE-26): Werte als Objekt `<Name>` in Speicher-Reihenfolge
   (Kennfeld spaltenweise, je X-Stützstelle die Werte über Y), eigene Stützstellen (STD_AXIS, im Datensatz vor den
@@ -21,7 +26,9 @@ Semantic Versioning (`lab_gui/version.py`).
   ein Lauf, dessen Bedingungen bzw. Überwachen-Blöcke XCP-Messgrößen lesen – „Prüfling (XCP)“ ist dort jetzt eine
   Quelle (Feld = A2L-Name), der Lauf schaltet die Abfrage für seine Dauer ein. Die Werte laufen außerdem in Verlauf
   und Aufzeichnung (Gerät `xcp:dut`). Ein Lesefehler beendet die Abfrage mit Meldung. **Mock-verifiziert:** neue
-  Prüfung `tools/check_xcp_tile.py` (Kachel, ~10 Werte/s, Verlauf, Lauf mit XCP-Bedingung und Überwachen).
+  Prüfung `tools/check_xcp_tile.py` (Kachel, ~10 Werte/s, Verlauf, Lauf mit XCP-Bedingung und Überwachen). **Hardware-verifiziert
+  (15.11.2026, Evalboard, PC/A-CAN):** Ablauf über MCP mit Überwachen-Block auf DemoSwc.MotorNtc_mV (Band
+  0–5000 mV, 3 s): der Lauf schaltet die Abfrage selbst ein, 29 Werte, Auflösung 109 ms, bestanden, Exit 0.
 
 ### Behoben
 - **XCP: Nullwerte erschienen als „-0“ (0.64.2, am Evalboard gesehen 14.11.2026).** Die RAT_FUNC-Umrechnung

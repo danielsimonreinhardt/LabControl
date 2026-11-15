@@ -135,6 +135,8 @@ class TestRunner(QObject):
     run_stopped = Signal()
     # Ergebnis eines Blocks "Ueberwachen" (0.63.0, FT-7): Schrittindex, dict (siehe _monitor_result)
     monitor_result = Signal(int, object)
+    # FP-18 b (0.64.5): device_id, Feld ("hil_ain"/"hil_in"), Kanal, an/aus -- microHIL-Kanal schneller abfragen
+    hil_focus_requested = Signal(str, str, int, bool)
     # Gesendeter Sollwert eines Arbitraersignal-Schritts (0.62.0, FT-2): index, device_id, Zielaktion, Wert --
     # fuer Soll gegen Ist und die tatsaechlichen Abstaende im Bericht
     setpoint_sent = Signal(int, str, str, float)
@@ -717,6 +719,9 @@ class TestRunner(QObject):
                 return tr("Keine aktuelle Messung für ein Gerät vom Typ '{kind}'", kind=kind_label("hil"))
         source = {"kind": kind, "device_id": device_id or "", "field": step.cond_field,
                   "channel": step.hil_channel}
+        if kind == "hil" and device_id and step.cond_field in ("hil_ain", "hil_in"):
+            source["focus"] = True
+            self.hil_focus_requested.emit(device_id, step.cond_field, step.hil_channel, True)
         self._monitors[index] = [timing_checks.Monitor(config, monotonic()), source, False]
         self.step_started.emit(index, step)
         if not self._monitor_timer.isActive():
@@ -766,6 +771,8 @@ class TestRunner(QObject):
         entry = self._monitors.pop(index, None)
         if not self._monitors:
             self._monitor_timer.stop()
+        if entry is not None:
+            self._release_focus(entry[1])
         if entry is None:
             return True
         monitor, source, reported = entry
@@ -788,7 +795,13 @@ class TestRunner(QObject):
                 "t_start": monitor.t_start + offset, "t_end": now + offset,
                 "series": [(t + offset, v) for t, v in monitor.series()]}
 
+    def _release_focus(self, source: dict) -> None:
+        if source.pop("focus", False):
+            self.hil_focus_requested.emit(source["device_id"], source["field"], source["channel"], False)
+
     def _clear_monitors(self) -> None:
+        for _monitor, source, _reported in self._monitors.values():
+            self._release_focus(source)
         self._monitors.clear()
         self._monitor_timer.stop()
 

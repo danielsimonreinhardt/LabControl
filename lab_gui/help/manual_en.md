@@ -365,8 +365,9 @@ The "+" menu additionally offers:
   gaps** (a CAN ID arrives at most the given interval apart). A violation
   counts as a failed check; with **Abort on violation** the run ends at
   once. The report lists result, measured value, the source's
-  **resolution** (mean interval between measurements, e.g. ~500 ms for the
-  power supply) and a curve excerpt with the limits for every timing check;
+  **resolution** (mean interval between measurements, e.g. ~200 ms for the
+  power supply; a microHIL channel being monitored is polled every 100 ms
+  during the block instead of once a second) and a curve excerpt with the limits for every timing check;
   if the resolution is too coarse for a deadline (more than half of it), the
   check counts as violated. `run-result.json` lists them under
   `timing_checks`, JUnit as separate test cases. The same checks also work
