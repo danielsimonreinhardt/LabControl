@@ -724,6 +724,18 @@ class Settings(QObject):
         self._save()
         self.partner_config_changed.emit(self.partner_config)
 
+    @property
+    def partner_off_on_loss(self) -> bool:
+        """Belegte Geraete dieses Rechners abschalten, wenn das Lebenszeichen des Partners ausbleibt
+        (1.0.1: abschaltbar, Standard aus). Eigener Schluessel: Umschalten verbindet den Verbund nicht neu."""
+        return bool(self._data.get("partner_off_on_loss", False))
+
+    def set_partner_off_on_loss(self, on: bool) -> None:
+        if bool(on) == self.partner_off_on_loss:
+            return
+        self._data["partner_off_on_loss"] = bool(on)
+        self._save()
+
     def set_share_device(self, device_id: str, read: bool, control: bool, measure: bool = False) -> None:
         """Freigabe EINES Geraets. Analog zu set_panel_color geraete-individuell
         in einem Dict abgelegt (share_devices), nicht als eigener Schluessel."""

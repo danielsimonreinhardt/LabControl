@@ -874,8 +874,10 @@ Sekundentakt). Der Rechner, an dem der Ablauf gestartet wird, führt ihn aus
 Am Partner zeigen deren Kacheln „belegt durch <Rechner> · <Ablauf>“ und sind
 gesperrt (Handbedienung, ALLE AUS und Sicherheitsabschaltung bleiben), und
 Bedienungen von anderer Stelle weist er ab. Der Leitstand meldet sich jede
-Sekunde; **bleibt das 3 Sekunden aus** (Netz weg, Absturz), schaltet der Partner
-die belegten Geräte ab, und der Leitstand bricht den Ablauf ab. Nach dem Ende
+Sekunde; **bleibt das 3 Sekunden aus** (Netz weg, Absturz), bricht der Leitstand
+den Ablauf ab, und der Partner hebt die Belegung auf. Die Geräte schaltet er dabei
+nur ab, wenn dort unter Einstellungen → Netzwerk „Bei Verbindungsverlust belegte
+Geräte abschalten“ angehakt ist (Standard: aus). Nach dem Ende
 des Ablaufs ist die Belegung aufgehoben. Pi und PC deshalb per Kabel verbinden,
 nicht über WLAN. Über den Verbund gehen die Bedienungen aus der Partnerkachel
 (Sollwerte, Ausgänge, Kanäle), nicht aber Arbiträrsignale, Leseschritte und
@@ -897,7 +899,8 @@ Freigabe des PCs zeigt Claude zusätzlich die Partnergeräte als
 muss am PC „Claude (MCP) darf steuern“ angehakt sein; am Partner braucht es
 nichts weiter. Vor dem ersten Befehl belegt der PC das Gerät beim
 Partner („belegt durch PC · Claude (MCP)“) und meldet sich jede Sekunde; fehlt
-das 3 Sekunden, schaltet der Partner das Gerät ab. Die Belegung endet nach
+das 3 Sekunden, endet die Belegung (abgeschaltet nur mit der Einstellung oben).
+Sonst endet sie nach
 10 Minuten ohne Befehl von Claude, bei ALLE AUS, einer Sicherheitsabschaltung,
 dem Start eines Testablaufs oder wenn der Verbund umgestellt wird; abgeschaltet
 wird dabei nichts. Durchgereicht wird nur an Aufrufer auf demselben Rechner.

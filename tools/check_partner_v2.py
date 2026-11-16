@@ -251,7 +251,24 @@ def main() -> int:
     check("Lauf abgebrochen mit 'ALLE AUS'", failed and "ALLE AUS" in failed[-1], str(failed))
     check("Belegung freigegeben", spin(app, 3.0, lambda: leases_b.holder_of(dw.SIM_PSU_ID) is None))
 
-    print("lost -- Partner nicht mehr erreichbar")
+    print("keep -- Lebenszeichen fehlt, Abschalten aus (Standard seit 1.0.1)")
+    check("Einstellung 'abschalten' steht standardmaessig aus", window_b._settings.partner_off_on_loss is False)
+    check("... und so im Einstellungsmenue",
+          window_b.settings_tab._partner_off_on_loss_checkbox.isChecked() is False)
+    mock_b.set_output(True)
+    leases_b.acquire([dw.SIM_PSU_ID], "pc-test", "Probe", ttl_s=1.0)
+    spin(app, 0.5)
+    check("Kachel belegt", window_b.control_tab.lease_text(dw.SIM_PSU_ID) != "")
+    spin(app, 2.0, lambda: leases_b.holder_of(dw.SIM_PSU_ID) is None)
+    spin(app, 1.0)
+    check("Belegung aufgehoben", leases_b.holder_of(dw.SIM_PSU_ID) is None)
+    check("Ausgang bleibt EIN", mock_b.get_output() is True, str(mock_b.get_output()))
+    check("Kachel wieder frei", window_b.control_tab.lease_text(dw.SIM_PSU_ID) == "")
+    mock_b.set_output(False)
+    window_b.settings_tab._partner_off_on_loss_checkbox.setChecked(True)   # wie ein Klick im Menue
+    check("Haken setzt die Einstellung", window_b._settings.partner_off_on_loss is True)
+
+    print("lost -- Partner nicht mehr erreichbar (Abschalten an)")
     failed.clear()
     window_a._on_run_requested()
     started = spin(app, 10.0, lambda: window_a._test_runner.is_running()

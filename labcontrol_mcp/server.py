@@ -124,7 +124,8 @@ Vorgehen:
   '@<rechner>/<id>' (z. B. '@raspberrypi/psu:0001') und 'partner' im Eintrag. Sie werden genauso bedient;
   der Befehl geht ueber diesen Rechner an den Besitzer, der Grenzwerte, Handbedienung und Sperren
   prueft ('control_blocked' nennt den Grund, 'at' bei remote_control_inactive den Rechner).
-  Das Geraet ist dort dann fuer Claude belegt; faellt die Verbindung 3 s aus, schaltet der Besitzer es ab.
+  Das Geraet ist dort dann fuer Claude belegt; faellt die Verbindung 3 s aus, endet die Belegung (abgeschaltet
+  wird nur, wenn das beim Besitzer eingestellt ist -- standardmaessig bleibt der Zustand).
   all_off wirkt auf beide Rechner.
 
 Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,

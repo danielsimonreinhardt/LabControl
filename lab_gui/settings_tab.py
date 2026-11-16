@@ -746,6 +746,7 @@ class SettingsTab(QWidget):
     program_remove_requested = Signal(str)          # Kopplung eines Programms aufheben: key_sha256 (PI-44 b)
     # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
     partner_config_edited = Signal(dict)
+    partner_off_on_loss_edited = Signal(bool)       # belegte Geraete bei Verbindungsverlust abschalten
     # Kopplung starten (pairing.py): eingetragene Adresse
     partner_pair_requested = Signal(str)
     # J-Link (PI-31 a): {"enabled", "device", "interface", "speed", "serial", "commander"}
@@ -1265,6 +1266,10 @@ class SettingsTab(QWidget):
         form.addRow(self._partner_name_label, self._partner_name_edit)
         layout.addLayout(form)
 
+        self._partner_off_on_loss_checkbox = QCheckBox()
+        self._partner_off_on_loss_checkbox.toggled.connect(self.partner_off_on_loss_edited)
+        layout.addWidget(self._partner_off_on_loss_checkbox)
+
         self._partner_status = QLabel()
         self._partner_status.setWordWrap(True)
         layout.addWidget(self._partner_status)
@@ -1280,6 +1285,10 @@ class SettingsTab(QWidget):
         self._partner_token_label.setText(tr("Partner-Token:"))
         self._partner_name_label.setText(tr("Anzeigename:"))
         self._partner_name_edit.setPlaceholderText(tr("Rechnername"))
+        self._partner_off_on_loss_checkbox.setText(tr("Bei Verbindungsverlust belegte Geräte abschalten"))
+        self._partner_off_on_loss_checkbox.setToolTip(tr(
+            "Gilt für die Geräte an diesem Rechner, die der Partner (Testablauf oder Claude) belegt hat: "
+            "bleibt sein Lebenszeichen 3 s aus, wird ihr Ausgang abgeschaltet."))
 
     def _emit_partner_config(self) -> None:
         self.partner_config_edited.emit({
@@ -1301,6 +1310,11 @@ class SettingsTab(QWidget):
         for widget in widgets:
             widget.blockSignals(False)
         self._partner_pair_button.setEnabled(bool(self._partner_address_edit.text().strip()))
+
+    def set_partner_off_on_loss(self, on: bool) -> None:
+        self._partner_off_on_loss_checkbox.blockSignals(True)
+        self._partner_off_on_loss_checkbox.setChecked(bool(on))
+        self._partner_off_on_loss_checkbox.blockSignals(False)
 
     def set_partner_status(self, text: str, tone: str) -> None:
         """tone: "success", "danger" oder "muted" (theme.set_tone)."""
