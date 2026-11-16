@@ -1752,6 +1752,7 @@ class MainWindow(QMainWindow):
             status_label.deleteLater()
         self._device_labels.pop(device_id, None)
         self._device_online.pop(device_id, None)
+        self._live_state.forget(device_id)
 
     def _wire_share(self) -> None:
         """Netzwerk-Freigabe: Einstellungen <-> Settings <-> LiveState/Server.

@@ -196,6 +196,13 @@ class LiveState(QObject):
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         self.on_device_known(kind, device_id, label)
 
+    def forget(self, device_id: str) -> None:
+        """Geraet vergessen ("Nicht verbundene Geraete loeschen", MainWindow._forget_device): sonst lieferte
+        /api/v1/values es weiter und der Verbund-Partner zeigte eine getrennte Kachel (1.0.1)."""
+        with self._lock:
+            self._devices.pop(device_id, None)
+            self._colors.pop(device_id, None)
+
     def set_online(self, device_id: str, online: bool) -> None:
         with self._lock:
             self._entry(device_id)["online"] = bool(online)

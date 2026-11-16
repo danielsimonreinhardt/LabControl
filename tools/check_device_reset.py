@@ -106,8 +106,12 @@ def main() -> int:
         if set(online()) != last:
             last, settled_since = set(online()), time.monotonic()
     sim_before = {d for d in online()}
+    shared = lambda: set(window._live_state._devices)
+    check("alte Geraete stehen vorher in der Freigabe (LiveState)", set(offline) <= shared(), str(shared()))
     window.settings_tab.remove_offline_devices_requested.emit()
     app.processEvents()
+    check("1.0.1: alte Geraete auch aus der Freigabe entfernt (Partner sieht sie nicht mehr)",
+          not (shared() & set(offline)) and sim_before <= shared(), str(shared()))
     check("alte Geraete aus der Registry entfernt", not (known() & set(offline)), str(known()))
     check("Kacheln der alten Geraete entfernt", not any(d in window.dashboard._panels for d in offline))
     check("Sektionen im Einstellungen-Reiter entfernt",

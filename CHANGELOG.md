@@ -17,6 +17,11 @@ Semantic Versioning (`lab_gui/version.py`).
   offscreen); in der laufenden App am PC noch nicht ausprobiert.
 
 ### Behoben
+- **Gelöschte Geräte blieben beim Verbund-Partner sichtbar.** „Nicht verbundene Geräte löschen“ entfernte ein
+  Gerät aus Kacheln, Einstellungen und Editor, nicht aber aus der Netzwerk-Freigabe – der Partner bekam es weiter
+  geliefert und zeigte eine getrennte Kachel (am Pi: der gelöschte Funktionsgenerator an COM20 des PCs). Jetzt
+  verschwindet es auch dort. Mock-verifiziert (`check_device_reset`, Gegenprobe ohne Korrektur schlägt fehl);
+  am Pi noch nicht, dafür brauchen PC und Pi den neuen Stand.
 - **Falsche OVP/OCP-Warnung in der Kachel eines Partner-Netzteils.** Am PC zeigte die Kachel eines Netzteils am Pi
   „Spannung (12V) liegt über der OVP-Schwelle (1V) … Strom (0.5A) liegt über der OCP-Schwelle (0A)“, obwohl das
   Netzteil mit 12 V lief. OVP/OCP des Partners sind am Leitstand unbekannt (die Felder sind dort ausgeblendet und
