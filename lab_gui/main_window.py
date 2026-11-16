@@ -504,6 +504,8 @@ class MainWindow(QMainWindow):
     def _wire_partner(self) -> None:
         self.settings_tab.partner_config_edited.connect(lambda cfg: self._settings.set_partner_config(**cfg))
         self._settings.partner_config_changed.connect(self._on_partner_config)
+        self.settings_tab.set_partner_off_on_loss(self._settings.partner_off_on_loss)
+        self.settings_tab.partner_off_on_loss_edited.connect(self._settings.set_partner_off_on_loss)
         # Kopplung (pairing.py): fragende Seite (Knopf "Koppeln…") und bestaetigende Seite (_check_pairing)
         self.settings_tab.partner_pair_requested.connect(self._start_pairing)
         self._pair_session: PairingSession | None = None
@@ -543,8 +545,10 @@ class MainWindow(QMainWindow):
         pd = self._partner_devices
         dash, ctrl = self.dashboard, self.control_tab
         pd.device_known.connect(self._on_partner_device_known)
-        pd.device_forgotten.connect(lambda _kind, rid: (dash.forget_device(rid), ctrl.forget_device(rid)))
+        pd.device_forgotten.connect(lambda _kind, rid: (dash.forget_device(rid), ctrl.forget_device(rid),
+                                                        self._forget_status_chip(rid)))
         pd.online_changed.connect(self._on_partner_device_online)
+        pd.label_changed.connect(self._on_label_changed_status)
         pd.control_changed.connect(ctrl.set_remote_controllable)
         for signal, slots in (
                 (pd.psu_measurement, (dash.update_psu,)),
@@ -574,12 +578,15 @@ class MainWindow(QMainWindow):
         if kind != "can":   # CAN des Partners: nur Zaehler in der Uebersicht, Senden geht nicht ueber den Verbund
             self.control_tab.on_device_known(kind, rid, label)   # section_created -> _on_control_section_created
             self.control_tab.set_remote(rid, host or "")
+        self._on_device_known_status(kind, rid, label)   # Chip auch fuer Partnergeraete (1.0.1)
 
     def _on_partner_device_online(self, kind: str, rid: str, online: bool) -> None:
         for view in (self.dashboard, self.control_tab):
             setter = getattr(view, f"set_{kind}_online", None)
             if setter is not None:
                 setter(rid, online)
+        self._device_online[rid] = online
+        self._render_status_label(rid)
 
     def _on_partner_tile_action_failed(self, rid: str, action: str, message: str) -> None:
         """Bedienung einer Partnerkachel abgelehnt: kurz an der Kachel zeigen (Touch hat keine Statusleiste)."""
@@ -1160,11 +1167,19 @@ class MainWindow(QMainWindow):
             logger.warning("Kopplung %s", "bestätigt" if accept else "abgelehnt")
 
     def _check_leases(self) -> None:
-        """Alle 250 ms: Belegungen ohne Lebenszeichen abschalten, Kacheln sperren/freigeben."""
+        """Alle 250 ms: Belegungen ohne Lebenszeichen aufheben (und abschalten, wenn in den Einstellungen
+        gewaehlt), Kacheln sperren/freigeben."""
         self._check_pairing()
         leases = self._live_state.leases
         for lease in leases.pop_expired():
             names = ", ".join(self._device_labels.get(d, d) for d in lease.devices)
+            if not self._settings.partner_off_on_loss:
+                logger.warning("Verbund: kein Lebenszeichen von %s seit %.0f s - Belegung aufgehoben, "
+                               "Geräte bleiben im Zustand: %s", lease.holder, lease.ttl_s, names)
+                self.statusBar().showMessage(
+                    tr("Verbund: kein Lebenszeichen von {holder} – Belegung aufgehoben: {devices}",
+                       holder=lease.holder_name(), devices=names), 30000)
+                continue
             logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden abgeschaltet: %s",
                          lease.holder, lease.ttl_s, names)
             self._request_devices_off.emit(list(lease.devices),
@@ -1746,13 +1761,17 @@ class MainWindow(QMainWindow):
         self.control_tab.forget_device(device_id)
         self.settings_tab.forget_device(device_id)
         self.testcase_tab.forget_device(device_id)
+        self._forget_status_chip(device_id)
+        self._live_state.forget(device_id)
+
+    def _forget_status_chip(self, device_id: str) -> None:
         status_label = self._status_labels.pop(device_id, None)
         if status_label is not None:
             self._status_layout.removeWidget(status_label)
             status_label.deleteLater()
         self._device_labels.pop(device_id, None)
         self._device_online.pop(device_id, None)
-        self._live_state.forget(device_id)
+        self._device_kinds.pop(device_id, None)
 
     def _wire_share(self) -> None:
         """Netzwerk-Freigabe: Einstellungen <-> Settings <-> LiveState/Server.
@@ -1851,7 +1870,7 @@ class MainWindow(QMainWindow):
         """Name/Kachelfarbe vom Verbund-Partner (PI-43 b): wie eine Aenderung an diesem Rechner uebernehmen --
         der Besitzer fuehrt, der Partner sieht das Ergebnis mit dem naechsten Abgleich."""
         kind = self._device_kinds.get(device_id)
-        if kind is None:
+        if kind is None or device_id.startswith("@"):   # Partnergeraete stehen seit 1.0.1 auch hier (Chips)
             self._share_bridge.complete(request_id, False, "unknown_tile", "", 0.0)
             return
         color = meta.get("color", "__keep__")
@@ -2223,10 +2242,11 @@ class MainWindow(QMainWindow):
         bekannten Geraeten bereits belegte Farben ausgenommen. Gemeinsame
         Vergabe-Logik fuer _on_panel_colors_enabled_changed (10e) und
         _on_device_known_panel_color (BUGS.md #15)."""
-        unassigned = [d for d in device_ids if self._settings.panel_color(d) is None]
+        # Partnergeraete (seit 1.0.1 in _device_labels, Status-Chips): Farbe vergibt der Besitzer
+        unassigned = [d for d in device_ids if not d.startswith("@") and self._settings.panel_color(d) is None]
         if not unassigned:
             return
-        used = {self._settings.panel_color(d) for d in self._device_labels} - {None}
+        used = {self._settings.panel_color(d) for d in self._device_labels if not d.startswith("@")} - {None}
         free = [c for c in PANEL_COLOR_ORDER if c not in used] or list(PANEL_COLOR_ORDER)
         for i, device_id in enumerate(unassigned):
             self._settings.set_panel_color(device_id, free[i % len(free)])
@@ -2732,6 +2752,12 @@ class MainWindow(QMainWindow):
             return tr(STATUS_KIND_SHORT[kind]) + number.group(1)
         return label if len(label) <= 10 else label[:9] + "…"
 
+    def _status_full_name(self, device_id: str) -> str:
+        label = self._device_labels.get(device_id, device_id)
+        if device_id.startswith("@"):
+            return f"{self._partner.name() or verbund_ids.split(device_id)[0]} · {label}"
+        return label
+
     def _on_label_changed_status(self, kind: str, device_id: str, label: str) -> None:
         self._device_labels[device_id] = label
         self._render_status_label(device_id)
@@ -2744,8 +2770,10 @@ class MainWindow(QMainWindow):
         symbol, state, chip_color = self._status_state(device_id)
         # Kurzer Chip mit Symbol statt "Name: Zustand" -- die volle Zeile passte ab vier Geraeten nicht mehr und war
         # vor allem an der Farbe lesbar (GUI-Review UX-1; seit PI-17 a auch am PC). Tipp/Klick -> Liste.
-        status_label.setText(f"{symbol} {self._short_name(device_id)}")
-        status_label.setToolTip(f"{label}: {state}")
+        # Partnergeraet (1.0.1): derselbe Chip mit "⇄" wie der Verbund-Chip, Rechnername im Tooltip
+        remote = device_id.startswith("@")
+        status_label.setText(f"{symbol} {self._short_name(device_id)}" + (" ⇄" if remote else ""))
+        status_label.setToolTip(f"{self._status_full_name(device_id)}: {state}")
         self._style_chip(status_label, chip_color)
 
     def _show_status_details(self) -> None:
@@ -2767,7 +2795,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(mcp)
         for device_id in self._status_labels:
             symbol, state, color = self._status_state(device_id)
-            row = QLabel(f"{symbol}  {self._device_labels.get(device_id, device_id)} – {state}")
+            row = QLabel(f"{symbol}  {self._status_full_name(device_id)} – {state}")
             row.setStyleSheet(f"color: {color}; font-weight: bold;")
             layout.addWidget(row)
         if not self._status_labels:

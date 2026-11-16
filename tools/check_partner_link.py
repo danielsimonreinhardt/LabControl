@@ -273,6 +273,10 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     # 1.0.1: OVP/OCP des Partners sind unbekannt (Felder auf 1 V / 0 A) -- keine OVP/OCP-Warnung, auch nach Eingabe
     section._voltage_spin.setValue(12.0)
     section._current_spin.setValue(0.5)
+    chip = window._status_labels.get(psu_id)
+    check("1.0.1: Status-Chip auch fuer das Partnergeraet, mit '⇄' und Rechnername im Tooltip",
+          chip is not None and chip.text().startswith("✓") and chip.text().endswith("⇄")
+          and chip.toolTip().startswith("Pi · "), (chip.text() + " | " + chip.toolTip()) if chip else "kein Chip")
     check("keine OVP/OCP-Warnung in der Partnerkachel (12 V / 0,5 A eingegeben)",
           section._limit_warning.isHidden() and not section._limit_warning.text(), section._limit_warning.text())
     spin(app, 2.0, lambda: "12.0" in panel._values["voltage"].text() if hasattr(panel, "_values") else True)
@@ -381,6 +385,9 @@ def section_window(app, state, server, executor, port, cfg) -> None:
           and "nicht erreichbar" in window._partner_chip.toolTip(), window._partner_chip.toolTip())
     check("Partnerkacheln getrennt (Steuerung verborgen, Uebersicht getrennt)",
           spin(app, 2.0, lambda: not section.isVisible()), f"sichtbar={section.isVisible()}")
+    chip = window._status_labels.get(psu_id)
+    check("1.0.1: Chip des Partnergeraets zeigt getrennt (✕)", chip is not None and chip.text().startswith("✕"),
+          chip.text() if chip else "kein Chip")
     server.apply(cfg)
     check("Partner wieder da: neu verbunden, Kachel wieder da",
           spin(app, 8.0, lambda: window._partner.is_connected() and section.isVisible()))
@@ -395,6 +402,8 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     app.processEvents()
     check("Verbund aus: Chip verborgen, Partnerkacheln weg", window._partner_chip.isHidden()
           and psu_id not in window.dashboard._panels and window.control_tab.section(psu_id) is None)
+    check("1.0.1: Verbund aus: Chips der Partnergeraete weg",
+          not any(d.startswith("@") for d in window._status_labels), str(list(window._status_labels)))
     before = len(executor.all_off)
     window._all_off_button.click()
     spin(app, 1.0)
