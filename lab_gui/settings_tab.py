@@ -569,8 +569,9 @@ class _ShareTable(QTableWidget):
     """
 
     share_changed = Signal(str, bool, bool, bool)  # device_id, read, control, measure
+    off_on_loss_changed = Signal(str, bool)        # device_id, bei Verbindungsverlust abschalten (PI-68 a)
 
-    COL_LABEL, COL_ID, COL_READ, COL_CONTROL, COL_MEASURE = range(5)
+    COL_LABEL, COL_ID, COL_READ, COL_CONTROL, COL_MEASURE, COL_OFF_ON_LOSS = range(6)
 
     # Geraetearten mit einer Zeile in dieser Tabelle. Steuern gibt es nur fuer
     # remote_actions.CONTROL_KINDS (CAN ist lesbar, aber nie fernsteuerbar),
@@ -579,7 +580,7 @@ class _ShareTable(QTableWidget):
     SUPPORTED_KINDS = ("load", "psu", "can", "hil", "fg", "picoscope", "scpiscope", "battsim")
 
     def __init__(self) -> None:
-        super().__init__(0, 5)
+        super().__init__(0, 6)
         self.verticalHeader().setVisible(False)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -589,8 +590,9 @@ class _ShareTable(QTableWidget):
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
-            [tr("Gerät"), tr("Geräte-ID"), tr("Lesen"), tr("Steuern"), tr("Messen")]
+            [tr("Gerät"), tr("Geräte-ID"), tr("Lesen"), tr("Steuern"), tr("Messen"), tr("Aus bei Verbindungsverlust")]
         )
+        self.horizontalHeaderItem(self.COL_OFF_ON_LOSS).setToolTip(self._off_on_loss_tooltip(CONTROL_KINDS[0]))
         for device_id, row in self._rows.items():
             widget = self.cellWidget(row, self.COL_CONTROL)
             if widget is not None:
@@ -598,6 +600,9 @@ class _ShareTable(QTableWidget):
             widget = self.cellWidget(row, self.COL_MEASURE)
             if widget is not None:
                 widget.setToolTip(self._measure_tooltip(self._kinds.get(device_id, "")))
+            widget = self.cellWidget(row, self.COL_OFF_ON_LOSS)
+            if widget is not None:
+                widget.setToolTip(self._off_on_loss_tooltip(self._kinds.get(device_id, "")))
 
     @staticmethod
     def _control_tooltip(kind: str) -> str:
@@ -610,6 +615,13 @@ class _ShareTable(QTableWidget):
         if kind in SCOPE_KINDS:
             return tr("Erfassungen über Netzwerk/MCP erlauben (schaltet nichts)")
         return tr("Nur für Oszilloskope")
+
+    @staticmethod
+    def _off_on_loss_tooltip(kind: str) -> str:
+        if kind in CONTROL_KINDS:
+            return tr("Hat der Verbund-Partner (Testablauf oder Claude) das Gerät belegt und bleibt sein "
+                      "Lebenszeichen 3 s aus, wird der Ausgang abgeschaltet. Ohne Haken bleibt er, wie er ist.")
+        return tr("Dieses Gerät lässt sich nicht fernsteuern")
 
     def _checkbox(self, device_id: str, column: int, enabled: bool) -> QWidget:
         box = QCheckBox()
@@ -633,6 +645,11 @@ class _ShareTable(QTableWidget):
         normalisiert dasselbe noch einmal -- das hier haelt nur die Anzeige
         ehrlich."""
         if device_id not in self._rows:
+            return
+        if column == self.COL_OFF_ON_LOSS:
+            box = self._box(device_id, column)
+            if box is not None:
+                self.off_on_loss_changed.emit(device_id, box.isChecked())
             return
         read = self._box(device_id, self.COL_READ)
         if read is not None:
@@ -682,6 +699,13 @@ class _ShareTable(QTableWidget):
         measure_cell = self._checkbox(device_id, self.COL_MEASURE, kind in SCOPE_KINDS)
         measure_cell.setToolTip(self._measure_tooltip(kind))
         self.setCellWidget(row, self.COL_MEASURE, measure_cell)
+        off_cell = self._checkbox(device_id, self.COL_OFF_ON_LOSS, kind in CONTROL_KINDS)
+        off_cell.setToolTip(self._off_on_loss_tooltip(kind))
+        box = getattr(off_cell, "checkbox")
+        box.blockSignals(True)
+        box.setChecked(kind in CONTROL_KINDS)   # Standard: abschalten; set_off_on_loss zieht den Stand nach
+        box.blockSignals(False)
+        self.setCellWidget(row, self.COL_OFF_ON_LOSS, off_cell)
         self.resizeColumnsToContents()
 
     def set_label(self, device_id: str, label: str) -> None:
@@ -699,6 +723,16 @@ class _ShareTable(QTableWidget):
         for other, other_row in self._rows.items():
             if other_row > row:
                 self._rows[other] = other_row - 1
+
+    def set_off_on_loss(self, keep_on: set) -> None:
+        """keep_on: Geraete, die bei Verbindungsverlust NICHT abgeschaltet werden (alle anderen schon)."""
+        for device_id in self._rows:
+            box = self._box(device_id, self.COL_OFF_ON_LOSS)
+            if box is None or not box.isEnabled():
+                continue
+            box.blockSignals(True)
+            box.setChecked(device_id not in keep_on)
+            box.blockSignals(False)
 
     def set_share(self, devices: dict) -> None:
         for device_id in self._rows:
@@ -742,11 +776,11 @@ class SettingsTab(QWidget):
     share_read_token_toggled = Signal(bool)
     share_access_log_toggled = Signal(bool)
     share_device_changed = Signal(str, bool, bool, bool)  # device_id, read, control, measure
+    share_off_on_loss_changed = Signal(str, bool)   # device_id, bei Verbindungsverlust abschalten (PI-68 a)
     share_local_bypass_toggled = Signal(bool)       # "Claude (MCP) darf steuern"
     program_remove_requested = Signal(str)          # Kopplung eines Programms aufheben: key_sha256 (PI-44 b)
     # Verbund-Partner (PI-23 a): {"enabled", "address", "token", "name"}
     partner_config_edited = Signal(dict)
-    partner_off_on_loss_edited = Signal(bool)       # belegte Geraete bei Verbindungsverlust abschalten
     # Kopplung starten (pairing.py): eingetragene Adresse
     partner_pair_requested = Signal(str)
     # J-Link (PI-31 a): {"enabled", "device", "interface", "speed", "serial", "commander"}
@@ -1214,6 +1248,8 @@ class SettingsTab(QWidget):
 
         self._share_table = _ShareTable()
         self._share_table.share_changed.connect(self.share_device_changed)
+        self._share_table.off_on_loss_changed.connect(self.share_off_on_loss_changed)
+        self._keep_on_loss: set[str] = set()
         layout.addWidget(self._share_table)
 
         layout.addWidget(_separator())
@@ -1266,10 +1302,6 @@ class SettingsTab(QWidget):
         form.addRow(self._partner_name_label, self._partner_name_edit)
         layout.addLayout(form)
 
-        self._partner_off_on_loss_checkbox = QCheckBox()
-        self._partner_off_on_loss_checkbox.toggled.connect(self.partner_off_on_loss_edited)
-        layout.addWidget(self._partner_off_on_loss_checkbox)
-
         self._partner_status = QLabel()
         self._partner_status.setWordWrap(True)
         layout.addWidget(self._partner_status)
@@ -1285,10 +1317,6 @@ class SettingsTab(QWidget):
         self._partner_token_label.setText(tr("Partner-Token:"))
         self._partner_name_label.setText(tr("Anzeigename:"))
         self._partner_name_edit.setPlaceholderText(tr("Rechnername"))
-        self._partner_off_on_loss_checkbox.setText(tr("Bei Verbindungsverlust belegte Geräte abschalten"))
-        self._partner_off_on_loss_checkbox.setToolTip(tr(
-            "Gilt für die Geräte an diesem Rechner, die der Partner (Testablauf oder Claude) belegt hat: "
-            "bleibt sein Lebenszeichen 3 s aus, wird ihr Ausgang abgeschaltet."))
 
     def _emit_partner_config(self) -> None:
         self.partner_config_edited.emit({
@@ -1311,10 +1339,10 @@ class SettingsTab(QWidget):
             widget.blockSignals(False)
         self._partner_pair_button.setEnabled(bool(self._partner_address_edit.text().strip()))
 
-    def set_partner_off_on_loss(self, on: bool) -> None:
-        self._partner_off_on_loss_checkbox.blockSignals(True)
-        self._partner_off_on_loss_checkbox.setChecked(bool(on))
-        self._partner_off_on_loss_checkbox.blockSignals(False)
+    def set_keep_on_loss(self, keep_on: set) -> None:
+        """Geraete, die bei Verbindungsverlust zum Partner NICHT abgeschaltet werden (PI-68 a)."""
+        self._keep_on_loss = set(keep_on)
+        self._share_table.set_off_on_loss(self._keep_on_loss)
 
     def set_partner_status(self, text: str, tone: str) -> None:
         """tone: "success", "danger" oder "muted" (theme.set_tone)."""
@@ -1572,6 +1600,7 @@ class SettingsTab(QWidget):
         if kind == "hil":
             self._ensure_info_section(device_id, label)
         self._share_table.add_device(kind, device_id, label)
+        self._share_table.set_off_on_loss(self._keep_on_loss)
         if not SAFETY_LIMIT_FIELDS.get(kind):
             # CAN/Oszilloskop/HIL sind nicht sicherheitsrelevant (keine
             # Watchdog-Grenzwerte, siehe SAFETY_LIMIT_FIELDS) -- keine leere

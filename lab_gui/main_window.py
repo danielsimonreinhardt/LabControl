@@ -504,8 +504,10 @@ class MainWindow(QMainWindow):
     def _wire_partner(self) -> None:
         self.settings_tab.partner_config_edited.connect(lambda cfg: self._settings.set_partner_config(**cfg))
         self._settings.partner_config_changed.connect(self._on_partner_config)
-        self.settings_tab.set_partner_off_on_loss(self._settings.partner_off_on_loss)
-        self.settings_tab.partner_off_on_loss_edited.connect(self._settings.set_partner_off_on_loss)
+        # PI-68 a: je Geraet, ob es bei Verbindungsverlust abgeschaltet wird (Spalte in der Freigabe-Tabelle)
+        self.settings_tab.set_keep_on_loss(self._settings.keep_on_loss)
+        self.settings_tab.share_off_on_loss_changed.connect(self._settings.set_off_on_loss)
+        self._settings.keep_on_loss_changed.connect(self.settings_tab.set_keep_on_loss)
         # Kopplung (pairing.py): fragende Seite (Knopf "Koppeln…") und bestaetigende Seite (_check_pairing)
         self.settings_tab.partner_pair_requested.connect(self._start_pairing)
         self._pair_session: PairingSession | None = None
@@ -1167,26 +1169,29 @@ class MainWindow(QMainWindow):
             logger.warning("Kopplung %s", "bestätigt" if accept else "abgelehnt")
 
     def _check_leases(self) -> None:
-        """Alle 250 ms: Belegungen ohne Lebenszeichen aufheben (und abschalten, wenn in den Einstellungen
-        gewaehlt), Kacheln sperren/freigeben."""
+        """Alle 250 ms: Belegungen ohne Lebenszeichen aufheben, die Geraete mit Haken "Aus bei
+        Verbindungsverlust" abschalten (PI-68 a), Kacheln sperren/freigeben."""
         self._check_pairing()
         leases = self._live_state.leases
         for lease in leases.pop_expired():
-            names = ", ".join(self._device_labels.get(d, d) for d in lease.devices)
-            if not self._settings.partner_off_on_loss:
+            off = [d for d in lease.devices if self._settings.off_on_loss(d)]
+            keep = [d for d in lease.devices if d not in off]
+            messages = []
+            if off:
+                names = ", ".join(self._device_labels.get(d, d) for d in off)
+                logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden "
+                             "abgeschaltet: %s", lease.holder, lease.ttl_s, names)
+                self._request_devices_off.emit(off, f"Verbund-Lebenszeichen fehlt ({lease.holder_name()})")
+                messages.append(tr("Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}",
+                                   holder=lease.holder_name(), devices=names))
+            if keep:
+                names = ", ".join(self._device_labels.get(d, d) for d in keep)
                 logger.warning("Verbund: kein Lebenszeichen von %s seit %.0f s - Belegung aufgehoben, "
                                "Geräte bleiben im Zustand: %s", lease.holder, lease.ttl_s, names)
-                self.statusBar().showMessage(
-                    tr("Verbund: kein Lebenszeichen von {holder} – Belegung aufgehoben: {devices}",
-                       holder=lease.holder_name(), devices=names), 30000)
-                continue
-            logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden abgeschaltet: %s",
-                         lease.holder, lease.ttl_s, names)
-            self._request_devices_off.emit(list(lease.devices),
-                                           f"Verbund-Lebenszeichen fehlt ({lease.holder_name()})")
-            self.statusBar().showMessage(
-                tr("Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}",
-                   holder=lease.holder_name(), devices=names), 30000)
+                messages.append(tr("Verbund: kein Lebenszeichen von {holder} – Belegung aufgehoben: {devices}",
+                                   holder=lease.holder_name(), devices=names))
+            if messages:
+                self.statusBar().showMessage(" · ".join(messages), 30000)
         view = {device_id: tr("belegt durch {holder} · {run}", holder=lease.holder_name(),
                               run=lease.run or tr("Testablauf"))
                 for device_id, lease in leases.snapshot().items()}

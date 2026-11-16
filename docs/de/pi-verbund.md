@@ -359,14 +359,15 @@ sequenceDiagram
   L->>B: Bedienung (z. B. Spannung setzen)
   B-->>L: bestätigt
   L->>B: Belegung freigeben (Laufende)
-  Note over B: Fehlt das Lebenszeichen 3 s,<br/>hebt B die Belegung auf<br/>(Abschalten wählbar)
+  Note over B: Fehlt das Lebenszeichen 3 s,<br/>hebt B die Belegung auf<br/>und schaltet ab (je Gerät abwählbar)
 ```
 
 - **Belegung:** Kachel beim Besitzer gesperrt mit „belegt durch <Rechner> · <Ablauf>“. Die Handbedienung des
   Netzteils bleibt möglich; Bedienungen anderer werden abgelehnt.
 - **Lebenszeichen:** Der Leitstand bricht den Lauf nach 3 s ohne bestätigtes Lebenszeichen ab. Der Besitzer hebt
-  die Belegung dann auf. Die Geräte bleiben dabei im Zustand, außer beim Besitzer ist unter Einstellungen → Netzwerk
-  „Bei Verbindungsverlust belegte Geräte abschalten“ eingeschaltet (Standard: aus).
+  die Belegung dann auf und schaltet die belegten Geräte ab. Ausnahme: Geräte, bei denen beim Besitzer unter
+  Einstellungen → Netzwerk in der Spalte „Aus bei Verbindungsverlust“ kein Haken steht – sie bleiben, wie sie sind
+  (z. B. das Netzteil, das ein Board dauerhaft versorgt).
 - **Rate-Grenze:** höchstens 5 Fernbefehle je Sekunde, damit ALLE AUS immer durchkommt. Arbiträrsignale und Rampen
   auf Partner-Netzteilen halten daher mindestens 220 ms zwischen zwei Sollwerten.
 - **Nicht über den Verbund:** Leseschritte, CAN-Schritte, J-Link. Solche Abläufe starten mit Meldung nicht, ebenso

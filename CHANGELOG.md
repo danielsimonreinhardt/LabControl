@@ -22,14 +22,15 @@ Semantic Versioning (`lab_gui/version.py`).
   Mock-verifiziert (`check_partner_link`); in der laufenden App an PC und Pi noch nicht.
 
 ### Geändert
-- **Abschalten bei Verbindungsverlust ist jetzt eine Einstellung, Standard: aus.** Bisher schaltete der Besitzer
-  die vom Partner belegten Geräte ab, wenn dessen Lebenszeichen 3 s ausblieb (Testablauf oder Claude über den
-  PC). Im WLAN kam das bei kurzen Aussetzern vor und schaltete das Netzteil am Pi mitten im Betrieb ab. Jetzt hebt
-  der Besitzer nur die Belegung auf, und die Geräte bleiben im Zustand. Wer das Abschalten will, hakt unter
-  Einstellungen → Netzwerk → Verbund „Bei Verbindungsverlust belegte Geräte abschalten“ an. Der Haken gilt für
-  die Geräte an diesem Rechner, also beim Besitzer setzen. Unverändert: Der Leitstand bricht einen Ablauf nach
-  3 s ohne bestätigtes Lebenszeichen ab. Mock-verifiziert (`check_partner_v2`: Ausgang bleibt EIN ohne Haken,
-  schaltet mit Haken nach etwa 3 s ab; `check_verbund_v4`); an PC und Pi noch nicht.
+- **Abschalten bei Verbindungsverlust je Gerät wählbar (PI-68 a).** Bisher schaltete der Besitzer alle vom
+  Partner belegten Geräte ab, wenn dessen Lebenszeichen 3 s ausblieb (Testablauf oder Claude über den PC). Im WLAN
+  kam das bei kurzen Aussetzern vor und schaltete das Netzteil des Evalboards am Pi mitten im Betrieb ab. Jetzt
+  hat die Freigabe-Tabelle (Einstellungen → Netzwerk) die Spalte „Aus bei Verbindungsverlust“. Standard ist
+  weiter „abschalten“. Ohne Haken hebt der Besitzer nur die Belegung auf, und das Gerät bleibt, wie es ist – etwa
+  das Netzteil, das ein Board dauerhaft versorgt. Der Haken gilt am Rechner, an dem das Gerät hängt. Unverändert:
+  Der Leitstand bricht einen Ablauf nach 3 s ohne bestätigtes Lebenszeichen ab. Mock-verifiziert
+  (`check_partner_v2`: ohne Haken bleibt der Ausgang EIN, mit Haken aus nach etwa 3 s; `check_verbund_v4`); an
+  PC und Pi noch nicht.
 
 ### Behoben
 - **Gelöschte Geräte blieben beim Verbund-Partner sichtbar.** „Nicht verbundene Geräte löschen“ entfernte ein

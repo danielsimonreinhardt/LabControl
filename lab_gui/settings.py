@@ -80,6 +80,7 @@ class Settings(QObject):
     scpi_scopes_changed = Signal(list)
     # Verbund-Partner (PI-23 a, partner_link.py): kompletter Block wie share_config_changed.
     partner_config_changed = Signal(dict)
+    keep_on_loss_changed = Signal(object)   # set[str], PI-68 a
     # J-Link (PI-31 a, jlink_service.py): kompletter Block
     jlink_config_changed = Signal(dict)
     # Verriegelung Netzteil/Last im Testablauf (FP-7 b): Liste der Gruppen
@@ -725,16 +726,27 @@ class Settings(QObject):
         self.partner_config_changed.emit(self.partner_config)
 
     @property
-    def partner_off_on_loss(self) -> bool:
-        """Belegte Geraete dieses Rechners abschalten, wenn das Lebenszeichen des Partners ausbleibt
-        (1.0.1: abschaltbar, Standard aus). Eigener Schluessel: Umschalten verbindet den Verbund nicht neu."""
-        return bool(self._data.get("partner_off_on_loss", False))
+    def keep_on_loss(self) -> set[str]:
+        """Geraete dieses Rechners, die NICHT abgeschaltet werden, wenn das Lebenszeichen des Verbund-Partners
+        ausbleibt (PI-68 a: je Geraet, Standard abschalten). Eigener Schluessel, verbindet den Verbund nicht neu."""
+        stored = self._data.get("partner_keep_on_loss")
+        return {d for d in stored if isinstance(d, str)} if isinstance(stored, list) else set()
 
-    def set_partner_off_on_loss(self, on: bool) -> None:
-        if bool(on) == self.partner_off_on_loss:
+    def off_on_loss(self, device_id: str) -> bool:
+        return device_id not in self.keep_on_loss
+
+    def set_off_on_loss(self, device_id: str, on: bool) -> None:
+        keep = self.keep_on_loss
+        changed = (device_id in keep) == bool(on)
+        if not changed:
             return
-        self._data["partner_off_on_loss"] = bool(on)
+        if on:
+            keep.discard(device_id)
+        else:
+            keep.add(device_id)
+        self._data["partner_keep_on_loss"] = sorted(keep)
         self._save()
+        self.keep_on_loss_changed.emit(self.keep_on_loss)
 
     def set_share_device(self, device_id: str, read: bool, control: bool, measure: bool = False) -> None:
         """Freigabe EINES Geraets. Analog zu set_panel_color geraete-individuell

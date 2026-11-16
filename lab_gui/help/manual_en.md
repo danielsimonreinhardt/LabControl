@@ -833,9 +833,9 @@ at the partner their tiles show "reserved by <computer> · <sequence>" and are
 locked (manual control, ALL OFF and the safety shutdown stay available), and
 operations from anywhere else are rejected. The control station reports every
 second; **if that stops for 3 seconds** (network gone, crash), the control
-station aborts the sequence and the partner lifts the reservation. It switches
-the devices off only if "Switch off reserved devices when the link is lost" is
-ticked there under Settings → Network (default: off).
+station aborts the sequence and the partner lifts the reservation and switches
+the reserved devices off. Exception: devices without a tick in the column "Off
+on link loss" (there under Settings → Network) stay as they are.
 After the sequence ends the reservation is lifted. Connect Pi and PC by cable,
 not via Wi-Fi. The link carries the operations of the partner tile (setpoints,
 outputs, channels), but not arbitrary waveforms, read steps or CAN messages –
@@ -856,7 +856,8 @@ and forwards commands for them to the partner. This needs “Claude (MCP) may
 control” ticked at the PC; the partner needs nothing else.
 Before the first command the PC reserves the device at the partner ("reserved
 by PC · Claude (MCP)") and reports every second; if that stops for 3 seconds,
-the reservation ends (switched off only with the setting above). Otherwise it
+the reservation ends and the device is switched off (unless "Off on link loss"
+is unticked). Otherwise it
 ends after 10 minutes
 without a command from Claude, on ALL OFF, a safety shutdown, the start of a
 test sequence or when the link is changed; nothing is switched off then. Only
