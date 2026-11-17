@@ -69,6 +69,7 @@ from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
 from device_worker import PICOSCOPE_RETRY_MESSAGE
 from i18n import tr
 from variants import resolve_refs
+from scope_steps import SCOPE_ACTIONS
 from testcase_model import (
     ARB_RAMP,
     COND_FIELD_UNITS,
@@ -132,6 +133,9 @@ class TestRunner(QObject):
     execute_uds = Signal(int, object)
     # Schrittindex, TestStep -- XCP am Pruefling (FT-10), ausgefuehrt von RunSession/XcpService
     execute_xcp = Signal(int, object)
+    # Schrittindex, TestStep -- Oszilloskop scharf schalten / auf Erfassung warten (1.0.1, PI-72 a), ausgefuehrt
+    # von RunSession ueber den ScopeService; Ergebnis wie immer ueber on_action_completed (bzw. fail_check)
+    execute_scope = Signal(int, object)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -694,6 +698,8 @@ class TestRunner(QObject):
                     self.execute_jlink.emit(step.device_id, step.action, step.file_path)
                 elif step.device_kind == "xcp":
                     self.execute_xcp.emit(self._index, step)
+                elif step.action in SCOPE_ACTIONS:
+                    self.execute_scope.emit(self._index, step)
                 elif step.device_kind == "uds":
                     # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
                     self.execute_uds.emit(self._index, step)

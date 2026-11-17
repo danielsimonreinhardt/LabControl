@@ -81,6 +81,30 @@ scope.close()
 `pre_trigger_pct` legt fest, wie viel Prozent der Erfassung vor dem Trigger
 liegen. `t = 0` ist der Trigger-Zeitpunkt.
 
+## Scharf schalten (seit 1.0.1)
+
+```mermaid
+stateDiagram-v2
+    [*] --> arming: arm()
+    arming --> armed: on_armed (Gerät wartet)
+    armed --> triggered: on_triggered (Daten werden gelesen)
+    triggered --> done
+    arming --> error
+    armed --> error: trigger_timeout, device_error
+    armed --> cancelled: cancel (release, Laufende)
+```
+
+`ScopeService.arm()` (`lab_gui/scope_service.py`) stellt ein, startet die
+Erfassung im Gerätethread und kehrt zurück, sobald der Adapter `on_armed()`
+ruft -- mit der `capture_id`, unter der die Daten später liegen.
+`wait_capture()` holt das Ergebnis, `cancel()`/`release()` brechen ab.
+Adapter bekommen dafür `acquire(request, cancel=, on_armed=, on_triggered=)`;
+`trigger.timeout_s` darf beim Scharfschalten bis 3600 s betragen. Denselben
+Kern nutzen REST/MCP (`POST /scopes/{id}/arm`, `POST /captures/{cid}/wait`)
+und die Testablauf-Schritte „Scharf schalten“/„Auf Erfassung warten“. Jedes
+Gerät hat seit 1.0.1 einen eigenen Thread, damit eine wartende Erfassung das
+andere Oszilloskop nicht blockiert.
+
 ## Kennwerte
 
 `vmax`, `vmin`, `vpp`, `vmean`, `vrms`, `vbase`, `vtop`, `amplitude`,
@@ -122,6 +146,9 @@ Erfassung aus dem Speicher verdrängt wird.
 | `device_error` | Gerät nicht erreichbar oder hat abgelehnt |
 | `unknown_capture` | ID nicht (mehr) im Speicher |
 | `unknown_measurement` | unbekannter Kennwert; `allowed` listet die bekannten |
+| `scope_armed` | am Gerät wartet schon eine scharfe Erfassung |
+| `capture_pending` | Erfassung noch scharf, noch keine Daten |
+| `cancelled` | scharfe Erfassung abgebrochen (`release`, Testablauf, Laufende) |
 
 ## 2204A-Adapter: Eigenheiten
 

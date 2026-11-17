@@ -52,8 +52,10 @@ from i18n import Translator, tr
 from icons import IconButton, SplitIconButton
 import app_logging
 import data_store
+import scope_steps
 import variants
 import verbund_ids
+from scope_steps import SCOPE_ACTIONS
 from testcase_model import NEW_TESTCASE_META
 from paths import app_dir
 from signal_dialog import SignalDialog
@@ -82,6 +84,8 @@ from testcase_model import (
     PICO_READ_CHECK_FIELD,
     PICO_VOLTAGE_RANGE_CODES,
     READ_ACTIONS,
+    SCOPE_CHECK_FIELD_LABELS,
+    SCOPE_READ_CHECK_FIELD,
     STEP_TYPE_ACTION,
     UDS_CHECK_FIELD_LABELS,
     UDS_READ_CHECK_FIELD,
@@ -1101,11 +1105,7 @@ class TestcaseTab(QWidget):
         ]
         for device_id, (kind, label) in sorted(self._known_devices.items(), key=lambda kv: kv[1][1]):
             if kind not in DEVICE_ACTIONS:
-                # z.B. "picoscope": hat bewusst keine Testablauf-Aktionen
-                # (siehe picoscope_panel.py-Modul-Docstring) -- ohne diesen
-                # Filter wuerde die Auswahl hier crashen, sobald eine Zeile
-                # damit eine Aktion bestuecken will (DEVICE_ACTIONS[kind] in
-                # _populate_action_combo hat keinen .get()-Fallback).
+                # Geraeteart ohne Testablauf-Aktionen -- nicht anbieten
                 continue
             items.append((f"{label} ({kind_label(kind)})", _device_key(kind, device_id)))
         for role, kind in sorted(self._variant_roles.items()):
@@ -1377,10 +1377,17 @@ class TestcaseTab(QWidget):
         uds_layout.addWidget(uds_label, 1)
         uds_layout.addWidget(uds_button)
         uds_page._params = dict(step.params) if step.device_kind in ("uds", "xcp") \
-            or step.action == "RESTBUS_SET" else {}
+            or step.action == "RESTBUS_SET" or step.action in SCOPE_ACTIONS else {}
 
         def refresh_uds_label() -> None:
-            # dieselbe Seite fuer UDS (FT-1), XCP (FT-10) und Restbus (FT-6): Zusammenfassung + Knopf
+            # dieselbe Seite fuer UDS (FT-1), XCP (FT-10), Restbus (FT-6) und Oszilloskop scharf schalten/warten
+            # (PI-72 a): Zusammenfassung + Knopf
+            if (action_combo.currentData() or "") in SCOPE_ACTIONS:
+                code = action_combo.currentData()
+                kind = _parse_device_key(device_combo.currentData())[0]
+                uds_label.setText(scope_steps.summary(code, uds_page._params, kind))
+                uds_button.setToolTip(tr("Oszilloskop-Parameter…"))
+                return
             if (action_combo.currentData() or "") == "RESTBUS_SET":
                 from types import SimpleNamespace
 
@@ -1400,7 +1407,11 @@ class TestcaseTab(QWidget):
 
         def open_uds_dialog() -> None:
             action = action_combo.currentData() or ""
-            if action == "RESTBUS_SET":
+            if action in SCOPE_ACTIONS:
+                from scope_step_dialog import ScopeStepDialog
+                kind = _parse_device_key(device_combo.currentData())[0]
+                dialog = ScopeStepDialog(action, kind, uds_page._params, self)
+            elif action == "RESTBUS_SET":
                 from restbus_dialog import RestbusStepDialog
                 provider = getattr(self, "_restbus_db_provider", None)
                 device_id = _parse_device_key(device_combo.currentData())[1]
@@ -1414,6 +1425,8 @@ class TestcaseTab(QWidget):
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 uds_page._params = dialog.params()
                 refresh_uds_label()
+                if action in SCOPE_ACTIONS:
+                    check_page._refresh_summary()   # Kennwert/Einheit der Pruefung folgen dem Dialog
 
         uds_button.clicked.connect(open_uds_dialog)
         uds_page._refresh = refresh_uds_label
@@ -1470,7 +1483,10 @@ class TestcaseTab(QWidget):
             if not params["enabled"]:
                 summary = "–" if not store_var else tr("Keine Prüfung")
             else:
-                summary = check_summary(_check_params_to_step(params))
+                summary_step = _check_params_to_step(params)
+                if (action_combo.currentData() or "") in SCOPE_ACTIONS:   # Kennwert und Einheit (PI-72 a)
+                    summary_step.params = dict(uds_page._params)
+                summary = check_summary(summary_step)
                 if params["abort"]:
                     summary = f"{summary} {tr('(Abbruch)')}"
             if store_var:
@@ -1491,7 +1507,7 @@ class TestcaseTab(QWidget):
             field_choices = None
             field_code = (HIL_READ_CHECK_FIELD.get(code) or PICO_READ_CHECK_FIELD.get(code)
                           or BATTSIM_READ_CHECK_FIELD.get(code) or UDS_READ_CHECK_FIELD.get(code)
-                          or XCP_READ_CHECK_FIELD.get(code))
+                          or XCP_READ_CHECK_FIELD.get(code) or SCOPE_READ_CHECK_FIELD.get(code))
             if field_code is not None:
                 # Nur der eine Wert, den die jeweilige Lese-Aktion (HIL_AIN_READ/
                 # HIL_IN_READ/PICO_*) tatsaechlich liefert -- die drei
@@ -1500,7 +1516,11 @@ class TestcaseTab(QWidget):
                 unit = COND_FIELD_UNITS.get(field_code, "")
                 label = (HIL_CHECK_FIELD_LABELS.get(field_code) or PICO_CHECK_FIELD_LABELS.get(field_code)
                          or BATTSIM_CHECK_FIELD_LABELS.get(field_code) or UDS_CHECK_FIELD_LABELS.get(field_code)
-                         or XCP_CHECK_FIELD_LABELS[field_code])
+                         or XCP_CHECK_FIELD_LABELS.get(field_code) or SCOPE_CHECK_FIELD_LABELS[field_code])
+                if code in SCOPE_ACTIONS:   # PI-72 a: der im Warteschritt gewaehlte Kennwert mit Einheit
+                    unit = scope_steps.unit(uds_page._params)
+                    label = scope_steps.measurement_label(
+                        scope_steps.clean_params(code, uds_page._params)["measurement"])
                 field_choices = {field_code: (label, unit)}
             # Nur eine Lese-Aktion (microHIL oder PicoScope) liefert ueberhaupt
             # einen Wert, der sich sinnvoll in eine Variable schreiben laesst
@@ -1639,7 +1659,7 @@ class TestcaseTab(QWidget):
             elif code == "CAN_SEND":
                 refresh_can_summary()
                 value_stack.setCurrentIndex(2)
-            elif code == "RESTBUS_SET":
+            elif code == "RESTBUS_SET" or code in SCOPE_ACTIONS:
                 refresh_uds_label()
                 value_stack.setCurrentIndex(6)
             elif kind in ("hil", "fg", "battsim"):
@@ -2457,6 +2477,10 @@ class TestcaseTab(QWidget):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
             step.params = dict(getattr(uds_page, "_params", {}))
+        elif step_type == STEP_TYPE_ACTION and step.action in SCOPE_ACTIONS:
+            # Oszilloskop-Parameter (PI-72 a) pflegt der Dialog der Zeile; nur die der gewaehlten Aktion
+            uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
+            step.params = scope_steps.clean_params(step.action, getattr(uds_page, "_params", {}), step.device_kind)
         if step_type == STEP_TYPE_ACTION:
             # Anforderungen pflegt der Pruefungsdialog (FT-3); er ist fuer Aktionszeilen massgeblich
             check_page = self._table.cellWidget(row, COL_CHECK)
@@ -2527,6 +2551,8 @@ class TestcaseTab(QWidget):
         # aus picoscope_page._range_combo (siehe _build_action_row).
         if kind in ("hil", "fg", "battsim"):
             value = hil_page._value_spin.value()
+        elif action_code in SCOPE_ACTIONS:
+            value = 0.0   # PI-72 a: Einstellungen in params
         elif kind == "picoscope":
             value = float(picoscope_page._range_combo.currentData())
         else:
@@ -2964,6 +2990,8 @@ class TestcaseTab(QWidget):
         elif step.action == "RESTBUS_SET":
             from testcase_model import restbus_summary
             text += f" ({restbus_summary(step)})"
+        elif step.action in SCOPE_ACTIONS:   # PI-72 a
+            text += f" ({scope_steps.summary(step.action, step.params, step.device_kind)})"
         elif not is_arb_action(step.action) and step.value:
             text += f" ({step.value:g})"
         if step.duration and step.step_type == STEP_TYPE_ACTION:
@@ -3403,6 +3431,8 @@ class TestcaseTab(QWidget):
                 detail += f": {step.value:g}"
         elif step.device_kind == "battsim":
             detail = battsim_step_detail(step)
+        elif step.action in SCOPE_ACTIONS:
+            detail = scope_steps.summary(step.action, step.params, step.device_kind)
         elif step.device_kind == "picoscope":
             ch = "A" if step.hil_channel != 2 else "B"
             range_name = _PICO_RANGE_BY_CODE.get(int(step.value), "?")

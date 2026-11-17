@@ -345,6 +345,26 @@ them or require an empty memory. A mismatch counts as a violated check and
 aborts the run. "Read DID" returns the value of the chosen element for a
 range check and for a variable (conditions in "If"/"While").
 
+### Oscilloscope: Arm and Wait for capture
+
+The **Oscilloscope** (PicoScope) and the **Oscilloscope (LAN)** (UNI-T
+MSO1000HD) offer two actions to capture an event that a later step causes
+(e.g. switching on with 12 V):
+
+- **Arm**: **"Oscilloscope parameters…"** sets channel (also the trigger
+  source), range (±V at the probe tip), probe, coupling, edge, level,
+  window and pre-trigger. The step is done as soon as the oscilloscope waits
+  for the trigger; the following steps keep running.
+- **Wait for capture**: maximum time, measurement (maximum, peak-to-peak,
+  frequency, rise time …) and channel. Without a trigger within the maximum
+  time the step fails. The measurement can be checked and stored in a
+  variable; the report shows the curve as an image and names the CSV file.
+- Stop, errors and the end of the run cancel a capture that is still armed
+  and release the oscilloscope.
+- Not combined with the measurement actions (Maximum … RMS) on the same
+  PicoScope in one sequence; only in the window, not on the partner.
+  Sequences with these steps are saved in format 5.
+
 ### Flow control
 
 The "+" menu additionally offers:

@@ -57,6 +57,36 @@ Semantic Versioning (`lab_gui/version.py`).
   Mock-verifiziert (`check_confirm_wait`: Format/Laden, Runner mit und ohne vorherige Aktion, Partner, Bestätigen,
   Abbrechen, Stopp per HTTP, Status über REST, Touch-Profil, Bericht, Kommandozeile; Gegenprobe ohne die Änderung
   schlägt fehl); am Gerät noch nicht.
+- **Oszilloskop scharf schalten und auf Erfassung warten (PI-72 a, PI-73 a).** Bisher lieferten Oszi-Schritte nur
+  einen Kennwert aus einer sofortigen Blockerfassung, und `acquire` über MCP blockierte bis zu 30 s auf den
+  Trigger – dazwischen ließ sich nichts schalten. Jetzt gibt es einen gemeinsamen Erfassungskern im Scope-Dienst,
+  den Ablauf und REST/MCP nutzen:
+  - **Testablauf, PicoScope und UNI-T MSO1000HD** (das UNI-T hat damit erstmals Ablaufschritte, Gerät „Oszilloskop
+    (LAN)“): **Scharf schalten** (Kanal = Quelle, Bereich, Tastkopf, Kopplung, Flanke, Pegel, Fenster, Vortrigger
+    über „Oszilloskop-Parameter…“) ist fertig, sobald das Gerät auf den Trigger wartet; die folgenden Schritte
+    laufen weiter (z. B. Generator aus, 12 V ein). **Auf Erfassung warten** (Höchstzeit, Kennwert, Kanal) holt das
+    Ergebnis; kein Trigger in der Höchstzeit = Schritt fehlgeschlagen mit Meldung. Der Kennwert (V, s, Hz, %) ist
+    prüfbar und in eine Variable speicherbar wie bei den bisherigen Oszi-Schritten; der Bericht zeigt die Kurve als
+    Bild und nennt die CSV-Datei (Abschnitt „Oszilloskop-Erfassungen“, in `run-result.json` `scope_captures`).
+    Getriggert, aber die Daten werden noch gelesen (UNI-T: 250 kS als ASCII), zählt nicht als „kein Trigger“.
+  - Stop, Fehler und Laufende brechen eine noch scharfe Erfassung ab und geben das Oszilloskop frei; während des
+    Laufs sind Erfassungen über Netzwerk/MCP an diesem Gerät gesperrt (eine scharfe MCP-Erfassung wird beim Start
+    abgebrochen). Nicht im selben Ablauf mit den alten Kennwert-Schritten am selben PicoScope, nicht an
+    Partner-Oszilloskopen und nicht ohne Fenster (der Lauf startet dann nicht).
+  - **MCP/REST:** neue Werkzeuge `arm` (kehrt sofort mit `capture_id` zurück, scharf bis `arm_timeout_s`, höchstens
+    3600 s) und `wait_capture` (Ergebnis wie `acquire`, ohne Trigger nach `timeout_s` `state: "armed"`);
+    `get_capture` mit der Kennung zeigt vorher den Zustand, `release_scope` bricht ab, `list_scopes` meldet
+    `armed`. Endpunkte `POST /api/v1/scopes/{id}/arm` und `POST /api/v1/captures/{cid}/wait`. `acquire` und die
+    Haltezeit von 60 s bleiben wie sie sind.
+  - Jedes Oszilloskop hat jetzt einen eigenen Thread im Scope-Dienst (vorher einer für alle), damit eine wartende
+    Erfassung das andere Gerät und das Trennen nicht blockiert. Das Öffnen des UNI-T wartet bis zu 3 s auf eine
+    laufende Erkennung, statt mit `scope_busy` abzubrechen.
+  - Dateiformat 5 (Bausteine: 4) nur für Abläufe mit diesen Schritten; andere bleiben Format 2/3/4.
+
+  **Nur Mock geprüft** (`check_scope_arm`: Kern mit PicoScope-Mock und UNI-T-Simulator, REST, echter MCP-Server,
+  Format, Editor, Hauptfenster mit Lauf per HTTP inkl. Timeout, Stopp und langsamem Lesen; dazu `check_confirm_wait`,
+  `check_scope_api`, `check_unit_mso`, `check_network_share` scopes/app, `check_translations`). Am echten
+  PicoScope und UNI-T noch nicht – Abbruch (`ps2000_stop` bzw. `:STOP`) und Scharf-Meldung sind dort zu prüfen.
 
 ### Geändert
 - **Touch-Bedienung ohne Vollbild-Knopf.** Am Pi läuft LabControl als Kiosk immer im Vollbild; der Knopf oben

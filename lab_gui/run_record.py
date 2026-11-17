@@ -23,6 +23,8 @@ from testcase_model import TestStep
 MAX_EVENTS = 5000
 # Sollwerte der Arbitraersignal-Schritte (bei 100 ms gut 13 h)
 MAX_SETPOINTS = 500_000
+# Oszilloskop-Erfassungen mit Bild (PI-72 a) -- je ~50 KB PNG im Speicher und im Bericht
+MAX_SCOPE_CAPTURES = 50
 
 
 @dataclass
@@ -64,6 +66,10 @@ class RunRecord:
     setpoints: list = field(default_factory=list)
     # Ergebnisse der Bloecke "Ueberwachen" (0.63.0, FT-7), dicts von TestRunner.monitor_result
     monitors: list = field(default_factory=list)
+    # Oszilloskop-Erfassungen der Schritte "Auf Erfassung warten" (1.0.1, PI-72 a), dicts von RunSession:
+    # index, arm_index, device_id, capture_id, csv_path, triggered, measurement, channel, value, unit, summary,
+    # warnings, t, png (Bild fuer den Bericht, fehlt wenn das Zeichnen scheiterte)
+    scope_captures: list = field(default_factory=list)
 
 
 class RunRecorder(QObject):
@@ -187,6 +193,13 @@ class RunRecorder(QObject):
             return
         if len(self._record.monitors) < MAX_EVENTS:
             self._record.monitors.append(dict(result))
+
+    @Slot(int, object)
+    def on_scope_capture(self, _index: int, entry: dict) -> None:
+        if not self._active or self._record is None:
+            return
+        if len(self._record.scope_captures) < MAX_SCOPE_CAPTURES:
+            self._record.scope_captures.append(dict(entry))
 
     @Slot(int, str, str, float)
     def on_setpoint_sent(self, index: int, device_id: str, target: str, value: float) -> None:

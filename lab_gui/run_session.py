@@ -9,17 +9,21 @@ derselbe Weg auch die Kommandozeile (headless.py, `labcontrol run`) und spaeter 
   das mit meta "source_sink" ausdruecklich aufheben (Quelle/Senke, z. B. Batterie nachbilden).
   Kachel, Speicherplaetze und Netzwerk sind bewusst NICHT verriegelt (Entscheidung FP-7 b).
 - RunSession: Start, Weiterleitung der Aktionen an den Worker (oder an einen Verbund-Router), Abschluss.
+  Oszilloskop "Scharf schalten"/"Auf Erfassung warten" (1.0.1, PI-72 a) gehen an den ScopeService (derselbe
+  Erfassungskern wie REST/MCP); Laufende/-abbruch bricht eine noch scharfe Erfassung ab und gibt frei.
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable
 
-from PySide6.QtCore import QMetaObject, QObject, Q_ARG, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QObject, Q_ARG, Qt, QTimer, Signal, Slot
 
+import scope_steps
 from i18n import tr
 from run_record import RunRecorder
-from testcase_model import TestStep, kind_label
+from testcase_model import PICO_READ_ACTIONS, TestStep, kind_label
 from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
@@ -31,6 +35,10 @@ SWITCH_ON_ACTIONS = {"load": {"OUT_ON"}, "psu": {"PSU_OUT_ON"}}
 # Aktionen, die ihn ausschalten -- der Zustand gilt danach sofort als "aus", nicht erst mit der
 # naechsten Rueckmeldung des Geraets (sonst lehnte ein direkt folgendes EIN des anderen Geraets ab)
 SWITCH_OFF_ACTIONS = {"load": {"OUT_OFF"}, "psu": {"PSU_OUT_OFF"}}
+
+# Oszilloskop "Auf Erfassung warten" (PI-72 a): rechtzeitig getriggert, aber die Daten werden noch gelesen --
+# so lange wartet der Schritt zusaetzlich, bevor er scheitert
+SCOPE_READ_TIMEOUT_S = 60.0
 
 # Laufergebnis -> Exit-Code der Kommandozeile (FP-3 a, wie neXtBSW boardtest)
 EXIT_PASSED = 0
@@ -211,6 +219,17 @@ class RunSession(QObject):
         self.dispatch_restbus.connect(worker.execute_restbus)
         runner.execute_uds.connect(self._on_execute_uds)
         runner.execute_xcp.connect(self._on_execute_xcp)
+        # Oszilloskop scharf schalten / auf Erfassung warten (PI-72 a)
+        runner.execute_scope.connect(self._on_execute_scope)
+        self._scope_armed: dict[str, dict] = {}    # device_id -> {"capture_id", "channel", "index"}
+        self._scope_arming: dict | None = None     # Schritt "Scharf schalten", bis das Geraet scharf ist
+        self._scope_wait: dict | None = None       # Schritt "Auf Erfassung warten", bis Trigger/Hoechstzeit
+        self._scope_devices: set[str] = set()      # vom Lauf ueber den ScopeService genutzt
+        self._scope_timer = QTimer(self)
+        self._scope_timer.setSingleShot(True)
+        self._scope_timer.timeout.connect(self._on_scope_timeout)
+        if scope_service is not None:
+            scope_service.capture_state.connect(self._on_capture_state)
         self.xcp = None
         self._xcp_pending = None
         self.dispatch_action.connect(worker.execute_action)
@@ -277,6 +296,24 @@ class RunSession(QObject):
         if any(s.enabled and s.step_type == "action" and s.device_kind == "xcp" for s in steps) and (
                 self.xcp is None or not self.xcp.configured()):
             return tr("Keine A2L beim Prüfling eingestellt (XCP)")
+        return self._scope_refusal(steps)
+
+    def _scope_refusal(self, steps: list[TestStep]) -> str:
+        """PI-72 a: Oszilloskop-Schritte brauchen den ScopeService (Fenster), ein eigenes Oszilloskop und
+        vertragen sich am selben PicoScope nicht mit den alten Kennwert-Schritten (die oeffnen es im Worker)."""
+        scope = [s for s in steps if s.enabled and scope_steps.is_scope_step(s)]
+        if not scope:
+            return ""
+        if self._scope_service is None:
+            return tr("Oszilloskop-Schritte (Scharf schalten, Auf Erfassung warten) gehen nur im LabControl-Fenster")
+        if any(s.device_id.startswith("@") for s in scope):
+            return tr("Oszilloskop-Schritte gehen nur an eigenen Oszilloskopen, nicht beim Verbund-Partner")
+        own = {self.directory.resolve(s.device_kind, s.device_id)[0] for s in scope} - {None}
+        legacy = {self.directory.resolve(s.device_kind, s.device_id)[0] for s in steps
+                  if s.enabled and s.step_type == "action" and s.action in PICO_READ_ACTIONS} - {None}
+        if own & legacy:
+            return tr("PicoScope-Kennwerte (Maximum, Minimum, …) und „Scharf schalten“ am selben Oszilloskop gehen "
+                      "nicht in einem Ablauf – „Auf Erfassung warten“ liefert dieselben Kennwerte")
         return ""
 
     # -- XCP (FT-10) ------------------------------------------------------------------
@@ -416,19 +453,27 @@ class RunSession(QObject):
             own = {d for d in step_device_ids if not d.startswith("@")}
             record.instruments = self.instruments.for_run(
                 own, {d: record.device_meta.get(d, ("", d))[1] for d in own})
-        # PicoScope und J-Link nicht in die Watchdog-Ueberwachung: kein Ausgang, und waehrend eines
+        # Oszilloskope und J-Link nicht in die Watchdog-Ueberwachung: kein Ausgang, und waehrend eines
         # Laufs keine periodischen Messwerte (sonst "veraltet" nach STALE_TIMEOUT_S, an Hardware
         # reproduziert)
         self.safety.begin_run_supervision(
-            {d for d in step_device_ids if not d.startswith(("picoscope:", "jlink:"))}
+            {d for d in step_device_ids if not d.startswith(("picoscope:", "scpiscope:", "jlink:"))}
         )
         self.picoscope_test_running.emit(True)
         if self._live_state is not None:
             self._live_state.set_test_running(True)
+        # Oszilloskop-Schritte (PI-72 a) laufen ueber den ScopeService: Netzwerk/MCP sperren, die Verbindung
+        # aber offen lassen (der Lauf erfasst selbst darueber)
+        self._reset_scope_state()
+        scope_ids = {self.directory.resolve(s.device_kind, s.device_id)[0] for s in steps
+                     if s.enabled and scope_steps.is_scope_step(s)} - {None}
+        if self._scope_service is not None:
+            for device_id in sorted(scope_ids):
+                self._scope_service.begin_test(device_id, close=False)
         # PicoScope-Sitzung nur mit PICO_*-Schritt, und BLOCKIEREND: sonst lief der erste PICO-Schritt
         # schon, waehrend der Worker die Verbindung (~4,5 s) noch aufbaute (an Hardware reproduziert)
         for device_id in step_device_ids:
-            if device_id.startswith("picoscope:"):
+            if device_id.startswith("picoscope:") and device_id not in scope_ids:
                 if self._scope_service is not None:
                     # Vorrang des Testablaufs vor Erfassungen ueber Netzwerk/MCP
                     self._scope_service.begin_test(device_id)
@@ -486,12 +531,206 @@ class RunSession(QObject):
             self.interlock.note_action(*pending)
         self.runner.on_action_completed(success, message, value)
 
+    # -- Oszilloskop scharf schalten / auf Erfassung warten (PI-72 a) ----------------------------
+
+    def _reset_scope_state(self) -> None:
+        self._scope_timer.stop()
+        self._scope_armed = {}
+        self._scope_arming = None
+        self._scope_wait = None
+        self._scope_devices = set()
+
+    def _scope_fail(self, message: str) -> None:
+        self.runner.on_action_completed(False, message, 0.0)
+
+    @Slot(int, object)
+    def _on_execute_scope(self, index: int, step: TestStep) -> None:
+        from scope_api.base import ScopeError
+        from scope_service import ARM_READY_TIMEOUT_S, OWNER_RUN
+
+        service = self._scope_service
+        if service is None:
+            self._scope_fail(tr("Oszilloskop-Schritte (Scharf schalten, Auf Erfassung warten) gehen nur im "
+                                "LabControl-Fenster"))
+            return
+        device_id, error = self.directory.resolve(step.device_kind, step.device_id)
+        if device_id is None:
+            self._scope_fail(error)
+            return
+        if step.action == scope_steps.SCOPE_ARM:
+            previous = self._scope_armed.get(device_id)
+            if previous is not None:
+                self._scope_fail(tr("Oszilloskop ist schon scharf (Schritt {n}) – erst „Auf Erfassung warten“",
+                                    n=previous["index"] + 1))
+                return
+            body = scope_steps.arm_body(step.params, step.device_kind)
+            try:
+                status = service.arm(device_id, body, owner=OWNER_RUN, wait_armed=False)
+            except ScopeError as exc:
+                self._scope_fail(tr("Oszilloskop: {message}", message=exc.message))
+                return
+            self._scope_devices.add(device_id)
+            entry = {"capture_id": status["capture_id"], "device_id": device_id, "index": index,
+                     "channel": body["channels"][0]["name"], "kind": step.device_kind,
+                     "summary": scope_steps.summary(step.action, step.params, step.device_kind)}
+            self._scope_armed[device_id] = entry
+            self._scope_arming = entry
+            self._scope_timer.start(round((ARM_READY_TIMEOUT_S + 5.0) * 1000))
+            if status.get("state") != "arming":
+                self._on_capture_state(entry["capture_id"], status["state"])
+            return
+        # SCOPE_WAIT
+        armed = self._scope_armed.get(device_id)
+        if armed is None:
+            self._scope_fail(tr("Am Oszilloskop {device} ist nichts scharf geschaltet – vorher „Scharf schalten“",
+                                device=self._label(device_id)))
+            return
+        params = scope_steps.clean_params(step.action, step.params, step.device_kind)
+        self._scope_wait = {**armed, "step": step, "wait_index": index, "timeout_s": params["timeout_s"],
+                            "started": time.monotonic()}
+        try:
+            state = service.capture_status(armed["capture_id"]).get("state")
+        except ScopeError:
+            state = "error"
+        if state in ("done", "error", "cancelled"):
+            self._finish_scope_wait()
+            return
+        self._scope_timer.start(max(0, round(params["timeout_s"] * 1000)))
+
+    def _label(self, device_id: str) -> str:
+        record = self.recorder.record()
+        if record is not None and device_id in record.device_meta:
+            return record.device_meta[device_id][1]
+        return device_id
+
+    @Slot(str, str)
+    def _on_capture_state(self, capture_id: str, state: str) -> None:
+        if not self._active:
+            return
+        arming = self._scope_arming
+        if arming is not None and arming["capture_id"] == capture_id:
+            self._scope_arming = None
+            self._scope_timer.stop()
+            if state in ("armed", "triggered", "done"):
+                self.runner.step_note.emit(arming["index"], tr("scharf ({summary})", summary=arming["summary"]))
+                self.runner.on_action_completed(True, "", 0.0)
+            else:
+                self._scope_armed.pop(arming["device_id"], None)
+                self._scope_fail(tr("Oszilloskop nicht scharf geschaltet: {message}",
+                                    message=self._capture_message(capture_id)))
+            return
+        wait = self._scope_wait
+        if wait is not None and wait["capture_id"] == capture_id and state in ("done", "error", "cancelled"):
+            self._finish_scope_wait()
+
+    def _capture_message(self, capture_id: str) -> str:
+        from scope_api.base import ScopeError
+        try:
+            status = self._scope_service.capture_status(capture_id)
+        except ScopeError as exc:
+            return exc.message
+        return status.get("message") or status.get("state", "")
+
+    def _on_scope_timeout(self) -> None:
+        if not self._active:
+            return
+        arming = self._scope_arming
+        if arming is not None:
+            self._scope_arming = None
+            self._scope_armed.pop(arming["device_id"], None)
+            self._scope_service.cancel(arming["capture_id"])
+            self._scope_fail(tr("Oszilloskop {device} wurde nicht scharf", device=self._label(arming["device_id"])))
+            return
+        wait = self._scope_wait
+        if wait is None:
+            return
+        try:
+            state = self._scope_service.capture_status(wait["capture_id"]).get("state")
+        except Exception:  # noqa: BLE001 -- dann wie "kein Trigger"
+            state = ""
+        if state == "triggered" and not wait.get("extended"):
+            # Rechtzeitig getriggert, die Daten werden noch gelesen (UNI-T: 250 kS als ASCII) -- kein FAIL
+            wait["extended"] = True
+            self._scope_timer.start(round(SCOPE_READ_TIMEOUT_S * 1000))
+            return
+        self._scope_wait = None
+        self._scope_armed.pop(wait["device_id"], None)
+        self._scope_service.cancel(wait["capture_id"])
+        if state == "triggered":
+            self._scope_fail(tr("Oszilloskop {device}: Daten nicht innerhalb von {seconds:g} s gelesen",
+                                device=self._label(wait["device_id"]), seconds=SCOPE_READ_TIMEOUT_S))
+            return
+        self._scope_fail(tr("Kein Trigger innerhalb von {seconds:g} s ({device}: {summary})",
+                            seconds=wait["timeout_s"], device=self._label(wait["device_id"]), summary=wait["summary"]))
+
+    def _finish_scope_wait(self) -> None:
+        """Die scharfe Erfassung des Warteschritts ist fertig (getriggert, Fehler oder abgebrochen)."""
+        from scope_api.base import ScopeError
+
+        wait, self._scope_wait = self._scope_wait, None
+        self._scope_timer.stop()
+        if wait is None:
+            return
+        self._scope_armed.pop(wait["device_id"], None)
+        service = self._scope_service
+        step = wait["step"]
+        try:
+            report = service.wait_capture(wait["capture_id"], 0.0)
+        except ScopeError as exc:
+            if exc.code == "trigger_timeout":
+                message = tr("Kein Trigger, solange scharf ({device}: {summary})",
+                             device=self._label(wait["device_id"]), summary=wait["summary"])
+            elif exc.code == "cancelled":
+                message = tr("Erfassung abgebrochen ({device})", device=self._label(wait["device_id"]))
+            else:
+                message = tr("Oszilloskop: {message}", message=exc.message)
+            self._scope_fail(message)
+            return
+        params = scope_steps.clean_params(step.action, step.params, step.device_kind)
+        try:   # den gewaehlten Kennwert gezielt berechnen (die Erfassung selbst wertet nur Einfaches aus)
+            measured = service.measure(report.get("capture_id", wait["capture_id"]),
+                                       {"measurements": [params["measurement"]],
+                                        "channel": params["channel"] or wait["channel"]})
+        except ScopeError as exc:
+            measured = {"channels": {}}
+            logger.warning("Oszilloskop-Erfassung %s: Kennwert nicht berechnet (%s)", wait["capture_id"], exc.message)
+        value, channel, reason = scope_steps.measured_value(measured, params, wait["channel"], step.device_kind)
+        unit = scope_steps.unit(params)
+        label = scope_steps.measurement_label(params["measurement"])
+        took = time.monotonic() - wait["started"]
+        entry = {"index": wait["wait_index"], "arm_index": wait["index"], "device_id": wait["device_id"],
+                 "kind": step.device_kind, "capture_id": report.get("capture_id", wait["capture_id"]),
+                 "csv_path": report.get("csv_path", ""), "triggered": report.get("triggered"),
+                 "measurement": params["measurement"], "channel": channel, "value": value, "unit": unit,
+                 "summary": wait["summary"], "warnings": list(report.get("warnings") or []), "t": time.time()}
+        try:
+            entry["png"] = service.plot(entry["capture_id"], None, None, None, 1000, 560)
+        except Exception:  # noqa: BLE001 -- ohne Bild bleibt der Bericht vollstaendig (CSV)
+            logger.exception("Oszilloskop-Erfassung %s: Bild fuer den Bericht gescheitert", entry["capture_id"])
+        self.recorder.on_scope_capture(wait["wait_index"], entry)
+        value_text = (f"{value:g} {unit}".rstrip() if value is not None
+                      else tr("nicht bestimmbar ({reason})", reason=reason))
+        self.runner.step_note.emit(wait["wait_index"], tr(
+            "getriggert nach {seconds:.1f} s – {measurement} {channel} = {value}",
+            seconds=took, measurement=label, channel=channel, value=value_text))
+        if value is None:
+            if step.check_enabled or step.store_var:
+                self._scope_fail(tr("Kennwert {measurement} ({channel}) nicht bestimmbar: {reason}",
+                                    measurement=label, channel=channel, reason=reason))
+                return
+            value = 0.0
+        self.runner.on_action_completed(True, "", float(value))
+
     # -- Ende ----------------------------------------------------------------------
 
     def _on_run_end(self) -> None:
         if not self._active:
             return
         self._active = False
+        if self._scope_service is not None and (self._scope_devices or self._scope_armed):
+            # PI-72 a: noch scharfe Erfassung des Laufs abbrechen, Oszilloskope freigeben (trennen)
+            self._scope_service.end_run(self._scope_devices | set(self._scope_armed))
+        self._reset_scope_state()
         if self.xcp is not None:
             self.xcp.set_polling("run", False)
         if self._flash_pending is not None and self.flasher is not None:

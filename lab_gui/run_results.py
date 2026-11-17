@@ -16,7 +16,7 @@ from pathlib import Path
 import requirements
 from run_record import RunRecord
 from run_session import exit_code
-from testcase_model import COND_FIELD_UNITS, action_label, check_summary, monitor_summary
+from testcase_model import COND_FIELD_UNITS, action_label, check_summary, check_unit, monitor_summary
 from version import __version__
 
 RESULT_FORMAT = "labcontrol-run-result"
@@ -93,6 +93,14 @@ def setpoint_summary(record: RunRecord) -> list[dict]:
              "last": item["last"], "interval_ms": item["interval_ms"]} for item in setpoint_runs(record)]
 
 
+def scope_capture_rows(record: RunRecord) -> list[dict]:
+    """Oszilloskop-Erfassungen ohne Bild (fuer run-result.json und den Bericht)."""
+    keys = ("capture_id", "device_id", "csv_path", "triggered", "measurement", "channel", "value", "unit",
+            "summary", "warnings")
+    return [{"step": entry["index"] + 1, "arm_step": entry.get("arm_index", -1) + 1,
+             **{k: entry.get(k) for k in keys}} for entry in getattr(record, "scope_captures", [])]
+
+
 def check_rows(record: RunRecord) -> list[dict]:
     """Je Schritt mit Pruefung: Ausfuehrungen, Fehlschlaege, letzter Messwert, Anforderungen."""
     rows = []
@@ -109,7 +117,7 @@ def check_rows(record: RunRecord) -> list[dict]:
             "action_label": action_label(step.device_kind, step.action),
             "check": check_summary(step),
             "field": step.check_field,
-            "unit": COND_FIELD_UNITS.get(step.check_field, ""),
+            "unit": check_unit(step),
             "min": step.check_min,
             "max": step.check_max,
             "executions": len(results),
@@ -149,6 +157,8 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
         "requirements": requirements.verdicts(record, record.requirement_register),
         "setpoints": setpoint_summary(record),
         "timing_checks": timing_rows(record),
+        # Oszilloskop-Erfassungen der Warteschritte (1.0.1, PI-72 a); Kurve als CSV unter csv_path
+        "scope_captures": scope_capture_rows(record),
         "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
                      for r in record.instruments if r.get("expired")],
     }

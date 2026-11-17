@@ -61,6 +61,7 @@ Wertebereiche = Grenzen des Eingabefelds; zusätzlich gelten die Grenzwerte aus 
 | **microHIL** | Digitalausgang EIN/AUS / Relais EIN/AUS / Analogausgang setzen | Kanal 1–8 / Kanal 1–4 / Kanal 1–2, 0–12210 mV |
 | | Digitaleingang lesen / Analogeingang lesen | Kanal 1–8, liefert 0/1 / Kanal 1–4, liefert mV |
 | **Oszilloskop** (PicoScope) | Maximum (Spitzenwert), Minimum (Spitzenwert), Spitze-Spitze (Vpp), Effektivwert (RMS) | Kanal A/B, Bereich 20 mV–20 V, liefert mV |
+| **Oszilloskop**, **Oszilloskop (LAN)** (UNI-T MSO1000HD) | Scharf schalten, Auf Erfassung warten | über **Oszilloskop-Parameter…** (siehe [unten](#oszilloskop-scharf-schalten-und-auf-erfassung-warten)) |
 | **Funktionsgenerator** | Frequenz / Amplitude / Offset / Tastverhältnis / Phase setzen | Kanal 1–2; 0,01 Hz–15 MHz / 0–20 V / −9,99…+9,99 V / 0–100 % / 0–360° (Kanal 2 gegen 1) |
 | | Wellenform Sinus, Rechteck, Puls, Dreieck, DC; Ausgang EIN/AUS | Kanal 1–2 |
 | **Batterie-Simulator** | Fernsteuerung EIN/AUS, Ausgang EIN/AUS, Alle Zellen EIN/AUS, FAIL zurücksetzen | – |
@@ -142,6 +143,45 @@ flowchart TD
 - Ohne Fenster (`labcontrol run`): startet nicht, Exit 3 – den Ablauf im Fenster oder über die laufende Instanz
   starten.
 - Bericht: „bestätigt“ bzw. „abgebrochen“ am Schritt.
+
+### Oszilloskop: scharf schalten und auf Erfassung warten
+
+Für Einschaltvorgänge und andere Ereignisse, die erst ein späterer Schritt auslöst: das Oszilloskop wartet im
+Hintergrund auf den Trigger, der Ablauf läuft weiter.
+
+```mermaid
+sequenceDiagram
+    participant A as Ablauf
+    participant O as Oszilloskop
+    A->>O: 1 Scharf schalten (Kanal A, ↑ 6 V, 20 ms)
+    O-->>A: scharf
+    A->>A: 2 Funktionsgenerator: Ausgang AUS
+    A->>A: 3 Netzteil: Ausgang EIN (12 V)
+    O-->>O: Trigger, Kurve
+    A->>O: 4 Auf Erfassung warten (≤ 5 s)
+    O-->>A: Kennwert, CSV, Bild
+```
+
+| Schritt | Parameter (**Oszilloskop-Parameter…**) |
+|---|---|
+| **Scharf schalten** | Kanal (= Trigger-Quelle), Bereich ±V an der Tastkopfspitze, Tastkopf, Kopplung, Flanke, Pegel, Fenster, Vortrigger in % |
+| **Auf Erfassung warten** | Höchstzeit, Kennwert (Maximum, Minimum, Spitze-Spitze, Frequenz, Anstiegszeit …), Kanal |
+
+- **Scharf schalten** ist fertig, sobald das Gerät auf den Trigger wartet (PicoScope: inkl. Öffnen ~5 s); erst dann
+  beginnt der nächste Schritt.
+- **Auf Erfassung warten** bezieht sich auf die scharfe Erfassung desselben Oszilloskops. Kein Trigger innerhalb der
+  Höchstzeit: Schritt **fehlgeschlagen** mit Meldung („Kein Trigger innerhalb von 5 s …“), die Erfassung wird
+  abgebrochen. Kam der Trigger rechtzeitig und werden die Daten nur noch gelesen, wartet der Schritt darauf
+  (bis 60 s).
+- Der Kennwert (V, s, Hz, %) lässt sich prüfen und in eine Variable schreiben wie bei einer Lese-Aktion.
+- Bericht: Abschnitt **Oszilloskop-Erfassungen** (Kennwert, CSV-Datei in `captures/`) und die Kurve als Bild unter
+  **Messverlauf**; `run-result.json`: `scope_captures`.
+- Stop, Fehler oder Laufende brechen eine noch scharfe Erfassung ab und geben das Oszilloskop frei.
+- Während des Laufs gehen Erfassungen über Netzwerk/MCP an diesem Oszilloskop nicht.
+- Nicht im selben Ablauf am selben PicoScope mit den Kennwert-Aktionen „Maximum“ … „Effektivwert“ kombinierbar
+  (der Lauf startet dann nicht); „Auf Erfassung warten“ liefert dieselben Kennwerte.
+- Nur eigene Oszilloskope, nicht die des Verbund-Partners; ohne Fenster (`labcontrol run`) startet der Ablauf nicht.
+- Bisher nur gegen die Simulation geprüft (PicoScope-Mock, UNI-T-Simulator).
 
 ### Bedingungen
 
@@ -411,7 +451,8 @@ flowchart LR
 
 - **Report…** bietet **Report öffnen (HTML)** und **Als PDF exportieren…**.
 - `run-result.json`: dieselben Inhalte maschinenlesbar (u. a. `outcome`, `exit_code`, `checks`, `devices`,
-  `interlock`, `instruments`, `requirements`, `setpoints`, `timing_checks`, `warnings`); Grundlage für den Reiter
+  `interlock`, `instruments`, `requirements`, `setpoints`, `timing_checks`, `scope_captures`, `warnings`); Grundlage
+  für den Reiter
   **Ergebnisse** ([Bedienung](bedienung.md)) und `coverage` ([Automatisierung](automatisierung.md)).
 - JUnit: je Prüfschritt ein Testfall, Anforderungen als `property`.
 
@@ -423,6 +464,7 @@ flowchart LR
 | Anforderungen | Urteil je ID, gelaufene und verletzte Prüfungen, Schritte |
 | Schritt-Ergebnisse | je Prüfschritt: Prüfung, Ausführungen, Ergebnis, Messwerte |
 | Zeitprüfungen / Sollwertverläufe | Ergebnis, Messwert, Auflösung, Meldung / Arbiträrsignale mit Abständen min/mittel/max |
+| Oszilloskop-Erfassungen | je „Auf Erfassung warten“: Einstellung, Kennwert, CSV-Datei; die Kurve unter Messverlauf |
 | Zeitverlauf / Messverlauf | Ereignisse mit Zeit / Diagramme, u. a. Soll gegen Ist und Kurvenausschnitte der Überwachen-Blöcke |
 
 ## Am Touch-Display ausführen
@@ -447,6 +489,9 @@ Gleiche Prüfungen und Sicherheitsabschaltung wie im Editor; keine Haltepunkte, 
 - Format 4 (ab 1.0.1), sobald der Ablauf **Bestätigung** (`"step_type": "confirm"`, Text in `params.text`) oder
   **Warten seit Aktion** (`"wait_since"`: `device_kind`, `device_id`, `action`, `duration` = Mindestzeit) enthält –
   ältere Versionen lehnen ihn ab, statt die Bestätigung still auszulassen. Bausteine: Format 3.
+- Format 5 (ab 1.0.1), sobald der Ablauf **Scharf schalten** oder **Auf Erfassung warten** enthält (`"action":
+  "SCOPE_ARM"`/`"SCOPE_WAIT"`, `device_kind` `picoscope` oder `scpiscope`, Einstellungen in `params`). Bausteine:
+  Format 4.
 - Unbekannte Felder bleiben beim Laden und Speichern erhalten.
 
 Gekürztes Beispiel (die App schreibt je Schritt alle Felder):
@@ -469,7 +514,7 @@ Gekürztes Beispiel (die App schreibt je Schritt alle Felder):
 | Eintrag | Bedeutung |
 |---|---|
 | `steps` | Schritte in Reihenfolge; `device_id` leer = „automatisch“, `role:<Name>` = Rolle einer Variante |
-| `params` | Parameter neuer Aktionen (UDS, XCP, Restbus, Überwachen) und `refs` (Werte aus Parametern: `value`, `duration`, `check_min`, `check_max`, `cond_value`) |
+| `params` | Parameter neuer Aktionen (UDS, XCP, Restbus, Überwachen, Oszilloskop) und `refs` (Werte aus Parametern: `value`, `duration`, `check_min`, `check_max`, `cond_value`) |
 | `requirements` | Anforderungs-IDs der Prüfung dieses Schritts |
 | `link` | nur am ersten Schritt eines verknüpften Bausteins: Datei relativ zu `blocks/`, Name, Schrittzahl; die Schritte folgen als Kopie |
 | `devices` | Art und Name jedes Geräts; kennt der andere Rechner eine ID nicht, nimmt LabControl das Gerät gleicher Art und gleichen Namens |

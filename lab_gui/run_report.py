@@ -27,11 +27,11 @@ from report_chart import fmt_elapsed, render_field_chart
 from run_record import RunRecord
 from testcase_model import (
     COND_FIELD_LABELS,
-    COND_FIELD_UNITS,
     TestStep,
     action_label,
     battsim_step_detail,
     check_summary,
+    check_unit,
     confirm_text,
     kind_label,
     monitor_source,
@@ -100,6 +100,32 @@ def _render_charts(record: RunRecord) -> list[tuple[str, QImage]]:
         charts.append((title, image))
     charts.extend(_render_setpoint_charts(record))
     charts.extend(_render_monitor_charts(record))
+    charts.extend(_render_scope_charts(record))
+    return charts
+
+
+def _scope_value_text(entry: dict) -> str:
+    import scope_steps
+    value = entry.get("value")
+    label = scope_steps.measurement_label(entry.get("measurement", ""))
+    shown = f"{value:g} {entry.get('unit', '')}".rstrip() if value is not None else "–"
+    return f"{label} {entry.get('channel', '')} = {shown}"
+
+
+def _render_scope_charts(record: RunRecord) -> list[tuple[str, QImage]]:
+    """Kurve je Oszilloskop-Warteschritt (1.0.1, PI-72 a), gezeichnet beim Abholen (scope_plot)."""
+    charts = []
+    for entry in getattr(record, "scope_captures", []):
+        png = entry.get("png")
+        if not png:
+            continue
+        image = QImage.fromData(png, "PNG")
+        if image.isNull():
+            continue
+        device = _device_display(record, entry.get("kind", "picoscope"), entry.get("device_id", ""))
+        title = tr("Schritt {n}: Oszilloskop {device} – {detail}", n=entry["index"] + 1, device=device,
+                   detail=_scope_value_text(entry))
+        charts.append((title, image))
     return charts
 
 
@@ -213,6 +239,9 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     elif step.device_kind == "uds":
         import uds_steps
         detail = uds_steps.summary(step.action, step.params) or "–"
+    elif step.action in ("SCOPE_ARM", "SCOPE_WAIT"):
+        import scope_steps
+        detail = scope_steps.summary(step.action, step.params, step.device_kind)
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)
@@ -243,7 +272,7 @@ def _timeline_rows(record: RunRecord) -> list[tuple[str, str, str | None]]:
                          None if event.passed else _COLOR_FAIL))
         elif event.kind == "result":
             step = record.steps[event.index]
-            unit = COND_FIELD_UNITS.get(step.check_field, "")
+            unit = check_unit(step)
             verdict = tr("bestanden") if event.passed else tr("fehlgeschlagen")
             text = tr(
                 "Prüfung Schritt {n}: {verdict}, gemessen {value:g} {unit}",
@@ -394,7 +423,7 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
             row_bg = _BG_FAIL if sticky_failed else _BG_PASS
             device = _device_display(record, step.device_kind, step.device_id)
             action = action_label(step.device_kind, step.action)
-            unit = COND_FIELD_UNITS.get(step.check_field, "")
+            unit = check_unit(step)
             result_text = (
                 tr("{failed}/{total} fehlgeschlagen", failed=failed, total=total)
                 if sticky_failed else tr("{total}/{total} bestanden", total=total)
@@ -445,6 +474,21 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
             cells = (item["index"] + 1, _device_display(record, step.device_kind, item["device_id"]),
                      action_label(step.device_kind, item["target"]), item["count"],
                      f'{item["first"]:g} → {item["last"]:g}', gap_text)
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
+        parts.append('</table>')
+
+    scope_rows = run_results.scope_capture_rows(record)
+    if scope_rows:
+        parts.append('<h2>' + html.escape(tr("Oszilloskop-Erfassungen")) + '</h2>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th("#") + th(tr("Gerät")) + th(tr("Scharf geschaltet")) + th(tr("Kennwert"))
+                     + th(tr("Kurve (CSV)")) + '</tr>')
+        for row, entry in zip(scope_rows, record.scope_captures):
+            device = _device_display(record, entry.get("kind", "picoscope"), row["device_id"] or "")
+            csv_path = row["csv_path"] or "–"
+            cells = (row["step"], device, f'{tr("Schritt {n}", n=row["arm_step"])}: {row["summary"]}',
+                     _scope_value_text(entry), csv_path)
             style = f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
             parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
         parts.append('</table>')

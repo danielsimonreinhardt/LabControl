@@ -38,6 +38,8 @@ TIMEOUT_S = 25.0
 # Oszilloskop-Erfassungen: Trigger-Timeout (max. 30 s) + Oeffnen (~4,5 s, dazu
 # bis 2 s Pause nach dem letzten Schliessen) + Uebertragung.
 SCOPE_TIMEOUT_S = 60.0
+# wait_capture: LabControl wartet hoechstens so lange je Aufruf (scope_service.MAX_WAIT_S), der Client etwas laenger.
+WAIT_MAX_S = 50.0
 
 # Was der Assistent tun kann, wenn eine Anfrage abgewiesen wird. Die Codes sind
 # die "error"-Felder der Antworten von lab_gui/share_api.py.
@@ -82,6 +84,11 @@ HINTS = {
     "unknown_capture": "Erfassung nicht (mehr) im Speicher (es werden die letzten 50 gehalten). "
                        "Die CSV-Datei (csv_path) kann noch vorhanden sein.",
     "unknown_measurement": "Unbekannter Kennwert; 'allowed' listet die moeglichen.",
+    "scope_armed": "An dem Oszilloskop wartet schon eine scharfe Erfassung. Mit wait_capture abholen oder mit "
+                   "release_scope abbrechen.",
+    "capture_pending": "Die Erfassung ist noch scharf und hat noch keine Daten. Erst wait_capture.",
+    "cancelled": "Die scharfe Erfassung wurde abgebrochen (release_scope, Trennen in LabControl oder ein "
+                 "Testablauf hat das Oszilloskop uebernommen). Bei Bedarf neu scharf schalten.",
     # Testlaeufe (0.59.0)
     "unknown_testcase": "Ablauf nicht im gemeinsamen Ordner. list_testcases zeigt die Namen.",
     "unknown_run": "Unbekannte Lauf-ID (es werden die letzten 30 Laeufe gehalten).",
@@ -128,8 +135,8 @@ Vorgehen:
   Besitzer schaltet es ab (ausser dort ist 'Aus bei Verbindungsverlust' fuer dieses Geraet abgewaehlt).
   all_off wirkt auf beide Rechner.
 
-Oszilloskope (list_scopes, get_scope_capabilities, acquire, get_capture, measure, plot_capture,
-release_scope):
+Oszilloskope (list_scopes, get_scope_capabilities, acquire, arm, wait_capture, get_capture, measure,
+plot_capture, release_scope):
 - Messen schaltet nichts, braucht aber das Haekchen 'Messen' je Oszilloskop (kein Steuerrecht).
 - Vor der ersten Messung an einem neuen Messpunkt den Nutzer nach Tastkopf (1:1/10:1) und erwartetem
   Pegel fragen und den Bereich (range_v) passend waehlen -- das Oszilloskop kann die Verdrahtung nicht pruefen.
@@ -141,6 +148,10 @@ release_scope):
 - Kanalnamen stehen in get_scope_capabilities: PicoScope 'A'/'B', UNI-T MSO1000HD (scpiscope) 'CH1'..'CH4'.
 - Die Verbindung bleibt 60 s nach der letzten Erfassung offen (PicoScope 7 kann das Geraet dann nicht
   oeffnen). Nach einer Messreihe release_scope aufrufen.
+- Einschaltvorgaenge u. ae.: arm schaltet scharf und kehrt sofort mit capture_id zurueck (das Geraet wartet
+  dann auf den Trigger, hoechstens arm_timeout_s). Danach schalten (control_device), dann wait_capture(capture_id)
+  -- liefert das Ergebnis wie acquire, oder nach timeout_s state='armed' (bleibt scharf; erneut warten oder
+  release_scope bricht ab). get_capture zeigt vorher nur den Zustand. Je Oszilloskop eine scharfe Erfassung.
 
 Testablaeufe (list_testcases, run_testcase, get_run, stop_run):
 - Ein Ablauf ist eine gespeicherte, vom Nutzer erstellte Schrittfolge; statt vieler Einzelbefehle laeuft er
@@ -354,8 +365,8 @@ def _scope_path(scope_id: str, suffix: str = "") -> str:
 def list_scopes() -> dict:
     """Freigegebene Oszilloskope mit Zustand: 'measure' (fuer Erfassungen freigegeben),
     'measure_available'/'measure_blocked' (geht es JETZT, sonst Grund), 'state' (idle / connected /
-    acquiring / test / offline), Modell und Seriennummer. 'disconnect_in_s': Restzeit bis zum
-    automatischen Trennen einer offenen Verbindung."""
+    acquiring / armed / test / offline), Modell und Seriennummer. 'disconnect_in_s': Restzeit bis zum
+    automatischen Trennen einer offenen Verbindung; bei 'armed' nennt 'armed_capture' die scharfe Erfassung."""
     return _checked("GET", "/api/v1/scopes")
 
 
@@ -407,13 +418,65 @@ def acquire(scope_id: str, channels: list[dict], duration_s: float | None = None
     return _checked("POST", _scope_path(scope_id, "/acquire"), payload, timeout=SCOPE_TIMEOUT_S)
 
 
+def _arm_payload(channels: list[dict], duration_s: float | None, sample_interval_s: float | None,
+                 samples: int | None, pre_trigger_pct: float, trigger_mode: str, trigger_source: str | None,
+                 trigger_level_v: float, trigger_edge: str, timeout_s: float, measurements: list[str] | None,
+                 envelope_points: int) -> dict:
+    timing: dict = {"pre_trigger_pct": pre_trigger_pct}
+    if duration_s is not None:
+        timing["duration_s"] = duration_s
+    if sample_interval_s is not None:
+        timing["sample_interval_s"] = sample_interval_s
+    if samples is not None:
+        timing["samples"] = samples
+    trigger: dict = {"mode": trigger_mode, "level_v": trigger_level_v, "edge": trigger_edge, "timeout_s": timeout_s}
+    if trigger_source is not None:
+        trigger["source"] = trigger_source
+    payload: dict = {"channels": channels, "timing": timing, "trigger": trigger, "envelope_points": envelope_points}
+    if measurements:
+        payload["measurements"] = measurements
+    return payload
+
+
+@server.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def arm(scope_id: str, channels: list[dict], trigger_level_v: float, duration_s: float | None = None,
+        sample_interval_s: float | None = None, samples: int | None = None, pre_trigger_pct: float = 10.0,
+        trigger_source: str | None = None, trigger_edge: str = "rising", trigger_mode: str = "single",
+        arm_timeout_s: float = 60.0, measurements: list[str] | None = None, envelope_points: int = 200) -> dict:
+    """Schaltet das Oszilloskop scharf und kehrt SOFORT zurueck, sobald es auf den Trigger wartet -- danach
+    kann geschaltet werden (z. B. Netzteil ein), das Ereignis wird trotzdem erfasst. Einstellungen wie acquire
+    (channels, Zeit, Trigger-Quelle/Pegel/Flanke, pre_trigger_pct, measurements). trigger_mode 'single'
+    (nur mit Trigger) oder 'auto' (nach arm_timeout_s trotzdem erfassen). arm_timeout_s: wie lange es
+    hoechstens scharf bleibt (bis 3600 s); ohne Trigger danach Fehler trigger_timeout.
+    Antwort: capture_id, state ('armed', selten schon 'done'), trigger. Ergebnis mit wait_capture(capture_id)
+    holen; release_scope bricht ab. Je Oszilloskop nur eine scharfe Erfassung (sonst scope_armed)."""
+    payload = _arm_payload(channels, duration_s, sample_interval_s, samples, pre_trigger_pct, trigger_mode,
+                           trigger_source, trigger_level_v, trigger_edge, arm_timeout_s, measurements,
+                           envelope_points)
+    return _checked("POST", _scope_path(scope_id, "/arm"), payload, timeout=SCOPE_TIMEOUT_S)
+
+
+@server.tool(annotations=ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def wait_capture(capture_id: str, timeout_s: float = 30.0) -> dict:
+    """Wartet auf eine mit arm scharf geschaltete Erfassung, hoechstens timeout_s (bis 50 s je Aufruf).
+    Getriggert: Ergebnis wie acquire (state 'done', Kennwerte, Warnungen, Huellkurve, csv_path). Noch kein
+    Trigger: state 'armed' mit 'expires_in_s' -- sie bleibt scharf, erneut aufrufen oder mit release_scope
+    abbrechen. state 'triggered': getriggert, die Daten werden noch gelesen -- erneut aufrufen. Lief die Frist von arm ab oder wurde abgebrochen, kommt der Fehler (trigger_timeout, cancelled)."""
+    wait = max(0.0, min(float(timeout_s), WAIT_MAX_S))
+    return _checked("POST", "/api/v1/captures/" + urllib.parse.quote(capture_id, safe="") + "/wait",
+                    {"timeout_s": wait}, timeout=wait + 15.0)
+
+
 @server.tool(annotations=READ_ONLY)
 def get_capture(capture_id: str, channel: str | None = None, t_start_s: float | None = None,
                 t_stop_s: float | None = None, max_points: int = 500, mode: str = "minmax") -> dict:
     """Ausschnitt einer Erfassung (Zeit t in s, t=0 ist der Trigger). Passt das Fenster in
     max_points (hoechstens 2000), kommen Rohwerte ('raw'); sonst verdichtet: mode 'minmax' (Min/Max je
     Abschnitt, Spitzen bleiben erhalten) oder 'mean'. Fuer vollstaendige Rohdaten die CSV-Datei
-    (csv_path) direkt lesen."""
+    (csv_path) direkt lesen. Eine mit arm scharf geschaltete Erfassung liefert vor dem Trigger nur ihren
+    Zustand (state 'armed', ohne Daten)."""
     query = {"max_points": max_points, "mode": mode}
     if channel:
         query["channel"] = channel
@@ -473,7 +536,8 @@ def plot_capture(capture_id: str, channels: list[str] | None = None, t_start_s: 
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def release_scope(scope_id: str) -> dict:
     """Verbindung zum Oszilloskop sofort trennen (sonst nach 60 s ohne Erfassung automatisch), damit
-    z.B. die PicoScope-7-App es wieder oeffnen kann. Gespeicherte Erfassungen bleiben erhalten."""
+    z.B. die PicoScope-7-App es wieder oeffnen kann. Bricht eine scharfe Erfassung (arm) ab ('cancelled').
+    Gespeicherte Erfassungen bleiben erhalten."""
     return _checked("POST", _scope_path(scope_id, "/release"), {})
 
 

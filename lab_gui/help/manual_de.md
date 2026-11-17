@@ -364,6 +364,28 @@ Speicher. Eine Abweichung gilt als verletzte Prüfung und bricht den Lauf ab.
 „DID lesen“ liefert den Wert des gewählten Elements für eine Prüfung mit
 Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
 
+### Oszilloskop: Scharf schalten und Auf Erfassung warten
+
+Beim **Oszilloskop** (PicoScope) und beim **Oszilloskop (LAN)** (UNI-T
+MSO1000HD) gibt es zwei Aktionen, um ein Ereignis zu erfassen, das erst ein
+späterer Schritt auslöst (z. B. Einschalten mit 12 V):
+
+- **Scharf schalten**: **„Oszilloskop-Parameter…“** wählt Kanal (zugleich
+  Trigger-Quelle), Bereich (±V an der Tastkopfspitze), Tastkopf, Kopplung,
+  Flanke, Pegel, Fenster und Vortrigger. Der Schritt ist fertig, sobald das
+  Oszilloskop auf den Trigger wartet; die folgenden Schritte laufen weiter.
+- **Auf Erfassung warten**: Höchstzeit, Kennwert (Maximum, Spitze-Spitze,
+  Frequenz, Anstiegszeit …) und Kanal. Kommt bis zur Höchstzeit kein
+  Trigger, ist der Schritt fehlgeschlagen. Der Kennwert lässt sich prüfen
+  und in eine Variable schreiben; der Bericht zeigt die Kurve als Bild und
+  nennt die CSV-Datei.
+- Stop, Fehler und Laufende brechen eine noch scharfe Erfassung ab und geben
+  das Oszilloskop frei.
+- Am selben PicoScope nicht zusammen mit den Kennwert-Aktionen
+  (Maximum … Effektivwert) in einem Ablauf; nur im Fenster, nicht beim
+  Verbund-Partner. Abläufe mit diesen Schritten speichert LabControl im
+  Format 5.
+
 ### Ablaufsteuerung
 
 Über das „+“-Menü lassen sich zusätzlich einfügen:

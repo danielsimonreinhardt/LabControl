@@ -66,6 +66,9 @@ def _step_line(step: TestStep) -> str:
     action = action_label(step.device_kind, step.action)
     if is_arb_action(step.action):
         return f"{device}: {action} ({arb_shape_label(step.arb_shape)})"
+    if step.action in ("SCOPE_ARM", "SCOPE_WAIT"):   # PI-72 a
+        import scope_steps
+        return f"{device}: {action} ({scope_steps.summary(step.action, step.params, step.device_kind)})"
     if step.action in VALUELESS_ACTIONS:
         return f"{device}: {action}"
     return f"{device}: {action} = {step.value:g}"

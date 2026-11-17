@@ -44,8 +44,10 @@ ausgefuehrt ueber `scopes` (im Betrieb scope_service.ScopeService):
   GET  /api/v1/scopes/{id}                 ein Oszilloskop
   GET  /api/v1/scopes/{id}/capabilities    Faehigkeiten
   POST /api/v1/scopes/{id}/acquire         eine Erfassung (blockiert bis Ergebnis)
-  POST /api/v1/scopes/{id}/release         Verbindung sofort trennen
-  GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung
+  POST /api/v1/scopes/{id}/arm             scharf schalten, sofort zurueck mit capture_id (1.0.1, PI-73 a)
+  POST /api/v1/scopes/{id}/release         Verbindung sofort trennen (bricht scharfe Erfassungen ab)
+  GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung (scharf: nur Zustand "armed")
+  POST /api/v1/captures/{cid}/wait         auf eine scharfe Erfassung warten ({"timeout_s"}, PI-73 a)
   GET  /api/v1/captures/{cid}/plot         Erfassung als PNG (Phase 3)
   POST /api/v1/captures/{cid}/measure      Kennwerte neu berechnen
 Erfassen braucht Token + Lesen + das eigene Haekchen "Messen" (E1), aber NICHT
@@ -711,6 +713,7 @@ SCOPE_ERROR_STATUS = {
     "duration_too_long": 400, "unknown_measurement": 400,
     "unknown_capture": 404,
     "device_offline": 409, "scope_in_test_run": 409, "scope_busy_external": 409,
+    "scope_armed": 409, "capture_pending": 409, "cancelled": 409,
     "scope_busy": 429,
     "device_error": 502,
     "trigger_timeout": 504,
@@ -828,6 +831,15 @@ def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, 
     payload = _parse_body(body)
     if payload is None:
         return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    if what == "arm":
+        try:
+            status = scopes.arm(device_id, payload)
+        except ScopeError as exc:
+            logger.info("Oszilloskop scharf schalten von %s: %s -> Fehler (%s)", client, device_id, exc.code)
+            return _scope_error(exc)
+        logger.info("Oszilloskop scharf schalten von %s: %s -> %s (%s)", client, device_id,
+                    status.get("capture_id"), status.get("state"))
+        return _json(200, {"v": API_VERSION, "ok": True, **status})
     started = time.monotonic()
     try:
         report = scopes.acquire(device_id, payload)
@@ -837,6 +849,24 @@ def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, 
     logger.info("Oszilloskop-Erfassung von %s: %s -> %s (%.1f s)", client, device_id,
                 report.get("capture_id"), time.monotonic() - started)
     return _json(200, {"v": API_VERSION, "ok": True, **report})
+
+
+def _capture_wait(snapshot: dict, scopes, capture_id: str, body: bytes) -> Response:
+    """Auf eine scharfe Erfassung warten (PI-73 a): Bericht wie acquire, oder nach timeout_s der Stand."""
+    denied = _capture_permitted(snapshot, scopes, capture_id)
+    if denied is not None:
+        return denied
+    payload = _parse_body(body) if body else {}
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    timeout = payload.get("timeout_s", 10.0)
+    try:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)                 or timeout < 0:
+            raise ScopeError("invalid_request", "'timeout_s' muss eine Zahl >= 0 sein.")
+        result = scopes.wait_capture(capture_id, float(timeout))
+    except ScopeError as exc:
+        return _scope_error(exc)
+    return _json(200, {"v": API_VERSION, "ok": True, **result})
 
 
 def _capture_measure(snapshot: dict, scopes, capture_id: str, body: bytes) -> Response:
@@ -853,8 +883,8 @@ def _capture_measure(snapshot: dict, scopes, capture_id: str, body: bytes) -> Re
 
 
 def _scope_route(path: str) -> tuple[str, str, str] | None:
-    """("scopes", "", "") | ("scope", id, ""|"capabilities"|"acquire"|"release")
-    | ("capture", cid, ""|"measure") | None fuer alle anderen Pfade."""
+    """("scopes", "", "") | ("scope", id, ""|"capabilities"|"acquire"|"arm"|"release")
+    | ("capture", cid, ""|"measure"|"wait"|"plot") | None fuer alle anderen Pfade."""
     if path == f"{API_PREFIX}/scopes":
         return "scopes", "", ""
     for prefix, kind in ((f"{API_PREFIX}/scopes/", "scope"), (f"{API_PREFIX}/captures/", "capture")):
@@ -869,7 +899,8 @@ def _scope_route(path: str) -> tuple[str, str, str] | None:
 
 
 _SCOPE_GET = {("scopes", ""), ("scope", ""), ("scope", "capabilities"), ("capture", ""), ("capture", "plot")}
-_SCOPE_POST = {("scope", "acquire"), ("scope", "release"), ("capture", "measure")}
+_SCOPE_POST = {("scope", "acquire"), ("scope", "arm"), ("scope", "release"), ("capture", "measure"),
+               ("capture", "wait")}
 
 
 def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict, body: bytes,
@@ -891,6 +922,8 @@ def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict,
             return denied
         if kind == "scope":
             return _scope_post(snapshot, scopes, ident, what, body, client)
+        if what == "wait":
+            return _capture_wait(snapshot, scopes, ident, body)
         return _capture_measure(snapshot, scopes, ident, body)
     denied = check_auth(snapshot, header_get, query)
     if denied is not None:
