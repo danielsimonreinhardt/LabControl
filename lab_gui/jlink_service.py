@@ -68,6 +68,9 @@ class JLinkService(QObject):
         self._busy: dict[str, bool] = {}
         self._running: dict[str, int] = {}         # device_id -> Anfrage-Nr. der laufenden Bedienung
         self._requests = 0
+        # PI-77 a: switch_log.SwitchLog des Rechners (MainWindow setzt ihn) -- erfolgreiche Bedienungen dort
+        # verbuchen, fuer "Warten seit Aktion" (z. B. Resets mindestens 65 s auseinander)
+        self.switch_log = None
         # Immer queued: auch ein sofort erkannter Fehler kommt erst nach run() an (Aufrufer kennt die Nummer)
         self._done.connect(self._on_done, Qt.ConnectionType.QueuedConnection)
 
@@ -179,5 +182,7 @@ class JLinkService(QObject):
         details = f" ({result.output})" if result.output else ""
         outcome = "ok" if result.ok else f"FEHLER [{result.message}]"
         logger.info("J-Link %s: %s%s per %s -> %s", device_id, action, details, source, outcome)
+        if result.ok and self.switch_log is not None:
+            self.switch_log.note("jlink", device_id, action, "Ablauf" if source == "Testablauf" else source)
         self.state_changed.emit(device_id, dict(state))
         self.finished.emit(request, device_id, action, result.ok, result.message)

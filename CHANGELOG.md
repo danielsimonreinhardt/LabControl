@@ -46,7 +46,7 @@ Semantic Versioning (`lab_gui/version.py`).
     in Aktionszeilen. Bezug ist die Quittung der Aktion **im laufenden Ablauf**; kam sie noch nicht vor, wartet der
     Schritt die volle Zeit. Bewusst nicht der Schaltzeitpunkt aus dem Worker: Kachel, Frontplatte oder der Partner
     selbst können dazwischen geschaltet haben, ohne dass dieser Rechner es weiß – die volle Zeit ist dann die
-    sichere Annahme. „(automatisch)“ passt auf jedes Gerät der Art (jüngster Treffer zählt), die Frist läuft auf
+    sichere Annahme (seit PI-77 a zählt jede Schaltung über LabControl, siehe „Geändert“). „(automatisch)“ passt auf jedes Gerät der Art (jüngster Treffer zählt), die Frist läuft auf
     einem genauen Timer und gilt auch nach Anhalten als Mindestzeit.
   - Bericht und Laufaufzeichnung vermerken „bestätigt“/„abgebrochen“ und die tatsächliche Wartezeit.
   - Ohne Fenster (`labcontrol run`) startet ein Ablauf mit Bestätigung nicht (Exit 3 mit Meldung), statt mitten im
@@ -112,6 +112,25 @@ Semantic Versioning (`lab_gui/version.py`).
   `check_network_share` app); am Gerät noch nicht.
 
 ### Geändert
+- **„Warten seit Aktion“ zählt jede Schaltung über LabControl, auch im Verbund (PI-77 a).** Bisher galt nur die
+  Ausführung im laufenden Ablauf; ein Aus/Ein an der Kachel kurz vor dem Lauf blieb unbemerkt, und „Resets ≥ 65 s
+  auseinander“ am Evalboard ließ sich so nicht sicher einhalten. Jetzt merkt sich der Besitzer eines Geräts (der
+  Rechner, an dem es steckt) je Gerät und Aktion Zeitpunkt und Herkunft jeder **erfolgreichen** Schaltung: Kachel,
+  Preset, Ablauf, MCP/REST, gekoppeltes Programm, Befehl des Verbund-Partners, ALLE AUS, J-Link-Bedienung.
+  Abgelehnte oder fehlgeschlagene Befehle und Lesen zählen nicht, die Frontplatte auch nicht (nicht erkennbar).
+  Über die Freigabe meldet jede Kachel das neue Feld `last_switch` mit dem **Alter** in Sekunden statt einer
+  Uhrzeit – so spielt die Uhrabweichung zwischen PC und Pi keine Rolle. Ein Ablauf am Partner nutzt diesen Stand
+  aus dem sekündlichen Abgleich; wäre die Frist laut einem Stand von vor dem Schrittbeginn schon um, wartet er auf
+  den nächsten Abgleich (höchstens etwa 1 s, ohne neuen Stand nach 5 s die volle Zeit). Eine Schaltung während des
+  Wartens verlängert die Frist. Volle Zeit, wenn nichts bekannt ist: nach einem Neustart von LabControl, ohne
+  Verbindung zum Partner, bei einem Partner mit älterer Version. Bericht und Laufaufzeichnung vermerken Alter und
+  Herkunft („Ausgang EIN zuletzt vor 42.0 s (Kachel am Pi) – wartet 23.0 s“) bzw. den Grund für die volle Zeit.
+  Dateiformat unverändert. Nur Mock geprüft (`check_last_switch`: Worker verbucht Kachel/Preset/Ablauf/MCP/
+  Verbund/ALLE AUS, nicht Lesen/Fehlschläge; Runner mit Auskunft, altem Stand, Verbindungsabbruch; zwei
+  Hauptfenster: Kachel und MCP am Besitzer, Partner-Befehl beim Besitzer verbucht und im Ablauf am Partner
+  berücksichtigt; dazu `check_confirm_wait`, `check_release_step`, `check_partner_link`, `check_partner_v2`,
+  `check_network_share`, `check_verbund_sync`, `check_operation_log`, `check_battsim_log`, `check_translations`);
+  an PC und Pi noch nicht.
 - **Touch-Bedienung ohne Vollbild-Knopf.** Am Pi läuft LabControl als Kiosk immer im Vollbild; der Knopf oben
   rechts verließ nur versehentlich den Kiosk. In der Touch-Bedienung fehlt er jetzt, am PC bleibt er.
   Mock-verifiziert (`check_touch_ui`); am Pi-Display noch nicht angesehen.

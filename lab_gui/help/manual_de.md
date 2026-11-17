@@ -427,11 +427,18 @@ späterer Schritt auslöst (z. B. Einschalten mit 12 V):
   Aktion an einem Gerät mindestens die eingestellte Zeit vergangen ist
   (Spalten: Gerät, Aktion, „≥ … s“), z. B. ≥ 10 s seit „Ausgang AUS“ vor dem
   Wiedereinschalten.
-  - Bezug: die Quittung der Aktion **in diesem Lauf**; kam sie noch nicht
-    vor, wartet der Schritt die **volle Zeit**.
+  - Bezug: die letzte **erfolgreiche** Schaltung über LabControl – aus
+    diesem Lauf, von der Kachel, einem Preset, über MCP/REST, vom
+    Verbund-Partner oder durch ALLE AUS. Die Frontplatte des Geräts zählt
+    nicht.
+  - Gemerkt wird an dem Rechner, an dem das Gerät steckt; der Partner im
+    Verbund bekommt das Alter der Schaltung mit dem Abgleich.
+  - Ist nichts bekannt (seit dem Start von LabControl nicht geschaltet,
+    keine Verbindung zum Partner), wartet der Schritt die **volle Zeit**.
   - Gerät „(automatisch)“ zählt für jedes Gerät der Art; Partnergeräte
     („@Rechner/…“) und Rollen gehen wie in einer Aktionszeile.
-  - Der Bericht vermerkt die tatsächliche Wartezeit.
+  - Der Bericht vermerkt, wann und woher die letzte Schaltung kam, und die
+    tatsächliche Wartezeit.
 - **Bestätigung**: hält den Lauf an und zeigt im LabControl-Fenster eine
   Rückfrage mit dem Text der Zeile.
   - **Weiter** setzt fort, **Abbrechen** (auch Escape/Schließen) wirkt wie

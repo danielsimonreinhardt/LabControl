@@ -87,6 +87,8 @@ from unit_mso1000hd.driver import (
     register_resource as scpi_register_resource,
 )
 
+from switch_log import SOURCE_ALL_OFF, SOURCE_REMOTE, SOURCE_RUN, SwitchLog
+
 logger = logging.getLogger(__name__)
 
 # Bedienungen ins Log (PI-15): Bezeichnung je Geraeteart und Aktionen, die nur lesen (nicht protokolliert)
@@ -659,6 +661,9 @@ class DeviceWorker(QObject):
         self._test_running = False
         self._simulation_mode = simulation_mode
         self._operation_source = "Kachel"   # Herkunft der Kachel-Bedienungen (set_operation_source, PI-15)
+        # PI-77 a: letzte erfolgreiche Schaltung je Geraet und Aktion (Kachel, Preset, Ablauf, MCP/REST, Verbund,
+        # ALLE AUS) -- fuer "Warten seit Aktion" hier und beim Verbund-Partner (switch_log.py, thread-sicher)
+        self.switch_log = SwitchLog()
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
@@ -2266,12 +2271,14 @@ class DeviceWorker(QObject):
         if node.get_state().remote_requested:
             node.set_output(False)
             logger.info("ALL OFF: Batterie-Simulator %s -> Ausgang gesperrt", device_id)
+            self._note_switch(True, BATTSIM_KIND, device_id, "BS_OUT_OFF", SOURCE_ALL_OFF)
 
     def _kill_load(self, device_id: str, load: KoradKEL102) -> bool:
         for attempt in (1, 2):
             try:
                 load.set_input(False)
                 logger.info("ALL OFF: Last %s -> Ausgang AUS", device_id)
+                self._note_switch(True, "load", device_id, "OUT_OFF", SOURCE_ALL_OFF)
                 return True
             except LoadError as exc:
                 if attempt == 1:
@@ -2291,6 +2298,7 @@ class DeviceWorker(QObject):
             try:
                 fg.set_outputs(False, False)
                 logger.info("ALL OFF: Funktionsgenerator %s -> beide Ausgaenge AUS", device_id)
+                self._note_switch(True, "fg", device_id, "FG_OUT_OFF", SOURCE_ALL_OFF)
                 self._emit_fg_state(device_id)
                 return True
             except FunctionGeneratorValueError as exc:
@@ -2328,6 +2336,7 @@ class DeviceWorker(QObject):
                 psu.set_output(False)
                 logger.info("ALL OFF: Netzteil %s -> Ausgang aus", device_id)
                 self._emit_psu_output(device_id, False)
+                self._note_switch(True, "psu", device_id, "PSU_OUT_OFF", SOURCE_ALL_OFF)
                 return True
             except PowerSupplyValueError as exc:
                 # Schalter wirkte nicht, keine Verbindungsstoerung -- Retry hilft nicht.
@@ -2370,6 +2379,8 @@ class DeviceWorker(QObject):
                 for ch in range(1, HIL_PWM_COUNT + 1):
                     hil.set_pwm(ch, 0)
                 logger.info("ALL OFF: microHIL %s -> alle Ausgaenge AUS", device_id)
+                for action in ("HIL_OUT_OFF", "HIL_RELAY_OFF", "HIL_PWR12_OFF"):
+                    self._note_switch(True, "hil", device_id, action, SOURCE_ALL_OFF)
                 return True
             except HilError as exc:
                 if attempt == 1:
@@ -2461,6 +2472,7 @@ class DeviceWorker(QObject):
                 self._psu_manual.add(device_id)
                 logger.info("Netzteil %s: Handbedienung (1 V / 0 A, Ausgang EIN) per %s", device_id,
                             self._operation_source)
+                self._note_switch(True, "psu", device_id, "PSU_OUT_ON", self._operation_source)
                 self._emit_psu_output(device_id, True)
             self.psu_manual_state.emit(device_id, True)
         else:
@@ -2655,6 +2667,7 @@ class DeviceWorker(QObject):
         liess sich ein gesendeter Zustand nicht mehr einer Quelle zuordnen (07.11.2026)."""
         ok, message = self._guard_battsim(device_id, action)
         self._log_battsim_write(device_id, action_name, value, channel, self._operation_source, ok, message)
+        self._note_switch(ok, BATTSIM_KIND, device_id, action_name, self._operation_source)
 
     @staticmethod
     def _log_battsim_write(device_id: str, action_name: str, value: float, channel: int, source: str,
@@ -2680,6 +2693,10 @@ class DeviceWorker(QObject):
         self._log_operation(kind, device_id, action, value, channel, self._operation_source, ok, message)
         if ok:
             self._note_setpoint(kind, device_id, action, value)
+            # PI-77 a: die Kachel meldet die Wellenform als Code, der Ablauf kennt je Form eine Aktion
+            switched = next((name for name, code in FG_WAVE_ACTIONS.items() if code == int(value)), action) \
+                if action == "FG_WAVE" else action
+            self._note_switch(ok, kind, device_id, switched, self._operation_source)
         return ok, message
 
     def _note_setpoint(self, kind: str, device_id: str, action: str, value: float) -> None:
@@ -2758,11 +2775,13 @@ class DeviceWorker(QObject):
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
         if kind in OPERATION_LABELS and action not in READ_ACTIONS:   # PI-15: jede Bedienung ins Log
             self._log_operation(kind, device_id, action, value, channel, "Testablauf", ok, message)
+        self._note_switch(ok, kind, device_id, action, SOURCE_RUN)
         self.action_completed.emit(ok, message, read_value)
 
-    @Slot(int, str, str, str, float, int)
+    @Slot(int, str, str, str, float, int, str)
     def execute_remote_action(
-        self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int
+        self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int,
+        source: str = SOURCE_REMOTE,
     ) -> None:
         """Aktion aus der Netzwerk-Fernsteuerung (siehe share_remote.py).
 
@@ -2777,9 +2796,17 @@ class DeviceWorker(QObject):
         diesem Zeitpunkt bereits geprueft; hier wird nur ausgefuehrt.
         """
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
-        logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) -> %s%s", device_id, action, value,
-                    channel, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) per %s -> %s%s", device_id, action, value,
+                    channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        self._note_switch(ok, kind, device_id, action, source)
         self.remote_action_completed.emit(request_id, ok, message, read_value)
+
+    def _note_switch(self, ok: bool, kind: str, device_id: str, action: str, source: str) -> None:
+        """PI-77 a: erfolgreiche Schaltung an einem Geraet verbuchen (Lesen zaehlt nicht). Einzige Stelle fuer
+        Kachel/Preset (_operate, _tile_battsim), Ablauf (execute_action), MCP/REST/Verbund (execute_remote_action)
+        und ALLE AUS (_kill_*)."""
+        if ok and kind in OPERATION_LABELS and action not in READ_ACTIONS:
+            self.switch_log.note(kind, device_id, action, source)
 
     def _dispatch_action(
         self, device_id: str, kind: str, action: str, value: float, channel: int

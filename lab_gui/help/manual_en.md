@@ -404,11 +404,17 @@ The "+" menu additionally offers:
   since the last execution of an action on a device (columns: device,
   action, "≥ … s"), e.g. ≥ 10 s since "Output OFF" before switching on
   again.
-  - Reference: the acknowledgement of the action **in this run**; if it
-    has not occurred yet, the step waits the **full time**.
+  - Reference: the last **successful** switching through LabControl –
+    from this run, the tile, a preset, MCP/REST, the link partner or
+    ALL OFF. The device's front panel does not count.
+  - It is remembered on the computer the device is connected to; the
+    link partner receives the age of the switching with the regular sync.
+  - If nothing is known (not switched since LabControl started, no
+    connection to the partner), the step waits the **full time**.
   - Device "(automatic)" counts for every device of that kind; partner
     devices ("@host/…") and roles work as in an action row.
-  - The report notes the actual waiting time.
+  - The report notes when and where the last switching came from and the
+    actual waiting time.
 - **Confirmation**: pauses the run and shows a prompt with the row's text
   in the LabControl window.
   - **Continue** resumes, **Cancel** (also Escape/closing) acts like

@@ -107,6 +107,16 @@ MEASUREMENT_STALE_S = 2.0
 PICOSCOPE_RETRY_DELAY_S = 6.0
 PICOSCOPE_MAX_RETRIES = 3
 
+# "Warten seit Aktion" an einem Partnergeraet (PI-77 a): der Stand des Besitzers kommt mit dem sekuendlichen
+# Abgleich. Waere die Frist laut einem Stand von VOR dem Schrittbeginn schon um, wartet der Schritt auf einen
+# neueren (eine Schaltung kurz vor dem Schritt fehlt darin evtl. noch) -- so oft nachsehen, hoechstens so lange,
+# danach vorsichtshalber die volle Zeit ab Schrittbeginn.
+SINCE_FRESH_POLL_MS = 200
+SINCE_FRESH_TIMEOUT_S = 5.0
+# Waechst die Frist beim Nachsehen um mehr als das, gab es eine neue Schaltung (Vermerk); kleinere Spruenge
+# sind Laufzeitschwankungen des Abgleichs und verlaengern nur still
+SINCE_NEW_SWITCH_S = 1.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -200,6 +210,12 @@ class TestRunner(QObject):
         # "Warten seit": eigener, praeziser Timer (der grobe darf bis 5 % zu frueh feuern -- hier gilt eine
         # Mindestzeit) mit Frist; feuert er doch vor der Frist (Pause, Systemuhr), wird nachgelegt.
         self._since_deadline = 0.0
+        # PI-77 a: Bezug auch ausserhalb des Laufs -- (device_kind, device_id, action) -> switch_log.LastSwitch | None
+        # (RunSession: eigener Worker bzw. Besitzer im Verbund). None = nur Ausfuehrungen in diesem Lauf.
+        self.switch_lookup = None
+        self._since_step: TestStep | None = None
+        self._since_started = 0.0
+        self._since_gave_up = False   # kein aktueller Stand vom Besitzer -> volle Zeit, nicht weiter nachfragen
         self._since_timer = QTimer(self)
         self._since_timer.setSingleShot(True)
         self._since_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -316,6 +332,7 @@ class TestRunner(QObject):
         self._pending_check = None
         self._run_started = monotonic()
         self._action_times = {}
+        self._since_step = None
         self._confirm_index = -1
         self._release_index = -1
         self._release_granted = False
@@ -938,33 +955,92 @@ class TestRunner(QObject):
                  and (device_id == step.device_id or not device_id or not step.device_id)]
         return max(times) if times else None
 
-    def _start_wait_since(self, step: TestStep) -> bool:
-        """True = wartet (Timer laeuft), False = Frist schon um."""
+    def _since_reference(self, step: TestStep) -> tuple[float | None, str, float]:
+        """(monotonic() der juengsten bekannten Ausfuehrung | None, Quelle bzw. Grund, Stand ab).
+
+        Bezug sind die Ausfuehrungen in diesem Lauf und (PI-77 a) jede Schaltung ueber LabControl, die der
+        Besitzer des Geraets kennt (switch_lookup: Kachel, MCP/REST, Verbund-Partner, ALLE AUS ...). "Stand ab":
+        ab wann die Auskunft gilt (lokal jetzt, beim Partner die letzte Abfrage)."""
         now = monotonic()
-        last = self._last_action_time(step)
-        minimum = max(0.0, step.duration)
-        if last is None:
-            remaining = minimum
-            note = tr("{action} in diesem Lauf noch nicht ausgeführt – volle {seconds:g} s",
-                      action=action_label(step.device_kind, step.action), seconds=minimum)
-        else:
-            remaining = max(0.0, minimum - (now - last))
-            note = tr("{action} vor {elapsed:.1f} s – wartet {remaining:.1f} s",
-                      action=action_label(step.device_kind, step.action), elapsed=now - last, remaining=remaining)
-        self.step_note.emit(self._index, note)
-        if remaining <= 0:
-            return False
-        self._since_deadline = now + remaining
+        own = self._last_action_time(step)
+        info = None
+        if self.switch_lookup is not None:
+            try:
+                info = self.switch_lookup(step.device_kind, step.device_id, step.action)
+            except Exception:  # noqa: BLE001 -- Nachsehen darf den Lauf nicht anhalten; ohne Auskunft volle Zeit
+                logger.exception("Letzte Schaltung von %s nicht lesbar", step.device_id or step.device_kind)
+        fresh = info.fresh_since if info is not None else now
+        if info is not None and info.at is not None and (own is None or info.at > own):
+            return info.at, tr(info.source) if info.source else "?", fresh
+        if own is not None:
+            return own, tr("Ablauf"), fresh
+        return None, info.source if info is not None else "", fresh
+
+    def _since_waiting(self, step: TestStep, remaining: float) -> None:
         self._set_waiting({"kind": "wait_since", "step": self._index + 1, "text": wait_since_summary(step),
                            "remaining_s": round(remaining, 1), "until": time.time() + remaining,
                            "message": tr("wartet {summary}", summary=wait_since_summary(step))})
-        self._since_timer.start(max(1, math.ceil(remaining * 1000)))
+
+    def _start_wait_since(self, step: TestStep) -> bool:
+        """True = wartet (Timer laeuft), False = Frist schon um."""
+        now = monotonic()
+        minimum = max(0.0, step.duration)
+        self._since_step = step
+        self._since_started = now
+        self._since_gave_up = False
+        last, source, fresh = self._since_reference(step)
+        action = action_label(step.device_kind, step.action)
+        if last is None:
+            deadline = now + minimum
+            note = (tr("{action}: letzter Zeitpunkt unbekannt ({reason}) – volle {seconds:g} s",
+                       action=action, reason=source, seconds=minimum) if source else
+                    tr("{action} seit dem Start von LabControl noch nicht ausgeführt – volle {seconds:g} s",
+                       action=action, seconds=minimum))
+        else:
+            deadline = last + minimum
+            note = tr("{action} zuletzt vor {elapsed:.1f} s ({source}) – wartet {remaining:.1f} s",
+                      action=action, elapsed=now - last, source=source, remaining=max(0.0, deadline - now))
+        self.step_note.emit(self._index, note)
+        self._since_deadline = deadline
+        if deadline <= now and fresh >= now:
+            return False
+        self._since_waiting(step, max(0.0, deadline - now))
+        self._since_timer.start(max(1, math.ceil((deadline - now) * 1000)) if deadline > now
+                                else SINCE_FRESH_POLL_MS)
         return True
 
     def _on_since_timeout(self) -> None:
-        if not self._running:
+        """Frist um (oder nachsehen): neu nachsehen -- eine Schaltung waehrend des Wartens (Kachel, Partner) oder
+        ein neuerer Stand des Besitzers verlaengert die Frist, nie verkuerzt sie."""
+        if not self._running or self._since_step is None:
             return
-        rest = self._since_deadline - monotonic()
+        step = self._since_step
+        now = monotonic()
+        minimum = max(0.0, step.duration)
+        action = action_label(step.device_kind, step.action)
+        last, source, fresh = self._since_reference(step)
+        if last is not None and last + minimum > self._since_deadline:
+            if last + minimum - self._since_deadline > SINCE_NEW_SWITCH_S:
+                self.step_note.emit(self._index, tr(
+                    "{action} erneut ausgeführt ({source}) – wartet weitere {remaining:.1f} s", action=action,
+                    source=source, remaining=max(0.0, last + minimum - now)))
+            self._since_deadline = last + minimum
+            self._since_waiting(step, max(0.0, self._since_deadline - now))
+        if fresh < self._since_started and not self._since_gave_up:
+            if now - self._since_started < SINCE_FRESH_TIMEOUT_S:
+                if self._since_deadline <= now:
+                    self._since_timer.start(SINCE_FRESH_POLL_MS)
+                    return
+            else:
+                self._since_gave_up = True
+                full = self._since_started + minimum
+                if full > self._since_deadline:
+                    self._since_deadline = full
+                    self.step_note.emit(self._index, tr(
+                        "{action}: kein aktueller Stand vom Besitzer – volle {seconds:g} s", action=action,
+                        seconds=minimum))
+                    self._since_waiting(step, max(0.0, full - now))
+        rest = self._since_deadline - now
         if rest > 0:
             self._since_timer.start(max(1, math.ceil(rest * 1000)))
             return

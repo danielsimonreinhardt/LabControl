@@ -59,6 +59,11 @@ class PartnerSnapshot:
     lan_scopes: list[str] = field(default_factory=list)
     # Uhr des Partners minus eigene Uhr in s (Mitte der Anfrage), None = Partner meldet keine "clock"
     clock_offset_s: float | None = None
+    # PI-77 a: monotone Uhr DIESES Rechners beim Absenden bzw. nach der Antwort der Kachel-Abfrage -- die
+    # Alter in "last_switch" werden von values_received zurueckgerechnet (vorsichtig), der Stand gilt ab
+    # values_sent
+    values_sent: float = 0.0
+    values_received: float = 0.0
 
 
 def normalize_url(address: str) -> str:
@@ -143,7 +148,9 @@ class PartnerClient:
         received = time.time()
         if status.get("app") != "LabControl":
             raise PartnerError("bad_response", "kein LabControl")
+        values_sent = time.monotonic()
         _, values = self._request("GET", "/api/v1/values")
+        values_received = time.monotonic()
         remote = status.get("remote_control") or {}
         tiles = values.get("tiles")
         clock = status.get("clock")
@@ -161,6 +168,8 @@ class PartnerClient:
             lan_scopes=[str(s) for s in scopes] if isinstance(scopes, list) else [],
             clock_offset_s=(float(clock) - (sent + received) / 2
                             if isinstance(clock, (int, float)) and not isinstance(clock, bool) else None),
+            values_sent=values_sent,
+            values_received=values_received,
         )
 
     def action(self, device_id: str, action: str, value: float | None = None,

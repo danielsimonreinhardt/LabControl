@@ -35,6 +35,7 @@ import app_logging
 import data_store
 import instruments
 import remote_actions
+import switch_log
 import system_power
 import verbund_ids
 from control_tab import ControlTab
@@ -111,7 +112,8 @@ class MainWindow(QMainWindow):
     # Signal statt direktem Methodenaufruf, damit die Verbindung ueber eine
     # Queued Connection in den Worker-Thread gelangt. Testablauf-Aktionen gehen
     # seit 0.58.0 ueber die RunSession (run_session.py).
-    _dispatch_share_action = Signal(int, str, str, str, float, int)  # id, device_id, kind, action, value, channel
+    # id, device_id, kind, action, value, channel, Herkunft (MCP/REST, Programm, Verbund -- PI-77 a)
+    _dispatch_share_action = Signal(int, str, str, str, float, int, str)
 
     # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
     # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
@@ -347,6 +349,8 @@ class MainWindow(QMainWindow):
             scpi_scopes=self._settings.scpi_scopes,
         )
         self._worker.moveToThread(self._thread)
+        # PI-77 a: letzte Schaltung je Geraet/Aktion -- der Verbund-Partner liest sie ueber die Freigabe mit
+        self._live_state.switch_log = self._worker.switch_log
 
         self._worker.device_added.connect(self._registry.on_device_added)
         self._worker.device_removed.connect(self._registry.on_device_removed)
@@ -906,6 +910,7 @@ class MainWindow(QMainWindow):
 
     def _wire_jlink(self) -> None:
         self._jlink = JLinkService(self)
+        self._jlink.switch_log = self._worker.switch_log   # PI-77 a: Reset & Co. fuer "Warten seit Aktion"
         self._pending_jlink_req = 0
         self._jlink.device_added.connect(self._on_jlink_added)
         self._jlink.device_removed.connect(self._on_jlink_removed)
@@ -1900,7 +1905,9 @@ class MainWindow(QMainWindow):
                 or (local and self._settings.share_config["local_bypass"])):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
-        self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel)
+        source = (switch_log.SOURCE_VERBUND if verbund else switch_log.SOURCE_PROGRAM if program
+                  else switch_log.SOURCE_REMOTE)
+        self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel, source)
 
     def _on_share_meta(self, request_id: int, device_id: str, meta: dict) -> None:
         """Name/Kachelfarbe vom Verbund-Partner (PI-43 b): wie eine Aenderung an diesem Rechner uebernehmen --
@@ -2331,6 +2338,7 @@ class MainWindow(QMainWindow):
                                        self._interlock, live_state=self._live_state,
                                        scope_service=self._scope_service, parent=self)
         self._run_session.partner_router = self._route_partner_action
+        self._run_session.partner_switch_lookup = self._partner_last_switch   # PI-77 a
         # Messmittel (FT-8): Kennungen aus dem Worker (verbunden in _setup_worker vor dem Thread-Start),
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
@@ -2706,6 +2714,27 @@ class MainWindow(QMainWindow):
             return False
         self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
         return True
+
+    def _partner_last_switch(self, _kind: str, device_id: str, action: str) -> switch_log.LastSwitch | None:
+        """RunSession.partner_switch_lookup (PI-77 a): letzte Schaltung eines Partnergeraets laut Besitzer, aus
+        dem sekuendlichen Abgleich (Kachelfeld "last_switch", Alter statt Uhrzeit). None = kein Partnergeraet."""
+        remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
+        if remote_id is None:
+            return None
+        now = time.monotonic()
+        name = self._partner.name()
+        snap = self._partner.snapshot()
+        if snap is None or not self._partner.is_connected():
+            return switch_log.LastSwitch(None, tr("keine Verbindung zu {name}", name=name), now)
+        tile = next((t for t in snap.tiles if t.get("id") == remote_id), None)
+        if tile is None:
+            return switch_log.LastSwitch(None, tr("{name} meldet das Gerät nicht", name=name), now)
+        info = switch_log.from_tile(tile, action, snap.values_received, snap.values_sent)
+        if info.at is not None:
+            return info._replace(source=tr("{source} am {name}", source=tr(info.source), name=name))
+        if info.source == switch_log.OWNER_WITHOUT_TIMES:
+            return info._replace(source=tr("{name} meldet keine Schaltzeiten (ältere Version)", name=name))
+        return info._replace(source=tr("am {name} seit dessen Start nicht geschaltet", name=name))
 
     def _resolve_device_id(self, kind: str, device_id: str) -> tuple[str | None, str]:
         return self._directory.resolve(kind, device_id)

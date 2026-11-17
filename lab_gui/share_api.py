@@ -220,6 +220,12 @@ def partner_tiles(snapshot: dict) -> dict[str, dict]:
                      "partner": {"host": host, "name": name, "id": remote_id}})
         if stale:
             item["stale"] = True
+        if isinstance(item.get("last_switch"), dict):
+            # PI-77 a: Alter beim Besitzer + Alter des hier gehaltenen Stands
+            age = float(partner.get("age_s", 0.0))
+            item["last_switch"] = {action: {**entry, "age_s": round(float(entry["age_s"]) + age, 3)}
+                                   for action, entry in item["last_switch"].items()
+                                   if isinstance(entry, dict) and isinstance(entry.get("age_s"), (int, float))}
         if item.get("control"):
             blocked = ("partner_unreachable" if stale else own_block
                        or ("" if tile.get("control_available") else tile.get("control_blocked") or "partner_blocked"))
@@ -407,6 +413,10 @@ def _tile_detail(device_id: str, entry: dict, snapshot: dict) -> dict:
         "control_blocked": _control_block_reason(snapshot, device_id) if tile["control"] else "",
         # Belegt durch einen Verbund-Leitstand (PI-25 a): {"holder", "run"}, sonst nicht vorhanden
         **({"leased_by": snapshot["leases"][device_id]} if device_id in snapshot.get("leases", {}) else {}),
+        # Letzte Schaltung je Aktion ueber LabControl (PI-77 a): {Aktion: {"age_s", "source"}} -- ALTER statt
+        # Zeitpunkt, damit die Uhren von Besitzer und Partner keine Rolle spielen. {} = seit dem Start nichts
+        # geschaltet; fehlt das Feld, kennt der Besitzer es nicht (aeltere Version).
+        **({"last_switch": snapshot["last_switch"].get(device_id, {})} if "last_switch" in snapshot else {}),
         "fields": fields,
     })
     return tile

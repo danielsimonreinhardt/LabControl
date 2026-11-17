@@ -23,6 +23,7 @@ from PySide6.QtCore import QMetaObject, QObject, Q_ARG, Qt, QTimer, Signal, Slot
 import scope_steps
 from i18n import tr
 from run_record import RunRecorder
+from switch_log import LastSwitch
 from testcase_model import PICO_READ_ACTIONS, TestStep, kind_label
 from testcase_runner import TestRunner
 
@@ -197,6 +198,9 @@ class RunSession(QObject):
         # Verbund: (device_id, kind, action, value, channel) -> True, wenn der Router die Aktion
         # uebernommen hat (Partnergeraet, MainWindow._route_partner_action)
         self.partner_router: Callable[[str, str, str, float, int], bool] | None = None
+        # PI-77 a: (kind, device_id, action) -> switch_log.LastSwitch fuer ein Partnergeraet ("@rechner/id"),
+        # None = kein Partnergeraet (MainWindow._partner_last_switch); eigene Geraete: worker.switch_log
+        self.partner_switch_lookup: Callable[[str, str, str], LastSwitch | None] | None = None
         # Messmittel (instruments.Instruments, FT-8); None = nicht erfassen
         self.instruments = None
         # Anforderungsregister (FT-3): () -> {id: {"title", ...}}; None = ohne Titel
@@ -213,6 +217,7 @@ class RunSession(QObject):
 
         runner = self.runner = TestRunner()
         runner.setParent(self)
+        runner.switch_lookup = self._lookup_switch   # PI-77 a: "Warten seit Aktion" ueber den ganzen Rechner
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
         runner.execute_restbus.connect(self._on_execute_restbus)
@@ -490,6 +495,18 @@ class RunSession(QObject):
         if needed and self.xcp is not None:   # XCP-Messliste fuer Bedingungen/Ueberwachen abfragen (0.64.3)
             self.xcp.set_polling("run", True, needed)
         self.runner.start(steps, variables, start_index)
+
+    # -- Letzte Schaltung (PI-77 a) ----------------------------------------------------
+
+    def _lookup_switch(self, kind: str, device_id: str, action: str) -> LastSwitch | None:
+        """Letzte Schaltung ueber LabControl: beim Partner fuer "@rechner/id", sonst im eigenen Worker. None =
+        nichts bekannt (ohne Worker-Protokoll, z. B. in Pruefskripten mit Attrappe)."""
+        if device_id and self.partner_switch_lookup is not None:
+            info = self.partner_switch_lookup(kind, device_id, action)
+            if info is not None:
+                return info
+        log = getattr(self.worker, "switch_log", None)
+        return log.lookup(kind, device_id, action) if log is not None else None
 
     # -- Aktionen ------------------------------------------------------------------
 

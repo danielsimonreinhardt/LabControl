@@ -75,17 +75,17 @@ def main() -> int:
     psu.set_voltage.emit("psu:SIM", 5.0)
     check("Kachel setzt 5 V -> Worker meldet die Sollwerte", spin(3.0, lambda: any(e[:2] == ("psu:SIM", 5.0)
                                                                                 for e in psu_events)), str(psu_events))
-    w._dispatch_share_action.emit(901, "psu:SIM", "psu", "PSU_VOLT", 6.5, 0)
+    w._dispatch_share_action.emit(901, "psu:SIM", "psu", "PSU_VOLT", 6.5, 0, "Verbund")
     check("Fernsteuerung setzt 6,5 V -> gemeldet", spin(3.0, lambda: any(e[:2] == ("psu:SIM", 6.5)
                                                                         for e in psu_events)), str(psu_events))
     check("Feld der Kachel folgt (6,5 V)", spin(2.0, lambda: abs(psu._voltage_spin.value() - 6.5) < 1e-6),
           str(psu._voltage_spin.value()))
-    w._dispatch_share_action.emit(902, "psu:SIM", "psu", "PSU_CURR", 1.25, 0)
+    w._dispatch_share_action.emit(902, "psu:SIM", "psu", "PSU_CURR", 1.25, 0, "Verbund")
     check("Strombegrenzung 1,25 A -> gemeldet, Spannung bleibt", spin(3.0, lambda: ("psu:SIM", 6.5, 1.25) in psu_events),
           str(psu_events[-3:]))
     psu._voltage_spin.setValue(9.9)
     psu._voltage_spin.hasFocus = lambda: True   # offscreen gibt setFocus() keinen echten Fokus
-    w._dispatch_share_action.emit(903, "psu:SIM", "psu", "PSU_VOLT", 7.0, 0)
+    w._dispatch_share_action.emit(903, "psu:SIM", "psu", "PSU_VOLT", 7.0, 0, "Verbund")
     spin(1.5, lambda: any(e[:2] == ("psu:SIM", 7.0) for e in psu_events))
     check("Feld mit Fokus (jemand tippt) wird nicht ueberschrieben", abs(psu._voltage_spin.value() - 9.9) < 1e-6,
           str(psu._voltage_spin.value()))
@@ -95,7 +95,7 @@ def main() -> int:
     load.apply_setpoint.emit("load:SIM", "VOLT", 12.0)
     check("Kachel setzt CV 12 V -> Worker meldet Modus und Wert",
           spin(3.0, lambda: ("load:SIM", "VOLT", 12.0) in load_events), str(load_events))
-    w._dispatch_share_action.emit(904, "load:SIM", "load", "CURR", 2.5, 0)
+    w._dispatch_share_action.emit(904, "load:SIM", "load", "CURR", 2.5, 0, "Verbund")
     check("Fernsteuerung CC 2,5 A -> gemeldet", spin(3.0, lambda: ("load:SIM", "CURR", 2.5) in load_events),
           str(load_events))
     check("Kachel folgt (CC, 2,5 A)", spin(3.0, lambda: load._mode_combo.currentData() == "CURR"

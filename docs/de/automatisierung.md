@@ -304,7 +304,7 @@ Alle Pfade beginnen mit `/api/v1`, Antworten sind JSON.
 | `GET /status` | Version, Sperrzustand (`lock`), Watchdog, ob der Aufrufer steuern darf (`remote_control`) |
 | `GET /tiles` | freigegebene Geräte (Kacheln) |
 | `GET /tiles/{id}` | ein Gerät mit Messwerten |
-| `GET /values[?tiles=id1,id2]` | Messwerte mehrerer Geräte, mit erlaubten Aktionen und Sperrgrund |
+| `GET /values[?tiles=id1,id2]` | Messwerte mehrerer Geräte, mit erlaubten Aktionen und Sperrgrund; `last_switch` = letzte erfolgreiche Schaltung je Aktion über LabControl als `{"age_s", "source"}` (Alter in s, Quelle z. B. `Kachel`, `Ablauf`, `MCP/REST`, `Verbund`; leer seit dem Start) |
 | `POST /tiles/{id}/actions` | eine Aktion, z. B. `{"action": "PSU_VOLT", "value": 5.0}` |
 | `POST /all-off` | **ALLE AUS** |
 | `GET /testcases` | Abläufe im gemeinsamen Ordner `testcases/` |

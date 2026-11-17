@@ -138,6 +138,9 @@ class LiveState(QObject):
         self._partner_ip = ""
         # Kachelfarbe je eigenem Geraet (Settings.panel_color): der Verbund-Partner zeigt sie mit (PI-43 b)
         self._colors: dict[str, str] = {}
+        # PI-77 a: switch_log.SwitchLog des DeviceWorkers (thread-sicher, MainWindow setzt ihn) -- je Kachel
+        # die letzte Schaltung je Aktion als Alter in s ("last_switch"), fuer "Warten seit Aktion" beim Partner
+        self.switch_log = None
 
     @Slot(str, object)
     def set_panel_color(self, device_id: str, color_key) -> None:
@@ -477,6 +480,8 @@ class LiveState(QObject):
             "colors": colors,
             # Laufender Ablauf wartet auf Bestaetigung/"Warten seit" (PI-71 a) bzw. Freigabe (PI-74 a), sonst None
             "run_waiting": self.runs.current_waiting(),
+            # Letzte Schaltung je Geraet und Aktion (PI-77 a): {device_id: {action: {"age_s", "source"}}}
+            "last_switch": self.switch_log.ages() if self.switch_log is not None else {},
         }
 
     def share_config(self) -> dict:

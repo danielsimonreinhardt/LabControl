@@ -129,11 +129,32 @@ flowchart TD
 
 **Warten seit Aktion**
 
-- Bezug: Quittung der Aktion **in diesem Lauf** (bei Schleifen die letzte).
-- Kam die Aktion im Lauf noch nicht vor: **volle Zeit** warten.
+```mermaid
+flowchart LR
+    K["Kachel / Preset"] --> O
+    L["Ablauf"] --> O
+    M["MCP / REST / Programm"] --> O
+    P["Partner im Verbund"] --> O
+    A["ALLE AUS"] --> O
+    O["Besitzer des Geräts<br/>merkt sich je Aktion:<br/>wann + woher"] -- "Alter in s<br/>(Abgleich jede Sekunde)" --> R["Ablauf am Partner"]
+    O --> S["Ablauf am selben Rechner"]
+```
+
+- Bezug: die letzte **erfolgreiche** Ausführung der Aktion am Gerät **über LabControl** – egal ob aus diesem
+  Lauf, von der Kachel, aus einem Preset, über MCP/REST, vom Verbund-Partner oder durch ALLE AUS. Die
+  Frontplatte des Geräts zählt nicht (nicht erkennbar), abgelehnte oder fehlgeschlagene Befehle auch nicht.
+- Gemerkt wird beim **Besitzer** (dem Rechner, an dem das Gerät steckt). Ein Partner-Rechner bekommt mit dem
+  sekündlichen Abgleich das **Alter** der letzten Schaltung, keine Uhrzeit – die Uhren von PC und Pi spielen
+  keine Rolle. Wäre die Frist laut Abgleich schon um, wartet der Schritt noch auf den nächsten Abgleich
+  (höchstens etwa 1 s), damit eine Schaltung kurz davor nicht fehlt.
+- **Volle Zeit**, wenn nichts bekannt ist: seit dem Start von LabControl (beim Besitzer) nicht geschaltet, keine
+  Verbindung zum Partner, Partner mit älterer Version.
+- Wird während des Wartens erneut geschaltet, verlängert sich die Frist.
 - „(automatisch)“ passt auf jedes Gerät der Art – es zählt die jüngste Ausführung.
 - Anhalten verlängert nur; die Frist bleibt eine Mindestzeit.
-- Bericht: z. B. „Ausgang EIN vor 12,3 s – wartet 52,7 s“.
+- Bericht: z. B. „Ausgang EIN zuletzt vor 12,3 s (Kachel am Pi) – wartet 52,7 s“ oder „… seit dem Start von
+  LabControl noch nicht ausgeführt – volle 65 s“.
+- Über die Freigabe meldet jede Kachel das Feld `last_switch` (siehe [Automatisierung](automatisierung.md)).
 
 **Bestätigung**
 
