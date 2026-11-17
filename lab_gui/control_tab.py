@@ -2099,6 +2099,12 @@ class PicoscopeControlGroup(QGroupBox):
         self._capture_text = text
         self._retranslate()
 
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (1.0.1, PI-67 a): nur Status und Geraet -- Erfassungen, Trennen und
+        PicoScope 7 nur am Rechner, an dem das Oszilloskop haengt."""
+        self._button_row.hide()
+        _hide_form_row(self._capture_label)
+
     def set_label(self, label: str) -> None:
         self.setTitle(label)
 
@@ -2141,6 +2147,7 @@ class JLinkControlGroup(QGroupBox):
         self._device_id = device_id
         self._color_key: str | None = None
         self._state: dict = {}
+        self._display_only = False
         self.setTitle(label)
         outer = QVBoxLayout(self)
         self._subtitle = QLabel()
@@ -2173,7 +2180,7 @@ class JLinkControlGroup(QGroupBox):
         self._flash_button = IconButton("mdi.download", "")
         for button, action in ((self._check_button, "JLINK_CHECK"), (self._reset_button, "JLINK_RESET"),
                                (self._halt_button, "JLINK_HALT"), (self._go_button, "JLINK_GO")):
-            button.clicked.connect(lambda _c=False, a=action: self.action_requested.emit(self._device_id, a, ""))
+            button.clicked.connect(lambda _c=False, a=action: self._request(a, ""))
         self._flash_button.clicked.connect(self._on_flash_clicked)
         self._buttons = (self._check_button, self._reset_button, self._halt_button, self._go_button,
                          self._flash_button)
@@ -2234,7 +2241,17 @@ class JLinkControlGroup(QGroupBox):
             self, tr("Firmware-Datei wählen"), start,
             tr("Firmware (*.hex *.srec *.s19 *.mot *.elf *.axf *.out);;Alle Dateien (*)"))
         if path:
-            self.action_requested.emit(self._device_id, "JLINK_FLASH", path)
+            self._request("JLINK_FLASH", path)
+
+    def _request(self, action: str, path: str) -> None:
+        if not self._display_only:
+            self.action_requested.emit(self._device_id, action, path)
+
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (1.0.1, PI-67 a): Ziel, Zielspannung und letzte Bedienung -- Pruefen,
+        Reset, Anhalten, Starten und Flashen nur am Rechner, an dem der J-Link haengt."""
+        self._display_only = True
+        self._button_row.hide()
 
     def set_state(self, state: dict) -> None:
         self._state = dict(state)
@@ -3103,13 +3120,16 @@ class ControlTab(QWidget):
                     _hide_form_row(widget)
         if hasattr(section, "set_limits_unknown"):
             section.set_limits_unknown()
+        if hasattr(section, "set_display_only"):   # Oszilloskop, J-Link: nur Anzeige (PI-67 a)
+            section.set_display_only()
         self._relayout_grid()
 
     def set_remote_controllable(self, device_id: str, allowed: bool) -> None:
-        """Bedienbar nur, wenn der Partner es erlaubt (Freigabe "Steuern", Fernsteuerung dort an, frei)."""
+        """Bedienbar nur, wenn der Partner es erlaubt (Freigabe "Steuern", Fernsteuerung dort an, frei).
+        Anzeige-Kacheln (Oszilloskop, J-Link) haben keine Bedienung -- Umbenennen/Farbe bleiben dort an."""
         section = self._sections.get(device_id)
         if section is not None:
-            section.setEnabled(allowed)
+            section.setEnabled(allowed or hasattr(section, "set_display_only"))
 
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 
@@ -3581,6 +3601,9 @@ class ControlTab(QWidget):
 
     def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    def set_scpiscope_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)   # Partnerkachel (MainWindow._on_partner_device_online)
 
     def update_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
         section = self._sections.get(device_id)

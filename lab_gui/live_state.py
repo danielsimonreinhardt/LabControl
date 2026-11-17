@@ -32,12 +32,13 @@ versehentliches verschachteltes Acquire verstecken statt es zu verklemmen.
 from __future__ import annotations
 
 import copy
+import os
 import threading
 import time
 
 from PySide6.QtCore import QObject, Slot
 
-from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT
+from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT, STATE_ONLY_KINDS
 from i18n import tr
 from lease_table import LeaseTable
 from pairing import PairingTable
@@ -278,7 +279,25 @@ class LiveState(QObject):
 
     @Slot(str, str, str, str)
     def on_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
-        self._write(device_id, status=status)
+        # Modell/Seriennummer seit 1.0.1 (PI-67 a, Kachel beim Verbund-Partner); leer = letzten Stand behalten
+        # (wie PicoscopePanel.set_state)
+        self._write(device_id, status=status, **({"model": variant} if variant else {}),
+                    **({"serial": serial} if serial else {}))
+
+    @Slot(str, dict)
+    def on_jlink_state(self, device_id: str, state: dict) -> None:
+        """J-Link (jlink_service.state_changed, 1.0.1 PI-67 a): Stand der letzten Bedienung fuer die Anzeige-
+        Kachel beim Verbund-Partner. Nur der Dateiname, nicht der Pfad auf diesem Rechner."""
+        vtref = state.get("vtref")
+        self._write(device_id, **{
+            "target": state.get("device") or None, "interface": state.get("interface") or None,
+            "speed": state.get("speed") or None, "core": state.get("core") or None,
+            "vtref": vtref if isinstance(vtref, (int, float)) else None,
+            "busy": int(bool(state.get("busy"))), "action": state.get("action") or None,
+            "result": int(bool(state["ok"])) if "ok" in state else None,
+            "message": state.get("message") or None, "time": state.get("time") or None,
+            "file": os.path.basename(state.get("last_file") or "") or None,
+        })
 
     @Slot(str, object)
     def on_fg_state(self, device_id: str, state: dict) -> None:
@@ -438,7 +457,8 @@ class LiveState(QObject):
         for entry in devices.values():
             age = now - entry.pop("ts")
             entry["age_s"] = round(age, 3)
-            entry["stale"] = age > STALE_TIMEOUT_S
+            # Oszilloskope/J-Link melden nur Aenderungen -- ihr Stand gilt, bis ein neuer kommt (1.0.1, PI-67 a)
+            entry["stale"] = age > STALE_TIMEOUT_S and entry.get("kind") not in STATE_ONLY_KINDS
         return {
             "devices": devices,
             "share": share,

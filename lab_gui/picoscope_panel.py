@@ -76,6 +76,7 @@ class PicoscopePanel(QGroupBox):
         super().__init__()
         self._device_id = device_id
         self._with_launch = with_launch
+        self._display_only = False   # Partnergeraet (set_display_only)
         self._online = True
         self._status = "busy"
         self._variant = ""
@@ -177,7 +178,16 @@ class PicoscopePanel(QGroupBox):
         """Kurztext der letzten Erfassung (scope_plot.summary), z.B.
         "11:31:00 · A 3.35 Vss 1.000 kHz"."""
         self._capture_label.setText(tr("Letzte Erfassung: {summary}", summary=text))
-        self._capture_row.setVisible(True)
+        self._capture_row.setVisible(not self._display_only)
+
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (Verbund, 1.0.1 PI-67 a): nur Status und Modell -- Erfassen, Trennen und
+        PicoScope 7 gibt es nur an dem Rechner, an dem das Oszilloskop haengt."""
+        self._display_only = True
+        self._with_launch = False
+        self._launch_button.setVisible(False)
+        self._release_button.setVisible(False)
+        self._capture_row.setVisible(False)
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")
@@ -240,7 +250,7 @@ class PicoscopePanel(QGroupBox):
         self._variant = variant or self._variant
         self._serial = serial or self._serial
         variant, serial = self._variant, self._serial
-        self._release_button.setVisible(status == "mcp")
+        self._release_button.setVisible(status == "mcp" and not self._display_only)
         self._apply_status_icon(current_palette())
         self._retranslate()
         # Nur die kurze Typenbezeichnung sichtbar (Nutzerfeedback: "reicht

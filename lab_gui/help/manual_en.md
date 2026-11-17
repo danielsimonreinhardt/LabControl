@@ -788,7 +788,11 @@ the tile title (tooltip: computer name). What does not work over the link
 (manual mode, OVP/OCP and memory slots of the power supply, PWM and 12 V outputs
 of the microHIL, the battery simulator's limit, sending CAN frames) is missing
 from the partner tile; the partner's CAN bus is shown in the overview only.
-**Both computers show the same:** a tile's fields (voltage setpoint, current
+**The partner's oscilloscopes and J-Link** only show their state: PicoScope and
+UNI-T with status (free, busy, connected (MCP)) and model, the J-Link with target,
+target voltage and the last operation with its result. Capturing, flashing,
+checking and reset only work on the computer the device is plugged into; Claude
+sees them in the device list but cannot control them. **Both computers show the same:** a tile's fields (voltage setpoint, current
 limit, load mode and setpoint, function generator, cell values) follow the
 device, no matter on which computer, via Claude or in a test sequence it was
 operated; a field someone is typing in is left alone. Name and tile colour belong

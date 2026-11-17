@@ -828,7 +828,11 @@ das Netzwerk-Symbol hinter dem Kacheltitel (Tooltip: Rechnername). Was über den
 Verbund nicht geht (Handbedienung, OVP/OCP und Speicherplätze des Netzteils,
 PWM und 12-V-Ausgänge des microHIL, der Grenzwert des Batterie-Simulators,
 CAN-Frames senden), fehlt in der Partnerkachel; der CAN-Bus des Partners steht
-nur in der Übersicht. **Beide Rechner zeigen dasselbe:** Die Felder einer Kachel
+nur in der Übersicht. **Oszilloskope und J-Link des Partners** zeigen nur ihren
+Stand: PicoScope und UNI-T mit Status (frei, belegt, Verbunden (MCP)) und Modell,
+der J-Link mit Ziel, Zielspannung und letzter Bedienung samt Ergebnis. Erfassen,
+Flashen, Prüfen und Reset gehen nur an dem Rechner, an dem das Gerät steckt;
+Claude sieht sie in der Geräteliste, steuern kann es sie nicht. **Beide Rechner zeigen dasselbe:** Die Felder einer Kachel
 (Sollspannung, Strombegrenzung, Last-Modus und -Sollwert, Funktionsgenerator,
 Zellwerte) folgen dem Gerät, egal an welchem Rechner, über Claude oder im
 Testablauf bedient wurde; ein Feld, in dem gerade jemand tippt, bleibt

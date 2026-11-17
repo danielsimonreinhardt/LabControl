@@ -773,6 +773,8 @@ class DashboardWidget(QGroupBox):
         if panel is not None:
             from remote_badge import attach
             attach(panel, host)
+            if hasattr(panel, "set_display_only"):   # Oszilloskop: ohne Knoepfe (PI-67 a)
+                panel.set_display_only()
 
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 
@@ -1571,6 +1573,10 @@ class DashboardWidget(QGroupBox):
     @Slot(str, bool)
     def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
+
+    @Slot(str, bool)
+    def set_scpiscope_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)   # Partnerkachel (MainWindow._on_partner_device_online)
 
     @Slot(str, bool)
     def set_battsim_online(self, device_id: str, online: bool) -> None:

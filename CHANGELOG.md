@@ -20,6 +20,16 @@ Semantic Versioning (`lab_gui/version.py`).
   Liste „Gerätezustand“ steht der Rechnername davor („Pi · NT 16V-30A“). Bricht die Verbindung ab, zeigen die Chips
   „✕“; bei „Verbund aus“ verschwinden sie. Kachelfarben vergibt für Partnergeräte weiter nur der Besitzer.
   Mock-verifiziert (`check_partner_link`); in der laufenden App an PC und Pi noch nicht.
+- **PicoScope, UNI-T und J-Link auch beim Verbund-Partner (PI-67 a).** Pi und PC zeigen jetzt dieselben Kacheln:
+  Oszilloskope und J-Link des Partners erscheinen in Übersicht und Steuerung, mit Status-Chip „⇄“. Das Oszilloskop
+  zeigt Status (frei, belegt, Verbunden (MCP)), Modell und Seriennummer, der J-Link Ziel, Zielspannung und die
+  letzte Bedienung mit Ergebnis. Es sind reine Anzeige-Kacheln: Erfassen, Trennen, Kurve, PicoScope 7, Prüfen,
+  Reset und Flashen gibt es nur an dem Rechner, an dem das Gerät hängt; Umbenennen und Kachelfarbe gehen wie bei
+  den anderen Partnerkacheln an den Besitzer. Im Testablauf-Editor stehen sie nicht zur Auswahl. Claude sieht sie
+  in `list_devices`, steuern kann es sie nicht (`control_available` false, Aktion → `control_not_permitted`). Die
+  Freigabe liefert dafür Modell/Seriennummer und den J-Link-Stand mit; Oszilloskop und J-Link gelten dort nicht
+  mehr nach 2 s als veraltet (sie melden nur Änderungen). Mock-verifiziert (`check_partner_devices`,
+  `check_partner_link`; Gegenprobe ohne Änderung schlägt fehl); an PC und Pi noch nicht.
 
 ### Geändert
 - **Abschalten bei Verbindungsverlust je Gerät wählbar (PI-68 a).** Bisher schaltete der Besitzer alle vom

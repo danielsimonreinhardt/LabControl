@@ -64,7 +64,15 @@ CAN_STATE_FIELDS = {
     "tx_count": ("Gesendet", ""),
     "rx_count": ("Empfangen", ""),
 }
-PICOSCOPE_STATE_FIELDS = {"status": ("Status", "")}
+# model/serial seit 1.0.1 (PI-67 a): der Verbund-Partner zeigt damit dieselbe Kachel
+PICOSCOPE_STATE_FIELDS = {"status": ("Status", ""), "model": ("Modell", ""), "serial": ("Seriennummer", "")}
+# J-Link (1.0.1, PI-67 a): Stand der letzten Bedienung (jlink_service), fuer die Anzeige beim Verbund-Partner.
+# result: 1 = ok, 0 = Fehler, leer = noch keine Bedienung; busy: 1 waehrend eine Bedienung laeuft.
+JLINK_STATE_FIELDS = {
+    "target": ("Ziel", ""), "interface": ("Schnittstelle", ""), "speed": ("Takt", "kHz"), "core": ("Kern", ""),
+    "vtref": ("Zielspannung", "V"), "busy": ("Läuft", ""), "action": ("Aktion", ""), "result": ("Ergebnis", ""),
+    "message": ("Meldung", ""), "time": ("Uhrzeit", ""), "file": ("Datei", ""),
+}
 # Funktionsgenerator: je Kanal Ausgang (0/1), Wellenform (Text), Frequenz,
 # Amplitude (Spitze-Spitze), Offset, Tastverhaeltnis; dazu die Phase. Nicht im
 # Verlauf-Tab plotbar (siehe KIND_FIELDS) -- es sind Einstellungen, keine
@@ -116,6 +124,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
     **{("scpiscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
     **{("fg", f): v for f, v in FG_STATE_FIELDS.items()},
     **{("battsim", f): v for f, v in BATTSIM_STATE_FIELDS.items()},
+    **{("jlink", f): v for f, v in JLINK_STATE_FIELDS.items()},
 }
 
 # Anzeigereihenfolge je Geraeteart -- bestimmt, in welcher Reihenfolge die
@@ -127,11 +136,16 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
     "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current"],
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
-    "picoscope": ["status"],
-    "scpiscope": ["status"],
+    "picoscope": list(PICOSCOPE_STATE_FIELDS),
+    "scpiscope": list(PICOSCOPE_STATE_FIELDS),
+    "jlink": list(JLINK_STATE_FIELDS),
     "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
     "battsim": list(BATTSIM_STATE_FIELDS),
 }
+
+# Geraete, die nur bei einer Aenderung melden (Zustand statt laufender Messwerte): ihr Stand veraltet nicht
+# (live_state.snapshot setzt kein "stale"), sonst galten sie nach 2 s beim Verbund-Partner als getrennt.
+STATE_ONLY_KINDS = ("picoscope", "scpiscope", "jlink")
 
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
 # Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md

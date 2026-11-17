@@ -14,6 +14,9 @@ Dieses Modul uebersetzt in beide Richtungen:
 Was der Partner nicht fernsteuern laesst (Handbedienung, OVP/OCP, Speicherplaetze, PWM, CAN senden),
 ist in der Kachel gesperrt; die Kachel selbst ist nur bedienbar, wenn der Partner es erlaubt
 (control_available) und dort die Fernsteuerung an ist.
+
+Oszilloskope (PicoScope, UNI-T) und J-Link sind seit 1.0.1 (PI-67 a) reine Anzeige-Kacheln (DISPLAY_KINDS):
+Status bzw. Ziel/Zielspannung/letzte Bedienung, aber Erfassen, Flashen, Pruefen und Reset nur am Besitzer.
 """
 from __future__ import annotations
 
@@ -21,8 +24,11 @@ from PySide6.QtCore import QObject, Signal
 
 from verbund_ids import qualify, split
 
-# Geraetearten mit eigener Kachel; alles andere (Oszilloskope, J-Link) bleibt am eigenen Rechner
-KINDS = ("psu", "load", "can", "battsim", "fg", "hil")
+# Geraetearten mit eigener Kachel
+KINDS = ("psu", "load", "can", "battsim", "fg", "hil", "picoscope", "scpiscope", "jlink")
+# Nur Anzeige (1.0.1, PI-67 a): Erfassen, Flashen, Pruefen, Reset nur an dem Rechner, an dem das Geraet haengt.
+# Nie bedienbar; Umbenennen/Umfaerben geht wie bei den anderen an den Besitzer (send_meta).
+DISPLAY_KINDS = ("picoscope", "scpiscope", "jlink")
 FG_WAVE_ACTIONS = {0: "FG_WAVE_SINE", 1: "FG_WAVE_SQUARE", 2: "FG_WAVE_PULSE", 3: "FG_WAVE_TRIANGLE",
                    6: "FG_WAVE_DC"}
 FG_WAVE_CODES = {"Sinus": 0, "Rechteck": 1, "Puls": 2, "Dreieck": 3, "Teilsinus": 4, "CMOS": 5, "DC": 6,
@@ -92,6 +98,21 @@ def fg_state_from(fields: dict) -> dict:
     return {"outputs": outputs, "channels": channels, "phase": _num(fields.get("phase"))}
 
 
+def jlink_state_from(fields: dict) -> dict:
+    """Umkehrung von LiveState.on_jlink_state: Felder -> Zustand wie jlink_service.state_changed."""
+    state = {"device": fields.get("target") or "", "interface": fields.get("interface") or "SWD",
+             "speed": int(_num(fields.get("speed"))), "busy": bool(_flag(fields.get("busy"))),
+             "action": fields.get("action") or "", "message": fields.get("message") or "",
+             "time": fields.get("time") or "", "last_file": fields.get("file") or ""}
+    if fields.get("core"):
+        state["core"] = fields["core"]
+    if isinstance(fields.get("vtref"), (int, float)):
+        state["vtref"] = float(fields["vtref"])
+    if fields.get("result") is not None:
+        state["ok"] = bool(_flag(fields["result"]))
+    return state
+
+
 class PartnerDevices(QObject):
     """Partnerkacheln -> Worker-gleiche Signale; Bedienung -> Partner-Aktionen."""
 
@@ -112,6 +133,8 @@ class PartnerDevices(QObject):
     hil_digital_state = Signal(str, list, list)
     hil_relay_state = Signal(str, list)
     hil_analog_input = Signal(str, list)
+    picoscope_state = Signal(str, str, str, str)   # "@host/id", Status (free/busy/test/mcp), Modell, Seriennummer
+    jlink_state = Signal(str, object)              # "@host/id", Zustand wie jlink_service.state_changed
     action_failed = Signal(str, str, str)      # "@host/id", Aktion, Grund (Bedienung aus einer Kachel)
     # PI-43 b: Name und Kachelfarbe kommen vom Besitzer, Last-Sollwert folgt dem Geraet
     label_changed = Signal(str, str, str)      # kind, "@host/id", Name
@@ -172,7 +195,7 @@ class PartnerDevices(QObject):
             online = bool(tile.get("online", True)) and not tile.get("stale")
             self._set_online(kind, rid, online)
             self._set_control(rid, online and allowed and bool(tile.get("control"))
-                              and bool(tile.get("control_available")))
+                              and bool(tile.get("control_available")) and kind not in DISPLAY_KINDS)
             if online:
                 self._emit_values(kind, rid, tile)
         for rid in [r for r in self._known if r not in seen]:
@@ -234,6 +257,11 @@ class PartnerDevices(QObject):
                                         [bool(_flag(v)) for v in series("out")])
             self.hil_relay_state.emit(rid, [bool(_flag(v)) for v in series("rel")])
             self.hil_analog_input.emit(rid, [_num(v) for v in series("ain")])
+        elif kind in ("picoscope", "scpiscope"):
+            self.picoscope_state.emit(rid, str(f.get("status") or "busy"), str(f.get("model") or ""),
+                                      str(f.get("serial") or ""))
+        elif kind == "jlink":
+            self.jlink_state.emit(rid, jlink_state_from(f))
 
     # -- Kachel -> Partner -----------------------------------------------------------
 

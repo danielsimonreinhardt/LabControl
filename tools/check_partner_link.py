@@ -83,7 +83,16 @@ def start_partner(app):
     state.on_device_known("load", "load:B1", "Last 1")
     state.on_load_measurement("load:B1", 11.9, 1.25, 14.875)
     state.on_device_known("fg", "fg:B1", "Funktionsgenerator 1")
-    for device_id in ("psu:B1", "load:B1", "fg:B1"):
+    # PI-67 a: Oszilloskope und J-Link (nicht in der Freigabeliste -- der gekoppelte Partner sieht sie trotzdem)
+    state.on_device_known("picoscope", "picoscope:B1", "PicoScope")
+    state.on_picoscope_state("picoscope:B1", "free", "2204A", "JO123/0001")
+    state.on_device_known("scpiscope", "scpiscope:B1", "UNI-T")
+    state.on_picoscope_state("scpiscope:B1", "free", "MSO1104HD", "SN-1")
+    state.on_device_known("jlink", "jlink:B1", "J-Link")
+    state.on_jlink_state("jlink:B1", {"device": "S32K144", "interface": "SWD", "speed": 4000, "vtref": 3.31,
+                                      "busy": False, "action": "JLINK_FLASH", "ok": False, "message": "Verify failed",
+                                      "time": "11:22:33", "last_file": "/home/pi/fw/app.hex"})
+    for device_id in ("psu:B1", "load:B1", "fg:B1", "picoscope:B1", "scpiscope:B1", "jlink:B1"):
         state.set_online(device_id, True)   # wie der Worker beim Verbinden
     # Wie der Worker: Messwerte laufend auffrischen, sonst gelten sie beim Partner als veraltet (stale)
     from PySide6.QtCore import QTimer
@@ -223,6 +232,148 @@ def spin(app, seconds: float, until=None) -> bool:
     return bool(until()) if until is not None else False
 
 
+class PassthroughSpy:
+    """Steht an A fuer den Executor (share_remote.RemoteBridge): merkt sich, was an den Partner durchginge."""
+
+    def __init__(self) -> None:
+        self.partner_actions: list[tuple] = []
+
+    def submit_partner_action(self, *args):
+        import share_api
+        self.partner_actions.append(args)
+        return share_api.RemoteResult("ok")
+
+
+def section_display_tiles(app, window, state, executor, cfg, rid_of) -> tuple[str, str, str]:
+    """PI-67 a: PicoScope, UNI-T und J-Link des Partners als reine Anzeige-Kacheln (A und B gekoppelt)."""
+    print("window -- Oszilloskop und J-Link des Partners als Anzeige-Kachel (PI-67 a)")
+    import share_api
+    from control_tab import JLinkControlGroup, PicoscopeControlGroup
+    from picoscope_panel import PicoscopePanel
+    from remote_badge import RemoteBadge
+    ctrl, dash = window.control_tab, window.dashboard
+    ids = ("picoscope:B1", "scpiscope:B1", "jlink:B1")
+    there = spin(app, 4.0, lambda: all(ctrl.section(rid_of(t)) is not None for t in ids))
+    scope_id, uni_id, jl_id = (rid_of(t) for t in ids)
+    check("Kacheln fuer PicoScope, UNI-T und J-Link des Partners in Uebersicht und Steuerung",
+          there and all(r in dash._panels for r in (scope_id, uni_id, jl_id)), str(window._partner_devices.known()))
+    if not there:
+        return scope_id, uni_id, jl_id
+    scope_sec, uni_sec, jl_sec = ctrl.section(scope_id), ctrl.section(uni_id), ctrl.section(jl_id)
+    scope_panel, jl_panel = dash._panels[scope_id], dash._panels[jl_id]
+    check("dieselben Kacheln wie fuer eigene Geraete, mit Symbol",
+          isinstance(scope_sec, PicoscopeControlGroup) and isinstance(uni_sec, PicoscopeControlGroup)
+          and isinstance(jl_sec, JLinkControlGroup) and isinstance(scope_panel, PicoscopePanel)
+          and all(w.findChild(RemoteBadge) is not None for w in (scope_sec, jl_sec, scope_panel, jl_panel)))
+    check("PicoScope: Status frei, Modell und Seriennummer",
+          spin(app, 3.0, lambda: scope_panel._status == "free" and scope_panel._variant == "2204A"
+               and scope_sec._status == "free" and "2204A (JO123/0001)" in scope_sec._device_label.text()),
+          f"{scope_panel._status} {scope_panel._variant} | {scope_sec._device_label.text()}")
+    check("UNI-T: Modell", "MSO1104HD" in uni_sec._device_label.text(), uni_sec._device_label.text())
+    check("J-Link: Ziel, Zielspannung, letzte Bedienung mit Ergebnis, Dateiname",
+          spin(app, 3.0, lambda: "S32K144" in jl_sec._target_label.text() and jl_sec._vtref_label.text() == "3,31 V"
+               and jl_sec._last_label.text().startswith("✕") and "Verify failed" in jl_sec._last_label.text()
+               and jl_sec._file_label.text() == "app.hex"),
+          f"{jl_sec._target_label.text()} | {jl_sec._vtref_label.text()} | {jl_sec._last_label.text()}")
+    check("J-Link in der Uebersicht", jl_panel._value_labels["jl_target"].text() == "S32K144"
+          and jl_panel._value_labels["jl_vtref"].text() == "3.31",
+          f"{jl_panel._value_labels['jl_target'].text()} {jl_panel._value_labels['jl_vtref'].text()}")
+    check("keine Bedienknoepfe (Trennen, Kurve, PicoScope 7; Pruefen, Reset, Anhalten, Starten, Flashen)",
+          scope_sec._button_row.isHidden() and uni_sec._button_row.isHidden() and jl_sec._button_row.isHidden()
+          and scope_panel._launch_button.isHidden() and scope_panel._release_button.isHidden())
+    check("Umbenennen und Farbe bleiben bedienbar (gehen an den Besitzer)",
+          scope_sec.isEnabled() and jl_sec.isEnabled() and not jl_sec._rename_button.isHidden()
+          and not scope_sec._rename_button.isHidden())
+    requested: list = []
+    ctrl.jlink_action_requested.connect(lambda *args: requested.append(args))
+    before = len(executor.actions)
+    for button in (jl_sec._check_button, jl_sec._reset_button, jl_sec._go_button):
+        button.click()
+    spin(app, 0.5)
+    check("J-Link-Knopf loest nichts aus, nichts geht an den Partner", not requested and len(executor.actions) == before,
+          str(requested))
+
+    state.on_picoscope_state("picoscope:B1", "mcp", "", "")
+    check("Status 'Verbunden (MCP)' kommt an, Trennen bleibt verborgen",
+          spin(app, 3.0, lambda: scope_panel._status == "mcp" and scope_sec._status == "mcp")
+          and scope_panel._release_button.isHidden() and scope_panel._variant == "2204A")
+    state.on_jlink_state("jlink:B1", {"device": "S32K144", "interface": "SWD", "speed": 4000, "vtref": 3.31,
+                                      "busy": True, "action": "JLINK_FLASH", "last_file": "/home/pi/fw/app.hex"})
+    check("J-Link: laufende Bedienung", spin(app, 3.0, lambda: "läuft" in jl_sec._last_label.text()),
+          jl_sec._last_label.text())
+    spin(app, 2.5)
+    chips = [window._status_labels.get(r) for r in (scope_id, uni_id, jl_id)]
+    check("Status-Chips mit '⇄'; ohne neue Meldung nach 2 s weiter verbunden (nicht 'veraltet')",
+          not scope_sec.isHidden() and not jl_sec.isHidden()
+          and all(c is not None and c.text().startswith("✓") and c.text().endswith("⇄") for c in chips),
+          str([c.text() if c else None for c in chips]))
+
+    before = len(executor.meta)
+    window._on_rename_requested("jlink", jl_id, "JL am Pi")
+    window._on_panel_color_requested(scope_id, "teal")
+    spin(app, 4.0, lambda: len(executor.meta) >= before + 2)
+    check("Umbenennen/Umfaerben geht an den Besitzer",
+          executor.meta[before:before + 2] == [("jlink:B1", {"label": "JL am Pi"}), ("picoscope:B1", {"color": "teal"})],
+          str(executor.meta[before:]))
+    state.on_label_changed("jlink", "jlink:B1", "JL am Pi")
+    check("Name vom Besitzer in Steuerung und Uebersicht",
+          spin(app, 3.0, lambda: jl_sec.title() == "JL am Pi" and jl_panel.title() == "JL am Pi"), jl_sec.title())
+    known = window.testcase_tab._known_devices
+    check("Testablauf: Partner-Oszilloskop/J-Link nicht als Schrittziel (Partner-Netzteil schon)",
+          not any(r in known for r in (scope_id, uni_id, jl_id)) and any(d.startswith("@") for d in known),
+          str([d for d in known if d.startswith("@")]))
+
+    # MCP an A: list_devices zeigt die Partnerkacheln (Freigabeliste von B), steuerbar sind sie nie
+    cfg["devices"].update({"picoscope:B1": {"read": True, "control": True, "measure": True},
+                           "jlink:B1": {"read": True, "control": True}})
+    state.set_share_config(cfg)
+
+    class LocalView:   # A, Aufruf vom selben Rechner mit "Claude (MCP) darf steuern"
+        def snapshot(self):
+            snap = window._live_state.snapshot()
+            snap["share"] = dict(snap["share"], token="t", local_bypass=True, read_requires_token=False)
+            return snap
+
+    spy = PassthroughSpy()
+
+    def call(method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+        resp = share_api.dispatch(method, path, lambda n: "Bearer t" if n == "Authorization" else None, LocalView(),
+                                  {"version": "x", "host": "A"}, body=json.dumps(payload).encode() if payload else b"",
+                                  executor=spy, client="127.0.0.1", local=True, scopes=window._scope_service)
+        try:
+            return resp.status, json.loads(resp.body or b"{}")
+        except ValueError:
+            return resp.status, {}
+
+    def mcp_tiles() -> dict:
+        return {t["id"]: t for t in call("GET", "/api/v1/values")[1].get("tiles", [])}
+
+    spin(app, 4.0, lambda: jl_id in mcp_tiles() and scope_id in mcp_tiles())
+    tiles = mcp_tiles()
+    check("MCP: Partner-PicoScope/J-Link in list_devices, control/control_available false, keine Aktionen",
+          all(r in tiles and tiles[r].get("control") is False and tiles[r].get("control_available") is False
+              and not tiles[r].get("actions") for r in (scope_id, jl_id)),
+          str({r: (tiles.get(r, {}).get("control"), tiles.get(r, {}).get("control_available")) for r in (scope_id, jl_id)}))
+    status, reply = call("POST", f"/api/v1/tiles/{jl_id}/actions", {"action": "JLINK_RESET"})
+    status2, reply2 = call("POST", f"/api/v1/tiles/{scope_id}/actions", {"action": "PSU_OUT_ON"})
+    check("MCP: Aktion an Partner-J-Link/-Oszilloskop -> 403 control_not_permitted, nichts durchgereicht",
+          (status, reply.get("error"), status2, reply2.get("error"))
+          == (403, "control_not_permitted", 403, "control_not_permitted") and not spy.partner_actions,
+          f"{status} {reply} | {status2} {reply2} | {spy.partner_actions}")
+    status, scopes = call("GET", "/api/v1/scopes")
+    status2, _reply = call("POST", f"/api/v1/scopes/{scope_id}/acquire", {"duration_s": 0.01})
+    check("MCP: Partner-Oszilloskop nicht unter den Oszilloskopen, Erfassen dort -> 404",
+          status == 200 and not any(str(s.get("id", "")).startswith("@") for s in scopes.get("scopes", []))
+          and status2 == 404, f"{status} {scopes.get('scopes')} | acquire {status2}")
+
+    # Geloescht beim Besitzer (LiveState.forget, 1.0.1) -> Kachel und Chip auch hier weg
+    state.forget("scpiscope:B1")
+    check("beim Besitzer geloeschtes Oszilloskop verschwindet auch hier",
+          spin(app, 4.0, lambda: uni_id not in dash._panels and ctrl.section(uni_id) is None
+               and uni_id not in window._status_labels))
+    return scope_id, uni_id, jl_id
+
+
 def section_window(app, state, server, executor, port, cfg) -> None:
     print("window -- Hauptfenster A mit B als Partner")
     import no_hardware
@@ -356,6 +507,7 @@ def section_window(app, state, server, executor, port, cfg) -> None:
           executor.meta[before:before + 2] == [("psu:B1", {"label": "Vom PC"}), ("psu:B1", {"color": "orange"})],
           str(executor.meta[before:]))
     check("... und wird hier nicht lokal gespeichert", window._settings.panel_color(psu_id) is None)
+    scope_id, uni_id, jl_id = section_display_tiles(app, window, state, executor, cfg, rid_of)
     state.set_remote_control(True, 600.0)
 
     def all_off_count_after(action) -> int:
@@ -388,6 +540,11 @@ def section_window(app, state, server, executor, port, cfg) -> None:
     chip = window._status_labels.get(psu_id)
     check("1.0.1: Chip des Partnergeraets zeigt getrennt (✕)", chip is not None and chip.text().startswith("✕"),
           chip.text() if chip else "kein Chip")
+    check("PI-67 a: Oszilloskop/J-Link des Partners getrennt (Steuerung verborgen, Chips ✕)",
+          all(window.control_tab.section(r) is not None and not window.control_tab.section(r).isVisible()
+              and r in window._status_labels and window._status_labels[r].text().startswith("✕")
+              for r in (scope_id, jl_id)),
+          str([window._status_labels[r].text() for r in (scope_id, jl_id) if r in window._status_labels]))
     server.apply(cfg)
     check("Partner wieder da: neu verbunden, Kachel wieder da",
           spin(app, 8.0, lambda: window._partner.is_connected() and section.isVisible()))
@@ -404,6 +561,9 @@ def section_window(app, state, server, executor, port, cfg) -> None:
           and psu_id not in window.dashboard._panels and window.control_tab.section(psu_id) is None)
     check("1.0.1: Verbund aus: Chips der Partnergeraete weg",
           not any(d.startswith("@") for d in window._status_labels), str(list(window._status_labels)))
+    check("PI-67 a: Verbund aus: Oszilloskop-/J-Link-Kacheln des Partners weg",
+          not any(r in window.dashboard._panels or window.control_tab.section(r) is not None
+                  for r in (scope_id, jl_id)))
     before = len(executor.all_off)
     window._all_off_button.click()
     spin(app, 1.0)

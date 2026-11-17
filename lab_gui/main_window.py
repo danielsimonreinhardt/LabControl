@@ -568,7 +568,10 @@ class MainWindow(QMainWindow):
                 (pd.fg_state, (dash.update_fg, ctrl.set_fg_state)),
                 (pd.hil_digital_state, (dash.update_hil_digital, ctrl.set_hil_digital_state)),
                 (pd.hil_relay_state, (dash.update_hil_relays, ctrl.set_hil_relay_state)),
-                (pd.hil_analog_input, (dash.update_hil_analog_in,))):
+                (pd.hil_analog_input, (dash.update_hil_analog_in,)),
+                # Oszilloskope und J-Link: nur Anzeige (1.0.1, PI-67 a)
+                (pd.picoscope_state, (dash.update_picoscope_state, ctrl.update_picoscope_state)),
+                (pd.jlink_state, (dash.update_jlink, ctrl.set_jlink_state))):
             for slot in slots:
                 signal.connect(slot)
         pd.action_failed.connect(self._on_partner_tile_action_failed)
@@ -900,6 +903,7 @@ class MainWindow(QMainWindow):
         self._jlink.device_removed.connect(self._on_jlink_removed)
         self._jlink.state_changed.connect(self.dashboard.update_jlink)
         self._jlink.state_changed.connect(self.control_tab.set_jlink_state)
+        self._jlink.state_changed.connect(self._live_state.on_jlink_state)   # Kachel beim Partner (PI-67 a)
         self._jlink.finished.connect(self._on_jlink_finished)
         self.control_tab.jlink_action_requested.connect(
             lambda device_id, action, path: self._jlink.run(device_id, action, path, source="Kachel"))

@@ -6,6 +6,8 @@
   vergessen; Durchreich-Kacheln des Partners ("@...") werden nicht gespiegelt
 - Bedienung in einer Partnerkachel -> richtiger Aktionscode/Wert/Kanal (Netzteil, Last, Batterie-Simulator,
   Funktionsgenerator, microHIL); gesperrte Kachel sendet nicht
+- Anzeige-Kacheln (1.0.1, PI-67 a): PicoScope/UNI-T (Status, Modell, Seriennummer) und J-Link (Ziel,
+  Zielspannung, letzte Bedienung) im Rundlauf, Stand veraltet nicht, nie bedienbar, Aktionen werden nicht gesendet
 
 Qt ohne Fenster, keine Hardware.  Aufruf:  python tools/check_partner_devices.py
 """
@@ -182,6 +184,63 @@ def main() -> int:
             trigger(section, rid)
             check(f"{kind}: {expected[1]}", link.sent == [expected], str(link.sent))
         section.deleteLater()
+
+    print("Anzeige-Kacheln: Oszilloskop und J-Link (1.0.1, PI-67 a)")
+    from partner_devices import DISPLAY_KINDS, jlink_state_from
+    for kind, device_id in (("picoscope", "picoscope:x"), ("scpiscope", "scpiscope:x"), ("jlink", "jlink:x")):
+        state.on_device_known(kind, device_id, device_id)
+        state.set_online(device_id, True)
+    state.on_picoscope_state("picoscope:x", "mcp", "2204A", "JO123/0001")
+    state.on_picoscope_state("picoscope:x", "free", "", "")   # leer = letzten Stand behalten (wie die Kachel)
+    state.on_picoscope_state("scpiscope:x", "free", "MSO1104HD", "SN-1")
+    jl = {"device": "S32K144", "interface": "SWD", "speed": 4000, "core": "Cortex-M4", "vtref": 3.31, "busy": False,
+          "action": "JLINK_FLASH", "ok": False, "message": "Verify failed", "time": "11:22:33",
+          "last_file": "C:/fw/geheim/app.hex", "serial": "123", "firmware": "V11"}
+    state.on_jlink_state("jlink:x", jl)
+    shown = tiles_from(state, ["picoscope:x", "scpiscope:x", "jlink:x"])
+    by_id = {t["id"]: fields_of(t) for t in shown}
+    check("PicoScope: Status, Modell, Seriennummer in der Freigabe",
+          by_id["picoscope:x"] == {"status": "free", "model": "2204A", "serial": "JO123/0001"}, str(by_id["picoscope:x"]))
+    check("UNI-T (scpiscope): dieselben Felder", by_id["scpiscope:x"].get("model") == "MSO1104HD")
+    back = jlink_state_from(by_id["jlink:x"])
+    want = {"device": "S32K144", "interface": "SWD", "speed": 4000, "core": "Cortex-M4", "vtref": 3.31, "busy": False,
+            "action": "JLINK_FLASH", "ok": False, "message": "Verify failed", "time": "11:22:33",
+            "last_file": "app.hex"}
+    check("J-Link: Rundlauf Ziel/Zielspannung/letzte Bedienung (nur Dateiname, kein Pfad)", back == want, str(back))
+    state.on_jlink_state("jlink:x", {"device": "S32K144", "busy": True, "action": "JLINK_CHECK"})
+    fresh = jlink_state_from(fields_of(tiles_from(state, ["jlink:x"])[0]))
+    check("J-Link: vor der ersten Bedienung kein Ergebnis, 'laeuft' gemeldet",
+          "ok" not in fresh and fresh["busy"] is True and "vtref" not in fresh, str(fresh))
+    state.on_jlink_state("jlink:x", jl)
+    with state._lock:   # Stand 5 s alt, wie ohne neue Meldung
+        for device_id in ("picoscope:x", "jlink:x", "psu:x"):
+            state._devices[device_id]["ts"] -= 5.0
+    aged = state.snapshot()["devices"]
+    check("Oszilloskop/J-Link melden nur Aenderungen: alter Stand gilt nicht als veraltet (Netzteil schon)",
+          not aged["picoscope:x"]["stale"] and not aged["jlink:x"]["stale"] and aged["psu:x"]["stale"],
+          str({d: aged[d]["stale"] for d in ("picoscope:x", "jlink:x", "psu:x")}))
+
+    link2 = FakeLink()
+    pd2 = PartnerDevices(link2)
+    seen: dict[str, list] = {}
+    for name in ("device_known", "control_changed", "online_changed", "picoscope_state", "jlink_state"):
+        getattr(pd2, name).connect(lambda *args, n=name: seen.setdefault(n, []).append(args))
+    pd2.on_snapshot(PartnerSnapshot(host="pi", remote_effective=True, lock="free", tiles=shown))
+    check("Anzeige-Arten bekannt", set(DISPLAY_KINDS) <= {"picoscope", "scpiscope", "jlink"}
+          and {a[1] for a in seen.get("device_known", [])} == {"@pi/picoscope:x", "@pi/scpiscope:x", "@pi/jlink:x"},
+          str(seen.get("device_known")))
+    check("online, aber nie bedienbar (auch wenn die Kachel 'control' meldet)",
+          all(a[2] for a in seen.get("online_changed", []))
+          and seen.get("control_changed") and not any(a[1] for a in seen["control_changed"]), str(seen.get("control_changed")))
+    check("PicoScope-Zustand an die Kachel", ("@pi/picoscope:x", "free", "2204A", "JO123/0001")
+          in seen.get("picoscope_state", []) and ("@pi/scpiscope:x", "free", "MSO1104HD", "SN-1")
+          in seen.get("picoscope_state", []), str(seen.get("picoscope_state")))
+    check("J-Link-Zustand an die Kachel", seen.get("jlink_state") == [("@pi/jlink:x", want)], str(seen.get("jlink_state")))
+    failed: list = []
+    pd2.action_failed.connect(lambda *args: failed.append(args))
+    check("J-Link-/Oszilloskop-Aktion wird nicht gesendet",
+          pd2.send("@pi/jlink:x", "JLINK_RESET") == 0 and pd2.send("@pi/picoscope:x", "SCOPE_ACQUIRE") == 0
+          and not link2.sent and len(failed) == 2, str(link2.sent))
     print()
     if FAILURES:
         print(f"{len(FAILURES)} PRUEFUNG(EN) FEHLGESCHLAGEN: {FAILURES}")
