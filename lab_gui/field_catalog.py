@@ -18,7 +18,9 @@ Netzwerk-Freigabe -- wer das spaeter angeht, faengt bei diesem Kommentar an.
 """
 from __future__ import annotations
 
+from jds66xx.driver import STALE_TIMEOUT_S as FG_STALE_TIMEOUT_S
 from microhil.driver import AIN_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT
+from verbund_ids import split as split_device_id
 
 # -- Plotbare Signale (Verlauf-Tab) ---------------------------------------
 # field_key -> (deutscher Basis-Anzeigename, Einheit); die Einheit ist
@@ -146,6 +148,24 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
 # Geraete, die nur bei einer Aenderung melden (Zustand statt laufender Messwerte): ihr Stand veraltet nicht
 # (live_state.snapshot setzt kein "stale"), sonst galten sie nach 2 s beim Verbund-Partner als getrennt.
 STATE_ONLY_KINDS = ("picoscope", "scpiscope", "jlink")
+
+# Frische-Grenze (s) je Geraeteart (PI-78 a): ab wann der letzte Wert eines Geraets als veraltet gilt --
+# Watchdog im Testablauf (safety), Bedingungen/Pruefungen (testcase_runner) und "stale" der Freigabe
+# (live_state; beim Verbund-Partner kommt es so mit der Kachel an). Standard 2 s; eine Geraeteart, die
+# ihre Werte langsamer liefert, nennt ihre Grenze im Treiber.
+DEFAULT_STALE_TIMEOUT_S = 2.0
+KIND_STALE_TIMEOUT_S: dict[str, float] = {"fg": FG_STALE_TIMEOUT_S}
+
+
+def kind_stale_timeout_s(kind: str) -> float:
+    return KIND_STALE_TIMEOUT_S.get(kind, DEFAULT_STALE_TIMEOUT_S)
+
+
+def stale_timeout_s(device_id: str) -> float:
+    """Frische-Grenze eines Geraets aus seiner ID ("fg:COM21", auch Partnergeraete
+    "@raspberrypi/fg:COM21" -- die Art steht vor dem ':')."""
+    _host, local_id = split_device_id(device_id)
+    return kind_stale_timeout_s(local_id.partition(":")[0])
 
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
 # Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md

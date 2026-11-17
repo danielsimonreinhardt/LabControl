@@ -316,7 +316,7 @@ gesetztem Häkchen.
 | Auslöser | Wann | Meldung im Banner |
 |---|---|---|
 | Grenzwert | jede Messung des Geräts liegt über einem aktiven Grenzwert, mit oder ohne Testablauf | „Grenzwert überschritten: …“ |
-| veraltete Messwerte | nur im Testablauf: beteiligtes Gerät getrennt oder 2 s ohne Messwert (schützt unbeaufsichtigte Läufe) | „Messwerte veraltet für Gerät …“ |
+| veraltete Messwerte | nur im Testablauf: beteiligtes Gerät getrennt oder 2 s ohne Messwert, Funktionsgenerator 5 s (schützt unbeaufsichtigte Läufe) | „Messwerte veraltet für Gerät …“ |
 
 Folgen der **Sicherheitsabschaltung**:
 

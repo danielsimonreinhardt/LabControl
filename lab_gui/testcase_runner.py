@@ -68,6 +68,7 @@ from time import monotonic
 from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
 
 from device_worker import PICOSCOPE_RETRY_MESSAGE
+from field_catalog import DEFAULT_STALE_TIMEOUT_S, stale_timeout_s
 from i18n import tr
 from variants import resolve_refs
 from scope_steps import SCOPE_ACTIONS
@@ -93,8 +94,9 @@ from testcase_model import (
 # Messung" (siehe _eval_condition) -- bewusst als absoluter Wert (deutlich
 # groesser als device_worker.POLL_INTERVAL_MS) statt an das Poll-Intervall
 # gekoppelt, toleriert einzelne verpasste/verzoegerte Zyklen, ohne eine
-# tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
-MEASUREMENT_STALE_S = 2.0
+# tatsaechlich getrennte/eingefrorene Quelle zu uebersehen. Standard; je Geraet
+# gilt field_catalog.stale_timeout_s (gleiche Grenze wie der Watchdog, PI-78 a).
+MEASUREMENT_STALE_S = DEFAULT_STALE_TIMEOUT_S
 
 # Verzoegerung vor einem automatischen Retry nach PICOSCOPE_RETRY_MESSAGE
 # (siehe device_worker._execute_picoscope_action) -- muss laenger sein als
@@ -636,7 +638,7 @@ class TestRunner(QObject):
                 self._fail_at(self._index, message)
                 return
         self._pending_check = (self._index, device_id)
-        self._check_timeout.start(round(MEASUREMENT_STALE_S * 1000))
+        self._check_timeout.start(round(stale_timeout_s(device_id) * 1000))
 
     def _maybe_complete_check(self, device_id: str) -> None:
         if not self._running or self._pending_check is None:
@@ -1268,7 +1270,7 @@ class TestRunner(QObject):
             device_id = step.cond_device_id
             if device_id:
                 entry = self._measurements.get(device_id)
-                if entry is None or (monotonic() - entry[3]) > MEASUREMENT_STALE_S:
+                if entry is None or (monotonic() - entry[3]) > stale_timeout_s(device_id):
                     return None, tr(
                         "Keine aktuelle Messung für Gerät '{device_id}'", device_id=device_id
                     )
@@ -1309,7 +1311,7 @@ class TestRunner(QObject):
         device_id = step.cond_device_id
         if device_id:
             entry = self._hil_measurements.get(device_id)
-            if entry is None or (monotonic() - entry[2]) > MEASUREMENT_STALE_S:
+            if entry is None or (monotonic() - entry[2]) > stale_timeout_s(device_id):
                 return None, tr(
                     "Keine aktuelle Messung für Gerät '{device_id}'", device_id=device_id
                 )
@@ -1395,7 +1397,7 @@ class TestRunner(QObject):
         candidates = [
             did
             for did, entry in measurements.items()
-            if did.startswith(prefix) and (monotonic() - entry[-1]) <= MEASUREMENT_STALE_S
+            if did.startswith(prefix) and (monotonic() - entry[-1]) <= stale_timeout_s(did)
         ]
         if not candidates:
             return None, "missing"

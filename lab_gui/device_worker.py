@@ -32,9 +32,13 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from jds66xx.driver import (
+    POLL_FAST_FIELDS as FG_POLL_FAST_FIELDS,
+    POLL_SLOW_FIELDS as FG_POLL_SLOW_FIELDS,
     FunctionGeneratorError,
     FunctionGeneratorValueError,
     JDS66xx,
+    read_field as fg_read_field,
+    readback_fields as fg_readback_fields,
     WAVE_DC,
     WAVE_PULSE,
     WAVE_SINE,
@@ -181,14 +185,18 @@ PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
 SCPISCOPE_PROBE_INTERVAL_MS = 10000
 SCPISCOPE_PROBE_TIMEOUT_S = 2.0
 
-# Eigenes Poll-Intervall fuer den Funktionsgenerator: ein voller Zustand sind
-# 13 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
-# Tastverhaeltnis, Phase). Der Generator hat keine Messwerte, die sich von
-# selbst aendern -- nur ein Handeingriff am Geraet ist zu erkennen, dafuer
-# reicht ein langsamer Takt und er nimmt dem gemeinsamen Poll-Zyklus von
-# Last/Netzteil keine Zeit weg. Nach jedem eigenen Schreibbefehl wird der
-# Zustand ohnehin sofort neu gelesen (siehe _guard_fg/_emit_fg_state).
-FG_POLL_INTERVAL_MS = 2000
+# Eigenes Poll-Intervall fuer den Funktionsgenerator. Ein voller Zustand sind
+# 12 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
+# Tastverhaeltnis, Phase); er wird nur beim Verbinden ganz gelesen. Je
+# Zyklus (PI-78 a) nur die Ausgaenge (jds66xx.driver.POLL_FAST_FIELDS)
+# und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen Felder: 4 statt 12
+# Abfragen, dafuer alle 0,5 s statt alle 2 s -- EIN/AUS ist nach spaetestens
+# 0,5 s aktuell, ein Handeingriff an den Signalparametern nach etwa 2 s
+# (11 Felder, 3 je Zyklus), und der Zustand kommt oft genug fuer den Watchdog
+# (Grenze siehe jds66xx.driver.STALE_TIMEOUT_S). Nach jedem eigenen
+# Schreibbefehl wird das betroffene Feld sofort zurueckgelesen (_guard_fg).
+FG_POLL_INTERVAL_MS = 500
+FG_SLOW_FIELDS_PER_POLL = 3
 
 # Ein CH340-Port (siehe jds66xx.driver.USB_VID) kann ein FREMDES Geraet tragen.
 # Ein Port, der den Handshake nicht besteht, wird deshalb nicht alle
@@ -523,7 +531,7 @@ class DeviceWorker(QObject):
     # [{"waveform", "frequency", "amplitude", "offset", "duty"} x2], "phase"}.
     # Ein dict statt vieler Einzelsignale, weil der Generator kein schnell
     # veraenderlicher Messwert ist, sondern ein Satz Einstellungen, der nur
-    # als Ganzes gelesen wird (siehe FG_POLL_INTERVAL_MS).
+    # als Ganzes gemeldet wird (gelesen teils rollierend, siehe FG_POLL_INTERVAL_MS).
     fg_state = Signal(str, object)
 
     # Batterie-Simulator (Geraeteart "battsim", CAN-Knoten an einem
@@ -564,6 +572,11 @@ class DeviceWorker(QObject):
         # Port -> monotonic()-Zeitpunkt, vor dem er nicht erneut geprobt wird
         # (siehe FG_REPROBE_INTERVAL_S).
         self._fg_probe_after: dict[str, float] = {}
+        # Zuletzt gelesener Zustand je Generator (Format wie fg_state) und Position der rollierenden
+        # Abfrage in FG_POLL_SLOW_FIELDS (PI-78 a)
+        self._fg_cache: dict[str, dict] = {}
+        self._fg_slow_index: dict[str, int] = {}
+        self._last_slow_fg_log = 0.0
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
         # Zuletzt bekannte Sollwerte je Netzteil [V, A] (_note_setpoint, PI-43 b)
@@ -1139,6 +1152,7 @@ class DeviceWorker(QObject):
 
     def _remove_mock_fg(self) -> None:
         fg = self._fgs.pop(SIM_FG_ID, None)
+        self._fg_cache.pop(SIM_FG_ID, None)
         if fg is not None:
             fg.close()
             self.fg_connected.emit(SIM_FG_ID, False)
@@ -1503,8 +1517,8 @@ class DeviceWorker(QObject):
         self._reconnect_done.emit("fg", device_id, candidate, "")
 
     def _emit_fg_state(self, device_id: str) -> None:
-        """Liest den vollen Zustand und meldet ihn per fg_state. Ein Fehler wird
-        wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
+        """Liest den vollen Zustand und meldet ihn per fg_state (beim Verbinden, Simulation).
+        Ein Fehler wird wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
         fg = self._fgs.get(device_id)
         if fg is None:
             return
@@ -1513,7 +1527,7 @@ class DeviceWorker(QObject):
         except FunctionGeneratorError as exc:
             self._drop_fg(device_id, str(exc))
             return
-        self.fg_state.emit(device_id, {
+        self._fg_cache[device_id] = {
             "outputs": list(state.outputs),
             "channels": [
                 {"waveform": c.waveform, "frequency": c.frequency, "amplitude": c.amplitude,
@@ -1521,10 +1535,46 @@ class DeviceWorker(QObject):
                 for c in state.channels
             ],
             "phase": state.phase,
-        })
+        }
+        self._publish_fg_state(device_id)
+
+    def _publish_fg_state(self, device_id: str) -> None:
+        """Zwischenstand als Kopie melden (das dict geht ueber die Thread-Grenze)."""
+        state = self._fg_cache[device_id]
+        self.fg_state.emit(device_id, {"outputs": list(state["outputs"]),
+                                       "channels": [dict(c) for c in state["channels"]],
+                                       "phase": state["phase"]})
+
+    def _read_fg_fields(self, device_id: str, fields) -> bool:
+        """Liest einzelne Felder (je eine Registerabfrage, siehe jds66xx.driver.read_field) in den
+        Zwischenstand und meldet ihn. Ohne Zwischenstand den vollen Zustand. False = Verbindung tot
+        (Geraet entfernt)."""
+        fg = self._fgs.get(device_id)
+        if fg is None:
+            return False
+        state = self._fg_cache.get(device_id)
+        if state is None:
+            self._emit_fg_state(device_id)
+            return device_id in self._fgs
+        try:
+            for field, channel in fields:
+                value = fg_read_field(fg, field, channel)
+                if field == "outputs":
+                    state["outputs"] = [bool(value[0]), bool(value[1])]
+                elif field == "phase":
+                    state["phase"] = value
+                else:
+                    state["channels"][channel - 1][field] = value
+        except FunctionGeneratorError as exc:
+            self._drop_fg(device_id, str(exc))
+            return False
+        self._publish_fg_state(device_id)
+        return True
 
     def _drop_fg(self, device_id: str, reason: str) -> None:
         fg = self._fgs.pop(device_id, None)
+        self._fg_cache.pop(device_id, None)
+        self._fg_slow_index.pop(device_id, None)
         if fg is None:
             return
         logger.warning("Funktionsgenerator %s getrennt: %s", device_id, reason)
@@ -1533,8 +1583,24 @@ class DeviceWorker(QObject):
         self.device_removed.emit("fg", device_id)
 
     def _poll_fgs(self) -> None:
+        """Je Generator die schnellen Felder und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen
+        (PI-78 a, siehe FG_POLL_INTERVAL_MS)."""
+        timings: dict[str, float] = {}
+        t_start = time.monotonic()
         for device_id in list(self._fgs):
-            self._emit_fg_state(device_id)
+            t_dev = time.monotonic()
+            index = self._fg_slow_index.get(device_id, 0)
+            slow = [FG_POLL_SLOW_FIELDS[(index + n) % len(FG_POLL_SLOW_FIELDS)]
+                    for n in range(FG_SLOW_FIELDS_PER_POLL)]
+            self._fg_slow_index[device_id] = (index + FG_SLOW_FIELDS_PER_POLL) % len(FG_POLL_SLOW_FIELDS)
+            self._read_fg_fields(device_id, list(FG_POLL_FAST_FIELDS) + slow)
+            timings[device_id] = time.monotonic() - t_dev
+        total = time.monotonic() - t_start
+        # Wie in _poll: der Generator teilt sich den Worker-Thread mit allen anderen Geraeten
+        if total > POLL_SLOW_S and t_start - self._last_slow_fg_log >= POLL_SLOW_LOG_EVERY_S:
+            self._last_slow_fg_log = t_start
+            detail = ", ".join(f"{d} {t * 1000:.0f} ms" for d, t in sorted(timings.items(), key=lambda kv: -kv[1]))
+            logger.warning("Poll-Zyklus langsam (Funktionsgenerator): %.0f ms gesamt (%s)", total * 1000, detail)
 
     def _reconnect_psus(self) -> None:
         candidates = _resolve_device_ids("psu", HCS34xx.discover_ports())
@@ -2120,7 +2186,11 @@ class DeviceWorker(QObject):
             self.device_removed.emit("psu", device_id)
             return False, str(exc)
 
-    def _guard_fg(self, device_id: str, action: Callable[[JDS66xx], None]) -> tuple[bool, str]:
+    def _guard_fg(self, device_id: str, action: Callable[[JDS66xx], None],
+                  readback: tuple[str, int] | None = None) -> tuple[bool, str]:
+        """readback: (Feld, Kanal), das `action` schreibt -- danach wird nur dieses Feld (und was das
+        Geraet dabei anpassen kann, jds66xx.driver.readback_fields) zurueckgelesen (PI-78 a); None =
+        voller Zustand."""
         fg = self._fgs.get(device_id)
         if fg is None:
             return False, "Funktionsgenerator nicht verbunden"
@@ -2134,7 +2204,10 @@ class DeviceWorker(QObject):
             return False, str(exc)
         # Sofort den echten Zustand zuruecklesen, damit Dashboard und Control-Tab
         # zeigen, was das Geraet tatsaechlich angenommen hat (z.B. gerundet).
-        self._emit_fg_state(device_id)
+        if readback is None:
+            self._emit_fg_state(device_id)
+        else:
+            self._read_fg_fields(device_id, fg_readback_fields(*readback))
         return True, ""
 
     def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
@@ -2299,7 +2372,7 @@ class DeviceWorker(QObject):
                 fg.set_outputs(False, False)
                 logger.info("ALL OFF: Funktionsgenerator %s -> beide Ausgaenge AUS", device_id)
                 self._note_switch(True, "fg", device_id, "FG_OUT_OFF", SOURCE_ALL_OFF)
-                self._emit_fg_state(device_id)
+                self._read_fg_fields(device_id, FG_POLL_FAST_FIELDS)
                 return True
             except FunctionGeneratorValueError as exc:
                 logger.error("ALL OFF: Funktionsgenerator %s quittierte nicht: %s", device_id, exc)
@@ -2523,37 +2596,42 @@ class DeviceWorker(QObject):
     @Slot(str, int, bool)
     def set_fg_output(self, device_id: str, channel: int, on: bool) -> None:
         self._operate("fg", device_id, "FG_OUT_ON" if on else "FG_OUT_OFF", 0.0, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on), ("outputs", 0)))
 
     @Slot(str, int, int)
     def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
         self._operate("fg", device_id, "FG_WAVE", float(code), channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code),
+                                              ("waveform", channel)))
 
     @Slot(str, int, float)
     def set_fg_frequency(self, device_id: str, channel: int, hertz: float) -> None:
         self._operate("fg", device_id, "FG_FREQ", hertz, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz),
+                                              ("frequency", channel)))
 
     @Slot(str, int, float)
     def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
         self._operate("fg", device_id, "FG_AMPL", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts),
+                                              ("amplitude", channel)))
 
     @Slot(str, int, float)
     def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
         self._operate("fg", device_id, "FG_OFFS", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts),
+                                              ("offset", channel)))
 
     @Slot(str, int, float)
     def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
         self._operate("fg", device_id, "FG_DUTY", percent, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent),
+                                              ("duty", channel)))
 
     @Slot(str, float)
     def set_fg_phase(self, device_id: str, degrees: float) -> None:
         self._operate("fg", device_id, "FG_PHASE", degrees, 0,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees), ("phase", 0)))
 
     # -- CAN-Bus: Steuerbefehle -----------------------------------------------
     # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
@@ -2902,21 +2980,21 @@ class DeviceWorker(QObject):
         if kind == "fg":
             if action in FG_WAVE_ACTIONS:
                 code = FG_WAVE_ACTIONS[action]
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code), ("waveform", channel))
             elif action == "FG_FREQ":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value), ("frequency", channel))
             elif action == "FG_AMPL":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, value), ("amplitude", channel))
             elif action == "FG_OFFS":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_offset(channel, value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_offset(channel, value), ("offset", channel))
             elif action == "FG_DUTY":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_duty(channel, value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_duty(channel, value), ("duty", channel))
             elif action == "FG_PHASE":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value), ("phase", 0))
             elif action == "FG_OUT_ON":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True), ("outputs", 0))
             elif action == "FG_OUT_OFF":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False), ("outputs", 0))
             else:
                 return False, f"Unbekannte Aktion '{action}' fuer Funktionsgenerator", 0.0
             return ok, message, 0.0

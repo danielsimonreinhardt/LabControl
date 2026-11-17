@@ -172,6 +172,26 @@ Semantic Versioning (`lab_gui/version.py`).
   standen auf ihrem Startwert 1 V / 0 A); die Warnung schaltete sich trotzdem wieder sichtbar. Jetzt entfällt sie
   in Partnerkacheln – Grenzwerte prüft der Besitzer. Mock-verifiziert (`check_partner_link`, Gegenprobe ohne
   Korrektur schlägt fehl); am Gerät (HCS16 am Pi, PC-App) noch nicht, dafür braucht die PC-App den neuen Stand.
+- **Testablauf mit Funktionsgenerator brach nach 2–3 s ab (PI-78 a).** Jeder Lauf mit einem Generator-Schritt
+  endete mit „Messwerte veraltet für Gerät 'fg:…'“, auch in einem reinen Warteschritt. Ursache: Der Watchdog
+  bekam vom Generator nie ein Lebenszeichen (nur Netzteil, Last, CAN und microHIL meldeten sich bei ihm), und der
+  Generator wurde ohnehin nur alle 2 s abgefragt. Dasselbe galt für den Batterie-Simulator. Jetzt:
+  - Der gemeldete Zustand von Generator und Batterie-Simulator zählt für den Watchdog.
+  - Die Frist bis „veraltet“ gilt je Geräteart: Funktionsgenerator 5 s (steht im Treiber), alle anderen weiter
+    2 s. Sie gilt gleich für Watchdog, Bedingungen im Ablauf, „stale“ der Netzwerk-Freigabe/MCP und das Display.
+    Partnergeräte (`@<rechner>/<id>`) bekommen sie über ihre Geräteart; der Besitzer setzt „veraltet“ in der
+    Kachel mit derselben Frist, ein Partner-Generator gilt daher nicht mehr nach 2 s als getrennt.
+  - Der Generator wird alle 0,5 s statt alle 2 s abgefragt, je Zyklus aber nur der Ausgang (beide Kanäle) und
+    drei weitere Einstellungen der Reihe nach: 4 statt 12 serielle Abfragen. EIN/AUS am Gerät steht nach
+    spätestens 0,5 s in der Kachel, die übrigen Einstellungen nach etwa 2 s. Nach einem eigenen Schreibbefehl
+    wird nur das betroffene Feld sofort zurückgelesen (bei Form und Frequenz auch die Amplitude, die das Gerät
+    still begrenzen kann) statt aller 12. Ein langsamer Generator-Zyklus wird wie bei den anderen Geräten mit
+    „Poll-Zyklus langsam“ geloggt.
+
+  Nur Mock geprüft (`check_stale_per_device`: Watchdog mit verstellter Uhr, Partnerkachel über LiveState und
+  Freigabe, Abfrage gegen eine Nachbildung der Registerbank; Gegenprobe auf dem alten Stand schlägt fehl;
+  `check_jds66xx`, `check_partner_devices`, `check_partner_link`, `check_network_share`, `check_confirm_wait`,
+  `check_reconnect_async`, `check_last_switch` unverändert grün); am JDS2915 (COM21) noch nicht.
 
 ## [1.0.0] – 2026-11-15
 

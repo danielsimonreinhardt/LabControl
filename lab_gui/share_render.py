@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import html
 
+from field_catalog import kind_stale_timeout_s
+
 # Nachkommastellen je Einheit. Die Last liefert 3 Stellen bei V/A, Leistung
 # ist mit 2 ausreichend genau, die microHIL-Rohwerte in mV/mA sind ganzzahlig
 # gemeint. Bewusst nach Einheit statt nach Feldname: ein neues Feld mit
@@ -81,7 +83,9 @@ def _field_line(field: dict, stale: bool) -> str:
 
 
 def _tile_block(tile: dict) -> str:
-    stale = bool(tile.get("stale")) or tile.get("age_s", 0.0) > DISPLAY_STALE_S
+    # nie strenger als die Grenze der Geraeteart (Funktionsgenerator 5 s, PI-78 a)
+    limit = max(DISPLAY_STALE_S, kind_stale_timeout_s(str(tile.get("kind", ""))))
+    stale = bool(tile.get("stale")) or tile.get("age_s", 0.0) > limit
     offline = not tile.get("online", True)
     title = html.escape(str(tile.get("label", tile.get("id", ""))))
     if offline:

@@ -77,6 +77,23 @@ ARBITRARY_FIRST, ARBITRARY_LAST = 101, 160
 
 _REPLY_RE = re.compile(r"^:r(\d+)=(.*?)\.?$")
 
+# Frische-Grenze (s) fuer diese Geraeteart (PI-78 a): so lange darf der letzte gemeldete Zustand alt
+# sein, bevor er als veraltet gilt (Watchdog im Testablauf, "stale" der Freigabe). Hoeher als der
+# Standard von 2 s, weil der Generator ueber eine geteilte serielle Leitung und mit eigenem Takt
+# abgefragt wird (device_worker.FG_POLL_INTERVAL_MS) -- ein Zyklus darf sich verzoegern, ohne
+# dass ein Lauf abbricht. Gelesen von lab_gui/field_catalog.stale_timeout_s.
+STALE_TIMEOUT_S = 5.0
+
+# Abfrage im Betrieb (device_worker._poll_fgs, PI-78 a): je Zyklus immer die Ausgaenge (EIN/AUS
+# beider Kanaele in einem Register), dazu rollierend einige der uebrigen Felder. (Feld, Kanal);
+# Kanal 0 = kanalunabhaengig. Nach einem eigenen Schreibbefehl liest der Worker das betroffene
+# Feld sofort zurueck (siehe readback_fields).
+POLL_FAST_FIELDS: tuple[tuple[str, int], ...] = (("outputs", 0),)
+POLL_SLOW_FIELDS: tuple[tuple[str, int], ...] = tuple(
+    (field, channel) for channel in CHANNELS
+    for field in ("waveform", "frequency", "amplitude", "offset", "duty")
+) + (("phase", 0),)
+
 
 class FunctionGeneratorError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Funktionsgenerator (Verbindung
@@ -392,6 +409,35 @@ class JDS66xx:
             channels=(self.get_channel_state(1), self.get_channel_state(2)),
             phase=self.get_phase(),
         )
+
+
+# -- Einzelfelder fuer die Abfrage im Betrieb (PI-78 a) ---------------------------------
+# Modulfunktionen statt Methoden, damit sie fuer Treiber und Mock gleich gelten (nur die get_*-
+# Methoden werden benutzt).
+
+def read_field(gen, field: str, channel: int = 0):
+    """Ein Feld lesen (eine Registerabfrage): "outputs" -> (bool, bool), "phase" -> Grad, sonst
+    der Wert des Kanals."""
+    if field == "outputs":
+        return gen.get_outputs()
+    if field == "phase":
+        return gen.get_phase()
+    getter = {"waveform": gen.get_waveform, "frequency": gen.get_frequency, "amplitude": gen.get_amplitude,
+              "offset": gen.get_offset, "duty": gen.get_duty}[field]
+    return getter(channel)
+
+
+def readback_fields(field: str, channel: int = 0) -> tuple[tuple[str, int], ...]:
+    """Felder, die nach dem Schreiben von `field` zurueckgelesen werden: das Feld selbst, dazu was
+    das Geraet dabei still anpassen kann (Amplitude wird frequenzabhaengig begrenzt, siehe
+    README; die Form kann die Frequenz klemmen)."""
+    if field in ("outputs", "phase"):
+        return ((field, 0),)
+    if field == "waveform":
+        return (("waveform", channel), ("frequency", channel), ("amplitude", channel))
+    if field == "frequency":
+        return (("frequency", channel), ("amplitude", channel))
+    return ((field, channel),)
 
 
 if __name__ == "__main__":

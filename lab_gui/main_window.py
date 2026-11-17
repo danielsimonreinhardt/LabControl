@@ -484,6 +484,8 @@ class MainWindow(QMainWindow):
         self._worker.psu_measurement.connect(self._safety.on_psu_measurement)
         self._worker.can_stats.connect(self._safety.on_can_stats)
         self._worker.hil_digital_state.connect(self._safety.on_hil_digital_state)
+        self._worker.fg_state.connect(self._safety.on_fg_state)   # Heartbeat (PI-78 a)
+        self._worker.battsim_state.connect(self._safety.on_battsim_state)
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)

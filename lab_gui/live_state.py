@@ -38,7 +38,9 @@ import time
 
 from PySide6.QtCore import QObject, Slot
 
-from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT, STATE_ONLY_KINDS
+from field_catalog import (
+    DEFAULT_STALE_TIMEOUT_S, FIELD_DEFS, LOAD_MODE_SHORT, STATE_ONLY_KINDS, kind_stale_timeout_s,
+)
 from i18n import tr
 from lease_table import LeaseTable
 from pairing import PairingTable
@@ -47,8 +49,10 @@ from run_registry import RunRegistry
 # Ab wann ein Wert als "steht" gilt. Bewusst identisch zu
 # safety.STALE_TIMEOUT_S (dort loest dieselbe Frist den Watchdog aus) --
 # ein Wert, den der Sicherheits-Watchdog als veraltet ansieht, soll auch
-# ueber die Netzwerk-Freigabe als veraltet erscheinen.
-STALE_TIMEOUT_S = 2.0
+# ueber die Netzwerk-Freigabe als veraltet erscheinen. Standard; je Geraeteart
+# gilt field_catalog.kind_stale_timeout_s (Funktionsgenerator 5 s, PI-78 a) --
+# so kommt die passende Grenze auch beim Verbund-Partner an ("stale" der Kachel).
+STALE_TIMEOUT_S = DEFAULT_STALE_TIMEOUT_S
 
 # Voreinstellung der Netzwerk-Freigabe. Bewusst vollstaendig inert: aus,
 # nur Loopback, nichts freigegeben, Token noetig. Ein Upgrade einer
@@ -461,7 +465,8 @@ class LiveState(QObject):
             age = now - entry.pop("ts")
             entry["age_s"] = round(age, 3)
             # Oszilloskope/J-Link melden nur Aenderungen -- ihr Stand gilt, bis ein neuer kommt (1.0.1, PI-67 a)
-            entry["stale"] = age > STALE_TIMEOUT_S and entry.get("kind") not in STATE_ONLY_KINDS
+            kind = entry.get("kind")
+            entry["stale"] = age > kind_stale_timeout_s(kind) and kind not in STATE_ONLY_KINDS
         return {
             "devices": devices,
             "share": share,

@@ -145,6 +145,8 @@ class _Rig:
         self.worker.psu_measurement.connect(self.safety.on_psu_measurement)
         self.worker.can_stats.connect(self.safety.on_can_stats)
         self.worker.hil_digital_state.connect(self.safety.on_hil_digital_state)
+        self.worker.fg_state.connect(self.safety.on_fg_state)   # Heartbeat (PI-78 a)
+        self.worker.battsim_state.connect(self.safety.on_battsim_state)
         self.worker.device_removed.connect(self.safety.on_device_removed)
         self.safety.all_off_requested.connect(self.worker.all_outputs_off)
         self.interlock = Interlock(settings.interlock_groups, self.directory.is_online)
