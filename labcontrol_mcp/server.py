@@ -98,6 +98,13 @@ HINTS = {
     "invalid_testcase": "Der Ablauf laesst sich nicht laden oder hat keine aktiven Aktionsschritte (siehe message).",
     "not_running": "Dieser Lauf laeuft nicht (mehr).",
     "not_ready": "Der Lauf ist noch nicht fertig; Ergebnisdateien gibt es erst danach.",
+    # Warten auf Freigabe (PI-74 a)
+    "not_waiting_release": "Der Lauf wartet gerade nicht an einem Schritt 'Warten auf Freigabe' (get_run: "
+                           "'waiting'). Nichts freigeben, was nicht wartet.",
+    "release_mismatch": "Der Lauf wartet an einem anderen Freigabe-Schritt als angegeben ('waiting' nennt Schritt "
+                        "und Kennung). Pruefen, ob wirklich dieser Wartepunkt gemeint ist.",
+    "confirm_local_only": "Der Lauf wartet auf eine Bestaetigung, die NUR der Nutzer im LabControl-Fenster geben "
+                          "kann. Den Nutzer darauf hinweisen -- nicht umgehen.",
 }
 
 INSTRUCTIONS = """\
@@ -153,7 +160,7 @@ plot_capture, release_scope):
   -- liefert das Ergebnis wie acquire, oder nach timeout_s state='armed' (bleibt scharf; erneut warten oder
   release_scope bricht ab). get_capture zeigt vorher nur den Zustand. Je Oszilloskop eine scharfe Erfassung.
 
-Testablaeufe (list_testcases, run_testcase, get_run, stop_run):
+Testablaeufe (list_testcases, run_testcase, get_run, stop_run, continue_run):
 - Ein Ablauf ist eine gespeicherte, vom Nutzer erstellte Schrittfolge; statt vieler Einzelbefehle laeuft er
   mit Pruefungen, Sicherheits-Watchdog und Bericht wie aus dem Fenster. Nur Ablaeufe starten, um die der
   Nutzer gebeten hat. Steuerrecht wie bei control_device; waehrend des Laufs ist Steuern gesperrt.
@@ -163,6 +170,10 @@ Testablaeufe (list_testcases, run_testcase, get_run, stop_run):
 - 'waiting' in get_run (auch 'run_waiting' in get_status): kind='confirm' = der Ablauf wartet auf eine
   Bestaetigung (Text in 'text'), die NUR der Nutzer im LabControl-Fenster geben kann -- den Nutzer darauf
   hinweisen, nicht umgehen. kind='wait_since' = Mindestzeit seit einer Schaltaktion, Rest in 'remaining_s'.
+  kind='release' = Schritt 'Warten auf Freigabe' (Kennung in 'key', Rest in 'remaining_s'; ohne Freigabe
+  in der Hoechstzeit scheitert der Lauf): freigeben mit continue_run(run_id, key) -- nur, wenn der Nutzer
+  darum gebeten hat oder die vereinbarte Bedingung erfuellt ist. Steuerrecht wie bei control_device; der
+  Bericht vermerkt die Freigabe mit Aufrufer und Uhrzeit.
 """
 
 server = MCPServer("labcontrol", instructions=INSTRUCTIONS)
@@ -325,7 +336,8 @@ def run_testcase(testcase: str, variables: dict[str, float] | None = None, varia
 @server.tool(annotations=READ_ONLY)
 def get_run(run_id: str, file: str | None = None) -> dict:
     """Stand eines Laufs (running, step/steps_total, checks_total/checks_failed, status, exit_code, error,
-    Meldungen in 'events', 'waiting': wartet auf Bestaetigung im LabControl-Fenster bzw. Mindestzeit). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
+    Meldungen in 'events', 'waiting': wartet auf Bestaetigung im LabControl-Fenster, Mindestzeit oder Freigabe
+    ueber continue_run). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
     Urteil, Anforderungen, Geraete); file='junit' liefert das JUnit-XML als Text. Den HTML-Bericht oeffnet
     der Nutzer in LabControl oder im Berichtsordner."""
     path = "/api/v1/runs/" + urllib.parse.quote(run_id, safe="")
@@ -352,6 +364,21 @@ def get_run(run_id: str, file: str | None = None) -> dict:
 def stop_run(run_id: str) -> dict:
     """Haelt einen laufenden Testablauf an und schaltet dabei ALLE AUS (wie der Stop-Knopf)."""
     return _checked("POST", "/api/v1/runs/" + urllib.parse.quote(run_id, safe="") + "/stop", {})
+
+
+@server.tool(annotations=ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+def continue_run(run_id: str, key: str | None = None, step: int | None = None) -> dict:
+    """Gibt einen Lauf frei, der an einem Schritt 'Warten auf Freigabe' wartet (get_run: waiting.kind='release');
+    danach schaltet der Ablauf weiter. key (Kennung des Schritts, waiting.key) und/oder step (Schrittnummer)
+    angeben, damit nicht versehentlich ein anderer Wartepunkt freigegeben wird. Eine Bestaetigung
+    (waiting.kind='confirm') geht hierueber NICHT -- die gibt nur der Nutzer im LabControl-Fenster."""
+    payload: dict = {"by": "MCP"}
+    if key is not None:
+        payload["key"] = key
+    if step is not None:
+        payload["step"] = step
+    return _checked("POST", "/api/v1/runs/" + urllib.parse.quote(run_id, safe="") + "/continue", payload)
 
 
 # -- Oszilloskope --------------------------------------------------------------

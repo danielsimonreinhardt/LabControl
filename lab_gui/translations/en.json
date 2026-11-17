@@ -1195,5 +1195,17 @@
   "Oszilloskop-Erfassungen": "Oscilloscope captures",
   "Scharf geschaltet": "Armed",
   "Kurve (CSV)": "Curve (CSV)",
-  "Oszilloskop {device}: Daten nicht innerhalb von {seconds:g} s gelesen": "Oscilloscope {device}: data not read within {seconds:g} s"
+  "Oszilloskop {device}: Daten nicht innerhalb von {seconds:g} s gelesen": "Oscilloscope {device}: data not read within {seconds:g} s",
+  "Warten auf Freigabe": "Wait for release",
+  "≤ {seconds:g} s": "≤ {seconds:g} s",
+  "wartet auf Freigabe {summary}": "waiting for release {summary}",
+  "Warten auf Freigabe geht nur mit Netzwerkfreigabe (REST/MCP) – Lauf abgebrochen": "Wait for release only works with network sharing (REST/MCP) – run aborted",
+  "freigegeben von {who} um {time}": "released by {who} at {time}",
+  "keine Freigabe {summary} – Höchstzeit abgelaufen": "no release {summary} – maximum time expired",
+  "Warten auf Freigabe in Schritt {n} braucht die Netzwerkfreigabe (REST/MCP)": "Wait for release in step {n} needs network sharing (REST/MCP)",
+  "Kennung": "Identifier",
+  "Kennung, die ein Programm bei der Freigabe angibt (continue_run)": "Identifier a program passes when releasing (continue_run)",
+  "Höchstzeit bis zur Freigabe; danach scheitert der Schritt": "Maximum time until release; after that the step fails",
+  "Schritt {index}/{total}: wartet auf Freigabe {detail} {iter}": "Step {index}/{total}: waiting for release {detail} {iter}",
+  "Schritt {n}: Warten auf Freigabe {detail}": "Step {n}: Wait for release {detail}"
 }

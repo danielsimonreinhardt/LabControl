@@ -57,9 +57,10 @@ def _iso(ts: float) -> str:
 
 
 def _public_waiting(waiting: dict | None) -> dict | None:
-    """{"kind": "confirm"|"wait_since", "step", "text", "message", "since"[, "remaining_s"]} oder None. Eine
-    Bestaetigung geht nur im LabControl-Fenster (PI-71 a) -- hier steht sie nur, damit ein Client darauf
-    hinweisen kann."""
+    """{"kind": "confirm"|"wait_since"|"release", "step", "text", "message", "since"[, "remaining_s"]} oder None.
+    Eine Bestaetigung geht nur im LabControl-Fenster (PI-71 a) -- hier steht sie nur, damit ein Client darauf
+    hinweisen kann. "release" (PI-74 a, dazu "key" und "timeout_s") gibt ein Programm mit Steuerrecht ueber
+    POST /runs/{id}/continue bzw. MCP continue_run frei."""
     if not waiting:
         return None
     data = {k: v for k, v in waiting.items() if k not in ("until", "since_ts")}
@@ -119,6 +120,13 @@ class RunRegistry:
                 entry.error = f"Schritt {index + 1}: {message}"
                 self._event(entry, "failed", step=index + 1, message=message)
 
+    def released(self, run_id: str, index: int, by: str) -> None:
+        """PI-74 a: "Warten auf Freigabe" in Schritt index freigegeben (by: Aufrufer wie im Protokoll)."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is not None:
+                self._event(entry, "released", step=index + 1, by=by)
+
     def set_waiting(self, run_id: str, info: dict | None) -> None:
         """PI-71 a: Lauf wartet auf Bestaetigung bzw. "Warten seit" (info) oder nicht mehr (None)."""
         with self._lock:
@@ -137,11 +145,19 @@ class RunRegistry:
             entry = self._runs.get(self._current) if self._current else None
             return _public_waiting(entry.waiting) if entry is not None else None
 
-    def finish(self, run_id: str, status: str, exit_code: int, files: dict[str, str]) -> None:
+    def finish(self, run_id: str, status: str, exit_code: int, files: dict[str, str],
+               failure: tuple[int, str] | None = None) -> None:
+        """Lauf zu Ende. failure: (Schrittindex, Meldung) des Schrittfehlers aus der Laufaufzeichnung -- traegt
+        "error" nach, falls step_failed das Register nicht (mehr) erreicht hat (Lauf aus dem Fenster: RunSession
+        beendet den Lauf schon im selben Signal, bevor MainWindow eintragen konnte)."""
         with self._lock:
             entry = self._runs.get(run_id)
             if entry is None:
                 return
+            if failure is not None and failure[1] and not entry.error:
+                index, message = failure
+                entry.error = f"Schritt {index + 1}: {message}"
+                self._event(entry, "failed", step=index + 1, message=message)
             entry.waiting = None
             entry.status = status
             entry.exit_code = exit_code

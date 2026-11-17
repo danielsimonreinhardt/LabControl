@@ -103,6 +103,9 @@ from testcase_model import (
     confirm_text,
     is_arb_action,
     kind_label,
+    RELEASE_KEY_MAX,
+    release_key,
+    release_summary,
     wait_since_actions,
     wait_since_summary,
     load_block,
@@ -147,8 +150,9 @@ _PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.ite
 #   wait:            COL_DURATION = Wartezeit,                 COL_ENABLED = Aktiv
 #   confirm:         COL_ACTION = Text der Rueckfrage,         COL_ENABLED = Aktiv          (PI-71 a)
 #   wait_since:      COL_ACTION = Geraet, COL_VALUE = Aktion, COL_DURATION = Mindestzeit, COL_ENABLED = Aktiv
+#   await_release:   COL_ACTION = Kennung,  COL_DURATION = Hoechstzeit,  COL_ENABLED = Aktiv     (PI-74 a)
 CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait", "monitor", "confirm",
-                             "wait_since"}
+                             "wait_since", "await_release"}
 
 
 class _NoWheelComboBox(QComboBox):
@@ -675,6 +679,10 @@ class TestcaseTab(QWidget):
         self._action_add_wait_since.triggered.connect(lambda: self._insert_new_step(TestStep(
             step_type="wait_since", device_kind="psu", action="PSU_OUT_ON", duration=10.0)))
         self._action_add_confirm.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="confirm")))
+        # PI-74 a: Warten auf Freigabe durch ein Programm (REST/MCP), Vorgabe 60 s Hoechstzeit
+        self._action_add_release = self._add_menu.addAction("")
+        self._action_add_release.triggered.connect(lambda: self._insert_new_step(TestStep(
+            step_type="await_release", duration=60.0)))
         self._confirm_dialog = None
         self._action_add_action.triggered.connect(lambda: self._insert_new_step(TestStep()))
         self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
@@ -885,6 +893,7 @@ class TestcaseTab(QWidget):
         self._action_add_wait.setText(tr("Warten"))
         self._action_add_wait_since.setText(tr("Warten seit Aktion"))
         self._action_add_confirm.setText(tr("Bestätigung"))
+        self._action_add_release.setText(tr("Warten auf Freigabe"))
         self._run_button.setToolTip(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
         self._pause_button.setToolTip(tr("Weiter") if getattr(self, "_paused", False) else tr("Anhalten"))
@@ -946,6 +955,14 @@ class TestcaseTab(QWidget):
             text_edit = self._table.cellWidget(row, COL_ACTION)
             if isinstance(text_edit, QLineEdit):
                 text_edit.setPlaceholderText(tr("Text der Rückfrage"))
+        if step_type == "await_release":
+            key_edit = self._table.cellWidget(row, COL_ACTION)
+            if isinstance(key_edit, QLineEdit):
+                key_edit.setPlaceholderText(tr("Kennung"))
+                key_edit.setToolTip(tr("Kennung, die ein Programm bei der Freigabe angibt (continue_run)"))
+            duration_spin = self._table.cellWidget(row, COL_DURATION)
+            if duration_spin is not None:
+                duration_spin.setToolTip(tr("Höchstzeit bis zur Freigabe; danach scheitert der Schritt"))
         if step_type == "wait_since":
             device_combo = self._table.cellWidget(row, COL_ACTION)
             if isinstance(device_combo, QComboBox):
@@ -1843,6 +1860,20 @@ class TestcaseTab(QWidget):
             text_edit.textChanged.connect(text_edit.setToolTip)
             self._table.setCellWidget(row_index, COL_ACTION, text_edit)
 
+        elif t == "await_release":
+            # PI-74 a: Kennung der Freigabe und Hoechstzeit
+            key_edit = QLineEdit(release_key(step))
+            key_edit.setMaxLength(RELEASE_KEY_MAX)
+            self._table.setCellWidget(row_index, COL_ACTION, key_edit)
+            duration_spin = SteppedDoubleSpinBox()
+            duration_spin.setRange(0.1, 86400)
+            duration_spin.setDecimals(1)
+            duration_spin.setPrefix("≤ ")
+            duration_spin.setSuffix(" s")
+            duration_spin.setValue(step.duration)
+            self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+            duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
+
         elif t == "wait_since":
             # PI-71 a: Geraet (wie in einer Aktionszeile, auch Partner und Rollen) und Aktion, Mindestzeit
             device_combo = _NoWheelComboBox()
@@ -2473,6 +2504,9 @@ class TestcaseTab(QWidget):
                                                              .get("monitor") or {})}
         if step_type == "confirm":   # PI-71 a: das Textfeld der Zeile ist massgeblich
             step.params = {**step.params, "text": self._table.cellWidget(row, COL_ACTION).text().strip()}
+        if step_type == "await_release":   # PI-74 a: Kennung aus dem Textfeld ("" = keine)
+            key = self._table.cellWidget(row, COL_ACTION).text().strip()
+            step.params = {k: v for k, v in {**step.params, "key": key}.items() if k != "key" or key}
         if step_type == STEP_TYPE_ACTION and (step.device_kind in ("uds", "xcp") or step.action == "RESTBUS_SET"):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
@@ -2639,6 +2673,10 @@ class TestcaseTab(QWidget):
 
         if step_type == "confirm":   # Text in params["text"], siehe _row_to_step
             return TestStep(step_type="confirm", enabled=enabled)
+
+        if step_type == "await_release":   # Kennung in params["key"], siehe _row_to_step
+            duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
+            return TestStep(step_type="await_release", enabled=enabled, duration=duration_spin.value())
 
         if step_type == "wait_since":
             device_combo: QComboBox = self._table.cellWidget(row, COL_ACTION)
@@ -2970,6 +3008,8 @@ class TestcaseTab(QWidget):
             return f"{tr(CONTROL_STEP_LABELS['confirm'])}: {confirm_text(step) or '–'}"
         if step.step_type == "wait_since":
             return f"{tr('Warten')} {wait_since_summary(step, self._wait_since_device(step))}"
+        if step.step_type == "await_release":
+            return f"{tr(CONTROL_STEP_LABELS['await_release'])} {release_summary(step)}"
         if step.step_type in CONTROL_STEP_LABELS and step.step_type not in ("wait", "set_var", "inc_var"):
             text = tr(CONTROL_STEP_LABELS[step.step_type])
             if step.step_type == "loop":
@@ -3402,6 +3442,10 @@ class TestcaseTab(QWidget):
         if step.step_type == "confirm":
             self._set_status("Schritt {index}/{total}: wartet auf Bestätigung – {prompt} {iter}", index=index + 1,
                              total=total, prompt=confirm_text(step) or "–", iter=self._iteration_text)
+            return
+        if step.step_type == "await_release":
+            self._set_status("Schritt {index}/{total}: wartet auf Freigabe {detail} {iter}", index=index + 1,
+                             total=total, detail=release_summary(step), iter=self._iteration_text)
             return
         if step.step_type == "wait_since":
             self._set_status("Schritt {index}/{total}: Warten {detail} {iter}", index=index + 1, total=total,

@@ -475,7 +475,7 @@ class LiveState(QObject):
             "partner": partner,
             "partner_ip": partner_ip,
             "colors": colors,
-            # Laufender Ablauf wartet auf Bestaetigung/"Warten seit" (PI-71 a), sonst None
+            # Laufender Ablauf wartet auf Bestaetigung/"Warten seit" (PI-71 a) bzw. Freigabe (PI-74 a), sonst None
             "run_waiting": self.runs.current_waiting(),
         }
 

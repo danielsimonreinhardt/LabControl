@@ -439,14 +439,19 @@ STEP_TYPE_ACTION = "action"
 # PI-71 a (1.0.1): "confirm" haelt den Lauf an, bis der Nutzer in der Oberflaeche bestaetigt (Text in
 # params["text"]); "wait_since" wartet, bis seit der letzten Ausfuehrung der Aktion `action` an device_kind/
 # device_id in diesem Lauf mindestens `duration` Sekunden vergangen sind (siehe testcase_runner).
+# PI-74 a (1.0.1): "await_release" haelt den Lauf an, bis ein Programm mit Steuerrecht ihn ueber REST/MCP
+# (continue_run) freigibt; Kennung in params["key"], Hoechstzeit in `duration` (danach FAIL). Bewusst getrennt von
+# "confirm", das nur am Bildschirm geht -- am Ablauf ist sichtbar, ob ein Mensch oder ein Programm freigibt.
 CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor",
-                      "confirm", "wait_since"}
+                      "confirm", "wait_since", "await_release"}
 # Schrittarten, die aeltere Programmversionen still uebersprungen haetten (unbekannter step_type = No-Op):
 # eine Datei mit ihnen bekommt Format 4, das aeltere Versionen mit Meldung ablehnen.
 V4_STEP_TYPES = {"confirm", "wait_since"}
 # Format 5 (1.0.1, PI-72 a): Oszilloskop-Schritte "Scharf schalten"/"Auf Erfassung warten" -- eine aeltere Version
 # schickte sie an den DeviceWorker bzw. kennt das UNI-T im Ablauf gar nicht; sie lehnt die Datei mit Meldung ab.
 V5_ACTIONS = set(SCOPE_ACTIONS)
+# Format 6 (1.0.1, PI-74 a): Schritt "Warten auf Freigabe" -- eine aeltere Version liesse ihn still aus.
+V6_STEP_TYPES = {"await_release"}
 # "monitor" (0.63.0, FT-7): Block "Ueberwachen … Ende" -- zeitbezogene Pruefung (timing_checks.py) ueber die
 # Schritte im Block; Quelle in den cond_*-Feldern (wie eine Messwert-Bedingung), Art/Grenzen in params["monitor"]
 BLOCK_START_TYPES = {"loop", "while", "if", "monitor"}
@@ -466,6 +471,7 @@ CONTROL_STEP_LABELS = {
     "monitor": "Überwachen",
     "confirm": "Bestätigung",
     "wait_since": "Warten seit",
+    "await_release": "Warten auf Freigabe",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -535,7 +541,9 @@ CHECK_FIELD_SYMBOLS = {
 # Ohne diese Inhalte wird weiter Version 2 geschrieben, damit aeltere Programmversionen die Datei lesen.
 # Version 4 (1.0.1, PI-71 a): wie 3, nur mit Schritten aus V4_STEP_TYPES -- eine aeltere Version laesst die
 # Bestaetigung sonst still aus. Version 5 (1.0.1, PI-72 a): wie 4, nur mit Oszilloskop-Schritten (V5_ACTIONS).
-FILE_FORMAT_VERSION = 5
+# Version 6 (1.0.1, PI-74 a): wie 5, nur mit "Warten auf Freigabe" (V6_STEP_TYPES).
+FILE_FORMAT_VERSION = 6
+_V5 = 5
 _V4 = 4
 _V3 = 3
 _V2 = 2
@@ -877,6 +885,21 @@ def wait_since_summary(step: TestStep, device: str = "") -> str:
               action=action_label(step.device_kind, step.action))
 
 
+RELEASE_KEY_MAX = 60   # Laenge der Freigabe-Kennung (Editor; REST nimmt bis zu 100 Zeichen an)
+
+
+def release_key(step: TestStep) -> str:
+    """Kennung eines Schritts "Warten auf Freigabe" (PI-74 a), "" = keine."""
+    return str((step.params or {}).get("key") or "").strip()
+
+
+def release_summary(step: TestStep) -> str:
+    """"„flash_ok“ (≤ 30 s)" bzw. "(≤ 30 s)" ohne Kennung (PI-74 a)."""
+    key = release_key(step)
+    limit = tr("≤ {seconds:g} s", seconds=step.duration)
+    return f"„{key}“ ({limit})" if key else f"({limit})"
+
+
 def check_unit(step: TestStep) -> str:
     """Einheit des geprueften Werts; beim Oszilloskop-Warteschritt die des gewaehlten Kennwerts (PI-72 a)."""
     if step.check_field == SCOPE_CHECK_FIELD:
@@ -944,14 +967,19 @@ def needs_v5(steps: list[TestStep]) -> bool:
     return any(step.step_type == STEP_TYPE_ACTION and step.action in V5_ACTIONS for step in steps)
 
 
+def needs_v6(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V6_STEP_TYPES for step in steps)
+
+
 def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
     """Dateiinhalt eines Ablaufs (auch fuer REST/Kommandozeile, ohne Datei)."""
-    v5 = needs_v5(steps)
+    v6 = needs_v6(steps)
+    v5 = v6 or needs_v5(steps)
     v4 = v5 or needs_v4(steps)
     v3 = v4 or needs_v3(steps, meta)
     payload = {
         "format": "labor-testcase",
-        "version": 5 if v5 else _V4 if v4 else _V3 if v3 else _V2,
+        "version": FILE_FORMAT_VERSION if v6 else _V5 if v5 else _V4 if v4 else _V3 if v3 else _V2,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
@@ -1086,12 +1114,13 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
     # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
     steps = [replace(step, link={}) for step in steps]   # Bausteine sind flach (keine Verknuepfung in sich)
-    v5 = needs_v5(steps)   # PI-72 a: Oszilloskop-Schritte -> Format 4
+    v6 = needs_v6(steps)   # PI-74 a: Warten auf Freigabe -> Format 5
+    v5 = v6 or needs_v5(steps)   # PI-72 a: Oszilloskop-Schritte -> Format 4
     v4 = v5 or needs_v4(steps)   # PI-71 a: Bestaetigung/Warten seit -> Format 3, aeltere Versionen lehnen ab
     v3 = v4 or needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
-        "version": BLOCK_FILE_FORMAT_VERSION + (3 if v5 else 2 if v4 else 1 if v3 else 0),
+        "version": BLOCK_FILE_FORMAT_VERSION + (4 if v6 else 3 if v5 else 2 if v4 else 1 if v3 else 0),
         "name": name,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
@@ -1102,7 +1131,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
 def load_block(path: Path) -> tuple[str, list[TestStep]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = int(data.get("version", 0))
-    if version > BLOCK_FILE_FORMAT_VERSION + 3:
+    if version > BLOCK_FILE_FORMAT_VERSION + 4:
         raise ValueError(
             tr(
                 "Baustein-Datei stammt aus einer neueren Programmversion "

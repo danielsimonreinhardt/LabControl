@@ -458,7 +458,8 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         # konfiguriert" von "scharf und in Ordnung" unterscheiden.
         "safety": snapshot.get("safety", "off"),
         "test_running": bool(snapshot.get("test_running")),
-        # PI-71 a: worauf der laufende Ablauf wartet ("confirm": nur im LabControl-Fenster bestaetigbar)
+        # PI-71 a: worauf der laufende Ablauf wartet ("confirm": nur im LabControl-Fenster bestaetigbar,
+        # "release": Freigabe ueber POST /runs/{id}/continue, PI-74 a)
         "run_waiting": snapshot.get("run_waiting"),
         "simulation": bool(app_info.get("simulation")),
         "time": int(time.time()),
@@ -1159,6 +1160,8 @@ def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: 
 #   POST /api/v1/runs                   {"testcase": "name.json", "vars": {...}} starten
 #                                       ({"path": ...} nur vom selben Rechner, Kommandozeile)
 #   POST /api/v1/runs/{id}/stop         anhalten (wie Stop: ALLE AUS)
+#   POST /api/v1/runs/{id}/continue     {"key"?, "step"?, "by"?} "Warten auf Freigabe" freigeben (PI-74 a); eine
+#                                       Bestaetigung (PI-71 a) geht bewusst NICHT ueber das Netz
 # Starten/Stoppen wie Steuern: Token + Fernsteuerung fuer diesen Aufrufer + Sperrzustand frei. Dateien
 # kommen nur ueber die Pfade, die das Register (run_registry.py) zum Lauf kennt -- kein Pfad aus der Anfrage.
 
@@ -1205,6 +1208,24 @@ def _run_start_payload(snapshot: dict, body: bytes) -> tuple[dict | None, Respon
             "all_off_at_end": bool(payload.get("all_off_at_end"))}, None
 
 
+def _run_continue_payload(body: bytes) -> tuple[dict | None, Response | None]:
+    """Rumpf von POST /runs/{id}/continue: optional "key" (Freigabe-Kennung), "step" (1-basiert) -- beide muessen
+    zum wartenden Schritt passen, damit nicht der falsche Wartepunkt freigegeben wird -- und "by" (Name des
+    Programms fuer den Bericht, der Aufrufer selbst steht ohnehin darin)."""
+    payload = _parse_body(body) if body else {}
+    if payload is None:
+        return None, _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    key, step, by = payload.get("key"), payload.get("step"), payload.get("by")
+    if key is not None and not (isinstance(key, str) and len(key) <= 100):
+        return None, _error(400, "invalid_key")
+    if step is not None and (isinstance(step, bool) or not isinstance(step, int) or step < 1):
+        return None, _error(400, "invalid_step")
+    if by is not None and not isinstance(by, str):
+        return None, _error(400, "invalid_by")
+    by = "".join(c for c in (by or "") if c.isalnum() or c in " -_.()")[:40].strip()
+    return {"key": key.strip() if isinstance(key, str) else None, "step": step, "by": by}, None
+
+
 def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query: dict, body: bytes,
                    executor, client: str) -> Response:
     kind, run_id, what = route
@@ -1212,7 +1233,7 @@ def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query:
     if registry is None:
         return _error(501, "not_implemented")
     if method == "POST":
-        if not ((kind == "runs") or (kind == "run" and what == "stop")):
+        if not ((kind == "runs") or (kind == "run" and what in ("stop", "continue"))):
             return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "GET, HEAD"})
         denied = check_write_auth(snapshot, header_get)
         if denied is not None:
@@ -1230,6 +1251,21 @@ def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query:
             result = executor.submit_run("start", payload, client)
             if result.status == "ok":
                 return _json(202, {"v": API_VERSION, "ok": True, "run": result.message})
+        elif what == "continue":
+            # PI-74 a: Freigabe wie Stoppen nur mit Steuerrecht (oben); kein Sperrzustand-Test -- waehrend eines
+            # Laufs ist "lock" ohnehin gesetzt
+            if registry.get(run_id) is None:
+                return _error(404, "unknown_run")
+            payload, error = _run_continue_payload(body)
+            if error is not None:
+                return error
+            result = executor.submit_run("continue", {"run": run_id, **payload}, client)
+            if result.status == "ok":
+                return _json(200, {"v": API_VERSION, "ok": True, "run": run_id,
+                                   "step": int(result.message) if result.message.isdigit() else None})
+            if result.code in ("release_mismatch", "not_waiting_release", "confirm_local_only"):
+                entry = registry.get(run_id) or {}
+                return _error(409, result.code, waiting=entry.get("waiting"))
         else:
             if registry.get(run_id) is None:
                 return _error(404, "unknown_run")

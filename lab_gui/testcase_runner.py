@@ -13,7 +13,8 @@ naechste Sample wird erst verschickt, nachdem der vorherige bestaetigt wurde
 antwortet als das konfigurierte Intervall).
 
 Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, seit 1.0.1 auch
-confirm/wait_since -- Bestaetigung im Fenster bzw. Mindestzeit seit einer Aktion, PI-71 a; siehe
+confirm/wait_since -- Bestaetigung im Fenster bzw. Mindestzeit seit einer Aktion, PI-71 a -- und
+await_release -- Freigabe durch ein Programm ueber REST/MCP mit Hoechstzeit, PI-74 a; siehe
 testcase_model.CONTROL_STEP_TYPES) veraendern statt einer Geraete-Aktion nur
 den internen Ausfuehrungszustand: einen Stack offener Bloecke (_Frame) sowie
 einen einfachen Variablenspeicher. _advance() ist deshalb kein simpler
@@ -81,6 +82,8 @@ from testcase_model import (
     arb_value,
     confirm_text,
     is_arb_action,
+    release_key,
+    release_summary,
     kind_label,
     validate_structure,
     wait_since_summary,
@@ -160,10 +163,12 @@ class TestRunner(QObject):
     # PI-71 a: Bestaetigungsschritt wartet auf "Weiter"/"Abbrechen" in der Oberflaeche (Index, Text) -- Antwort
     # ueber confirm(). Nur wenn confirm_available gesetzt ist (Fenster), sonst bricht der Schritt den Lauf ab.
     confirm_requested = Signal(int, str)
-    # Worauf der Lauf gerade wartet (Bestaetigung, Warten seit), fuer Laufregister/MCP: dict oder None
+    # Worauf der Lauf gerade wartet (Bestaetigung, Warten seit, Freigabe), fuer Laufregister/MCP: dict oder None
     waiting_changed = Signal(object)
     # Vermerk zu einem Schritt fuer die Laufaufzeichnung (Index, Text), z. B. "bestätigt", tatsaechliche Wartezeit
     step_note = Signal(int, str)
+    # PI-74 a: "Warten auf Freigabe" freigegeben (Index, wer) -- fuer das Laufregister (REST/MCP)
+    released = Signal(int, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -199,6 +204,18 @@ class TestRunner(QObject):
         self._since_timer.setSingleShot(True)
         self._since_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._since_timer.timeout.connect(self._on_since_timeout)
+
+        # -- PI-74 a: "Warten auf Freigabe" ------------------------------------------------------
+        # Freigeben kann nur ein Programm mit Steuerrecht ueber REST/MCP (MainWindow -> release()). Ohne
+        # erreichbaren Server kann niemand freigeben: dann lehnt RunSession.refusal den Lauf ab, der Schritt
+        # selbst scheitert sofort. Wert: bool oder Aufruf ohne Argumente (MainWindow: laeuft der Server?).
+        self.release_available = False
+        self._release_index = -1
+        self._release_granted = False
+        self._release_timer = QTimer(self)
+        self._release_timer.setSingleShot(True)
+        self._release_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._release_timer.timeout.connect(self._on_release_timeout)
 
         # Zustand einer armierten Pass/Fail-Pruefung: (Schrittindex,
         # aufgeloeste device_id), None wenn keine Pruefung wartet. Der Timeout
@@ -300,6 +317,8 @@ class TestRunner(QObject):
         self._run_started = monotonic()
         self._action_times = {}
         self._confirm_index = -1
+        self._release_index = -1
+        self._release_granted = False
         self._waiting = None
         self._index = max(0, min(int(start_index), len(steps))) - 1
         self._running = True
@@ -331,7 +350,7 @@ class TestRunner(QObject):
             return
         held = []
         if not self._arb_active:
-            for timer in (self._timer, self._wait_timer, self._since_timer):
+            for timer in (self._timer, self._wait_timer, self._since_timer, self._release_timer):
                 if timer.isActive():
                     held.append((timer, max(0, timer.remainingTime())))
                     timer.stop()
@@ -741,6 +760,13 @@ class TestRunner(QObject):
                     return
                 continue
 
+            if t == "await_release":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                self._start_await_release(step)
+                return
+
             if t in ("set_var", "inc_var"):
                 if not step.enabled:
                     continue
@@ -897,7 +923,10 @@ class TestRunner(QObject):
 
     def _clear_waiting(self) -> None:
         self._confirm_index = -1
+        self._release_index = -1
+        self._release_granted = False
         self._since_timer.stop()
+        self._release_timer.stop()
         if self._waiting is not None:
             self._set_waiting(None)
 
@@ -941,6 +970,66 @@ class TestRunner(QObject):
             return
         self._clear_waiting()
         self._advance()
+
+    # -- Warten auf Freigabe (PI-74 a) ---------------------------------------------
+
+    def release_possible(self) -> bool:
+        available = self.release_available
+        return bool(available()) if callable(available) else bool(available)
+
+    def _start_await_release(self, step: TestStep) -> None:
+        key = release_key(step)
+        if not self.release_possible():
+            self._fail_at(self._index, tr("Warten auf Freigabe geht nur mit Netzwerkfreigabe (REST/MCP) – Lauf "
+                                          "abgebrochen"))
+            return
+        limit = max(0.0, step.duration)
+        self._release_index = self._index
+        self._release_granted = False
+        self._set_waiting({"kind": "release", "step": self._index + 1, "key": key, "text": key,
+                           "timeout_s": limit, "remaining_s": round(limit, 1), "until": time.time() + limit,
+                           "message": tr("wartet auf Freigabe {summary}", summary=release_summary(step))})
+        self._release_timer.start(max(1, math.ceil(limit * 1000)))
+
+    def release(self, who: str, key: str | None = None, step: int | None = None) -> str:
+        """Freigabe eines wartenden Schritts "Warten auf Freigabe" (PI-74 a) -- nur ueber REST/MCP (MainWindow
+        prueft vorher das Steuerrecht). key/step (1-basiert), falls angegeben, muessen zum wartenden Schritt
+        passen. "" = freigegeben, sonst Fehlercode: not_running, confirm_local_only (wartet auf eine
+        Bestaetigung, die nur im Fenster geht), not_waiting_release, release_mismatch."""
+        if not self._running:
+            return "not_running"
+        if self._release_index < 0 or self._release_index != self._index or self._release_granted:
+            return "confirm_local_only" if self._confirm_index >= 0 else "not_waiting_release"
+        step_obj = self._steps[self._release_index]
+        if (key is not None and key.strip() != release_key(step_obj)) or (
+                step is not None and int(step) != self._release_index + 1):
+            return "release_mismatch"
+        index = self._release_index
+        self.step_note.emit(index, tr("freigegeben von {who} um {time}", who=who or "?",
+                                      time=time.strftime("%H:%M:%S")))
+        self.released.emit(index, who or "")
+        if self._paused:
+            # Angehalten (FT-12): freigegeben, weiter erst nach "Weiter" -- der gehaltene Timer feuert dann sofort
+            self._release_granted = True
+            self._held_timers = [(timer, 0 if timer is self._release_timer else remaining)
+                                 for timer, remaining in self._held_timers]
+            if self._waiting is not None:
+                self._set_waiting(None)
+            return ""
+        self._clear_waiting()
+        self._advance()
+        return ""
+
+    def _on_release_timeout(self) -> None:
+        if not self._running or self._release_index < 0:
+            return
+        if self._release_granted:   # waehrend einer Pause freigegeben
+            self._clear_waiting()
+            self._advance()
+            return
+        step = self._steps[self._release_index]
+        self._fail_at(self._release_index, tr("keine Freigabe {summary} – Höchstzeit abgelaufen",
+                                              summary=release_summary(step)))
 
     # -- Zeitpruefungen (FT-7, "Ueberwachen … Ende") -------------------------------
 

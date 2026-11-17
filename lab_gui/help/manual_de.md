@@ -443,6 +443,17 @@ späterer Schritt auslöst (z. B. Einschalten mit 12 V):
     nicht (Exit 3).
   - Abläufe mit diesen beiden Schritten speichert LabControl im Format 4;
     ältere Versionen lehnen sie ab, statt die Bestätigung still auszulassen.
+- **Warten auf Freigabe**: hält den Lauf an, bis ein **Programm** ihn
+  freigibt (Spalten: Kennung, Höchstzeit „≤ … s“) – das Gegenstück zur
+  Bestätigung, die nur ein Mensch im Fenster gibt.
+  - Freigabe über `POST /api/v1/runs/{id}/continue` bzw. das MCP-Werkzeug
+    `continue_run`, nur mit Steuerrecht (gekoppeltes Programm oder „Claude
+    (MCP) darf steuern“). Eine angegebene Kennung oder Schrittnummer muss
+    zum wartenden Schritt passen.
+  - Ohne Freigabe in der Höchstzeit ist der Schritt fehlgeschlagen (ALLE AUS).
+  - Der Bericht vermerkt, wer wann freigegeben hat.
+  - Braucht die Netzwerkfreigabe: ohne sie bzw. ohne Fenster
+    (`labcontrol run`) startet der Ablauf nicht. Format 6.
 
 Block-Start und „Ende“ werden immer als Paar eingefügt. Die Tabelle zeigt
 die Verschachtelung als Einrückung; ist die Struktur unausgeglichen (z.B.

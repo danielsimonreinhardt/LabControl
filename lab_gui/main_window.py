@@ -2368,6 +2368,8 @@ class MainWindow(QMainWindow):
         self._test_runner.confirm_available = True
         self._test_runner.confirm_requested.connect(self.testcase_tab.on_confirm_requested)
         self.testcase_tab.confirm_answered.connect(self._test_runner.confirm)
+        # PI-74 a: "Warten auf Freigabe" gibt ein Programm ueber REST/MCP frei -- nur moeglich, solange der Server laeuft
+        self._test_runner.release_available = self._share_server.is_running
         self._run_session.run_ended.connect(lambda _outcome: self.testcase_tab.set_report_available(True))
         # Laufregister fuer REST/MCP/Kommandozeile (0.59.0): jeder Lauf, auch aus dem Fenster
         self._runs = self._live_state.runs
@@ -2385,8 +2387,11 @@ class MainWindow(QMainWindow):
             lambda index, _step: self._run_id and self._runs.step_started(self._run_id, index))
         self._test_runner.step_result.connect(
             lambda index, ok, value: self._run_id and self._runs.step_result(self._run_id, index, ok, value))
-        self._test_runner.step_failed.connect(
-            lambda index, message: self._run_id and self._runs.step_failed(self._run_id, index, message))
+        # Schrittfehler: KEIN eigener Eintrag ueber step_failed -- RunSession beendet den Lauf schon im selben
+        # Signal (vorher verbunden), _run_id ist danach None. _on_run_ended_register traegt die Meldung aus der
+        # Laufaufzeichnung nach (Fehler "error" leer in get_run, 1.0.1).
+        self._test_runner.released.connect(   # PI-74 a: wer freigegeben hat, als Meldung im Register
+            lambda index, by: self._run_id and self._runs.released(self._run_id, index, by))
         self._test_runner.waiting_changed.connect(   # PI-71 a: "wartet auf Bestätigung" fuer REST/MCP
             lambda info: self._run_id and self._runs.set_waiting(self._run_id, info))
         self._run_session.run_ended.connect(self._on_run_ended_register)
@@ -2590,6 +2595,21 @@ class MainWindow(QMainWindow):
             self._safe_stop(f"run stop via network ({client})")
             answer(True)
             return
+        if command == "continue":
+            # PI-74 a: "Warten auf Freigabe" -- Steuerrecht hat share_api schon geprueft (wie bei stop)
+            run_id = payload.get("run", "")
+            if run_id != self._runs.current_id() or not self._test_runner.is_running():
+                answer(False, "not_running")
+                return
+            waiting = self._test_runner.waiting() or {}
+            by = client + (f" ({payload['by']})" if payload.get("by") else "")
+            code = self._test_runner.release(by, payload.get("key"), payload.get("step"))
+            if code:
+                answer(False, code, waiting.get("message", ""))
+                return
+            logger.info("Testlauf %s: Schritt %s über das Netzwerk freigegeben (%s)", run_id, waiting.get("step"), by)
+            answer(True, "", str(waiting.get("step") or ""))
+            return
         if command != "start":
             answer(False, "unknown_command")
             return
@@ -2674,7 +2694,8 @@ class MainWindow(QMainWindow):
                 files[key] = str(path)
         except OSError as exc:
             logger.warning("Ergebnisse des Laufs %s nicht geschrieben: %s", run_id, exc)
-        self._runs.finish(run_id, outcome, exit_code(record), files)
+        failure = (record.error_index, record.error_message) if record.error_message else None
+        self._runs.finish(run_id, outcome, exit_code(record), files, failure)
         data_store.store().sync_now()
 
     def _route_partner_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> bool:

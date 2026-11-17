@@ -36,6 +36,7 @@ from testcase_model import (
     kind_label,
     monitor_source,
     monitor_summary,
+    release_summary,
     wait_since_summary,
 )
 from version import __version__
@@ -211,6 +212,8 @@ def _step_started_text(record: RunRecord, index: int) -> str:
         return tr("Schritt {n}: Warten ({duration:g} s)", n=index + 1, duration=step.duration)
     if step.step_type == "confirm":
         return tr("Schritt {n}: Bestätigung – {prompt}", n=index + 1, prompt=confirm_text(step) or "–")
+    if step.step_type == "await_release":
+        return tr("Schritt {n}: Warten auf Freigabe {detail}", n=index + 1, detail=release_summary(step))
     if step.step_type == "wait_since":
         device = record.device_meta.get(step.device_id, ("", ""))[1] if step.device_id else ""
         return tr("Schritt {n}: Warten {detail}", n=index + 1, detail=wait_since_summary(step, device))

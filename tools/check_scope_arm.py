@@ -669,10 +669,10 @@ def section_window(app) -> None:
         return window._live_state.runs.get(run_id) or {}
 
     def run_error() -> str:
-        # Meldung des fehlgeschlagenen Schritts aus der Laufaufzeichnung (das Laufregister fuehrt "error" fuer
-        # Laeufe aus dem Fenster nicht nach, siehe Bericht)
-        record = window._run_recorder.record()
-        return f"Schritt {record.error_index + 1}: {record.error_message}" if record is not None else ""
+        # Meldung des fehlgeschlagenen Schritts wie in get_run ("error" des juengsten Laufs im Register; seit dem
+        # Bugfix in 1.0.1 auch fuer Laeufe im Fenster gefuellt)
+        runs = window._live_state.runs.list()
+        return (runs[0].get("error") or "") if runs else ""
 
     # Das "Schalten": wenn Schritt 2 (Netzteil EIN) startet, liegt am Oszilloskop das Signal an -- vorher muss
     # die Erfassung schon scharf sein.

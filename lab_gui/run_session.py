@@ -285,6 +285,11 @@ class RunSession(QObject):
         if confirms and not self.runner.confirm_available:
             # PI-71 a: ohne Fenster kann niemand bestaetigen -- vor dem ersten Schalten ablehnen statt mittendrin
             return tr("Bestätigung in Schritt {n} geht nur im LabControl-Fenster", n=confirms[0] + 1)
+        releases = [i for i, s in enumerate(steps) if s.enabled and s.step_type == "await_release"]
+        if releases and not self.runner.release_possible():
+            # PI-74 a: ohne laufenden Server (REST/MCP) kann niemand freigeben -- vor dem Start ablehnen
+            return tr("Warten auf Freigabe in Schritt {n} braucht die Netzwerkfreigabe (REST/MCP)",
+                      n=releases[0] + 1)
         uds_steps_used = [s for s in steps if s.enabled and s.step_type == "action" and s.device_kind == "uds"]
         if any(s.action != "UDS_FLASH" for s in uds_steps_used) and (self.uds is None or not self.uds.configured()):
             return tr("Kein Prüfling (UDS) eingestellt")

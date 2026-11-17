@@ -87,6 +87,29 @@ Semantic Versioning (`lab_gui/version.py`).
   Format, Editor, Hauptfenster mit Lauf per HTTP inkl. Timeout, Stopp und langsamem Lesen; dazu `check_confirm_wait`,
   `check_scope_api`, `check_unit_mso`, `check_network_share` scopes/app, `check_translations`). Am echten
   PicoScope und UNI-T noch nicht – Abbruch (`ps2000_stop` bzw. `:STOP`) und Scharf-Meldung sind dort zu prüfen.
+- **Testablauf: „Warten auf Freigabe“ und MCP-Werkzeug `continue_run` (PI-74 a).** Ein eigener Schritt, den ein
+  Programm freigibt (Skript, CI, Claude über MCP), etwa wenn außerhalb von LabControl geflasht wird. Die
+  „Bestätigung“ bleibt unverändert nur am Bildschirm – am Ablauf ist so sichtbar, ob ein Mensch oder ein Programm
+  weiterschaltet.
+  - Zeile mit optionaler **Kennung** (z. B. `flash_ok`) und **Höchstzeit** „≤ … s“; im Einfügen-Menü. Ohne
+    Freigabe in der Höchstzeit ist der Schritt fehlgeschlagen („keine Freigabe … – Höchstzeit abgelaufen“, ALLE
+    AUS). Anhalten (Debuggen) hält die Höchstzeit an; eine Freigabe während der Pause wirkt nach „Weiter“.
+  - Freigabe über `POST /api/v1/runs/{id}/continue` (`key`, `step`, `by` optional) bzw. MCP
+    `continue_run(run_id, key, step)`. Nur mit Steuerrecht wie beim Schalten (`403 remote_control_inactive`);
+    passen Kennung oder Schritt nicht, `409 release_mismatch` mit dem wartenden Schritt; außerdem `404 unknown_run`,
+    `409 not_running`, `409 not_waiting_release`. Wartet der Lauf auf eine Bestätigung, lehnt `continue` mit
+    `409 confirm_local_only` ab.
+  - `get_run`/`GET /runs/{id}` zeigen `"waiting": {"kind": "release", "key", "step", "timeout_s", "remaining_s"}`
+    (auch `run_waiting` im Status), nach der Freigabe die Meldung `released` mit Aufrufer. Bericht und
+    Laufaufzeichnung vermerken „freigegeben von <Aufrufer> um <Uhrzeit>“ bzw. den Ablauf der Höchstzeit.
+  - Freigeben geht nur über den Server der laufenden Instanz: ohne Fenster (`labcontrol run`) startet ein Ablauf
+    mit diesem Schritt nicht (Exit 3 mit Meldung), im Fenster nicht bei ausgeschalteter Netzwerkfreigabe.
+  - Dateiformat 6 (Bausteine: 5) nur für Abläufe mit diesem Schritt; andere bleiben beim bisherigen Format.
+
+  **Nur Mock geprüft** (`check_release_step`: Format, Runner, Editor, Hauptfenster mit Freigabe per HTTP, falscher
+  Kennung/Schritt, ohne Steuerrecht, Höchstzeit, Bestätigung weiterhin nicht über das Netz, echter MCP-Server mit
+  `continue_run`, Kommandozeile; dazu `check_confirm_wait`, `check_scope_arm`, `check_translations`,
+  `check_network_share` app); am Gerät noch nicht.
 
 ### Geändert
 - **Touch-Bedienung ohne Vollbild-Knopf.** Am Pi läuft LabControl als Kiosk immer im Vollbild; der Knopf oben
@@ -103,6 +126,12 @@ Semantic Versioning (`lab_gui/version.py`).
   PC und Pi noch nicht.
 
 ### Behoben
+- **Fehlermeldung fehlte in `get_run` bei Läufen im Fenster.** Scheiterte ein Schritt, blieb `error` im
+  Laufregister leer – über REST/MCP war nur „error“ als Status zu sehen, nicht warum. Ursache: Der Lauf endete
+  schon im selben Signal, bevor das Fenster die Meldung eintragen konnte. Jetzt übernimmt das Register sie beim
+  Laufende aus der Laufaufzeichnung (mit Meldung `failed` vor `end`). Mock-verifiziert (`check_release_step`
+  window, Start per HTTP und im Fenster; Gegenprobe ohne Korrektur schlägt fehl; `check_scope_arm` liest die
+  Meldung wieder über das Register); am Gerät noch nicht.
 - **Vollbild-Knopf am PC schief und zu hoch.** Das Symbol saß links von der Mitte (der Abstand für einen
   Menüpfeil aus dem Theme galt auch hier), und der Knopf war höher als „ALLE AUS“ daneben. Jetzt sind beide
   gleich hoch, das Symbol mittig. Mock-verifiziert (`check_touch_ui`, Bild offscreen); in der .exe am PC noch

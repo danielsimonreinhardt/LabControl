@@ -37,6 +37,7 @@ from testcase_model import (
     confirm_text,
     is_arb_action,
     kind_label,
+    release_summary,
     validate_structure,
     wait_since_summary,
 )
@@ -61,6 +62,8 @@ def _step_line(step: TestStep) -> str:
             return f"{tr(CONTROL_STEP_LABELS['confirm'])}: {confirm_text(step) or '–'}"
         if step.step_type == "wait_since":
             return f"{tr(CONTROL_STEP_LABELS['wait'])} {wait_since_summary(step)}"
+        if step.step_type == "await_release":
+            return f"{tr(CONTROL_STEP_LABELS['await_release'])} {release_summary(step)}"
         return tr(CONTROL_STEP_LABELS.get(step.step_type, step.step_type))
     device = step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
     action = action_label(step.device_kind, step.action)

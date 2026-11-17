@@ -33,7 +33,7 @@ Werkzeugleiste (Symbole, Name im Tooltip):
 
 | Knopf (Tooltip) | Wirkung |
 |---|---|
-| **Zeile hinzufügen** (+) | neuer Aktionsschritt hinter der markierten Zeile; der Pfeil daneben bietet **Aktionsschritt**, **Schleife (n×) … Ende**, **Solange … Ende**, **Wenn … Ende**, **Überwachen … Ende**, **Sonst**, **Ende**, **Variable setzen**, **Variable erhöhen**, **Warten**, **Warten seit Aktion**, **Bestätigung** (Blöcke gleich mit „Ende“) |
+| **Zeile hinzufügen** (+) | neuer Aktionsschritt hinter der markierten Zeile; der Pfeil daneben bietet **Aktionsschritt**, **Schleife (n×) … Ende**, **Solange … Ende**, **Wenn … Ende**, **Überwachen … Ende**, **Sonst**, **Ende**, **Variable setzen**, **Variable erhöhen**, **Warten**, **Warten seit Aktion**, **Bestätigung**, **Warten auf Freigabe** (Blöcke gleich mit „Ende“) |
 | **Zeile entfernen** (−), **Nach oben**, **Nach unten** | markierte Zeile entfernen bzw. verschieben; mit der Maus: Zeile an der Nummer (#) greifen und ziehen |
 | **Alle Zeilen löschen** | leert den Ablauf nach Rückfrage, nicht rückgängig zu machen |
 | **Baustein speichern…**, **Baustein einfügen…**, **Verknüpfung zum Baustein lösen** | siehe [Bausteine](#bausteine) |
@@ -90,6 +90,7 @@ Wertebereiche = Grenzen des Eingabefelds; zusätzlich gelten die Grenzwerte aus 
 | **Warten** | wartet die Dauer ab, ohne Gerät |
 | **Warten seit Aktion** | wartet, bis seit der letzten Ausführung einer Aktion an einem Gerät mindestens „≥ … s“ vergangen sind (siehe [unten](#bestatigung-und-warten-seit-aktion)) |
 | **Bestätigung** | hält an, bis der Nutzer die Rückfrage im LabControl-Fenster mit **Weiter** beantwortet |
+| **Warten auf Freigabe** | hält an, bis ein Programm mit Steuerrecht über REST/MCP freigibt; nach der Höchstzeit FAIL (siehe [unten](#warten-auf-freigabe)) |
 
 ```mermaid
 flowchart TD
@@ -143,6 +144,45 @@ flowchart TD
 - Ohne Fenster (`labcontrol run`): startet nicht, Exit 3 – den Ablauf im Fenster oder über die laufende Instanz
   starten.
 - Bericht: „bestätigt“ bzw. „abgebrochen“ am Schritt.
+
+### Warten auf Freigabe
+
+Das Gegenstück zur Bestätigung für Programme: Ein Skript, eine CI-Pipeline oder Claude (MCP) gibt den Lauf frei,
+wenn etwas außerhalb von LabControl fertig ist (Firmware gebaut und geflasht, Messung am anderen Gerät, …). Am
+Ablauf ist so sichtbar, ob ein Mensch (**Bestätigung**) oder ein Programm (**Warten auf Freigabe**) weiterschaltet.
+
+```mermaid
+sequenceDiagram
+    participant L as LabControl (Lauf)
+    participant P as Programm mit Steuerrecht
+    L->>L: 1 Netzteil: Ausgang EIN
+    L->>L: 2 Warten auf Freigabe „flash_ok“ (≤ 120 s)
+    P->>L: GET /api/v1/runs/{id} → waiting.kind = "release"
+    P->>P: Firmware flashen …
+    P->>L: POST /api/v1/runs/{id}/continue {"key": "flash_ok"}
+    L->>L: 3 Prüfschritte …
+    Note over L: ohne Freigabe in der Höchstzeit:<br/>Schritt FAIL, ALLE AUS
+```
+
+| Zeile | Gerät | Aktion | Wert | Dauer |
+|---|---|---|---|---|
+| **Warten auf Freigabe** | – | Kennung (optional, z. B. `flash_ok`) | – | Höchstzeit „≤ … s“ |
+
+- Freigeben darf nur, wer auch schalten darf: gekoppeltes Programm oder am selben Rechner „Claude (MCP) darf
+  steuern“ (wie `POST /runs`).
+- `POST /api/v1/runs/{id}/continue` mit optional `"key"` (Kennung des Schritts), `"step"` (Schrittnummer) und
+  `"by"` (Name für den Bericht); MCP: `continue_run(run_id, key, step)`. Passen Kennung oder Schritt nicht zum
+  wartenden Schritt, wird abgelehnt – so trifft eine Freigabe nie versehentlich den falschen Wartepunkt.
+- Sichtbar wie die Bestätigung: `"waiting": {"kind": "release", "key": …, "step": …, "remaining_s": …}` in
+  `GET /api/v1/runs/{id}` (auch `run_waiting` in `/api/v1/status`).
+- Ablehnungen: `403 remote_control_inactive` (kein Steuerrecht), `404 unknown_run`, `409 not_running`,
+  `409 not_waiting_release`, `409 release_mismatch` (Antwort nennt den wartenden Schritt),
+  `409 confirm_local_only` (der Lauf wartet auf eine **Bestätigung** – die geht weiterhin nur im Fenster).
+- Höchstzeit abgelaufen: Schritt FAIL mit „keine Freigabe … – Höchstzeit abgelaufen“, Meldung auch in `error`.
+  Anhalten (Debuggen) hält die Höchstzeit an.
+- Bericht: „freigegeben von 127.0.0.1 (MCP) um 14:03:12“ am Schritt; Meldung `released` mit Aufrufer im Lauf.
+- Freigeben geht nur über den Server der laufenden Instanz: ohne Fenster (`labcontrol run`) oder bei
+  ausgeschalteter Netzwerkfreigabe startet ein Ablauf mit diesem Schritt nicht (Exit 3 bzw. „Nicht gestartet“).
 
 ### Oszilloskop: scharf schalten und auf Erfassung warten
 
@@ -492,6 +532,8 @@ Gleiche Prüfungen und Sicherheitsabschaltung wie im Editor; keine Haltepunkte, 
 - Format 5 (ab 1.0.1), sobald der Ablauf **Scharf schalten** oder **Auf Erfassung warten** enthält (`"action":
   "SCOPE_ARM"`/`"SCOPE_WAIT"`, `device_kind` `picoscope` oder `scpiscope`, Einstellungen in `params`). Bausteine:
   Format 4.
+- Format 6 (ab 1.0.1), sobald der Ablauf **Warten auf Freigabe** enthält (`"step_type": "await_release"`,
+  Kennung in `params.key`, `duration` = Höchstzeit). Bausteine: Format 5.
 - Unbekannte Felder bleiben beim Laden und Speichern erhalten.
 
 Gekürztes Beispiel (die App schreibt je Schritt alle Felder):

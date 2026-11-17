@@ -420,6 +420,17 @@ The "+" menu additionally offers:
     does not start (exit 3).
   - Sequences with these two steps are saved in format 4; older versions
     refuse them instead of silently skipping the confirmation.
+- **Wait for release**: pauses the run until a **program** releases it
+  (columns: identifier, maximum time "≤ … s") – the counterpart to the
+  confirmation, which only a person gives in the window.
+  - Release via `POST /api/v1/runs/{id}/continue` or the MCP tool
+    `continue_run`, only with control permission (paired program or
+    "Claude (MCP) may control"). A given identifier or step number must
+    match the waiting step.
+  - Without a release within the maximum time the step fails (ALL OFF).
+  - The report notes who released it and when.
+  - Needs network sharing: without it or without a window
+    (`labcontrol run`) the sequence does not start. Format 6.
 
 A block start and its "End" are always inserted as a pair. The table
 shows nesting as indentation; if the structure is unbalanced (e.g. a

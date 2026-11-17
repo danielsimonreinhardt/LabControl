@@ -254,6 +254,11 @@ def _prepare_steps(path: Path, rig: _Rig):
         # PI-71 a: niemand kann bestaetigen -- vor dem Start ablehnen, nicht still weiterlaufen
         return steps, meta, (f"Bestätigungsschritt (Schritt {confirms[0]}) braucht das LabControl-Fenster – "
                              "Ablauf dort starten (oder bei laufender Instanz über sie)")
+    releases = [i + 1 for i, s in enumerate(steps) if s.enabled and s.step_type == "await_release"]
+    if releases:
+        # PI-74 a: ohne Fenster laeuft kein Server, ueber den ein Programm freigeben koennte -- vor dem Start ablehnen
+        return steps, meta, (f"Warten auf Freigabe (Schritt {releases[0]}) braucht das LabControl-Fenster mit "
+                             "Netzwerkfreigabe – Ablauf dort starten (oder bei laufender Instanz über sie)")
     return steps, meta, ""
 
 

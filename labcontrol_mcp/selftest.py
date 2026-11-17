@@ -26,7 +26,7 @@ EXPECTED_TOOLS = {
     "list_scopes", "get_scope_capabilities", "acquire", "arm", "wait_capture", "get_capture", "measure",
     "plot_capture", "release_scope",
     # Testablaeufe (0.59.0)
-    "list_testcases", "run_testcase", "get_run", "stop_run",
+    "list_testcases", "run_testcase", "get_run", "stop_run", "continue_run",
 }
 
 

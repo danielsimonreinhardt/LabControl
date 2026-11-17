@@ -309,9 +309,10 @@ Alle Pfade beginnen mit `/api/v1`, Antworten sind JSON.
 | `POST /all-off` | **ALLE AUS** |
 | `GET /testcases` | Abläufe im gemeinsamen Ordner `testcases/` |
 | `POST /runs` | Lauf starten: `{"testcase": "ladetest.json", "vars": {…}, "variant": "…"}` |
-| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen; `waiting` = wartet auf Bestätigung im Fenster bzw. „Warten seit“ |
+| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen; `waiting` = wartet auf Bestätigung im Fenster, „Warten seit“ bzw. Freigabe (`kind: "release"`); `error` = Meldung des fehlgeschlagenen Schritts |
 | `GET /runs/{id}/result`, `/junit`, `/report` | `run-result.json`, JUnit-XML, HTML-Bericht |
 | `POST /runs/{id}/stop` | Lauf anhalten (wie Stop: ALLE AUS) |
+| `POST /runs/{id}/continue` | Schritt „Warten auf Freigabe“ freigeben: `{"key": "…", "step": n, "by": "…"}` (alles optional); Steuerrecht nötig, eine Bestätigung geht hierüber nicht (`409 confirm_local_only`) |
 | `GET /scopes`, `POST /scopes/{id}/acquire` … | Oszilloskope und Erfassungen (siehe `scope_api/README.md`) |
 | `POST /scopes/{id}/arm`, `POST /captures/{cid}/wait` | scharf schalten (sofort zurück mit `capture_id`) bzw. auf den Trigger warten: `{"timeout_s": 20}` |
 
@@ -394,8 +395,9 @@ LabControl auf einem **anderen Rechner**: dessen Adresse eintragen (z. B. `http:
 | `all_off` | ALLE AUS – geht immer |
 | `list_testcases` | gespeicherte Abläufe und letzte Läufe |
 | `run_testcase` | Ablauf starten, optional mit Variablen und `variant`; liefert die Lauf-ID |
-| `get_run` | Stand eines Laufs (auch `waiting`: Bestätigung nur im Fenster); `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
+| `get_run` | Stand eines Laufs (auch `waiting`: Bestätigung nur im Fenster, Freigabe über `continue_run`; `error` bei Schrittfehler); `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
 | `stop_run` | Lauf anhalten (ALLE AUS) |
+| `continue_run` | Schritt „Warten auf Freigabe“ freigeben (`run_id`, optional `key`, `step`); keine Bestätigung |
 | `list_scopes`, `get_scope_capabilities` | Oszilloskope, Kanäle, Bereiche, Triggerarten |
 | `acquire` | Erfassung mit vollständiger Einstellung (V, s); Kennwerte, Warnungen, Hüllkurve, CSV-Pfad |
 | `arm` | scharf schalten, kehrt sofort mit `capture_id` zurück; dazwischen kann geschaltet werden |
