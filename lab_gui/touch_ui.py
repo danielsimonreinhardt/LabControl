@@ -6,8 +6,8 @@ Gleiche Widgets wie am PC, nur groesser (Raspberry Pi, 1024 x 600):
   Haekchen und Scrollbalken -- kommt zusaetzlich zum Theme-Stylesheet (theme.ThemeManager.set_touch)
 - NavBar: Reiter als Schaltflaechen links (Symbol + Text) statt der Reiterleiste oben; im Touch-Profil
   ist die Uebersicht (Dashboard) dort ein eigener Reiter statt eines festen Streifens
-- TopBar: Leiste oben mit Geraetezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf und
-  ALLE AUS -- ersetzt die Statusleiste, die mit vielen Geraeten breiter als 1024 px wird
+- TopBar: Leiste oben mit Geraetezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf (nur am PC)
+  und ALLE AUS -- ersetzt die Statusleiste, die mit vielen Geraeten breiter als 1024 px wird
 
 NavBar und TopBar (shell_qss) gelten seit 0.53.0 auch am PC, dort kleiner und mit dem Dashboard als
 festem Streifen ueber dem Inhalt (Nutzerwunsch 12.11.2026).
@@ -650,6 +650,8 @@ class TopBar(QWidget):
         if not on:
             self._arrange_button.setChecked(False)
         self._arrange_button.setVisible(on)
+        # Im Touch-Profil (Kiosk am Pi, immer Vollbild) ohne Vollbild-Knopf (Nutzerwunsch 17.11.2026)
+        self._fullscreen_button.setVisible(not on)
         icon = QSize(26, 26) if on else QSize(20, 20)
         for button in (self._fullscreen_button, self._power_button):
             button.setIconSize(icon)

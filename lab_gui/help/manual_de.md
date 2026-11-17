@@ -535,7 +535,7 @@ zeitfenster-begrenzten Ringpuffer der Live-Diagramme.
   (1024 × 600). Größere Schrift und Bedienelemente, größere Schaltflächen in
   der Navigation links, die Übersicht (Dashboard) als eigene Seite statt
   eines festen Streifens, der Gerätezustand oben zum Wischen und der Knopf
-  zum **Anordnen** (Verschiebe-Kreuz). Den Vollbild-Knopf oben gibt es auch am PC; am Raspberry Pi
+  zum **Anordnen** (Verschiebe-Kreuz). Einen Vollbild-Knopf gibt es nur am PC; am Raspberry Pi
   startet LabControl im Vollbild. Unter Linux gibt es
   dort zusätzlich einen Ein/Aus-Knopf: Er fährt den Rechner nach einer
   Rückfrage herunter oder startet ihn neu, LabControl gibt vorher die
@@ -989,8 +989,8 @@ mit Symbol und Kurzname: ✓ verbunden (grün), ✕ getrennt (rot),
 Ⓗ Handbedienung (orange), z. B. „✓ NT1“. Der volle Name steht im
 Tooltip; ein Klick auf die Chips öffnet „Gerätezustand“ mit allen
 Geräten. Die Verbindung wird automatisch alle 3 Sekunden neu versucht,
-solange ein Gerät nicht erreichbar ist. Rechts folgen der Vollbild-Knopf und
-der „ALLE AUS“-Button. Meldungen der App erscheinen kurz als Hinweis am
+solange ein Gerät nicht erreichbar ist. Rechts folgen der Vollbild-Knopf (nicht in der
+Touch-Bedienung) und der „ALLE AUS“-Button. Meldungen der App erscheinen kurz als Hinweis am
 unteren Fensterrand.
 
 ---

@@ -432,6 +432,7 @@ def main() -> int:
     check("UX-8: schmale Scrollleiste (Positionsanzeige)", bar.sizeHint().width() <= 10, str(bar.sizeHint().width()))
 
     print("Vollbild und Ausschalten")
+    check("Touch: kein Vollbild-Knopf in der Leiste", w._top_bar._fullscreen_button.isHidden())
     w._toggle_fullscreen()
     app.processEvents()
     check("Vollbild-Knopf: an, Symbol folgt", w.isFullScreen() and w._top_bar._fullscreen)
@@ -465,6 +466,7 @@ def main() -> int:
           w._top_bar.isVisible() and w._top_bar.isAncestorOf(w._all_off_button) and w._all_off_button.isVisible()
           and w._top_bar.height() < 52 and not w._top_bar._arrange_button.isVisible()
           and not w.statusBar().isVisible())
+    check("PC: Vollbild-Knopf wieder da", w._top_bar._fullscreen_button.isVisible())
     check("Dashboard wieder als Streifen ueber den Seiten, fuenf Seiten, Navigation schmal",
           w.dashboard.parent() is w.tabs.parent() and visible_tabs(w) == 5 and not w.tabs.tabBar().isVisible()
           and w._nav.isVisible() and w._nav.width() < 124 and w.dashboard.isVisible())

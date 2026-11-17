@@ -510,7 +510,7 @@ time-window-limited ring buffer of the live charts.
   (1024 × 600). Larger text and controls, larger buttons in the navigation
   on the left, the overview (dashboard) as its own page instead of a fixed
   strip, a swipeable device status at the top and the **Arrange** button (move cross).
-  The full-screen button at the top exists on the PC too; on the Raspberry
+  The full-screen button at the top exists only on the PC; on the Raspberry
   Pi LabControl starts in full screen. On Linux there is also a power button: after a
   confirmation it shuts the computer down or restarts it, LabControl
   releases the power supplies first. Number fields in the tiles have large
@@ -943,7 +943,7 @@ device with icon and short name: ✓ connected (green), ✕ disconnected
 (red), Ⓗ manual control (orange), e.g. "✓ PSU1". The full name is in the
 tooltip; clicking the chips opens "Device status" with all devices. The
 connection is retried automatically every 3 seconds as long as a device
-is unreachable. The full-screen button and the "ALL OFF" button follow on
+is unreachable. The full-screen button (not in touch mode) and the "ALL OFF" button follow on
 the right. App messages appear briefly as a notice at the bottom of the
 window.
 

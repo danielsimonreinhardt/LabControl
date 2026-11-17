@@ -55,6 +55,9 @@ Semantic Versioning (`lab_gui/version.py`).
   schlägt fehl); am Gerät noch nicht.
 
 ### Geändert
+- **Touch-Bedienung ohne Vollbild-Knopf.** Am Pi läuft LabControl als Kiosk immer im Vollbild; der Knopf oben
+  rechts verließ nur versehentlich den Kiosk. In der Touch-Bedienung fehlt er jetzt, am PC bleibt er.
+  Mock-verifiziert (`check_touch_ui`); am Pi-Display noch nicht angesehen.
 - **Abschalten bei Verbindungsverlust je Gerät wählbar (PI-68 a).** Bisher schaltete der Besitzer alle vom
   Partner belegten Geräte ab, wenn dessen Lebenszeichen 3 s ausblieb (Testablauf oder Claude über den PC). Im WLAN
   kam das bei kurzen Aussetzern vor und schaltete das Netzteil des Evalboards am Pi mitten im Betrieb ab. Jetzt

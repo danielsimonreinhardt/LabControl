@@ -42,7 +42,7 @@ flowchart TB
 | Verbund-Chip, z. B. „⇄ Pi“ | nur bei eingeschaltetem Verbund: grün = verbunden, gelb = verbunden mit Hinweis oder Partner gesperrt, rot „✕ …“ = nicht verbunden; Tooltip nennt den Grund |
 | Chip **MCP** | nur bei eingeschalteter Netzwerk-Freigabe: grün = Claude (MCP) darf steuern, grau = nur lesen |
 | Geräte-Chips, z. B. „✓ NT1“ | je Gerät Kurzname und Zustand: ✓ verbunden (grün), ✕ getrennt (rot), Ⓗ Handbedienung (orange) |
-| Vollbild | Fenster im Vollbild bzw. zurück |
+| Vollbild | Fenster im Vollbild bzw. zurück (nur am PC, nicht in der Touch-Bedienung) |
 | **ALLE AUS** | schaltet sofort alle Ausgänge ab |
 
 - Kurznamen: **NT** Netzteil, **Last**, **CAN**, **HIL**, **Scope** Oszilloskop, **FG** Funktionsgenerator,
