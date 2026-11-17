@@ -17,6 +17,11 @@ Der Monitor selbst loest nur aus (tripped/all_off_requested) -- das
 tatsaechliche Abschalten uebernimmt DeviceWorker.all_outputs_off() im
 Worker-Thread (siehe main_window._wire_safety).
 
+Waehrend eines Testlaufs (1.0.1, PI-79 a) schaltet ein Trip nicht mehr alles ab, sondern nur die Geraete,
+die der Ablauf schaltet, und das ausloesende Geraet: run_trip_handler (RunSession.handle_safety_trip) uebernimmt
+dann die Abschaltung (ohne Abbruch-Block). Nur wenn kein Lauf den Trip uebernimmt (oder die Uebergabe
+scheitert), kommt all_off_requested wie bisher. NOTAUS/ALLE AUS bleibt davon unberuehrt.
+
 Ein Trip ist "latchend": er bleibt bestehen, bis acknowledge() aufgerufen
 wird (Quittieren-Button im Trip-Banner), damit ein unbeaufsichtigter Lauf
 nicht unbemerkt automatisch weiterlaeuft. Ein Temperaturkanal liesse sich
@@ -99,6 +104,8 @@ class SafetyMonitor(QObject):
         self._tripped = False
         self._last_seen: dict[str, float] = {}
         self._supervised: set[str] = set()
+        # (device_id, Grund) -> True, wenn ein laufender Testablauf die Abschaltung uebernimmt (PI-79 a)
+        self.run_trip_handler = None
 
         self._stale_timer = QTimer(self)
         self._stale_timer.setInterval(STALE_CHECK_MS)
@@ -251,6 +258,15 @@ class SafetyMonitor(QObject):
             return
         self._tripped = True
         logger.error("Sicherheitsabbruch: %s", reason)
-        self.all_off_requested.emit(reason)
+        handled = False
+        handler = self.run_trip_handler
+        if handler is not None:
+            try:
+                handled = bool(handler(device_id, reason))
+            except Exception:  # noqa: BLE001 -- dann wie ohne Lauf: alles aus
+                logger.exception("Sicherheitsabbruch: Uebergabe an den Testlauf gescheitert -- ALLE AUS")
+                handled = False
+        if not handled:
+            self.all_off_requested.emit(reason)
         self.tripped.emit(device_id, reason)
         self.state_changed.emit(self._state())

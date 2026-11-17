@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
     _restbus_push = Signal(dict)                     # FT-6: Restbus-Einstellungen an den Worker
     # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
     _request_devices_off = Signal(list, str)
+    _request_devices_off_tagged = Signal(int, list, str)   # PI-79 a: POST /devices-off vom Verbund-Partner
     # PI-28: Partner fuehrt einen Batterie-Simulator -> hier kein 0x130 von Hand/aus Ablaeufen
     _request_partner_battsim = Signal(bool)
 
@@ -508,7 +509,8 @@ class MainWindow(QMainWindow):
         logger.warning("Safe-Stop ausgelöst: %s", reason)
         self._request_all_off.emit(reason)
         if stop_run and self._test_runner.is_running():
-            self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"))
+            # ohne Abbruch-Block (PI-76 a): ALLE AUS schaltet ohnehin alles ab, ein laufender Block bricht ab
+            self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"), mode="all_off")
         if propagate:
             self._partner.all_off(reason)
         self._passthrough.release("ALLE AUS")
@@ -1322,10 +1324,16 @@ class MainWindow(QMainWindow):
     # -- Sicherheits-Watchdog: Banner + Statusanzeige --------------------------
 
     def _on_safety_tripped(self, device_id: str, reason: str) -> None:
-        self._test_runner.stop()
-        # Die eigenen Ausgaenge schaltet der Watchdog selbst ab (all_off_requested); der Partner
-        # bekommt ALLE AUS dazu (PI-27 a).
-        self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
+        handled, self._run_session.trip_handled = self._run_session.trip_handled, False
+        if handled:
+            # PI-79 a: der Lauf hat den Trip uebernommen (RunSession.handle_safety_trip) -- abgeschaltet werden die
+            # Geraete, die der Ablauf schaltet, und das ausloesende, auch beim Verbund-Partner; kein ALLE AUS
+            logger.warning("Sicherheitsabschaltung %s im Testlauf: Abschaltung der Ablauf-Geräte", device_id)
+        else:
+            self._test_runner.stop(mode="all_off")
+            # Ohne Lauf schaltet der Watchdog die eigenen Ausgaenge selbst ab (all_off_requested); der Partner
+            # bekommt ALLE AUS dazu (PI-27 a).
+            self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
         self._passthrough.release("Sicherheitsabschaltung")
         self._safety_banner_label.setText(reason)
         self._safety_banner.show()
@@ -1849,6 +1857,12 @@ class MainWindow(QMainWindow):
             self._on_share_action, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.all_off_requested.connect(
             self._on_share_all_off, Qt.ConnectionType.QueuedConnection)
+        # PI-79 a: Verbund-Partner schaltet beim Abbruch nur die Geraete dieses Rechners ab, die sein Ablauf schaltet
+        self._share_off_pending: set[int] = set()
+        self._share_bridge.devices_off_requested.connect(
+            self._on_share_devices_off, Qt.ConnectionType.QueuedConnection)
+        self._request_devices_off_tagged.connect(self._worker.devices_off_tagged)
+        self._worker.devices_off_done.connect(self._on_worker_devices_off_done)
         self._share_bridge.meta_requested.connect(self._on_share_meta, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.run_requested.connect(self._on_run_command, Qt.ConnectionType.QueuedConnection)
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
@@ -2341,6 +2355,7 @@ class MainWindow(QMainWindow):
                                        scope_service=self._scope_service, parent=self)
         self._run_session.partner_router = self._route_partner_action
         self._run_session.partner_switch_lookup = self._partner_last_switch   # PI-77 a
+        self._run_session.partner_devices_off = self._partner_devices_off     # PI-79 a
         # Messmittel (FT-8): Kennungen aus dem Worker (verbunden in _setup_worker vor dem Thread-Start),
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
@@ -2374,6 +2389,7 @@ class MainWindow(QMainWindow):
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
+        self._test_runner.abort_step_started.connect(self.testcase_tab.on_abort_step_started)   # PI-76 a
         # PI-71 a: Bestaetigungsschritt per Rueckfrage im Fenster (nur hier, nie ueber Netzwerk/MCP)
         self._test_runner.confirm_available = True
         self._test_runner.confirm_requested.connect(self.testcase_tab.on_confirm_requested)
@@ -2408,13 +2424,11 @@ class MainWindow(QMainWindow):
         self.testcase_tab.open_report_requested.connect(self._on_open_report)
         self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)
 
-        # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
-        # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen",
-        # Verriegelung) schaltet sofort alle Ausgaenge ab, statt auf das manuelle
-        # Quittieren per Stop-Button zu warten (siehe testcase_tab.on_step_failed).
-        self._test_runner.step_failed.connect(
-            lambda _index, message: self._safe_stop(f"step failed: {message}")
-        )
+        # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete Messung, verletzte Pruefung mit
+        # "Bei Verletzung abbrechen", Verriegelung) und der Stopp schalten ab, ohne auf das Quittieren per
+        # Stop-Knopf zu warten -- seit 1.0.1 (PI-76 a/PI-79 a) nicht mehr ALLE AUS, sondern der Abbruch-Block des
+        # Ablaufs bzw. die Geraete, die der Ablauf schaltet, und das ausloesende (RunSession._shutdown), BEVOR
+        # step_failed/run_stopped kommen.
 
         self.testcase_tab.run_requested.connect(self._on_run_requested)
         # Debuggen (FT-12, PI-58 a): nur fuer Laeufe aus dem Fenster
@@ -2425,8 +2439,8 @@ class MainWindow(QMainWindow):
         self._test_runner.paused.connect(
             lambda index: self.testcase_tab.on_paused(index, self._test_runner.debug_snapshot()))
         self._test_runner.resumed.connect(self.testcase_tab.on_resumed)
-        self.testcase_tab.stop_requested.connect(self._test_runner.stop)
-        self.testcase_tab.stop_requested.connect(lambda: self._safe_stop("stop button"))
+        # Stopp: Abbruch-Block bzw. Abschaltung der geschalteten Geraete (PI-76 a/PI-79 a), kein ALLE AUS mehr
+        self.testcase_tab.stop_requested.connect(lambda: self._test_runner.stop())
 
     def _on_run_requested(self) -> None:
         self.testcase_tab.refresh_linked_blocks()   # geaenderte verknuepfte Bausteine (0.61.2, PI-49 b)
@@ -2601,8 +2615,7 @@ class MainWindow(QMainWindow):
                 answer(False, "not_running")
                 return
             logger.info("Testlauf %s über das Netzwerk angehalten (%s)", run_id, client)
-            self._test_runner.stop()
-            self._safe_stop(f"run stop via network ({client})")
+            self._test_runner.stop()   # Abbruch-Block bzw. geschaltete Geraete aus (PI-76 a/PI-79 a)
             answer(True)
             return
         if command == "continue":
@@ -2682,8 +2695,10 @@ class MainWindow(QMainWindow):
             # Lauf von der Kommandozeile (FP-4 a): immer ALLE AUS, nur an diesem Rechner
             self._run_all_off_at_end = False
             self._request_all_off.emit("cli: Lauf beendet")
-        elif record is not None and (record.meta or {}).get("all_off_at_end") and outcome != "stopped":
-            # Ablauf-Eigenschaft "Am Ende ALLE AUS" (0.70.0, DR-5); Fehler/Stopp schalten ohnehin ab
+        elif record is not None and (record.meta or {}).get("all_off_at_end") and outcome in ("passed",
+                                                                                               "failed_checks"):
+            # Ablauf-Eigenschaft "Am Ende ALLE AUS" (0.70.0, DR-5) nur bei normalem Ende; Fehler/Stopp schalten
+            # ueber Abbruch-Block bzw. die geschalteten Geraete ab (PI-76 a/PI-79 a), nicht alles
             self._request_all_off.emit("Ablauf beendet (Am Ende ALLE AUS)")
         if run_id is None or record is None:
             return
@@ -2705,7 +2720,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             logger.warning("Ergebnisse des Laufs %s nicht geschrieben: %s", run_id, exc)
         failure = (record.error_index, record.error_message) if record.error_message else None
-        self._runs.finish(run_id, outcome, exit_code(record), files, failure)
+        self._runs.finish(run_id, outcome, exit_code(record), files, failure, run_results.shutdown_dict(record))
         data_store.store().sync_now()
 
     def _route_partner_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> bool:
@@ -2716,6 +2731,37 @@ class MainWindow(QMainWindow):
             return False
         self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
         return True
+
+    def _partner_devices_off(self, device_ids: list[str], reason: str, done) -> bool:
+        """RunSession.partner_devices_off (PI-79 a): Geraete des Verbund-Partners beim Abbruch abschalten -- nur
+        diese, nicht ALLE AUS. done(abgeschaltet, nicht erreichbar) mit den Kennungen "@rechner/id"."""
+        mapping = {}
+        for device_id in device_ids:
+            remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
+            if remote_id is not None:
+                mapping[remote_id] = device_id
+        unknown = [d for d in device_ids if d not in mapping.values()]
+        if not mapping:
+            return False
+
+        def finished(off: list, failed: list) -> None:
+            done([mapping.get(r, r) for r in off], [mapping.get(r, r) for r in failed] + unknown)
+
+        return self._partner.devices_off(sorted(mapping), reason, finished)
+
+    def _on_share_devices_off(self, request_id: int, devices: list, reason: str, client: str) -> None:
+        """POST /devices-off (Verbund-Partner bricht einen Lauf ab, PI-79 a): wie ALLE AUS ohne weitere Pruefung,
+        aber nur fuer die genannten Geraete und ohne einen hier laufenden Ablauf anzuhalten."""
+        logger.warning("Abschalten auf Anfrage von %s (%s): %s", client, reason or "-", ", ".join(devices))
+        self._share_off_pending.add(request_id)
+        self._request_devices_off_tagged.emit(-request_id, list(devices), f"remote devices-off ({client})")
+
+    def _on_worker_devices_off_done(self, tag: int, _off: list, failed: list) -> None:
+        if tag >= 0 or -tag not in self._share_off_pending:
+            return
+        self._share_off_pending.discard(-tag)
+        self._share_bridge.complete(-tag, not failed, "devices_off_incomplete" if failed else "",
+                                    ";".join(failed), 0.0)
 
     def _partner_last_switch(self, _kind: str, device_id: str, action: str) -> switch_log.LastSwitch | None:
         """RunSession.partner_switch_lookup (PI-77 a): letzte Schaltung eines Partnergeraets laut Besitzer, aus

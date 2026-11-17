@@ -443,7 +443,7 @@ STEP_TYPE_ACTION = "action"
 # (continue_run) freigibt; Kennung in params["key"], Hoechstzeit in `duration` (danach FAIL). Bewusst getrennt von
 # "confirm", das nur am Bildschirm geht -- am Ablauf ist sichtbar, ob ein Mensch oder ein Programm freigibt.
 CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor",
-                      "confirm", "wait_since", "await_release"}
+                      "confirm", "wait_since", "await_release", "on_abort"}
 # Schrittarten, die aeltere Programmversionen still uebersprungen haetten (unbekannter step_type = No-Op):
 # eine Datei mit ihnen bekommt Format 4, das aeltere Versionen mit Meldung ablehnen.
 V4_STEP_TYPES = {"confirm", "wait_since"}
@@ -452,9 +452,15 @@ V4_STEP_TYPES = {"confirm", "wait_since"}
 V5_ACTIONS = set(SCOPE_ACTIONS)
 # Format 6 (1.0.1, PI-74 a): Schritt "Warten auf Freigabe" -- eine aeltere Version liesse ihn still aus.
 V6_STEP_TYPES = {"await_release"}
+# Format 7 (1.0.1, PI-76 a): Abbruch-Block -- eine aeltere Version liefe ihn als normale Schritte mit bzw. liesse
+# ihn beim Abbruch weg und schaltete alles ab; sie lehnt die Datei mit Meldung ab.
+V7_STEP_TYPES = {"on_abort"}
 # "monitor" (0.63.0, FT-7): Block "Ueberwachen … Ende" -- zeitbezogene Pruefung (timing_checks.py) ueber die
 # Schritte im Block; Quelle in den cond_*-Feldern (wie eine Messwert-Bedingung), Art/Grenzen in params["monitor"]
-BLOCK_START_TYPES = {"loop", "while", "if", "monitor"}
+# "on_abort" (1.0.1, PI-76 a): Block "Abbruch-Block … Ende" -- laeuft NICHT im normalen Ablauf, sondern nur bei
+# einem Abbruch (Stopp, Fehler, verletzte Pruefung/Grenze, Abbrechen bei der Bestaetigung, Freigabe-Hoechstzeit,
+# Verbindungsverlust), siehe testcase_runner. Hoechstens einer je Ablauf, nur auf oberster Ebene.
+BLOCK_START_TYPES = {"loop", "while", "if", "monitor", "on_abort"}
 CONDITION_STEP_TYPES = {"while", "if"}
 
 # step_type-Basis-Anzeigenamen (Uebersetzungsschluessel), analog zu
@@ -472,6 +478,7 @@ CONTROL_STEP_LABELS = {
     "confirm": "Bestätigung",
     "wait_since": "Warten seit",
     "await_release": "Warten auf Freigabe",
+    "on_abort": "Abbruch-Block",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -542,7 +549,9 @@ CHECK_FIELD_SYMBOLS = {
 # Version 4 (1.0.1, PI-71 a): wie 3, nur mit Schritten aus V4_STEP_TYPES -- eine aeltere Version laesst die
 # Bestaetigung sonst still aus. Version 5 (1.0.1, PI-72 a): wie 4, nur mit Oszilloskop-Schritten (V5_ACTIONS).
 # Version 6 (1.0.1, PI-74 a): wie 5, nur mit "Warten auf Freigabe" (V6_STEP_TYPES).
-FILE_FORMAT_VERSION = 6
+# Version 7 (1.0.1, PI-76 a): wie 6, nur mit Abbruch-Block (V7_STEP_TYPES).
+FILE_FORMAT_VERSION = 7
+_V6 = 6
 _V5 = 5
 _V4 = 4
 _V3 = 3
@@ -744,7 +753,7 @@ class BlockMatch:
 
 
 def validate_structure(
-    steps: list[TestStep],
+    steps: list[TestStep], abort_rules: bool = True,
 ) -> tuple[dict[int, BlockMatch], list[int], list[tuple[int, str]]]:
     """Prueft die Verschachtelung der Block-Marker (loop/while/if/else/end).
 
@@ -757,7 +766,8 @@ def validate_structure(
         Blocks selbst, der Blockinhalt eine Ebene tiefer.
       - errors: (Zeilenindex, Fehlermeldung) fuer strukturelle Probleme --
         "end" ohne offenen Block, "else" ausserhalb/doppelt in einem "if",
-        am Dateiende nicht geschlossene Bloecke.
+        am Dateiende nicht geschlossene Bloecke; mit abort_rules auch die Regeln
+        des Abbruch-Blocks (PI-76 a, siehe _abort_block_errors).
     """
     matching: dict[int, BlockMatch] = {}
     depths = [0] * len(steps)
@@ -804,7 +814,118 @@ def validate_structure(
     for start_index, _kind, _else_index in stack:
         errors.append((start_index, tr("Block nicht geschlossen (fehlendes „Ende“)")))
 
+    if abort_rules:
+        errors.extend(_abort_block_errors(steps, matching, depths))
+        errors.sort(key=lambda item: item[0])
     return matching, depths, errors
+
+
+# -- Abbruch-Block (1.0.1, PI-76 a) und Abschaltung beim Abbruch (PI-79 a) --------------------------------------
+#
+# Ein Abbruch-Block enthaelt nur Schritte, die ohne Mensch, Programm oder Messung in begrenzter Zeit sicher
+# durchlaufen: Geraeteaktionen, die einen Ausgang/Sollwert setzen (Netzteil, Last, microHIL, Funktionsgenerator,
+# Batterie-Simulator, CAN-Frame/Restbus), und Warten. Nicht erlaubt: Pruefungen und Lese-Aktionen (koennen gerade
+# im Fehlerfall scheitern), Bestaetigung/Freigabe (niemand muss beim Abbruch etwas tun), Oszilloskop, J-Link, UDS,
+# XCP (lange Laufzeiten, kein Ausgang), Arbitraersignal (laeuft ueber die Schrittdauer), Variablen und Bloecke.
+ABORT_BLOCK_MAX_S = 60.0
+ABORT_BLOCK_DEVICE_KINDS = ("psu", "load", "hil", "fg", "battsim", "can")
+# Geraetearten, die die Abschaltung kennt (device_worker._kill_*; CAN: Restbus anhalten)
+OFF_DEVICE_KINDS = ("psu", "load", "hil", "fg", "battsim")
+
+
+def abort_block_range(steps: list[TestStep]) -> tuple[int, int] | None:
+    """(Start, Ende) des ersten Abbruch-Blocks (Indizes der Marker-Zeilen) oder None."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    for i, step in enumerate(steps):
+        if step.step_type == "on_abort" and i in matching:
+            return i, matching[i].end_index
+    return None
+
+
+def abort_block_steps(steps: list[TestStep]) -> list[int]:
+    """Indizes der aktiven Schritte im Abbruch-Block (leer = kein Block oder nur deaktivierte Schritte)."""
+    span = abort_block_range(steps)
+    if span is None or not steps[span[0]].enabled:
+        return []
+    return [i for i in range(span[0] + 1, span[1]) if steps[i].enabled and steps[i].step_type in ("action", "wait")]
+
+
+def abort_step_problem(step: TestStep) -> str:
+    """"" = darf im Abbruch-Block stehen, sonst der Grund."""
+    if step.step_type == "wait":
+        return ""
+    if step.step_type != STEP_TYPE_ACTION:
+        return tr("Im Abbruch-Block gehen nur Geräteaktionen und Warten")
+    if step.device_kind not in ABORT_BLOCK_DEVICE_KINDS:
+        return tr("{kind} geht im Abbruch-Block nicht", kind=kind_label(step.device_kind))
+    if step.action in READ_ACTIONS or step.action in ARB_ACTIONS:
+        return tr("{action} geht im Abbruch-Block nicht", action=action_label(step.device_kind, step.action))
+    if step.check_enabled:
+        return tr("Prüfungen gehen im Abbruch-Block nicht")
+    return ""
+
+
+def _abort_block_errors(steps: list[TestStep], matching: dict, depths: list[int]) -> list[tuple[int, str]]:
+    errors: list[tuple[int, str]] = []
+    starts = [i for i, s in enumerate(steps) if s.step_type == "on_abort"]
+    for n, start in enumerate(starts):
+        if n:
+            errors.append((start, tr("Nur ein Abbruch-Block je Ablauf")))
+            continue
+        if depths[start] != 0:
+            errors.append((start, tr("Der Abbruch-Block steht nur auf oberster Ebene, nicht in einem Block")))
+            continue
+        match = matching.get(start)
+        if match is None:
+            continue   # nicht geschlossen, schon gemeldet
+        total = 0.0
+        for i in range(start + 1, match.end_index):
+            step = steps[i]
+            problem = abort_step_problem(step)
+            if problem:
+                errors.append((i, problem))
+            elif step.enabled:
+                total += max(0.0, step.duration)
+        if total > ABORT_BLOCK_MAX_S:
+            errors.append((start, tr("Abbruch-Block dauert {seconds:g} s – höchstens {limit:g} s", seconds=total,
+                                     limit=ABORT_BLOCK_MAX_S)))
+    return errors
+
+
+def switching_step(step: TestStep) -> bool:
+    """Schaltet dieser (aktive Aktions-)Schritt ein Geraet, das die Abschaltung kennt? Lesen zaehlt nicht."""
+    if step.step_type != STEP_TYPE_ACTION or not step.enabled:
+        return False
+    if step.device_kind == "can":
+        return step.action == "RESTBUS_START"
+    return step.device_kind in OFF_DEVICE_KINDS and step.action not in READ_ACTIONS
+
+
+def switched_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
+    """(Geraeteart, device_id) aller Geraete, die der Ablauf schaltet (PI-79 a), in Reihenfolge des ersten
+    Auftretens -- auch im Abbruch-Block, ohne Schritte in deaktivierten Bloecken. device_id "" = automatisch."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    result: list[tuple[str, str]] = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        if step.step_type in BLOCK_START_TYPES and not step.enabled and index in matching:
+            index = matching[index].end_index + 1
+            continue
+        if switching_step(step) and (step.device_kind, step.device_id) not in result:
+            result.append((step.device_kind, step.device_id))
+        index += 1
+    return result
+
+
+def abort_block_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
+    """(Geraeteart, device_id) der Aktionen im Abbruch-Block, in Reihenfolge des ersten Auftretens."""
+    result: list[tuple[str, str]] = []
+    for i in abort_block_steps(steps):
+        step = steps[i]
+        if step.step_type == STEP_TYPE_ACTION and (step.device_kind, step.device_id) not in result:
+            result.append((step.device_kind, step.device_id))
+    return result
 
 
 def condition_summary(step: TestStep) -> str:
@@ -971,15 +1092,21 @@ def needs_v6(steps: list[TestStep]) -> bool:
     return any(step.step_type in V6_STEP_TYPES for step in steps)
 
 
+def needs_v7(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V7_STEP_TYPES for step in steps)
+
+
 def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
     """Dateiinhalt eines Ablaufs (auch fuer REST/Kommandozeile, ohne Datei)."""
-    v6 = needs_v6(steps)
+    v7 = needs_v7(steps)
+    v6 = v7 or needs_v6(steps)
     v5 = v6 or needs_v5(steps)
     v4 = v5 or needs_v4(steps)
     v3 = v4 or needs_v3(steps, meta)
     payload = {
         "format": "labor-testcase",
-        "version": FILE_FORMAT_VERSION if v6 else _V5 if v5 else _V4 if v4 else _V3 if v3 else _V2,
+        "version": (FILE_FORMAT_VERSION if v7 else _V6 if v6 else _V5 if v5 else _V4 if v4 else _V3 if v3
+                    else _V2),
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
@@ -1114,13 +1241,14 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
     # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
     steps = [replace(step, link={}) for step in steps]   # Bausteine sind flach (keine Verknuepfung in sich)
-    v6 = needs_v6(steps)   # PI-74 a: Warten auf Freigabe -> Format 5
+    v7 = needs_v7(steps)   # PI-76 a: Abbruch-Block -> Format 6
+    v6 = v7 or needs_v6(steps)   # PI-74 a: Warten auf Freigabe -> Format 5
     v5 = v6 or needs_v5(steps)   # PI-72 a: Oszilloskop-Schritte -> Format 4
     v4 = v5 or needs_v4(steps)   # PI-71 a: Bestaetigung/Warten seit -> Format 3, aeltere Versionen lehnen ab
     v3 = v4 or needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
-        "version": BLOCK_FILE_FORMAT_VERSION + (4 if v6 else 3 if v5 else 2 if v4 else 1 if v3 else 0),
+        "version": BLOCK_FILE_FORMAT_VERSION + (5 if v7 else 4 if v6 else 3 if v5 else 2 if v4 else 1 if v3 else 0),
         "name": name,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
@@ -1131,7 +1259,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
 def load_block(path: Path) -> tuple[str, list[TestStep]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = int(data.get("version", 0))
-    if version > BLOCK_FILE_FORMAT_VERSION + 4:
+    if version > BLOCK_FILE_FORMAT_VERSION + 5:
         raise ValueError(
             tr(
                 "Baustein-Datei stammt aus einer neueren Programmversion "

@@ -418,7 +418,7 @@ The "+" menu additionally offers:
 - **Confirmation**: pauses the run and shows a prompt with the row's text
   in the LabControl window.
   - **Continue** resumes, **Cancel** (also Escape/closing) acts like
-    **Stop** (ALL OFF).
+    **Stop** (abort block or shutdown, see below).
   - The prompt is not modal: ALL OFF and Stop stay usable.
   - Visible over the network/MCP ("waiting" in `/api/v1/runs/{id}`), but
     confirmable **only in the window**.
@@ -433,10 +433,38 @@ The "+" menu additionally offers:
     `continue_run`, only with control permission (paired program or
     "Claude (MCP) may control"). A given identifier or step number must
     match the waiting step.
-  - Without a release within the maximum time the step fails (ALL OFF).
+  - Without a release within the maximum time the step fails (abort block
+    or shutdown, see below).
   - The report notes who released it and when.
   - Needs network sharing: without it or without a window
     (`labcontrol run`) the sequence does not start. Format 6.
+- **Abort block … End**: steps that run only when the run is aborted –
+  never when it ends normally. Always added at the end of the sequence
+  (with "Power supply – Output OFF" as the first step); at most one per
+  sequence, top level only.
+  - Runs on: Stop (button, REST/MCP), step error, a violated check or
+    monitor limit with "abort", "Cancel" at a confirmation, the maximum
+    time of "Wait for release", connection loss in the Verbund.
+  - Allowed: device actions that set an output or setpoint (power supply,
+    load, microHIL, function generator, battery simulator, CAN/rest bus)
+    and **Wait** – in any order, e.g. generator off, wait 1 s, 24 V off,
+    12 V off. Not allowed: checks, read actions, confirmation, release,
+    oscilloscope, J-Link, UDS, XCP, arbitrary signal, variables, blocks.
+    At most 60 s.
+  - Devices not named in the block stay as they are.
+  - If a step fails (device gone, refused), the remaining steps still run;
+    afterwards the devices switched by the sequence are turned off for
+    safety (standard shutdown).
+  - Safety shutdown and ALL OFF do not run the block.
+  - Sequences with an abort block are saved in format 7.
+
+**Off on abort** (bottom, next to the report button): shows what an abort
+turns off. Without an abort block these are the devices the sequence
+switches (actions, including building blocks and roles), plus the device
+that triggers the abort (e.g. the source of a violated check or monitor).
+Devices that are only read – such as a power supply measured only in
+"Monitor" – stay as they are, also at the Verbund partner. With an abort
+block it shows the block's devices.
 
 A block start and its "End" are always inserted as a pair. The table
 shows nesting as indentation; if the structure is unbalanced (e.g. a
@@ -490,12 +518,16 @@ times — otherwise a check can fail incorrectly.
   running, the table is locked, the current step is highlighted and
   shown in the status line (including the current loop/while iteration,
   if applicable).
-- **Stop** (square): aborts the run and immediately switches off all outputs
-  (safety shutdown).
+- **Stop** (square): aborts the run: the abort block runs first; without
+  one, the devices switched by the sequence are turned off. To turn
+  everything off: **ALL OFF**.
 - **Report button** (enabled after every run): opens a post-run report
   as an HTML page in the browser, or exports it as PDF. The report
   contains the sequence, all check results, and a chart of the recorded
-  measurements.
+  measurements; after an abort also "Shutdown on abort" (abort block or
+  standard shutdown, the block's steps with their result, devices turned
+  off and not reachable). The same is in `get_run` and the result JSON as
+  `shutdown`.
 - With desktop notifications enabled (see Settings), a system
   notification reports the run finishing or failing, even if the window
   is not in the foreground.
@@ -878,8 +910,10 @@ notice reminds you. Which devices may be read and controlled is still set by
 each computer in its own share list.
 
 **In a link, ALL OFF acts on both computers**: the button, ALL OFF via MCP or
-the network and a safety shutdown also switch everything off at the partner.
-Stopping a test sequence or a failed step only affects the own computer. The
+the network and a safety shutdown without a running test sequence also switch
+everything off at the partner. Stop, error or safety shutdown of a test sequence
+only turn off the devices the sequence switches and the triggering one – also
+those of the partner, nothing else there. The
 bar at the top shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
 (disconnected). Closing the app switches nothing off at the partner. ALL OFF
 also aborts a running test sequence, so that its next step does not switch the
@@ -942,8 +976,12 @@ out – remove it on one of them.
 For every known device, the Settings tab offers its own section of
 limits (max. voltage/current, plus max. power for the load). If a live
 measurement exceeds an enabled limit **of that specific device**, the
-software immediately switches off **all** outputs — regardless of
-whether a testcase is currently running.
+software immediately switches off:
+
+- **without a test sequence** all outputs (also at the Verbund partner);
+- **during a test sequence** only the devices the sequence switches and the
+  triggering device (e.g. the power supply with too much current). Devices
+  that are only read stay on. The abort block does not run.
 
 - A triggered alarm "latches": it stays active until confirmed via the
   **Acknowledge** button in the red banner at the top of the window —
@@ -965,7 +1003,8 @@ whether a testcase is currently running.
 - **Power supply/load interlock** (Settings → Safety): pairs of a power
   supply and a load connected to the same point. In a test sequence,
   "Output ON" is rejected while the other device of the pair is on or its
-  state is unknown; the run then ends with an error and ALL OFF. A sequence
+  state is unknown; the run then ends with an error (abort block or shutdown
+  of the sequence's devices). A sequence
   can lift this in "Test sequence properties…" (source/sink). Tiles, presets
   and the network are not interlocked. Only devices of this computer count.
 

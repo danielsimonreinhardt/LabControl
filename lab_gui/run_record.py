@@ -70,6 +70,11 @@ class RunRecord:
     # index, arm_index, device_id, capture_id, csv_path, triggered, measurement, channel, value, unit, summary,
     # warnings, t, png (Bild fuer den Bericht, fehlt wenn das Zeichnen scheiterte)
     scope_captures: list = field(default_factory=list)
+    # Abschaltung beim Abbruch (1.0.1, PI-76 a/PI-79 a, RunSession._shutdown), None = normal beendet:
+    # mode ("block" | "standard" | "watchdog" | "all_off"), cause ("failed"/"stopped"), message, trigger,
+    # block (Schritte des Abbruch-Blocks: step, ok, message, device_id) oder None, fallback (Fehler im Block ->
+    # Standard-Abschaltung), timed_out, devices (vorgesehen), off, unreachable, labels (device_id -> Name)
+    shutdown: dict | None = None
 
 
 class RunRecorder(QObject):

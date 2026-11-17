@@ -35,6 +35,8 @@ class RunEntry:
     files: dict[str, str] = field(default_factory=dict)   # "result" | "junit" | "report" -> Pfad
     # PI-71 a: worauf der Lauf gerade wartet (TestRunner.waiting_changed), sonst None
     waiting: dict | None = None
+    # PI-76 a/PI-79 a: Abschaltung beim Abbruch (run_results.shutdown_dict), None = normal beendet/laeuft
+    shutdown: dict | None = None
 
     def public(self, with_events: int = -1) -> dict:
         data = {
@@ -45,6 +47,7 @@ class RunEntry:
             "checks_total": self.checks_total, "checks_failed": self.checks_failed,
             "error": self.error or None, "files": sorted(self.files),
             "waiting": _public_waiting(self.waiting),
+            "shutdown": self.shutdown,
         }
         if with_events >= 0:
             data["events"] = self.events[with_events:]
@@ -146,10 +149,11 @@ class RunRegistry:
             return _public_waiting(entry.waiting) if entry is not None else None
 
     def finish(self, run_id: str, status: str, exit_code: int, files: dict[str, str],
-               failure: tuple[int, str] | None = None) -> None:
+               failure: tuple[int, str] | None = None, shutdown: dict | None = None) -> None:
         """Lauf zu Ende. failure: (Schrittindex, Meldung) des Schrittfehlers aus der Laufaufzeichnung -- traegt
         "error" nach, falls step_failed das Register nicht (mehr) erreicht hat (Lauf aus dem Fenster: RunSession
-        beendet den Lauf schon im selben Signal, bevor MainWindow eintragen konnte)."""
+        beendet den Lauf schon im selben Signal, bevor MainWindow eintragen konnte). shutdown: Abschaltung beim
+        Abbruch (PI-79 a), siehe run_results.shutdown_dict."""
         with self._lock:
             entry = self._runs.get(run_id)
             if entry is None:
@@ -159,6 +163,7 @@ class RunRegistry:
                 entry.error = f"Schritt {index + 1}: {message}"
                 self._event(entry, "failed", step=index + 1, message=message)
             entry.waiting = None
+            entry.shutdown = dict(shutdown) if shutdown else None
             entry.status = status
             entry.exit_code = exit_code
             entry.ended = time.time()

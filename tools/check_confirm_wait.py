@@ -7,7 +7,8 @@
              um, Partner- und "automatisch"-Kennung, Bestaetigen, Abbrechen (= Stopp), ohne Fenster -> Abbruch
 - editor  -- Einfuegen-Menue, Zeilen bearbeiten, steps()/Speichern/Laden, Ausfuehren-Ansicht, Baustein-Vorschau
 - window  -- echtes Hauptfenster mit Freigabe: Lauf per HTTP, "waiting" in /runs/{id} und /status, kein Bestaetigen
-             ueber das Netz, Rueckfrage im Fenster (auch Touch-Profil), Weiter, Abbrechen (ALLE AUS), Stopp per HTTP
+             ueber das Netz, Rueckfrage im Fenster (auch Touch-Profil), Weiter, Abbrechen (Abschaltung der Ablauf-Geraete,
+             seit PI-79 a), Stopp per HTTP
              schliesst die Rueckfrage, Bericht mit Vermerken
 - cli     -- `labcontrol run` ohne Fenster: Bestaetigung -> Exit 3 mit Meldung, "Warten seit" laeuft
 
@@ -463,7 +464,7 @@ def section_window(app) -> None:
           and "Warten ≥ 1.5 s seit Ausgang EIN" in html and "bestätigt" in html, html[-400:])
     spin(app, 3.0)
 
-    # Abbrechen in der Rueckfrage = Stopp (ALLE AUS), im Touch-Profil
+    # Abbrechen in der Rueckfrage = Stopp (Abschaltung der Ablauf-Geraete, PI-79 a), im Touch-Profil
     import touch_ui
     touch_ui.sizer().set_active(True)
     count = len(reasons)
@@ -480,7 +481,11 @@ def section_window(app) -> None:
     entry = run_entry(run_id)
     check("Abbrechen: gestoppt, Exit 2", entry.get("status") == "stopped" and entry.get("exit_code") == 2,
           str(entry)[:200])
-    check("Abbrechen: ALLE AUS wie Stopp", "stop button" in reasons[count:], str(reasons[count:]))
+    # seit PI-79 a: kein ALLE AUS mehr, sondern die Geraete, die der Ablauf schaltet (wie der Stopp)
+    shutdown = entry.get("shutdown") or {}
+    check("Abbrechen: wie Stopp -- Standard-Abschaltung des Ablauf-Netzteils, kein ALLE AUS",
+          shutdown.get("mode") == "standard" and shutdown.get("cause") == "stopped"
+          and "psu:SIM" in shutdown.get("off", []) and not reasons[count:], f"{shutdown} {reasons[count:]}")
     touch_ui.sizer().set_active(False)
     spin(app, 3.0)
 

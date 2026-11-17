@@ -66,6 +66,10 @@ from touch_run_view import TouchRunView
 from theme import current as current_palette
 from theme import set_tone
 from testcase_model import (
+    ABORT_BLOCK_MAX_S,
+    abort_block_devices,
+    abort_block_steps,
+    switched_devices,
     ACTION_VALUE_RANGE,
     ARB_TARGETS,
     BATTSIM_CHECK_FIELD_LABELS,
@@ -151,8 +155,9 @@ _PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.ite
 #   confirm:         COL_ACTION = Text der Rueckfrage,         COL_ENABLED = Aktiv          (PI-71 a)
 #   wait_since:      COL_ACTION = Geraet, COL_VALUE = Aktion, COL_DURATION = Mindestzeit, COL_ENABLED = Aktiv
 #   await_release:   COL_ACTION = Kennung,  COL_DURATION = Hoechstzeit,  COL_ENABLED = Aktiv     (PI-74 a)
+#   on_abort:        COL_ENABLED = Aktiv (Abbruch-Block, PI-76 a; Inhalt bis zum "Ende" laeuft nur beim Abbruch)
 CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait", "monitor", "confirm",
-                             "wait_since", "await_release"}
+                             "wait_since", "await_release", "on_abort"}
 
 
 class _NoWheelComboBox(QComboBox):
@@ -683,6 +688,9 @@ class TestcaseTab(QWidget):
         self._action_add_release = self._add_menu.addAction("")
         self._action_add_release.triggered.connect(lambda: self._insert_new_step(TestStep(
             step_type="await_release", duration=60.0)))
+        # PI-76 a: Abbruch-Block (hoechstens einer, am Ende des Ablaufs)
+        self._action_add_abort = self._add_menu.addAction("")
+        self._action_add_abort.triggered.connect(self._insert_abort_block)
         self._confirm_dialog = None
         self._action_add_action.triggered.connect(lambda: self._insert_new_step(TestStep()))
         self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
@@ -819,6 +827,11 @@ class TestcaseTab(QWidget):
         run_row.addWidget(self._run_from_button)
         run_row.addWidget(self._status_label)
         run_row.addStretch()
+        # PI-79 a: was beim Abbruch abgeschaltet wird (bzw. die Geraete des Abbruch-Blocks), Einzelheiten im Tooltip
+        self._abort_chip = QLabel()
+        self._abort_chip.setObjectName("abortOffChip")
+        self._abort_chip.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        run_row.addWidget(self._abort_chip)
 
         self._report_button = IconButton("mdi.file-chart-outline", "")
         self._report_button.setEnabled(False)
@@ -894,6 +907,7 @@ class TestcaseTab(QWidget):
         self._action_add_wait_since.setText(tr("Warten seit Aktion"))
         self._action_add_confirm.setText(tr("Bestätigung"))
         self._action_add_release.setText(tr("Warten auf Freigabe"))
+        self._action_add_abort.setText(tr("Abbruch-Block … Ende"))
         self._run_button.setToolTip(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
         self._pause_button.setToolTip(tr("Weiter") if getattr(self, "_paused", False) else tr("Anhalten"))
@@ -1202,6 +1216,22 @@ class TestcaseTab(QWidget):
         self._insert_row(index, TestStep(step_type=kind))
         self._insert_row(index + 1, TestStep(step_type="end"))
         self._table.selectRow(index)
+        self._revalidate_structure()
+
+    def _insert_abort_block(self) -> None:
+        """PI-76 a: Abbruch-Block am Ende des Ablaufs anlegen (Netzteil AUS als erster Schritt); gibt es schon
+        einen, wird er markiert."""
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, COL_NUM)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == "on_abort":
+                self._table.selectRow(row)
+                self._reveal_row(row)
+                return
+        index = self._table.rowCount()
+        self._insert_row(index, TestStep(step_type="on_abort"))
+        self._insert_row(index + 1, TestStep(device_kind="psu", action="PSU_OUT_OFF"))
+        self._insert_row(index + 2, TestStep(step_type="end"))
+        self._table.selectRow(index + 1)
         self._revalidate_structure()
 
     def _refresh_actions_for_row(
@@ -2678,6 +2708,9 @@ class TestcaseTab(QWidget):
             duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
             return TestStep(step_type="await_release", enabled=enabled, duration=duration_spin.value())
 
+        if step_type == "on_abort":   # PI-76 a
+            return TestStep(step_type="on_abort", enabled=enabled)
+
         if step_type == "wait_since":
             device_combo: QComboBox = self._table.cellWidget(row, COL_ACTION)
             action_combo: QComboBox = self._table.cellWidget(row, COL_VALUE)
@@ -3221,7 +3254,7 @@ class TestcaseTab(QWidget):
         matching, depths, errors = validate_structure(steps)
         error_by_row = dict(errors)
         end_kind_labels = {"loop": tr("Schleife"), "while": tr("Solange"), "if": tr("Wenn"),
-                           "monitor": tr("Überwachen")}
+                           "monitor": tr("Überwachen"), "on_abort": tr("Abbruch-Block")}
 
         # group_member_rows markiert die Zeilen INNERHALB eines (auf- oder
         # eingeklappten) Bausteins (ohne die Kopfzeile selbst) -- sie werden
@@ -3251,6 +3284,7 @@ class TestcaseTab(QWidget):
             else:
                 col1.setToolTip("")
 
+        self._refresh_abort_chip(steps, not errors)
         self._structure_ok = not errors
         if errors:
             self._run_button.setToolTip(
@@ -3295,6 +3329,39 @@ class TestcaseTab(QWidget):
         # Zellen-Widgets muessen dafuer bereits ihre endgueltige Zeilen-/
         # Spaltenzuordnung haben (siehe _apply_member_row_shifts).
         self._apply_member_row_shifts()
+
+    def abort_chip_text(self) -> str:
+        """Text der Anzeige "Beim Abbruch aus: …" (fuer Pruefungen)."""
+        return self._abort_chip.text()
+
+    def _refresh_abort_chip(self, steps: list[TestStep], structure_ok: bool) -> None:
+        """PI-76 a/PI-79 a: kompakte Zeile, was ein Abbruch abschaltet -- ohne Block die Geraete, die der Ablauf
+        schaltet, mit Block dessen Geraete. Einzelheiten (Regel, Ausloeser, Rueckfall) im Tooltip."""
+        if not hasattr(self, "_abort_chip"):
+            return
+        names = lambda pairs: ", ".join(self._device_display(kind, device_id) for kind, device_id in pairs)
+        switched = switched_devices(steps) if structure_ok else []
+        block = abort_block_steps(steps) if structure_ok else []
+        if block:
+            devices = abort_block_devices(steps)
+            text = tr("Abbruch-Block: {devices}", devices=names(devices) or "–")
+            tip = [tr("Beim Abbruch (Stopp, Fehler, verletzte Prüfung, Abbrechen, Freigabe-Höchstzeit, "
+                      "Verbindungsverlust) laufen die Schritte des Abbruch-Blocks der Reihe nach, höchstens "
+                      "{seconds:g} s. Andere Geräte bleiben, wie sie sind.", seconds=ABORT_BLOCK_MAX_S),
+                   tr("Scheitert ein Schritt, werden danach die Geräte abgeschaltet, die der Ablauf schaltet: "
+                      "{devices}", devices=names(switched) or "–")]
+        else:
+            text = tr("Beim Abbruch aus: {devices}", devices=names(switched) or "–")
+            tip = [tr("Beim Abbruch werden die Geräte abgeschaltet, die der Ablauf schaltet, dazu das Gerät, "
+                      "das den Abbruch auslöst. Nur gelesene Geräte bleiben, wie sie sind.")]
+        tip.append(tr("Sicherheitsabschaltung: ohne Abbruch-Block die Geräte des Ablaufs und das auslösende. "
+                      "ALLE AUS schaltet weiterhin alles ab."))
+        self._abort_chip.setText(text)
+        self._abort_chip.setToolTip("\n".join(tip))
+        pal = current_palette()
+        self._abort_chip.setStyleSheet(f"color: {pal.text_muted}; border: 1px solid {pal.text_muted};"
+                                       " border-radius: 8px; padding: 1px 8px;")
+        self._abort_chip.setVisible(any(s.step_type == STEP_TYPE_ACTION for s in steps))
 
     def _update_run_enabled(self) -> None:
         self._run_button.setEnabled(not self._is_running and self._structure_ok)
@@ -3498,6 +3565,17 @@ class TestcaseTab(QWidget):
             iter=self._iteration_text,
         )
 
+    def on_abort_step_started(self, index: int, step: TestStep) -> None:
+        """PI-76 a: Schritt des Abbruch-Blocks laeuft -- Zeile markieren, Status "Abbruch-Block: …"."""
+        if not 0 <= index < self._table.rowCount():
+            return
+        self._reveal_row(index)
+        self._start_blink(index)
+        detail = (tr("Warten ({duration:g} s)", duration=step.duration) if step.step_type == "wait" else
+                  f"{self._device_display(step.device_kind, step.device_id)} – "
+                  f"{action_label(step.device_kind, step.action)}")
+        self._set_status("Abbruch-Block, Schritt {index}: {detail}", index=index + 1, detail=detail)
+
     # -- Bestaetigungsschritt (PI-71 a) ---------------------------------------------
 
     def on_confirm_requested(self, index: int, text: str) -> None:
@@ -3522,7 +3600,7 @@ class TestcaseTab(QWidget):
         self._confirm_dialog = None
         self.confirm_answered.emit(accepted)
         if not accepted:
-            self._on_stop_clicked()   # wie der Stopp-Knopf: Lauf aus, ALLE AUS (MainWindow._safe_stop)
+            self._on_stop_clicked()   # wie der Stopp-Knopf: Abbruch-Block bzw. geschaltete Geraete aus (PI-76 a)
 
     def _close_confirm_dialog(self) -> None:
         dialog, self._confirm_dialog = self._confirm_dialog, None

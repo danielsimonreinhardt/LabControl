@@ -488,7 +488,10 @@ def section_window(app) -> None:
     check("... Ereignis 'failed' vor 'end'", [e["kind"] for e in entry.get("events", [])
                                               if e["kind"] in ("failed", "end")] == ["failed", "end"],
           str(entry.get("events")))
-    check("... ALLE AUS", any(r.startswith("step failed") for r in reasons[count:]), str(reasons[count:]))
+    # seit PI-79 a: Standard-Abschaltung der Ablauf-Geraete statt ALLE AUS
+    shutdown = entry.get("shutdown") or {}
+    check("... Netzteil des Ablaufs abgeschaltet, kein ALLE AUS", shutdown.get("mode") == "standard"
+          and shutdown.get("off") and not reasons[count:], f"{shutdown} {reasons[count:]}")
     spin(app, 3.0)
 
     # Bugfix: Schrittfehler bei einem Start im Fenster (nicht ueber REST)

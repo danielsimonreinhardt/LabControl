@@ -442,7 +442,7 @@ späterer Schritt auslöst (z. B. Einschalten mit 12 V):
 - **Bestätigung**: hält den Lauf an und zeigt im LabControl-Fenster eine
   Rückfrage mit dem Text der Zeile.
   - **Weiter** setzt fort, **Abbrechen** (auch Escape/Schließen) wirkt wie
-    **Stop** (ALLE AUS).
+    **Stop** (Abbruch-Block bzw. Abschaltung, siehe unten).
   - Die Rückfrage ist nicht modal: ALLE AUS und Stop bleiben bedienbar.
   - Über Netzwerk/MCP sichtbar („waiting“ in `/api/v1/runs/{id}`), aber
     **nur im Fenster** bestätigbar.
@@ -457,10 +457,39 @@ späterer Schritt auslöst (z. B. Einschalten mit 12 V):
     `continue_run`, nur mit Steuerrecht (gekoppeltes Programm oder „Claude
     (MCP) darf steuern“). Eine angegebene Kennung oder Schrittnummer muss
     zum wartenden Schritt passen.
-  - Ohne Freigabe in der Höchstzeit ist der Schritt fehlgeschlagen (ALLE AUS).
+  - Ohne Freigabe in der Höchstzeit ist der Schritt fehlgeschlagen
+    (Abbruch-Block bzw. Abschaltung, siehe unten).
   - Der Bericht vermerkt, wer wann freigegeben hat.
   - Braucht die Netzwerkfreigabe: ohne sie bzw. ohne Fenster
     (`labcontrol run`) startet der Ablauf nicht. Format 6.
+- **Abbruch-Block … Ende**: Schritte, die nur laufen, wenn der Lauf
+  abgebrochen wird – nie bei normalem Ende. Wird immer am Ende des Ablaufs
+  angelegt (mit „Netzteil – Ausgang AUS“ als erstem Schritt); höchstens
+  einer je Ablauf, nur auf oberster Ebene.
+  - Läuft bei: Stop (Knopf, REST/MCP), Schrittfehler, verletzter Prüfung
+    oder Überwachen-Grenze mit „Abbrechen“, „Abbrechen“ bei der
+    Bestätigung, Höchstzeit von „Warten auf Freigabe“, Verbindungsverlust
+    im Verbund.
+  - Erlaubt sind Geräteaktionen, die einen Ausgang oder Sollwert setzen
+    (Netzteil, Last, microHIL, Funktionsgenerator, Batterie-Simulator,
+    CAN/Restbus), und **Warten** – Reihenfolge frei, z. B. Generator aus,
+    1 s warten, 24 V aus, 12 V aus. Nicht erlaubt: Prüfungen,
+    Lese-Aktionen, Bestätigung, Freigabe, Oszilloskop, J-Link, UDS, XCP,
+    Arbiträrsignal, Variablen, Blöcke. Höchstens 60 s.
+  - Geräte, die im Block nicht vorkommen, bleiben, wie sie sind.
+  - Scheitert ein Schritt (Gerät weg, Ablehnung), laufen die übrigen
+    trotzdem; danach werden zur Sicherheit die Geräte abgeschaltet, die
+    der Ablauf schaltet (Standard-Abschaltung).
+  - Sicherheitsabschaltung und ALLE AUS führen den Block nicht aus.
+  - Abläufe mit Abbruch-Block speichert LabControl im Format 7.
+
+**Beim Abbruch aus** (unten neben dem Report-Knopf): zeigt, was ein Abbruch
+abschaltet. Ohne Abbruch-Block sind das die Geräte, die der Ablauf schaltet
+(Aktionen, auch Bausteine und Rollen), dazu das Gerät, das den Abbruch
+auslöst (z. B. die Quelle einer verletzten Prüfung oder Überwachung). Nur
+gelesene Geräte – etwa ein Netzteil, das nur in „Überwachen“ gemessen
+wird – bleiben, wie sie sind, auch beim Verbund-Partner. Mit Abbruch-Block
+stehen dort dessen Geräte.
 
 Block-Start und „Ende“ werden immer als Paar eingefügt. Die Tabelle zeigt
 die Verschachtelung als Einrückung; ist die Struktur unausgeglichen (z.B.
@@ -516,12 +545,16 @@ Prüfung fälschlich fehl.
   Während der Ausführung ist die Tabelle gesperrt, der aktuelle Schritt
   markiert und in der Statuszeile sichtbar (inkl. aktueller
   Schleifen-/Solange-Durchlauf, falls zutreffend).
-- **Stop** (Quadrat): bricht den Lauf ab und schaltet sofort alle Ausgänge ab
-  (Sicherheitsabschaltung).
+- **Stop** (Quadrat): bricht den Lauf ab: zuerst läuft der Abbruch-Block,
+  ohne ihn werden die Geräte abgeschaltet, die der Ablauf schaltet. Alles
+  abschalten: **ALLE AUS**.
 - **Report-Button** (nach jedem Lauf aktiv): öffnet einen Nachlauf-Report
   als HTML-Seite im Browser oder exportiert ihn als PDF. Der Report
   enthält den Ablauf, alle Prüfergebnisse und ein Diagramm der
-  aufgezeichneten Messwerte.
+  aufgezeichneten Messwerte; nach einem Abbruch auch „Abschaltung beim
+  Abbruch“ (Abbruch-Block oder Standard-Abschaltung, die Schritte des
+  Blocks mit Ergebnis, abgeschaltete und nicht erreichbare Geräte). Dasselbe
+  steht als `shutdown` in `get_run` und im Ergebnis-JSON.
 - Bei aktivierter Desktop-Benachrichtigung (siehe Einstellungen) meldet
   eine System-Benachrichtigung Lauf-Ende bzw. -Fehler, auch wenn das
   Fenster gerade nicht im Vordergrund ist.
@@ -923,8 +956,10 @@ sonst erinnert ein Hinweis daran. Welche Geräte gelesen und gesteuert werden
 dürfen, legt weiterhin jeder Rechner in seiner Freigabeliste fest.
 
 **ALLE AUS wirkt im Verbund auf beide Rechner**: der Knopf, ALLE AUS über MCP
-oder das Netzwerk und eine Sicherheitsabschaltung schalten auch beim Partner
-alles ab. Stop oder Fehler eines Testablaufs betreffen nur den eigenen Rechner.
+oder das Netzwerk und eine Sicherheitsabschaltung ohne laufenden Testablauf
+schalten auch beim Partner alles ab. Stop, Fehler oder Sicherheitsabschaltung
+eines Testablaufs schalten nur die Geräte ab, die der Ablauf schaltet, und das
+auslösende – auch die des Partners, sonst nichts dort.
 Die Leiste oben zeigt den Verbund als Chip „⇄ Pi“ (verbunden) bzw. „✕ Pi“
 (getrennt). Beim Beenden der App wird am Partner nichts abgeschaltet.
 ALLE AUS bricht außerdem einen laufenden Testablauf ab, damit dessen nächster
@@ -989,8 +1024,12 @@ Für jedes bekannte Gerät lässt sich im Einstellungen-Tab eine eigene
 Sektion mit Grenzwerten (max. Spannung/Strom, bei der Last zusätzlich
 max. Leistung) aktivieren. Überschreitet eine laufende Messung einen
 aktivierten Grenzwert **dieses konkreten Geräts**, schaltet die Software
-sofort **alle** Ausgänge ab – unabhängig davon, ob gerade ein Testablauf
-läuft.
+sofort ab:
+
+- **ohne Testablauf** alle Ausgänge (auch beim Verbund-Partner);
+- **während eines Testablaufs** nur die Geräte, die der Ablauf schaltet, und
+  das auslösende Gerät (z. B. das Netzteil mit zu hohem Strom). Nur gelesene
+  Geräte bleiben an. Der Abbruch-Block läuft dabei nicht.
 
 - Ein ausgelöster Alarm ist „latchend“: Er bleibt bestehen, bis er über
   den **Quittieren**-Button im roten Banner am oberen Fensterrand
@@ -1002,7 +1041,7 @@ läuft.
 - Während eines Testlaufs überwacht der Watchdog zusätzlich die
   Verbindung der beteiligten Geräte – bricht die Verbindung ab oder
   liefert ein Gerät zu lange keine aktuelle Messung, schaltet ebenfalls
-  sofort ab.
+  sofort ab (die Geräte des Ablaufs und das betroffene Gerät).
 - Der **„ALLE AUS“-Button** ganz rechts in der Leiste oben schaltet
   jederzeit manuell und sofort alle Ausgänge ab, unabhängig vom
   Watchdog-Status.
@@ -1014,7 +1053,8 @@ läuft.
   Netzteil und Last, die an derselben Stelle angeschlossen sind. Im
   Testablauf wird „Ausgang EIN“ abgelehnt, solange das andere Gerät des
   Paares eingeschaltet ist oder sein Zustand unbekannt ist; der Lauf endet
-  dann mit Fehler und ALLE AUS. Ein Ablauf kann das über „Eigenschaften des
+  dann mit Fehler (Abbruch-Block bzw. Abschaltung der Ablauf-Geräte). Ein
+  Ablauf kann das über „Eigenschaften des
   Ablaufs…“ aufheben (Quelle/Senke). Kachel, Speicherplätze und Netzwerk
   sind nicht verriegelt. Es zählen nur Geräte dieses Rechners.
 

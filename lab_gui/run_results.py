@@ -130,6 +130,18 @@ def check_rows(record: RunRecord) -> list[dict]:
     return rows
 
 
+def shutdown_dict(record: RunRecord) -> dict | None:
+    """Abschaltung beim Abbruch fuer run-result.json und get_run: mode ("block" = Abbruch-Block, "standard" =
+    geschaltete Geraete und Ausloeser, "watchdog" = Sicherheitsabschaltung, "all_off" = ALLE AUS), fallback,
+    off/unreachable (Kennungen), block (Schritte mit Ergebnis), labels."""
+    shutdown = getattr(record, "shutdown", None)
+    if not shutdown:
+        return None
+    keys = ("mode", "cause", "message", "trigger", "fallback", "timed_out", "devices", "off", "unreachable",
+            "block", "labels", "escalated")
+    return {key: shutdown[key] for key in keys if key in shutdown}
+
+
 def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
     used = sorted({s.device_id for s in record.samples} | {st.device_id for st in record.steps if st.device_id})
     return {
@@ -159,6 +171,8 @@ def result_dict(record: RunRecord, interrupted: bool = False) -> dict:
         "timing_checks": timing_rows(record),
         # Oszilloskop-Erfassungen der Warteschritte (1.0.1, PI-72 a); Kurve als CSV unter csv_path
         "scope_captures": scope_capture_rows(record),
+        # Abschaltung beim Abbruch (1.0.1, PI-76 a/PI-79 a), None = normal beendet
+        "shutdown": shutdown_dict(record),
         "warnings": [f"Kalibrierung abgelaufen: {r['label']} (fällig {r['due']})"
                      for r in record.instruments if r.get("expired")],
     }

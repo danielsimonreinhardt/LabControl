@@ -250,6 +250,65 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)
 
 
+SHUTDOWN_MODE_TEXTS = {
+    "block": "Abbruch-Block",
+    "standard": "Standard-Abschaltung (geschaltete Geräte und Auslöser)",
+    "watchdog": "Sicherheitsabschaltung (geschaltete Geräte und Auslöser)",
+    "all_off": "ALLE AUS (alle Geräte)",
+}
+
+
+def shutdown_mode_text(shutdown: dict) -> str:
+    text = tr(SHUTDOWN_MODE_TEXTS.get(shutdown.get("mode", ""), shutdown.get("mode", "")))
+    if shutdown.get("fallback"):
+        text += " – " + tr("Fehler im Block, danach Standard-Abschaltung")
+    if shutdown.get("escalated") == "watchdog" and shutdown.get("mode") != "watchdog":
+        text += " – " + tr("danach Sicherheitsabschaltung")
+    elif shutdown.get("escalated") == "all_off" and shutdown.get("mode") != "all_off":
+        text += " – " + tr("danach ALLE AUS")
+    return text
+
+
+def _shutdown_html(record: RunRecord, th, td) -> list[str]:
+    """Abschnitt "Abschaltung beim Abbruch" (1.0.1, PI-76 a/PI-79 a): Art, Schritte des Abbruch-Blocks mit
+    Ergebnis, abgeschaltete und nicht erreichbare Geraete."""
+    shutdown = getattr(record, "shutdown", None)
+    if not shutdown:
+        return []
+    labels = shutdown.get("labels") or {}
+
+    def names(ids) -> str:
+        return ", ".join(labels.get(d) or record.device_meta.get(d, ("", d))[1] for d in ids) or "–"
+
+    parts = ['<h2>' + html.escape(tr("Abschaltung beim Abbruch")) + '</h2>',
+             '<table style="width:100%; border-collapse:collapse;">']
+    rows = [(tr("Art"), shutdown_mode_text(shutdown))]
+    if shutdown.get("trigger"):
+        rows.append((tr("Auslösendes Gerät"), names([shutdown["trigger"]])))
+    if shutdown.get("mode") != "all_off":
+        rows.append((tr("Abgeschaltet"), names(shutdown.get("off") or [])))
+        rows.append((tr("Nicht erreichbar"), names(shutdown.get("unreachable") or [])))
+    if shutdown.get("timed_out"):
+        rows.append((tr("Abbruch-Block"), tr("Höchstdauer überschritten")))
+    for label, value in rows:
+        parts.append('<tr>' + td(label, bold=True) + td(value) + '</tr>')
+    parts.append('</table>')
+    block = shutdown.get("block")
+    if block:
+        parts.append('<h3>' + html.escape(tr("Abbruch-Block")) + '</h3>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th(tr("Schritt")) + th(tr("Ergebnis")) + th(tr("Meldung")) + '</tr>')
+        for row in block:
+            index = int(row.get("step", 0)) - 1
+            text = _step_started_text(record, index) if 0 <= index < len(record.steps) else str(row.get("step"))
+            bg = _BG_PASS if row.get("ok") else _BG_FAIL
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER}; background:{bg};'
+            cells = (text, tr("ok") if row.get("ok") else tr("Fehler"), row.get("message") or "–")
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
+        parts.append('</table>')
+    return parts
+
+
 def _iteration_suffix(event) -> str:
     # Dieselben Uebersetzungsschluessel wie testcase_tab.on_iteration_changed
     # (ohne Leerzeichen davor, damit beide Stellen sich eine Uebersetzung
@@ -445,6 +504,8 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
                 f'</tr>'
             )
         parts.append('</table>')
+
+    parts.extend(_shutdown_html(record, th, td))
 
     timing = run_results.timing_rows(record)
     if timing:

@@ -230,3 +230,10 @@ class PartnerClient:
     def all_off(self) -> dict:
         _, payload = self._request("POST", "/api/v1/all-off", {}, ALL_OFF_TIMEOUT_S)
         return payload
+
+    def devices_off(self, devices: list[str], reason: str = "") -> dict:
+        """Nur diese Geraete abschalten (1.0.1, PI-79 a): {"ok": True, "off": [...], "failures": []}; nicht
+        erreichbare als PartnerError devices_off_incomplete mit "failures"."""
+        _, payload = self._request("POST", "/api/v1/devices-off", {"devices": list(devices), "reason": reason},
+                                   ALL_OFF_TIMEOUT_S)
+        return payload

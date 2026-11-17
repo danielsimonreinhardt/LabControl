@@ -61,18 +61,24 @@ Testablaufs und nach einer Sicherheitsabschaltung.
 flowchart LR
   subgraph BEIDE["auch beim Verbund-Partner"]
     K["Knopf ALLE AUS"]
-    NW["REST und MCP"]
-    SA["Sicherheitsabschaltung"]
+    NW["REST und MCP all_off"]
+    SA["Sicherheitsabschaltung<br/>ohne Testablauf"]
   end
   subgraph LOKAL["nur dieser Rechner"]
-    ST["Stop im Testablauf"]
-    FS["fehlgeschlagener Schritt"]
     CL["Lauf-Ende von der<br/>Kommandozeile"]
-    EG["Lauf-Ende mit<br/>„Am Ende ALLE AUS“"]
+    EG["normales Lauf-Ende mit<br/>„Am Ende ALLE AUS“"]
+  end
+  subgraph ABL["nur Geräte des Ablaufs (auch beim Partner)"]
+    ST["Stop, fehlgeschlagener Schritt,<br/>Sicherheitsabschaltung im Lauf"]
   end
   BEIDE --> AA(["ALLE AUS"])
   LOKAL --> AA
+  ST --> AB(["Abbruch-Block bzw. geschaltete<br/>Geräte + Auslöser aus"])
 ```
+
+Stop, Fehler und Sicherheitsabschaltung **im Testablauf** schalten seit 1.0.1 nicht mehr alles ab, sondern nur, was
+der Ablauf schaltet, und das auslösende Gerät – oder es läuft der Abbruch-Block des Ablaufs
+([Testabläufe](testablaeufe.md#abbruch-abbruch-block-und-abschaltung)).
 
 | Gerät | Wirkung von ALLE AUS |
 |---|---|
@@ -83,7 +89,7 @@ flowchart LR
 | Batterie-Simulator | Ausgang gesperrt, die Fernsteuerung bleibt bestehen |
 | CAN-Interface | ein laufender Restbus wird gestoppt |
 | Testablauf | bricht mit „ALLE AUS – Ablauf abgebrochen“ ab |
-| Verbund | bei Knopf, REST/MCP und Sicherheitsabschaltung schaltet der Partner-Rechner ebenfalls alles ab |
+| Verbund | bei Knopf, REST/MCP und Sicherheitsabschaltung ohne Testablauf schaltet der Partner-Rechner ebenfalls alles ab |
 
 **Am Ende eines Laufs:**
 
@@ -293,10 +299,13 @@ Netzteil/Last. Sie ersetzen keine Schutzfunktion am Gerät wie OVP/OCP des Netzt
 ```mermaid
 flowchart LR
   M["Messwert von<br/>Netzteil oder Last"] --> W{"über einem<br/>aktiven Grenzwert?"}
-  W -- ja --> T["Sicherheitsabschaltung:<br/>alle Ausgänge aus,<br/>Ablauf stoppt"]
+  W -- ja --> L{"Testablauf<br/>läuft?"}
+  L -- nein --> T["Sicherheitsabschaltung:<br/>alle Ausgänge aus"]
+  L -- ja --> TL["Sicherheitsabschaltung:<br/>Geräte des Ablaufs +<br/>auslösendes aus, Ablauf stoppt"]
   R["Testablauf läuft"] --> S{"Gerät getrennt oder<br/>2 s ohne Messwert?"}
-  S -- ja --> T
+  S -- ja --> TL
   T --> B["rotes Banner,<br/>Chip AUSGELÖST"]
+  TL --> B
   B --> Q["Quittieren"]
   Q --> F["wieder frei"]
 ```
@@ -320,8 +329,11 @@ gesetztem Häkchen.
 
 Folgen der **Sicherheitsabschaltung**:
 
-- alle Ausgänge aus wie bei ALLE AUS, im Verbund auch beim Partner,
-- ein laufender Testablauf stoppt,
+- ohne Testablauf: alle Ausgänge aus wie bei ALLE AUS, im Verbund auch beim Partner,
+- im Testablauf: der Lauf stoppt, abgeschaltet werden nur die Geräte, die der Ablauf schaltet, und das
+  auslösende Gerät (Grenzwert verletzt, veraltet oder getrennt), auch beim Partner. Nur gelesene Geräte, etwa ein
+  Netzteil, das nur in „Überwachen“ gemessen wird, bleiben an. Der Abbruch-Block läuft dabei **nicht**,
+- welche Geräte abgeschaltet wurden und welche nicht erreichbar waren, steht im Bericht und in `get_run`,
 - rotes Banner mit dem Grund, Chip **AUSGELÖST**.
 
 !!! warning "Der Watchdog prüft Messwerte, nicht Sollwerte"
@@ -368,7 +380,7 @@ flowchart LR
   Q -- nein --> OK["wird eingeschaltet"]
   Q -- ja --> X{"Ablauf erlaubt<br/>Quelle/Senke?"}
   X -- ja --> OK
-  X -- nein --> F["abgelehnt: Lauf endet<br/>mit Fehler und ALLE AUS"]
+  X -- nein --> F["abgelehnt: Lauf endet<br/>mit Fehler (Abbruch)"]
 ```
 
 - Meldung bei Ablehnung: „Verriegelung: … ist eingeschaltet“.

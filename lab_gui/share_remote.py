@@ -84,6 +84,8 @@ class RemoteBridge(QObject):
     # verbund (gekoppelter Partner, PI-39 b), program (gekoppeltes Programm, PI-44 b)
     action_requested = Signal(int, str, str, str, float, int, bool, bool, bool)
     all_off_requested = Signal(int, str)                       # id, client
+    # Abschalten einzelner Geraete (POST /devices-off, PI-79 a): id, Geraete, Grund, client
+    devices_off_requested = Signal(int, list, str, str)
     # Verbund (PI-32 a): id, ID beim Partner, qualifizierte ID, kind, action, value, channel, client
     partner_action_requested = Signal(int, str, str, str, str, float, int, str)
     # Verbund (PI-43 b): id, eigene Geraete-ID, {"label"?, "color"?}
@@ -209,6 +211,15 @@ class RemoteBridge(QObject):
         result = pending.result if done and pending.result is not None else RemoteResult(
             "pending", message="Keine Rueckmeldung innerhalb der Wartezeit")
         self._audit(client, "ALLE AUS", result)
+        return result
+
+    def submit_devices_off(self, devices: list[str], reason: str, client: str) -> RemoteResult:
+        """Nur diese Geraete abschalten (share_api._devices_off, PI-79 a). Wie ALLE AUS ohne Drosselung -- es ist
+        die sichere Richtung. Der GUI-Thread meldet ueber complete() (devices_off_incomplete mit den
+        fehlgeschlagenen Geraeten als Semikolon-Liste)."""
+        result = self._wait(lambda req_id: self.devices_off_requested.emit(req_id, list(devices), reason, client),
+                            ALL_OFF_TIMEOUT_S)
+        self._audit(client, f"Abschalten {', '.join(devices)}" + (f" ({reason})" if reason else ""), result)
         return result
 
     # -- GUI-Thread -----------------------------------------------------------

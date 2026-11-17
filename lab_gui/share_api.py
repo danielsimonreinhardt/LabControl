@@ -23,6 +23,8 @@ Sicherheitsleitplanken, die hier und nirgends sonst durchgesetzt werden:
 Lesen ist GET, Schreiben (Fernsteuerung) ist POST:
   POST /api/v1/tiles/{id}/actions   eine Aktion an einem Geraet
   POST /api/v1/all-off              ALLE AUS
+  POST /api/v1/devices-off          nur die genannten Geraete abschalten ({"devices": [...], "reason"}; Abbruch
+                                    eines Testablaufs beim Verbund-Partner, 1.0.1, PI-79 a)
 
 Schreiben ist strenger als Lesen und wird in dieser Reihenfolge abgewiesen:
   Token (immer, nur als Authorization-Header, nie als ?token= -- URLs landen
@@ -33,6 +35,7 @@ Schreiben ist strenger als Lesen und wird in dieser Reihenfolge abgewiesen:
 ALLE AUS ist die einzige Ausnahme: es verlangt nur den Token und geht auch
 bei ausgeschaltetem Hauptschalter, laufendem Testlauf und nach einer
 Sicherheitsabschaltung -- es ist die Richtung, in der nichts kaputtgehen kann.
+Dasselbe gilt fuer devices-off (Abschalten einzelner Geraete).
 
 Ausgefuehrt wird ueber einen `executor` (im Betrieb share_remote.RemoteBridge),
 den dispatch() als Parameter bekommt. So bleibt dieses Modul Qt-frei und mit
@@ -716,6 +719,32 @@ def _all_off(executor, client: str) -> Response:
     return _result_response(result, {})
 
 
+DEVICES_OFF_MAX = 50
+
+
+def _devices_off(executor, body: bytes, client: str) -> Response:
+    """POST /api/v1/devices-off {"devices": ["psu:0001", ...], "reason": "..."} -- nur diese Geraete abschalten
+    (1.0.1, PI-79 a: Abbruch eines Testablaufs, der Geraete dieses Rechners geschaltet hat). Wie ALLE AUS nur mit
+    Token. 502 devices_off_incomplete mit "failures", wenn ein Geraet nicht erreichbar war."""
+    if executor is None or not hasattr(executor, "submit_devices_off"):
+        return _error(501, "not_implemented")
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except (UnicodeDecodeError, ValueError):
+        return _error(400, "invalid_json")
+    devices = payload.get("devices") if isinstance(payload, dict) else None
+    if (not isinstance(devices, list) or not devices or len(devices) > DEVICES_OFF_MAX
+            or not all(isinstance(d, str) and d and len(d) <= 200 for d in devices)):
+        return _error(400, "invalid_value", field="devices")
+    reason = str(payload.get("reason") or "")[:200]
+    result = executor.submit_devices_off(list(dict.fromkeys(devices)), reason, client)
+    if result.status == "error" and result.code == "devices_off_incomplete":
+        failures = [f for f in result.message.split(";") if f]
+        return _json(502, {"v": API_VERSION, "ok": False, "error": "devices_off_incomplete",
+                           "failures": failures})
+    return _result_response(result, {"off": list(dict.fromkeys(devices))} if result.status == "ok" else {})
+
+
 # -- Oszilloskope (scope_api) --------------------------------------------------
 
 # HTTP-Status je ScopeError-Code (Codes siehe scope_api/base.py und scope_service.py).
@@ -955,6 +984,8 @@ def _post_route(path: str) -> tuple[str, str] | None:
     ("lease_renew", lease_id) oder ("lease_release", lease_id)."""
     if path == f"{API_PREFIX}/all-off":
         return "all_off", ""
+    if path == f"{API_PREFIX}/devices-off":
+        return "devices_off", ""
     if path == f"{API_PREFIX}/leases":
         return "lease", ""
     lease_prefix = f"{API_PREFIX}/leases/"
@@ -1005,6 +1036,8 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
     kind, device_id = route
     if kind == "all_off":
         return _all_off(executor, client)
+    if kind == "devices_off":
+        return _devices_off(executor, body, client)
     if kind.startswith("lease"):
         if leases is None:
             return _error(501, "not_implemented")

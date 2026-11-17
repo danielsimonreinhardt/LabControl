@@ -11,9 +11,16 @@ derselbe Weg auch die Kommandozeile (headless.py, `labcontrol run`) und spaeter 
 - RunSession: Start, Weiterleitung der Aktionen an den Worker (oder an einen Verbund-Router), Abschluss.
   Oszilloskop "Scharf schalten"/"Auf Erfassung warten" (1.0.1, PI-72 a) gehen an den ScopeService (derselbe
   Erfassungskern wie REST/MCP); Laufende/-abbruch bricht eine noch scharfe Erfassung ab und gibt frei.
+- Abschaltung beim Abbruch (1.0.1, PI-76 a/PI-79 a, _shutdown): nach dem Abbruch-Block (TestRunner) -- ist er
+  fehlerfrei gelaufen, bleibt alles, wie er es hinterlassen hat. Sonst (kein Block, Fehler im Block,
+  Sicherheitsabschaltung) werden die Geraete abgeschaltet, die der Ablauf schaltet, dazu das ausloesende Geraet;
+  nur gelesene Geraete bleiben, wie sie sind. Eigene ueber den Worker (devices_off_tagged), die des Verbund-
+  Partners ueber partner_devices_off (POST /devices-off beim Besitzer). Ergebnis in RunRecord.shutdown.
+  ALLE AUS/NOTAUS schaltet weiterhin alles ab (MainWindow), hier wird es nur vermerkt.
 """
 from __future__ import annotations
 
+import itertools
 import logging
 import time
 from typing import Callable
@@ -24,10 +31,20 @@ import scope_steps
 from i18n import tr
 from run_record import RunRecorder
 from switch_log import LastSwitch
-from testcase_model import PICO_READ_ACTIONS, TestStep, kind_label
+from testcase_model import OFF_DEVICE_KINDS, PICO_READ_ACTIONS, TestStep, kind_label, switched_devices
 from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
+
+# Abschaltung beim Abbruch (PI-79 a): so lange auf die Rueckmeldung von Worker und Verbund-Partner warten (ALLE AUS
+# braucht mit Wiederholung je Geraet einige Sekunden, der Partner bis zu share_remote.ALL_OFF_TIMEOUT_S)
+SHUTDOWN_TIMEOUT_S = 20.0
+_OFF_TAGS = itertools.count(1)
+
+
+def device_kind_of(device_id: str) -> str:
+    """Geraeteart aus der Kennung ("psu:0001", Partner "@pi/psu:0001")."""
+    return device_id.rpartition("/")[2].partition(":")[0]
 
 DEVICE_KINDS = ("load", "psu", "can", "hil", "picoscope", "fg", "scpiscope", "battsim", "jlink", "uds", "xcp")
 
@@ -180,6 +197,8 @@ class RunSession(QObject):
     dispatch_restbus = Signal(str, str, str, str, str)   # FT-6: can_id, Aktion, Botschaft, Signal, Wert
     picoscope_test_running = Signal(bool)
     close_picoscope_sessions = Signal()
+    # Abschaltung beim Abbruch (PI-79 a): Kennung, Geraete, Grund -> DeviceWorker.devices_off_tagged
+    dispatch_devices_off = Signal(int, list, str)
     # Lauf zu Ende (nachdem die Laufaufzeichnung ihr Ergebnis hat): outcome wie RunRecord.outcome
     run_ended = Signal(str)
 
@@ -214,9 +233,29 @@ class RunSession(QObject):
         self._active = False
         # An den Worker gesendete Schaltaktion, deren Bestaetigung die Verriegelung nachfuehrt
         self._pending_switch: tuple[str, str, str] | None = None
+        # Abschaltung beim Abbruch (PI-79 a): Geraete, die der Ablauf schaltet (aufgeloest), und laufende Abschaltung
+        self._switched: list[str] = []
+        self._shutdown_state: dict | None = None
+        self.trip_handled = False   # letzte Sicherheitsabschaltung hat dieser Lauf uebernommen (handle_safety_trip)
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setSingleShot(True)
+        self._shutdown_timer.timeout.connect(self._on_shutdown_timeout)
+        # Geraete des Verbund-Partners abschalten: (Kennungen "@rechner/id", Grund, fertig(off, failed)) -> False,
+        # wenn das nicht geht (kein Verbund) -- MainWindow._partner_devices_off
+        self.partner_devices_off: Callable[[list[str], str, Callable[[list, list], None]], bool] | None = None
 
         runner = self.runner = TestRunner()
         runner.setParent(self)
+        runner.shutdown_handler = self._shutdown
+        runner.escalate_handler = self._escalate
+        self._worker_off = hasattr(worker, "devices_off_tagged")
+        if self._worker_off:
+            self.dispatch_devices_off.connect(worker.devices_off_tagged)
+            worker.devices_off_done.connect(self._on_devices_off_done)
+        try:
+            safety.run_trip_handler = self.handle_safety_trip   # Watchdog im Lauf (PI-79 a)
+        except AttributeError:
+            pass
         runner.switch_lookup = self._lookup_switch   # PI-77 a: "Warten seit Aktion" ueber den ganzen Rechner
         runner.execute_action.connect(self._on_execute_action)
         runner.execute_can_send.connect(self._on_execute_can_send)
@@ -446,6 +485,8 @@ class RunSession(QObject):
         if self.meta.get("source_sink") and self.interlock.groups():
             logger.warning("Testablauf %s: Verriegelung Netzteil/Last aufgehoben (Quelle/Senke)", testcase_name)
         self._active = True
+        self._shutdown_state = None
+        self._switched = self.switched_ids(steps)
         step_device_ids = self.directory.step_device_ids(steps)
         if self.requirement_register is not None and record is not None:
             # Anforderungen (FT-3): Titel der genannten IDs aus dem Register festhalten
@@ -495,6 +536,212 @@ class RunSession(QObject):
         if needed and self.xcp is not None:   # XCP-Messliste fuer Bedingungen/Ueberwachen abfragen (0.64.3)
             self.xcp.set_polling("run", True, needed)
         self.runner.start(steps, variables, start_index)
+
+    # -- Abschaltung beim Abbruch (PI-76 a, PI-79 a) ------------------------------------
+
+    def switched_ids(self, steps: list[TestStep]) -> list[str]:
+        """Aufgeloeste Kennungen der Geraete, die der Ablauf schaltet (auch im Abbruch-Block). Feste Kennungen
+        bleiben, auch wenn das Geraet gerade fehlt (dann "nicht erreichbar"); "automatisch" nur, wenn eindeutig."""
+        result: list[str] = []
+        for kind, device_id in switched_devices(steps):
+            resolved = device_id if device_id else self.directory.resolve(kind, "")[0]
+            if resolved and resolved not in result:
+                result.append(resolved)
+        return result
+
+    def _resolve_trigger(self, trigger) -> str:
+        """Kennung des ausloesenden Geraets, "" = keins bzw. eins, das die Abschaltung nicht kennt."""
+        if not trigger:
+            return ""
+        kind, device_id = trigger
+        if not device_id:
+            device_id = self.directory.resolve(kind, "")[0] or ""
+        if not device_id:
+            return ""
+        kind = kind or device_kind_of(device_id)
+        return device_id if kind in OFF_DEVICE_KINDS and device_kind_of(device_id) in OFF_DEVICE_KINDS else ""
+
+    def handle_safety_trip(self, device_id: str, reason: str) -> bool:
+        """SafetyMonitor.run_trip_handler: Sicherheitsabschaltung waehrend eines Laufs -- abschalten nur der
+        Geraete des Ablaufs und des ausloesenden Geraets, ohne Abbruch-Block (PI-79 a). False = kein Lauf."""
+        if not self._active or not self.runner.is_running():
+            return False
+        self.trip_handled = True   # fuer MainWindow._on_safety_tripped: kein ALLE AUS am Partner
+        self.runner.abort(reason, mode="watchdog", trigger=("", device_id))
+        return True
+
+    def _shutdown(self, info: dict) -> bool:
+        """TestRunner.shutdown_handler: Abschaltung nach dem Abbruch-Block. True = laeuft, finish_abort folgt."""
+        record = self.recorder.record()
+        mode = info["mode"]
+        trigger = self._resolve_trigger(info.get("trigger"))
+        steps = record.steps if record is not None else []
+        block_rows = []
+        for row in info.get("block") or []:
+            step = steps[row["index"]] if 0 <= row["index"] < len(steps) else None
+            device = ""
+            if step is not None and step.step_type == "action":
+                device = (step.device_id if step.device_id else
+                          self.directory.resolve(step.device_kind, "")[0] or "")
+            block_rows.append({"step": row["index"] + 1, "ok": bool(row["ok"]), "message": row.get("message", ""),
+                               "device_id": device})
+        shutdown = {"mode": "", "cause": info["kind"], "message": info.get("message", ""), "trigger": trigger,
+                    "block": block_rows if info.get("has_block") else None, "fallback": False,
+                    "timed_out": bool(info.get("timed_out")), "devices": [], "off": [], "unreachable": [],
+                    "labels": {}}
+        if mode == "all_off":
+            # ALLE AUS/NOTAUS: MainWindow schaltet alle Geraete ab (auch beim Partner) -- nur vermerken
+            shutdown["mode"] = "all_off"
+            self._finish_shutdown(shutdown, notify=False)
+            return False
+        if mode == "normal" and info.get("has_block"):
+            for row in block_rows:
+                if not row["device_id"]:
+                    continue
+                bucket = shutdown["off"] if row["ok"] else shutdown["unreachable"]
+                if row["device_id"] not in bucket:
+                    bucket.append(row["device_id"])
+            shutdown["off"] = [d for d in shutdown["off"] if d not in shutdown["unreachable"]]
+            shutdown["mode"] = "block"
+            if info.get("block_ok"):
+                shutdown["devices"] = list(shutdown["off"])
+                self._finish_shutdown(shutdown, notify=False)
+                return False
+            shutdown["fallback"] = True   # Fehler im Block: zur Sicherheit wie ohne Block abschalten
+        else:
+            shutdown["mode"] = "watchdog" if mode == "watchdog" else "standard"
+        targets = list(self._switched)
+        if trigger and trigger not in targets:
+            targets.append(trigger)
+        shutdown["devices"] = targets
+        reason = tr("Testablauf „{name}“ abgebrochen", name=self.testcase_name or "?")
+        state = self._shutdown_state = {"shutdown": shutdown, "own_tag": 0, "partner": False, "reason": reason,
+                                        "extra_tags": set()}
+        self._send_off(targets, reason)
+        if self._shutdown_state is not state:
+            return True   # schon fertig (Rueckmeldung kam sofort), finish_abort ist gelaufen
+        if not state["own_tag"] and not state["partner"]:
+            self._finish_shutdown(shutdown, notify=False)
+            return False
+        self._shutdown_timer.start(round(SHUTDOWN_TIMEOUT_S * 1000))
+        return True
+
+    def _send_off(self, targets: list[str], reason: str) -> None:
+        state = self._shutdown_state
+        shutdown = state["shutdown"]
+        own = [d for d in targets if not d.startswith("@")]
+        partner = [d for d in targets if d.startswith("@")]
+        logger.warning("Testablauf abgebrochen (%s): schalte ab: %s", shutdown["mode"], ", ".join(targets) or "-")
+        if own:
+            if self._worker_off:
+                tag = next(_OFF_TAGS)
+                state["own_tag"] = tag
+                state["own_ids"] = list(own)
+                self.dispatch_devices_off.emit(tag, own, reason)
+            else:   # kein Worker mit Abschaltung (Pruefskript-Attrappe)
+                self._merge_off([], own)
+        if partner:
+            sender = self.partner_devices_off
+            accepted = False
+            state["partner"] = True   # vor dem Aufruf: die Rueckmeldung darf auch sofort kommen
+            state["partner_ids"] = list(partner)
+            if sender is not None:
+                try:
+                    accepted = bool(sender(partner, reason,
+                                           lambda off, failed, st=state: self._on_partner_off_done(st, off, failed)))
+                except Exception:  # noqa: BLE001 -- dann nicht erreichbar
+                    logger.exception("Abschaltung beim Verbund-Partner gescheitert")
+            if not accepted and state["partner"]:
+                state["partner"] = False
+                self._merge_off([], partner)
+
+    def _merge_off(self, off: list, failed: list) -> None:
+        shutdown = self._shutdown_state["shutdown"]
+        for device_id in off:
+            if device_id in shutdown["unreachable"]:
+                shutdown["unreachable"].remove(device_id)
+            if device_id not in shutdown["off"]:
+                shutdown["off"].append(device_id)
+        for device_id in failed:
+            if device_id in shutdown["off"]:
+                shutdown["off"].remove(device_id)
+            if device_id not in shutdown["unreachable"]:
+                shutdown["unreachable"].append(device_id)
+
+    @Slot(int, list, list)
+    def _on_devices_off_done(self, tag: int, off: list, failed: list) -> None:
+        state = self._shutdown_state
+        if state is not None and tag in state["extra_tags"]:   # ausloesendes Geraet einer Verschaerfung
+            state["extra_tags"].discard(tag)
+            self._merge_off(list(off), list(failed))
+            return
+        if state is None or not tag or tag != state.get("own_tag"):
+            return
+        state["own_tag"] = 0
+        self._merge_off(list(off), list(failed))
+        self._maybe_finish_shutdown()
+
+    def _on_partner_off_done(self, state: dict, off: list, failed: list) -> None:
+        if state is not self._shutdown_state or not state.get("partner"):
+            return
+        state["partner"] = False
+        self._merge_off(list(off), list(failed))
+        self._maybe_finish_shutdown()
+
+    def _maybe_finish_shutdown(self) -> None:
+        state = self._shutdown_state
+        if state is not None and not state["own_tag"] and not state["partner"]:
+            self._shutdown_timer.stop()
+            self._finish_shutdown(state["shutdown"])
+
+    def _on_shutdown_timeout(self) -> None:
+        state = self._shutdown_state
+        if state is None:
+            return
+        pending = (state.get("own_ids", []) if state["own_tag"] else []) + \
+                  (state.get("partner_ids", []) if state["partner"] else [])
+        logger.error("Abschaltung beim Abbruch: keine Rueckmeldung fuer %s", ", ".join(pending))
+        state["own_tag"] = 0
+        state["partner"] = False
+        self._merge_off([], [d for d in pending if d not in state["shutdown"]["off"]])
+        self._finish_shutdown(state["shutdown"])
+
+    def _escalate(self, mode: str, trigger) -> None:
+        """TestRunner.escalate_handler: Sicherheitsabschaltung/ALLE AUS, waehrend die Abschaltung schon laeuft."""
+        state = self._shutdown_state
+        if state is None:
+            return
+        shutdown = state["shutdown"]
+        shutdown["escalated"] = mode
+        device_id = self._resolve_trigger(trigger)
+        if mode != "watchdog" or not device_id or device_id in shutdown["devices"]:
+            return   # ALLE AUS schaltet MainWindow ohnehin ab
+        shutdown["devices"].append(device_id)
+        shutdown["trigger"] = shutdown["trigger"] or device_id
+        if device_id.startswith("@") or not self._worker_off:
+            logger.error("Abschaltung beim Abbruch: ausloesendes Geraet %s nachtraeglich nicht abschaltbar", device_id)
+            self._merge_off([], [device_id])
+            return
+        tag = next(_OFF_TAGS)
+        state["extra_tags"].add(tag)
+        self.dispatch_devices_off.emit(tag, [device_id], state["reason"])
+
+    def _finish_shutdown(self, shutdown: dict, notify: bool = True) -> None:
+        """notify: der Runner wartet auf finish_abort (asynchrone Abschaltung); synchron meldet er sich selbst."""
+        self._shutdown_state = None
+        self._shutdown_timer.stop()
+        ids = set(shutdown["devices"]) | set(shutdown["off"]) | set(shutdown["unreachable"])
+        if shutdown["trigger"]:
+            ids.add(shutdown["trigger"])
+        shutdown["labels"] = {d: self._label(d) for d in sorted(ids)}
+        record = self.recorder.record()
+        if record is not None:
+            record.shutdown = shutdown
+        logger.warning("Abschaltung beim Abbruch: %s%s, aus: %s, nicht erreichbar: %s", shutdown["mode"],
+                       " (Rückfall)" if shutdown["fallback"] else "", ", ".join(shutdown["off"]) or "-",
+                       ", ".join(shutdown["unreachable"]) or "-")
+        if notify:
+            self.runner.finish_abort()
 
     # -- Letzte Schaltung (PI-77 a) ----------------------------------------------------
 

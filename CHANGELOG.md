@@ -110,8 +110,53 @@ Semantic Versioning (`lab_gui/version.py`).
   Kennung/Schritt, ohne Steuerrecht, Höchstzeit, Bestätigung weiterhin nicht über das Netz, echter MCP-Server mit
   `continue_run`, Kommandozeile; dazu `check_confirm_wait`, `check_scope_arm`, `check_translations`,
   `check_network_share` app); am Gerät noch nicht.
+- **Abbruch-Block im Testablauf (PI-76 a).** Ein Ablauf kann einen eigenen Block „Abbruch-Block … Ende“ haben
+  (Einfügen-Menü, landet am Ende des Ablaufs, höchstens einer, nur oberste Ebene). Seine Schritte laufen nur bei
+  einem Abbruch – Stop (Knopf, REST/MCP), Schrittfehler, verletzte Prüfung bzw. Überwachen-Grenze mit Abbruch,
+  „Abbrechen“ bei der Bestätigung, Höchstzeit von „Warten auf Freigabe“, Verbindungsverlust im Verbund –, nie bei
+  normalem Ende. Reihenfolge frei, z. B. Generator aus, 1 s warten, 24 V aus, 12 V aus; Geräte, die im Block nicht
+  vorkommen, bleiben, wie sie sind.
+  - Erlaubt sind Aktionen, die einen Ausgang oder Sollwert setzen (Netzteil, Last, microHIL, Funktionsgenerator,
+    Batterie-Simulator, CAN/Restbus), und Warten. Nicht erlaubt (Zeile markiert, Start gesperrt): Prüfungen und
+    Lese-Aktionen (können gerade im Fehlerfall scheitern), Bestätigung und Warten auf Freigabe (beim Abbruch soll
+    niemand etwas tun müssen), Oszilloskop, J-Link, UDS, XCP und Arbiträrsignal (lange Laufzeit, kein Ausgang),
+    Variablen und verschachtelte Blöcke. Der Block darf höchstens 60 s dauern; die Grenze gilt auch zur Laufzeit.
+  - Scheitert ein Schritt (Gerät weg, Ablehnung), laufen die übrigen trotzdem; danach werden zur Sicherheit die
+    Geräte abgeschaltet, die der Ablauf schaltet (Rückfall auf die Standard-Abschaltung, siehe „Geändert“).
+  - Ist beim Abbruch noch eine Aktion des Laufs unterwegs, wartet der Block bis zu 5 s auf deren Quittung. Während
+    Block und Abschaltung gilt der Lauf noch als laufend (die Belegung beim Verbund-Partner bleibt, ein zweiter
+    Stop ändert nichts); Sicherheitsabschaltung und ALLE AUS führen den Block nicht aus bzw. brechen ihn ab.
+  - Bericht („Abschaltung beim Abbruch“ mit den Schritten des Blocks und Ergebnis), Ergebnis-JSON und `get_run`
+    (`shutdown`) nennen, ob Abbruch-Block oder Standard-Abschaltung lief, welche Geräte abgeschaltet wurden und
+    welche nicht erreichbar waren.
+  - Dateiformat 7 (Bausteine: 6) nur für Abläufe mit Abbruch-Block, damit ältere Versionen ihn nicht still
+    ignorieren; andere Abläufe bleiben beim bisherigen Format.
+- **`POST /api/v1/devices-off`** (Verbund): schaltet nur die genannten Geräte ab (`{"devices": [...], "reason"}`),
+  wie ALLE AUS nur mit Token; nicht erreichbare Geräte als `502 devices_off_incomplete` mit `failures`. Damit
+  schaltet der Leitstand beim Abbruch die Partnergeräte seines Ablaufs ab; kennt der Partner die Route nicht
+  (ältere Version), schaltet er dort zur Sicherheit ALLE AUS.
+
+  **Nur Mock geprüft** (`check_abort_block`: Dateiformat und Regeln, Runner bei Stop/Fehler/Prüfung/Bestätigung/
+  Freigabe-Höchstzeit/Verbindungsverlust, nicht bei normalem Ende, Fehler im Block mit Rückfall, Höchstdauer,
+  Watchdog und ALLE AUS, RunSession mit Attrappe, Partner, Editor, Hauptfenster in der Simulation mit Stopp per
+  HTTP, ALLE AUS-Knopf und `/devices-off`); an PC, Pi und Geräten noch nicht.
 
 ### Geändert
+- **Abschaltung beim Abbruch nur für geschaltete Geräte und den Auslöser (PI-79 a).** Bisher schaltete jeder
+  Abbruch eines Testablaufs alle Geräte ab, auch solche, die der Ablauf nie geschaltet hat – am Termin gingen so die
+  24 V einer Endstufe mit aus, deren Netzteil nur in einem Überwachen-Block gelesen wurde. Jetzt schalten Stop,
+  Schrittfehler, verletzte Prüfung und Sicherheitsabschaltung (Grenzwert, Messwerte veraltet, Gerät getrennt)
+  während eines Laufs ohne Abbruch-Block nur die Geräte ab, an denen der Ablauf eine schaltende Aktion ausführt
+  (auch in Bausteinen, über Rollen und im Abbruch-Block), dazu das auslösende Gerät (Quelle der verletzten
+  Prüfung/Überwachung, Gerät des gescheiterten Schritts, das Gerät mit Grenzwertverletzung bzw. das veraltete).
+  Nur gelesene Geräte bleiben, wie sie sind – auch beim Verbund-Partner, der nur noch diese Geräte abschaltet statt
+  ALLE AUS. Die Sicherheitsabschaltung im Lauf führt den Abbruch-Block nicht aus. Unverändert: ALLE AUS/NOTAUS
+  (Knopf, REST, MCP `all_off`) und eine Sicherheitsabschaltung ohne Lauf schalten alles ab; der
+  Verbindungsverlust-Schutz im Verbund (PI-68) bleibt; Läufe von der Kommandozeile enden weiter mit ALLE AUS.
+  „Am Ende ALLE AUS“ greift nur noch bei normalem Ende, nicht nach Fehler/Abbruch. Der Editor zeigt unter der
+  Tabelle „Beim Abbruch aus: <Geräte>“ bzw. „Abbruch-Block: <Geräte>“, Einzelheiten im Tooltip. MCP-Texte zu
+  `stop_run`/`get_run` angepasst. **Nur Mock geprüft** (`check_abort_block`; angepasst `check_confirm_wait`,
+  `check_release_step`, die bisher ALLE AUS nach Abbrechen/Fehler erwarteten); an Hardware noch nicht.
 - **„Warten seit Aktion“ zählt jede Schaltung über LabControl, auch im Verbund (PI-77 a).** Bisher galt nur die
   Ausführung im laufenden Ablauf; ein Aus/Ein an der Kachel kurz vor dem Lauf blieb unbemerkt, und „Resets ≥ 65 s
   auseinander“ am Evalboard ließ sich so nicht sicher einhalten. Jetzt merkt sich der Besitzer eines Geräts (der

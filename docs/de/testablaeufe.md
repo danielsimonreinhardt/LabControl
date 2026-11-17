@@ -91,6 +91,7 @@ Wertebereiche = Grenzen des Eingabefelds; zusätzlich gelten die Grenzwerte aus 
 | **Warten seit Aktion** | wartet, bis seit der letzten Ausführung einer Aktion an einem Gerät mindestens „≥ … s“ vergangen sind (siehe [unten](#bestatigung-und-warten-seit-aktion)) |
 | **Bestätigung** | hält an, bis der Nutzer die Rückfrage im LabControl-Fenster mit **Weiter** beantwortet |
 | **Warten auf Freigabe** | hält an, bis ein Programm mit Steuerrecht über REST/MCP freigibt; nach der Höchstzeit FAIL (siehe [unten](#warten-auf-freigabe)) |
+| **Abbruch-Block** | Schritte bis „Ende“, die nur bei einem Abbruch laufen (siehe [Abbruch](#abbruch-abbruch-block-und-abschaltung)) |
 
 ```mermaid
 flowchart TD
@@ -117,7 +118,7 @@ flowchart TD
     A["1 Netzteil: Ausgang AUS"] --> W1["2 Warten ≥ 10 s seit Ausgang AUS"]
     W1 --> B["3 Bestätigung „Evalboard einschalten?“"]
     B -- Weiter --> C["4 Netzteil: Ausgang EIN"]
-    B -- "Abbrechen" --> X["wie Stop: ALLE AUS"]
+    B -- "Abbrechen" --> X["wie Stop: Abbruch-Block<br/>bzw. Abschaltung"]
     C --> W2["5 Warten ≥ 65 s seit Ausgang EIN"]
     W2 --> D["6 Prüfschritte …"]
 ```
@@ -159,7 +160,8 @@ flowchart LR
 **Bestätigung**
 
 - Rückfrage im Fenster, nicht modal (ALLE AUS und Stop bleiben bedienbar); im Touch-Profil groß wie jeder Dialog.
-- **Weiter** setzt fort; **Abbrechen**, Escape oder Schließen = **Stop** (ALLE AUS).
+- **Weiter** setzt fort; **Abbrechen**, Escape oder Schließen = **Stop** (siehe
+  [Abbruch](#abbruch-abbruch-block-und-abschaltung)).
 - Über Netzwerk/MCP nur sichtbar, nicht bestätigbar: `GET /api/v1/runs/{id}` →
   `"waiting": {"kind": "confirm", "text": …}` (auch `run_waiting` in `/api/v1/status`).
 - Ohne Fenster (`labcontrol run`): startet nicht, Exit 3 – den Ablauf im Fenster oder über die laufende Instanz
@@ -182,7 +184,7 @@ sequenceDiagram
     P->>P: Firmware flashen …
     P->>L: POST /api/v1/runs/{id}/continue {"key": "flash_ok"}
     L->>L: 3 Prüfschritte …
-    Note over L: ohne Freigabe in der Höchstzeit:<br/>Schritt FAIL, ALLE AUS
+    Note over L: ohne Freigabe in der Höchstzeit:<br/>Schritt FAIL, Abbruch-Block bzw. Abschaltung
 ```
 
 | Zeile | Gerät | Aktion | Wert | Dauer |
@@ -270,7 +272,7 @@ sowie alle Lese-Aktionen (microHIL, Oszilloskop, Batterie-Simulator, „DID lese
 | **Prüfung aktiv** | schaltet die Prüfung ein |
 | **Messgröße:** | Last/Netzteil: Spannung, Strom oder Leistung (Netzteil aus U·I); Lese-Aktionen liefern genau einen Wert |
 | **Minimum:** / **Maximum:** | erlaubter Bereich; Minimum > Maximum sperrt OK |
-| **Bei Verletzung abbrechen** | Verletzung beendet den Lauf (mit ALLE AUS); ohne Haken wird sie nur gezählt |
+| **Bei Verletzung abbrechen** | Verletzung beendet den Lauf (Abbruch-Block bzw. Abschaltung, das geprüfte Gerät geht mit aus); ohne Haken wird sie nur gezählt |
 | **In Variable speichern:** | nur Lese-Aktionen: Wert zusätzlich in diese Variable, auch ohne aktive Prüfung |
 | **Anforderungen:** | Anforderungs-IDs, die die Prüfung nachweist, z. B. `SSR-012(a), SYS-150` |
 
@@ -413,7 +415,7 @@ Parametern: `run --matrix` mit einer CSV-Datei (siehe [Automatisierung](automati
 Verriegelung Netzteil/Last (Einstellungen → Sicherheit → **Verriegelung Netzteil/Last im Testablauf**):
 
 - Paare aus Netzteil und Last. Im Ablauf wird „Ausgang EIN“ abgelehnt, solange das andere Gerät des Paares an
-  oder sein Zustand unbekannt ist; der Lauf endet mit Fehler und ALLE AUS.
+  oder sein Zustand unbekannt ist; der Lauf endet mit Fehler (siehe [Abbruch](#abbruch-abbruch-block-und-abschaltung)).
 - Gilt nur für Geräte dieses Rechners und nur im Testablauf, nicht für Kacheln oder Netzwerkbefehle.
 
 !!! warning "Freigabe Quelle/Senke"
@@ -449,6 +451,8 @@ stateDiagram-v2
   (…)“, in Schleifen „(Durchlauf i/n)“; Tabelle und Werkzeugleiste gesperrt.
 - Zum Fehler führen u. a. Gerätefehler, Verriegelung, veraltete Messwerte, **Bei Verletzung abbrechen**,
   die Sicherheitsabschaltung (Grenzwerte, Watchdog) und **ALLE AUS** oben rechts.
+- Während Abbruch-Block und Abschaltung laufen, gilt der Lauf noch als laufend (Statuszeile „Abbruch-Block,
+  Schritt n: …“); ein zweites Stop ändert daran nichts, ALLE AUS bricht den Block ab.
 
 | Status am Ende | Bedeutung |
 |---|---|
@@ -462,14 +466,15 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    E{"Wie endet der Lauf?"} -- "Fehler oder Stop" --> AA["ALLE AUS"]
-    E -- "normal, Kommandozeile" --> AA
+    E{"Wie endet der Lauf?"} -- "Fehler oder Stop" --> AB["Abbruch-Block bzw.<br/>Abschaltung (siehe unten)"]
+    E -- "normal, Kommandozeile" --> AA["ALLE AUS"]
     E -- "normal, Fenster<br/>oder REST/MCP" --> P{"Eigenschaft<br/>Am Ende ALLE AUS an?"}
     P -- ja --> AA
     P -- nein --> B["Geräte bleiben im Zustand<br/>des letzten Schritts"]
 ```
 
-- Bei Fehler und Stop wirkt ALLE AUS sofort auf die Geräte dieses Rechners.
+- Bei Fehler und Stop gilt [Abbruch](#abbruch-abbruch-block-und-abschaltung); „Am Ende ALLE AUS“ greift dann nicht.
+- Läufe von der Kommandozeile enden weiter immer mit ALLE AUS.
 - ALLE AUS setzt am microHIL auch die PWM-Kanäle auf 0 (Mock-verifiziert, am microHIL noch nicht geprüft).
 - Die Eigenschaft „Am Ende ALLE AUS“ ist in der Simulation geprüft (Mock-verifiziert).
 
@@ -477,6 +482,53 @@ flowchart LR
     Nach einem normalen Lauf aus dem Fenster oder über REST/MCP bleibt dann eingeschaltet, was der letzte Schritt
     hinterlassen hat.
     Schalte die Eigenschaft ein oder beende den Ablauf mit „Ausgang AUS“-Schritten.
+
+### Abbruch: Abbruch-Block und Abschaltung
+
+```mermaid
+flowchart TD
+    A{"Warum endet der Lauf?"} -- "Stop, Fehler, verletzte Prüfung/Überwachung,<br/>Abbrechen, Freigabe-Höchstzeit,<br/>Verbindungsverlust" --> B{"Abbruch-Block<br/>im Ablauf?"}
+    A -- "Sicherheitsabschaltung<br/>(Grenzwert, veraltet, getrennt)" --> S["geschaltete Geräte<br/>+ auslösendes Gerät aus"]
+    A -- "ALLE AUS / NOTAUS" --> ALL["alles aus<br/>(auch Partner)"]
+    B -- nein --> S
+    B -- ja --> R["Schritte des Blocks<br/>der Reihe nach (≤ 60 s)"]
+    R -- "alle ok" --> K["fertig – andere Geräte<br/>bleiben, wie sie sind"]
+    R -- "ein Schritt scheitert" --> S2["Rest des Blocks,<br/>dann geschaltete Geräte aus"]
+```
+
+**Geschaltete Geräte** sind die Geräte, an denen der Ablauf eine Aktion ausführt – auch in Bausteinen, über
+Rollen und im Abbruch-Block. Nur gelesene Geräte (Bedingung, Überwachen, Lese-Aktion) zählen nicht und bleiben
+an. Dazu kommt das **auslösende Gerät**: bei einer verletzten Prüfung oder Überwachen-Grenze die Quelle, bei einem
+Gerätefehler das Gerät des Schritts, bei der Sicherheitsabschaltung das Gerät mit Grenzwertverletzung bzw. das
+veraltete oder getrennte. Geräte des Verbund-Partners schaltet der Partner ab (nur diese, nicht alles).
+
+Beispiel: Ein Ablauf schaltet 12 V am PC und den Funktionsgenerator, das 24-V-Netzteil am Pi steht nur in einem
+Überwachen-Block. Bei einem Stop bleiben die 24 V an; mit Abbruch-Block lässt sich die Reihenfolge festlegen:
+
+| Zeile | Gerät | Aktion | Dauer |
+|---|---|---|---|
+| **Abbruch-Block** | | | |
+| | Funktionsgenerator | Ausgang AUS | |
+| | – | Warten | 1 s |
+| | Pi · Netzteil 24 V | Ausgang AUS | 0,5 s |
+| | Netzteil 12 V | Ausgang AUS | |
+| **Ende (Abbruch-Block)** | | | |
+
+- Einfügen: **+** → **Abbruch-Block … Ende** (legt den Block am Ende des Ablaufs an; höchstens einer, nur oberste
+  Ebene).
+- Im Block erlaubt: Aktionen an Netzteil, Last, microHIL, Funktionsgenerator, Batterie-Simulator, CAN/Restbus und
+  **Warten**. Nicht erlaubt: Prüfungen und Lese-Aktionen (können gerade im Fehlerfall scheitern), Bestätigung und
+  Warten auf Freigabe (beim Abbruch soll niemand etwas tun müssen), Oszilloskop, J-Link, UDS, XCP, Arbiträrsignal
+  (lange Laufzeit, kein Ausgang), Variablen und Blöcke. Verstöße markieren die Zeile, Start bleibt gesperrt.
+- Der Block läuft **nicht** bei normalem Ende.
+- Unter der Tabelle zeigt **Beim Abbruch aus: …** (ohne Block) bzw. **Abbruch-Block: …** die betroffenen Geräte;
+  der Tooltip nennt die Regel.
+- Bericht, Ergebnis-JSON und `get_run` nennen unter `shutdown` die Art (`block`, `standard`, `watchdog`,
+  `all_off`), ob nach einem Fehler im Block zurückgefallen wurde (`fallback`), die Schritte des Blocks mit Ergebnis
+  sowie abgeschaltete (`off`) und nicht erreichbare (`unreachable`) Geräte.
+- Unverändert: **ALLE AUS**/NOTAUS (Knopf, MCP `all_off`) schaltet alles ab; der Verbindungsverlust-Schutz im
+  Verbund (Besitzer schaltet belegte Geräte nach 3 s ab, je Gerät abwählbar) bleibt.
+- Nur in der Simulation bzw. mit Attrappen geprüft (Mock-verifiziert), noch nicht an Hardware.
 
 ## Debuggen
 
@@ -512,7 +564,8 @@ flowchart LR
 
 - **Report…** bietet **Report öffnen (HTML)** und **Als PDF exportieren…**.
 - `run-result.json`: dieselben Inhalte maschinenlesbar (u. a. `outcome`, `exit_code`, `checks`, `devices`,
-  `interlock`, `instruments`, `requirements`, `setpoints`, `timing_checks`, `scope_captures`, `warnings`); Grundlage
+  `interlock`, `instruments`, `requirements`, `setpoints`, `timing_checks`, `scope_captures`, `shutdown`,
+  `warnings`); Grundlage
   für den Reiter
   **Ergebnisse** ([Bedienung](bedienung.md)) und `coverage` ([Automatisierung](automatisierung.md)).
 - JUnit: je Prüfschritt ein Testfall, Anforderungen als `property`.
@@ -524,6 +577,7 @@ flowchart LR
 | Messmittel | Typ, Seriennummer, Firmware, Inventarnummer, Kalibrierdatum und Fälligkeit; abgelaufene Kalibrierung = nur Warnung |
 | Anforderungen | Urteil je ID, gelaufene und verletzte Prüfungen, Schritte |
 | Schritt-Ergebnisse | je Prüfschritt: Prüfung, Ausführungen, Ergebnis, Messwerte |
+| Abschaltung beim Abbruch | nur nach einem Abbruch: Art, auslösendes Gerät, abgeschaltet, nicht erreichbar, Schritte des Abbruch-Blocks mit Ergebnis |
 | Zeitprüfungen / Sollwertverläufe | Ergebnis, Messwert, Auflösung, Meldung / Arbiträrsignale mit Abständen min/mittel/max |
 | Oszilloskop-Erfassungen | je „Auf Erfassung warten“: Einstellung, Kennwert, CSV-Datei; die Kurve unter Messverlauf |
 | Zeitverlauf / Messverlauf | Ereignisse mit Zeit / Diagramme, u. a. Soll gegen Ist und Kurvenausschnitte der Überwachen-Blöcke |
@@ -555,6 +609,8 @@ Gleiche Prüfungen und Sicherheitsabschaltung wie im Editor; keine Haltepunkte, 
   Format 4.
 - Format 6 (ab 1.0.1), sobald der Ablauf **Warten auf Freigabe** enthält (`"step_type": "await_release"`,
   Kennung in `params.key`, `duration` = Höchstzeit). Bausteine: Format 5.
+- Format 7 (ab 1.0.1), sobald der Ablauf einen **Abbruch-Block** enthält (`"step_type": "on_abort"` … `"end"`).
+  Bausteine: Format 6.
 - Unbekannte Felder bleiben beim Laden und Speichern erhalten.
 
 Gekürztes Beispiel (die App schreibt je Schritt alle Felder):

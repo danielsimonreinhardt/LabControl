@@ -405,16 +405,18 @@ def _cmd_run(args, settings) -> int:
             return
         state["interrupted"] = True
         _say("Unterbrochen – ALLE AUS")
-        rig.session.runner.stop()
+        rig.session.runner.stop(mode="all_off")   # ohne Abbruch-Block, am Ende kommt ALLE AUS (rig.shutdown)
 
     shutdown_signals.install(interrupt, app)
     rig.session.run_ended.connect(lambda _outcome: state.update(ended=True))
+    # Schrittfehler/Sicherheitsabschaltung: Abbruch-Block bzw. Abschaltung der geschalteten Geraete und des
+    # ausloesenden macht RunSession (PI-76 a/PI-79 a); am Ende schaltet rig.shutdown wie immer ALLES ab (FP-4 a)
     rig.session.runner.step_failed.connect(lambda index, message: _say(f"Schritt {index + 1}: {message}"))
-    rig.session.runner.step_failed.connect(lambda _i, message: rig.all_off_async(f"step failed: {message}"))
+    rig.session.runner.abort_step_done.connect(
+        lambda index, ok, message: _say(f"Abbruch-Block, Schritt {index + 1}: {'ok' if ok else message}"))
     rig.session.runner.step_result.connect(
         lambda index, ok, value: _say(f"Schritt {index + 1}: {'bestanden' if ok else 'NICHT bestanden'} ({value:g})"))
-    rig.safety.tripped.connect(lambda device_id, reason: (_say(f"Sicherheitsabschaltung {device_id}: {reason}"),
-                                                         rig.session.runner.stop()))
+    rig.safety.tripped.connect(lambda device_id, reason: _say(f"Sicherheitsabschaltung {device_id}: {reason}"))
 
     name = (meta.get("name") or path.stem)
     _say(f"Start: {name} ({len(steps)} Schritte)")

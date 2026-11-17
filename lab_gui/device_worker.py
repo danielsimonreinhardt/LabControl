@@ -455,6 +455,9 @@ class DeviceWorker(QObject):
     # Bewusst NICHT action_completed -- das gehoert dem TestRunner.
     remote_action_completed = Signal(int, bool, str, float)
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
+    # Abschaltung einzelner Geraete mit Kennung (devices_off_tagged, PI-79 a): Kennung, abgeschaltet, nicht
+    # erreichbar/fehlgeschlagen (Listen von device_ids)
+    devices_off_done = Signal(int, list, list)
 
     can_connected = Signal(str, bool)        # device_id, online
     # PI-54 (0.65.0): CAN-Kanal fuer canflash freigegeben (True) bzw. wieder geoeffnet (False)
@@ -2314,24 +2317,55 @@ class DeviceWorker(QObject):
         Verbund-Partners (PI-26 a: Lebenszeichen fehlt -> die belegten Geraete in den sicheren Zustand).
         Meldet wie all_outputs_off ueber all_off_finished (fehlgeschlagene Geraete)."""
         logger.warning("Abschalten einzelner Geraete (reason=%s): %s", reason, ", ".join(device_ids))
+        _off, failures, _unknown = self._devices_off(device_ids)
+        self.all_off_finished.emit(";".join(failures))
+
+    @Slot(int, list, str)
+    def devices_off_tagged(self, tag: int, device_ids: list, reason: str) -> None:
+        """Abschaltung beim Abbruch eines Testablaufs (PI-79 a) bzw. vom Verbund-Partner (POST /devices-off):
+        nur die genannten Geraete. Ergebnis ueber devices_off_done (nicht all_off_finished -- das weckt ALLE AUS).
+        Ein hier nicht verbundenes Geraet zaehlt als nicht erreichbar."""
+        logger.warning("Abschalten (reason=%s): %s", reason, ", ".join(device_ids) or "-")
+        off, failures, unknown = self._devices_off(device_ids)
+        self.devices_off_done.emit(int(tag), off, failures + unknown)
+
+    def _devices_off(self, device_ids: list) -> tuple[list[str], list[str], list[str]]:
+        """(abgeschaltet, fehlgeschlagen, hier unbekannt). CAN: ein laufender Restbus wird angehalten."""
+        off: list[str] = []
         failures: list[str] = []
+        unknown: list[str] = []
         kills = (
             (self._loads, self._kill_load), (self._psus, lambda d, p: self._kill_psu(d, p, release=False)),
             (self._hils, self._kill_hil), (self._fgs, self._kill_fg),
             (self._battsims, lambda d, n: self._kill_battsim(d, n) or True),
         )
         for device_id in device_ids:
+            node = self._restbus.get(device_id)
+            if node is not None or device_id in self._can_buses:
+                if node is not None and node.running:
+                    node.set_running(False)
+                    logger.info("Restbus %s gestoppt (Abschaltung)", device_id)
+                    self._emit_restbus(device_id)
+                off.append(device_id)
+                continue
+            found = False
             for devices, kill in kills:
                 device = devices.get(device_id)
                 if device is None:
                     continue
+                found = True
                 try:
-                    if not kill(device_id, device):
+                    if kill(device_id, device):
+                        off.append(device_id)
+                    else:
                         failures.append(device_id)
                 except Exception:  # noqa: BLE001 -- Abschalten darf nie haengenbleiben
                     logger.exception("Abschalten: unerwarteter Fehler bei %s", device_id)
                     failures.append(device_id)
-        self.all_off_finished.emit(";".join(failures))
+                break
+            if not found:
+                unknown.append(device_id)
+        return off, failures, unknown
 
     def _kill_battsim(self, device_id: str, node: BattSim) -> None:
         """Ausgang sperren (OUTPUT=1 -> REMOTE/STOP, alle Zellen gebrueckt).

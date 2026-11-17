@@ -166,7 +166,10 @@ Testablaeufe (list_testcases, run_testcase, get_run, stop_run, continue_run):
   Nutzer gebeten hat. Steuerrecht wie bei control_device; waehrend des Laufs ist Steuern gesperrt.
 - run_testcase liefert eine Lauf-ID; mit get_run den Stand abfragen (running, step, checks_failed,
   exit_code: 0 bestanden, 1 nicht bestanden, 2 Abbruch/Fehler). Am Ende stehen Bericht/JUnit/Ergebnis bereit
-  (get_run mit file='result' liefert die Pruefergebnisse als JSON). stop_run haelt an und schaltet ALLE AUS.
+  (get_run mit file='result' liefert die Pruefergebnisse als JSON). stop_run haelt an; wie bei jedem Abbruch
+  laeuft dann der Abbruch-Block des Ablaufs, sonst werden die Geraete abgeschaltet, die der Ablauf schaltet,
+  plus das ausloesende -- nur gelesene bleiben an. 'shutdown' in get_run nennt Art (block/standard/watchdog/
+  all_off), abgeschaltete ('off') und nicht erreichbare ('unreachable') Geraete. all_off schaltet ALLES ab.
 - 'waiting' in get_run (auch 'run_waiting' in get_status): kind='confirm' = der Ablauf wartet auf eine
   Bestaetigung (Text in 'text'), die NUR der Nutzer im LabControl-Fenster geben kann -- den Nutzer darauf
   hinweisen, nicht umgehen. kind='wait_since' = Mindestzeit seit einer Schaltaktion, Rest in 'remaining_s'.
@@ -337,7 +340,8 @@ def run_testcase(testcase: str, variables: dict[str, float] | None = None, varia
 def get_run(run_id: str, file: str | None = None) -> dict:
     """Stand eines Laufs (running, step/steps_total, checks_total/checks_failed, status, exit_code, error,
     Meldungen in 'events', 'waiting': wartet auf Bestaetigung im LabControl-Fenster, Mindestzeit oder Freigabe
-    ueber continue_run). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
+    ueber continue_run; 'shutdown' nach einem Abbruch: Abbruch-Block oder Standard-Abschaltung, abgeschaltete
+    und nicht erreichbare Geraete). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
     Urteil, Anforderungen, Geraete); file='junit' liefert das JUnit-XML als Text. Den HTML-Bericht oeffnet
     der Nutzer in LabControl oder im Berichtsordner."""
     path = "/api/v1/runs/" + urllib.parse.quote(run_id, safe="")
@@ -362,7 +366,8 @@ def get_run(run_id: str, file: str | None = None) -> dict:
 @server.tool(annotations=ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def stop_run(run_id: str) -> dict:
-    """Haelt einen laufenden Testablauf an und schaltet dabei ALLE AUS (wie der Stop-Knopf)."""
+    """Haelt einen laufenden Testablauf an (wie der Stop-Knopf): Abbruch-Block des Ablaufs, sonst werden die
+    Geraete abgeschaltet, die der Ablauf schaltet. Fuer alles aus: all_off."""
     return _checked("POST", "/api/v1/runs/" + urllib.parse.quote(run_id, safe="") + "/stop", {})
 
 
