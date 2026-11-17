@@ -287,12 +287,13 @@ def check_fg_poll() -> None:
           fake.writes() == [20] and fake.reads() == [20, 20], str(fake.sent))
     check("Ausgang sofort gemeldet", states[-1]["outputs"] == [True, True], str(states[-1]))
     fake.sent.clear()
-    worker.set_fg_waveform("fg:FAKE", 1, 1)
+    worker.set_fg_waveform("fg:FAKE", 1, 2)   # Puls: nur dort wirkt der Tastgrad (PI-80 a)
     check("Form K1: Form, Frequenz, Amplitude K1 zuruecklesen",
           fake.writes() == [21] and fake.reads() == [21, 23, 25], str(fake.sent))
     fake.sent.clear()
     worker.set_fg_duty("fg:FAKE", 1, 30.0)
-    check("Tastgrad K1: nur dieses Feld", fake.writes() == [29] and fake.reads() == [29]
+    # PI-80 a: vor dem Schreiben die Form lesen (nur bei Puls), danach nur dieses Feld zurueck
+    check("Tastgrad K1: Form pruefen, dann nur dieses Feld", fake.writes() == [29] and fake.reads() == [21, 29]
           and abs(states[-1]["channels"][0]["duty"] - 30.0) < 1e-9, str(fake.sent))
     fake.sent.clear()
     worker.set_fg_phase("fg:FAKE", 90.0)

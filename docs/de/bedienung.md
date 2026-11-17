@@ -157,7 +157,7 @@ Klick wiederherstellen.
 |---|---|
 | Netzteil | Spannung, Strom, Ausgang ein/aus |
 | Elektronische Last | Modus, Sollwert, Eingang ein/aus (nur wenn der Zustand vom Gerät bekannt war) |
-| Funktionsgenerator | je Kanal Form, Frequenz, Amplitude, Offset, Tastverhältnis, Ausgang; Phase |
+| Funktionsgenerator | je Kanal Form, Frequenz, Amplitude, Offset, Tastverhältnis (nur bei Puls), Ausgang; Phase; in DC nur „Spannung“ |
 | microHIL | Digitalausgänge, Analogausgänge, PWM, Relais, 12-V-Ausgänge, Stromgrenzen |
 | Batterie-Simulator | Sollwerte und Freigaben der Zellen, **nicht** Fernsteuerung und Ausgang |
 | CAN, Oszilloskop, J-Link, Prüfling | nichts |

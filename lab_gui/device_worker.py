@@ -39,6 +39,10 @@ from jds66xx.driver import (
     JDS66xx,
     read_field as fg_read_field,
     readback_fields as fg_readback_fields,
+    set_amplitude_checked as fg_set_amplitude,
+    set_duty_checked as fg_set_duty,
+    set_offset_checked as fg_set_offset,
+    set_waveform_checked as fg_set_waveform,
     WAVE_DC,
     WAVE_PULSE,
     WAVE_SINE,
@@ -2771,8 +2775,9 @@ class DeviceWorker(QObject):
 
     @Slot(str, int, int)
     def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
+        # PI-75 a: DC setzt zugleich die Amplitude auf 0,01 V (jds66xx.driver.set_waveform_checked)
         self._operate("fg", device_id, "FG_WAVE", float(code), channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code),
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
                                               ("waveform", channel)))
 
     @Slot(str, int, float)
@@ -2783,20 +2788,22 @@ class DeviceWorker(QObject):
 
     @Slot(str, int, float)
     def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
+        # PI-75 a: in DC abgelehnt (die Spannung ist dort der Offset)
         self._operate("fg", device_id, "FG_AMPL", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts),
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, volts),
                                               ("amplitude", channel)))
 
     @Slot(str, int, float)
     def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
         self._operate("fg", device_id, "FG_OFFS", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts),
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, volts),
                                               ("offset", channel)))
 
     @Slot(str, int, float)
     def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
+        # PI-80 a: nur bei Puls, sonst abgelehnt (am Geraet wirkt der Tastgrad nur dort)
         self._operate("fg", device_id, "FG_DUTY", percent, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent),
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, percent),
                                               ("duty", channel)))
 
     @Slot(str, float)
@@ -3153,15 +3160,19 @@ class DeviceWorker(QObject):
         if kind == "fg":
             if action in FG_WAVE_ACTIONS:
                 code = FG_WAVE_ACTIONS[action]
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code), ("waveform", channel))
+                # PI-75 a: FG_WAVE_DC setzt zugleich die Amplitude auf 0,01 V
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
+                                             ("waveform", channel))
             elif action == "FG_FREQ":
                 ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value), ("frequency", channel))
-            elif action == "FG_AMPL":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, value), ("amplitude", channel))
-            elif action == "FG_OFFS":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_offset(channel, value), ("offset", channel))
-            elif action == "FG_DUTY":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_duty(channel, value), ("duty", channel))
+            elif action == "FG_AMPL":   # PI-75 a: in DC abgelehnt
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, value),
+                                             ("amplitude", channel))
+            elif action == "FG_OFFS":   # in DC die Ausgangsspannung
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, value),
+                                             ("offset", channel))
+            elif action == "FG_DUTY":   # PI-80 a: nur bei Puls, sonst abgelehnt
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, value), ("duty", channel))
             elif action == "FG_PHASE":
                 ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value), ("phase", 0))
             elif action == "FG_OUT_ON":

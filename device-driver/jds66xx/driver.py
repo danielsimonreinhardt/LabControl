@@ -430,14 +430,83 @@ def read_field(gen, field: str, channel: int = 0):
 def readback_fields(field: str, channel: int = 0) -> tuple[tuple[str, int], ...]:
     """Felder, die nach dem Schreiben von `field` zurueckgelesen werden: das Feld selbst, dazu was
     das Geraet dabei still anpassen kann (Amplitude wird frequenzabhaengig begrenzt, siehe
-    README; die Form kann die Frequenz klemmen)."""
+    README; die Form kann die Frequenz klemmen). Offset: in DC setzt set_offset_checked auch die
+    Amplitude (PI-75 a)."""
     if field in ("outputs", "phase"):
         return ((field, 0),)
     if field == "waveform":
         return (("waveform", channel), ("frequency", channel), ("amplitude", channel))
-    if field == "frequency":
-        return (("frequency", channel), ("amplitude", channel))
+    if field in ("frequency", "offset"):
+        return ((field, channel), ("amplitude", channel))
     return ((field, channel),)
+
+
+# -- DC und Tastgrad (PI-75 a, PI-80 a; gemessen am JDS2915 am 17.11.2026, CH1 ohne Last) ------------
+#
+# DC: Am Ausgang liegt etwa Offset + Amplitude/2 (Amplitude 0/1/2,5/5 V bei Offset 0 -> 0,01/0,47/1,21/
+# 2,41 V; Amplitude 2,5 V bei Offset 1/2,5 V -> 2,29/3,73 V). Sonderfall Amplitude genau 0: der Offset kommt
+# nur zu etwa 1/10 an (Offset 2,5 V -> 0,22 V), mit 0,01 V bzw. 0,1 V Amplitude dagegen 2,61/2,57 V. Deshalb
+# setzt LabControl in DC die Amplitude auf DC_AMPLITUDE_V (kleinster Wert != 0) und gibt die Spannung als
+# Offset vor; der Rest der halben Amplitude (DC_RESIDUAL_V, 5 mV) bleibt.
+# Tastgrad: Rechteck 1 kHz mit 10 % und 99 % ergab jeweils 50 %, Puls 99 %/10 % ergab 98,9 %/9,97 % -- das
+# Register wirkt nur bei Puls. Das Geraet nimmt den Wert in jeder Form an (:ok), er wirkt nur nicht.
+
+DC_AMPLITUDE_V = 0.01
+DC_RESIDUAL_V = DC_AMPLITUDE_V / 2
+DUTY_WAVEFORMS = (WAVE_PULSE,)
+
+
+def duty_refusal(code: int, channel: int) -> str:
+    """Text, warum der Tastgrad bei dieser Form nicht gesetzt wird ("" = Puls, geht)."""
+    if code in DUTY_WAVEFORMS:
+        return ""
+    return (f"Tastgrad wirkt nur bei Kurvenform Puls -- Kanal {channel} steht auf {waveform_name(code)} "
+            f"(erst Kurvenform Puls waehlen)")
+
+
+def amplitude_refusal(code: int, channel: int) -> str:
+    """Text, warum in dieser Form keine Amplitude gesetzt wird ("" = geht)."""
+    if code != WAVE_DC:
+        return ""
+    return (f"In DC gibt es keine Amplitude -- Kanal {channel}: die Spannung ist der Offset "
+            f"(Amplitude bleibt {DC_AMPLITUDE_V:g} V)")
+
+
+def set_waveform_checked(gen, channel: int, code: int) -> None:
+    """Form setzen; bei DC zugleich die Amplitude auf DC_AMPLITUDE_V, damit am Ausgang der Offset liegt."""
+    gen.set_waveform(channel, code)
+    if code == WAVE_DC:
+        gen.set_amplitude(channel, DC_AMPLITUDE_V)
+
+
+def set_amplitude_checked(gen, channel: int, volts: float) -> None:
+    """Amplitude setzen -- in DC abgelehnt (FunctionGeneratorValueError), siehe amplitude_refusal."""
+    check_channel(channel)
+    check_amplitude(volts)
+    refusal = amplitude_refusal(gen.get_waveform(channel), channel)
+    if refusal:
+        raise FunctionGeneratorValueError(refusal)
+    gen.set_amplitude(channel, volts)
+
+
+def set_offset_checked(gen, channel: int, volts: float) -> None:
+    """Offset setzen; in DC ist das die Ausgangsspannung -- steht die Amplitude dort nicht auf DC_AMPLITUDE_V
+    (am Geraet verstellt), wird sie vorher gesetzt."""
+    check_channel(channel)
+    check_offset(volts)
+    if gen.get_waveform(channel) == WAVE_DC and abs(gen.get_amplitude(channel) - DC_AMPLITUDE_V) > 1e-6:
+        gen.set_amplitude(channel, DC_AMPLITUDE_V)
+    gen.set_offset(channel, volts)
+
+
+def set_duty_checked(gen, channel: int, percent: float) -> None:
+    """Tastgrad setzen -- nur bei Puls, sonst FunctionGeneratorValueError (kein stilles Umschalten der Form)."""
+    check_channel(channel)
+    check_duty(percent)
+    refusal = duty_refusal(gen.get_waveform(channel), channel)
+    if refusal:
+        raise FunctionGeneratorValueError(refusal)
+    gen.set_duty(channel, percent)
 
 
 if __name__ == "__main__":

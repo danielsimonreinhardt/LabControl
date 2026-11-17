@@ -62,7 +62,7 @@ Wertebereiche = Grenzen des Eingabefelds; zusätzlich gelten die Grenzwerte aus 
 | | Digitaleingang lesen / Analogeingang lesen | Kanal 1–8, liefert 0/1 / Kanal 1–4, liefert mV |
 | **Oszilloskop** (PicoScope) | Maximum (Spitzenwert), Minimum (Spitzenwert), Spitze-Spitze (Vpp), Effektivwert (RMS) | Kanal A/B, Bereich 20 mV–20 V, liefert mV |
 | **Oszilloskop**, **Oszilloskop (LAN)** (UNI-T MSO1000HD) | Scharf schalten, Auf Erfassung warten | über **Oszilloskop-Parameter…** (siehe [unten](#oszilloskop-scharf-schalten-und-auf-erfassung-warten)) |
-| **Funktionsgenerator** | Frequenz / Amplitude / Offset / Tastverhältnis / Phase setzen | Kanal 1–2; 0,01 Hz–15 MHz / 0–20 V / −9,99…+9,99 V / 0–100 % / 0–360° (Kanal 2 gegen 1) |
+| **Funktionsgenerator** | Frequenz / Amplitude / Offset / Tastverhältnis / Phase setzen | Kanal 1–2; 0,01 Hz–15 MHz / 0–20 V / −9,99…+9,99 V / 0–100 % / 0–360° (Kanal 2 gegen 1); Tastverhältnis nur bei Puls, in DC ist der Offset die Spannung und Amplitude abgelehnt ([Geräte](geraete.md#funktionsgenerator-jds66xx-jds2915)) |
 | | Wellenform Sinus, Rechteck, Puls, Dreieck, DC; Ausgang EIN/AUS | Kanal 1–2 |
 | **Batterie-Simulator** | Fernsteuerung EIN/AUS, Ausgang EIN/AUS, Alle Zellen EIN/AUS, FAIL zurücksetzen | – |
 | | Zellspannung setzen / Alle Zellspannungen setzen | Zelle 1–14, 0–5 V / 0–5 V |

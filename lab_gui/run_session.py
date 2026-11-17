@@ -31,7 +31,8 @@ import scope_steps
 from i18n import tr
 from run_record import RunRecorder
 from switch_log import LastSwitch
-from testcase_model import OFF_DEVICE_KINDS, PICO_READ_ACTIONS, TestStep, kind_label, switched_devices
+from testcase_model import (OFF_DEVICE_KINDS, PICO_READ_ACTIONS, TestStep, fg_waveform_refusal, kind_label,
+                            switched_devices)
 from testcase_runner import TestRunner
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,9 @@ class RunSession(QObject):
         if any(s.enabled and s.step_type == "action" and s.device_kind == "xcp" for s in steps) and (
                 self.xcp is None or not self.xcp.configured()):
             return tr("Keine A2L beim Prüfling eingestellt (XCP)")
+        fg_problem = fg_waveform_refusal(steps)   # PI-75 a/PI-80 a: Tastgrad nur bei Puls, keine Amplitude in DC
+        if fg_problem is not None:
+            return fg_problem[1]
         return self._scope_refusal(steps)
 
     def _scope_refusal(self, steps: list[TestStep]) -> str:

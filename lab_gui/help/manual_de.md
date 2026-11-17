@@ -145,6 +145,17 @@ Zwei gleichartige Kanalkästen (Kanal 1 und 2) nebeneinander:
 - Im **Testablauf** stehen Aktionen für Frequenz, Amplitude, Offset,
   Tastverhältnis, Phase, die Formen Sinus/Rechteck/Puls/Dreieck/DC und
   Ausgang EIN/AUS zur Verfügung; der Kanal wird in der Zeile gewählt.
+- **DC**: Der Kasten zeigt nur **Spannung** (= Offset), Frequenz und
+  Tastverhältnis sind gesperrt. Beim Umschalten auf DC setzt LabControl die
+  Amplitude auf 0,01 V, denn das Gerät gibt in DC etwa Offset + Amplitude/2
+  aus und bei Amplitude genau 0 nur etwa ein Zehntel des Offsets (am JDS2915
+  gemessen). Am Ausgang liegen also Spannung + 5 mV. „Amplitude setzen“ wird
+  in DC abgelehnt.
+- **Tastverhältnis** nur bei **Puls**: bei Rechteck bleibt das Gerät bei
+  50 %. Das Feld ist sonst gesperrt; „Tastverhältnis setzen“ aus Ablauf, MCP
+  oder Verbund wird bei anderer Form abgelehnt (die Form wird nicht still
+  umgeschaltet). Ist die Form im Ablauf an dieser Stelle bekannt, startet er
+  gar nicht erst.
 - Das Gerät wird über den CH340-USB-Seriell-Wandler erkannt. Weil dieser
   Wandler auch in fremden Geräten steckt, wird per Abfrage geprüft, ob
   tatsächlich ein Funktionsgenerator antwortet. Ein eingeschaltetes Gerät

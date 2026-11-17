@@ -267,6 +267,33 @@ Semantic Versioning (`lab_gui/version.py`).
   `check_partner_v2`, `check_verbund_v4`, `check_network_share`, `check_runs_api`, `check_psu_manual`,
   `check_psu_output`, `check_last_switch`, `check_stale_per_device`, `check_reconnect_async`, `check_control_tab`,
   `check_translations` unverändert grün); am Pi und an den HCS-34xx noch nicht.
+- **Funktionsgenerator: DC lieferte nicht die eingestellte Spannung, Tastgrad bei Rechteck wirkungslos (PI-75 a,
+  PI-80 a).** Gerätebefund **an Hardware gemessen** (JDS2915, 17.11.2026, CH1 ohne Last, PicoScope 10:1): In DC
+  gibt das Gerät etwa Offset + Amplitude/2 aus (Amplitude 0/1/2,5/5 V bei Offset 0 → 0,01/0,47/1,21/2,41 V;
+  2,5 V bei Offset 1/2,5 V → 2,29/3,73 V); bei Amplitude genau 0 kommt der Offset nur zu etwa 1/10 an (2,5 V →
+  0,22 V, mit 0,01/0,1 V Amplitude 2,61/2,57 V). Der Tastgrad wirkt nur bei Puls (99 % → 98,9 %, 10 % → 9,97 %);
+  Rechteck 1 kHz mit 10 % und 99 % ergab jeweils 50 %.
+  - **DC:** Beim Umschalten auf DC (Kachel, `FG_WAVE_DC` aus Ablauf, MCP, REST, Verbund) setzt LabControl die
+    Amplitude auf 0,01 V (kleinster Wert ≠ 0, nicht 0), die Spannung ist der Offset (`FG_OFFS`); am Ausgang liegt
+    sie plus 5 mV (halbe Amplitude). Hat jemand die Amplitude am Gerät verstellt, setzt `FG_OFFS` in DC sie vorher
+    wieder auf 0,01 V. `FG_AMPL` wird in DC **abgelehnt** (Schritt scheitert mit Meldung, MCP/REST
+    `device_error` mit Meldung) – nicht still ignoriert: ein Ablauf, der in DC eine Amplitude setzt, meint eine
+    andere Spannung, als dann anläge. Die Kachel zeigt in DC nur **Spannung** (= Offset), Amplitude ausgeblendet,
+    Frequenz und Tastverhältnis gesperrt; die Übersicht zeigt „DC  3.30 V“.
+  - **Tastgrad nur bei Puls:** Das Tastverhältnis-Feld ist nur bei Puls bedienbar. `FG_DUTY` bei jeder anderen
+    Form wird abgelehnt (Kachel, Ablauf, MCP/REST, Verbund), die Form wird nie still umgeschaltet. Ein Ablauf, der
+    an einer Stelle mit erkennbarer Form (Wellenform-Schritt davor, ohne Blockgrenze dazwischen) `FG_DUTY` bei
+    Nicht-Puls oder `FG_AMPL` in DC ausführt, startet nicht (Meldung mit Schritt, Kanal und Form); sonst scheitert
+    der Schritt zur Laufzeit. Presets schicken in DC keine Amplitude und außerhalb Puls kein Tastverhältnis.
+  - Treiber: `set_waveform_checked`/`set_offset_checked`/`set_amplitude_checked`/`set_duty_checked`,
+    `DC_AMPLITUDE_V`, `DC_RESIDUAL_V`; der Mock bildet die Messung nach (`output_dc_voltage`, `effective_duty`).
+    MCP-Anweisungen und -Beschreibung von `control_device`, `list_devices` (Hinweise je Aktion), Doku.
+
+  Die Umsetzung ist **nur Mock geprüft** (`check_fg_dc_duty`: Messwerte im Mock, Treiber-Helfer, Worker über
+  Ablauf/Kachel/Fernsteuerung, Ablehnung vor dem Start und zur Laufzeit, Kachel, Preset, Übersicht;
+  `check_stale_per_device` angepasst: Tastgrad jetzt bei Puls, vorher Formabfrage; `check_jds66xx`,
+  `check_last_switch`, `check_partner_devices`, `check_network_share`, `check_control_tab`, `check_touch_ui`,
+  `check_abort_block`, `check_headless_run`, `check_translations` unverändert grün); am JDS2915 noch nicht.
 
 ## [1.0.0] – 2026-11-15
 

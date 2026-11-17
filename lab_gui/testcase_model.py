@@ -918,6 +918,47 @@ def switched_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
     return result
 
 
+FG_WAVE_ACTION_NAMES = {"FG_WAVE_SINE": "Sinus", "FG_WAVE_SQUARE": "Rechteck", "FG_WAVE_PULSE": "Puls",
+                        "FG_WAVE_TRIANGLE": "Dreieck", "FG_WAVE_DC": "DC"}
+
+
+def fg_waveform_refusal(steps: list[TestStep]) -> tuple[int, str] | None:
+    """PI-75 a/PI-80 a: (Index, Grund) des ersten Funktionsgenerator-Schritts, der an seiner Stelle nicht zur
+    Kurvenform passt -- "Tastverhältnis setzen" bei einer anderen Form als Puls, "Amplitude setzen" in DC. None =
+    nichts statisch erkennbar.
+
+    Bewusst vorsichtig: bekannt ist die Form nur nach einem "Wellenform …"-Schritt desselben Geraets und Kanals
+    davor auf derselben Ebene; jede Blockzeile (Schleife, Wenn, Sonst, Ende, Ueberwachen, Abbruch-Block) loescht
+    das Wissen, weil dort ein anderer Weg oder ein zweiter Durchlauf hinfuehren kann. Was hier nicht erkennbar
+    ist, lehnt der Worker zur Laufzeit ab (Schritt scheitert)."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    known: dict[tuple[str, int], str] = {}
+    skip_until = -1
+    for index, step in enumerate(steps):
+        if index <= skip_until:
+            continue
+        if step.step_type in BLOCK_START_TYPES and not step.enabled and index in matching:
+            skip_until = matching[index].end_index   # deaktivierter Block laeuft nicht
+            known.clear()
+            continue
+        if step.step_type in BLOCK_START_TYPES or step.step_type in ("else", "end"):
+            known.clear()
+            continue
+        if not step.enabled or step.step_type != STEP_TYPE_ACTION or step.device_kind != "fg":
+            continue
+        key = (step.device_id, int(step.hil_channel))
+        if step.action in FG_WAVE_ACTION_NAMES:
+            known[key] = step.action
+        elif step.action == "FG_DUTY" and key in known and known[key] != "FG_WAVE_PULSE":
+            return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal {channel} "
+                             "steht hier auf {wave}", n=index + 1, channel=key[1],
+                             wave=tr(FG_WAVE_ACTION_NAMES[known[key]]))
+        elif step.action == "FG_AMPL" and known.get(key) == "FG_WAVE_DC":
+            return index, tr("Schritt {n}: in DC gibt es keine Amplitude – die Spannung gibt „Offset setzen“ vor "
+                             "(Kanal {channel})", n=index + 1, channel=key[1])
+    return None
+
+
 def abort_block_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
     """(Geraeteart, device_id) der Aktionen im Abbruch-Block, in Reihenfolge des ersten Auftretens."""
     result: list[tuple[str, str]] = []

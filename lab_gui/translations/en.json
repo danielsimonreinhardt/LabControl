@@ -1261,5 +1261,9 @@
   "beim Verbinden EIN": "ON when connected",
   "Beim Verbinden EIN": "On when connected",
   "{voltage} V / {current} A": "{voltage} V / {current} A",
+  "Gleichspannung am Ausgang (Leerlauf)": "DC voltage at the output (no load)",
+  "nur bei Puls": "pulse only",
+  "Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal {channel} steht hier auf {wave}": "Step {n}: \"Set duty cycle\" only works with waveform pulse – channel {channel} is set to {wave} here",
+  "Schritt {n}: in DC gibt es keine Amplitude – die Spannung gibt „Offset setzen“ vor (Kanal {channel})": "Step {n}: there is no amplitude in DC – \"Set offset\" sets the voltage (channel {channel})",
   "Ausgang war beim Verbinden EIN (Sollwerte {setpoints}). LabControl hat nichts geschaltet. Der Hinweis verschwindet, sobald das Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet.": "Output was ON when connected (setpoints {setpoints}). LabControl did not switch anything. The marker disappears as soon as the power supply is switched via LabControl or reports output OFF."
 }

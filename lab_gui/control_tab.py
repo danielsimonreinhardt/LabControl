@@ -52,6 +52,8 @@ from jds66xx.driver import (
     MAX_FREQUENCY_HZ,
     MAX_OFFSET_V,
     MIN_FREQUENCY_HZ,
+    WAVE_DC,
+    WAVE_PULSE,
     WAVEFORMS,
     waveform_name,
 )
@@ -1075,6 +1077,8 @@ class _FgChannelBox(QGroupBox):
         # Zuletzt zurueckgelesene Werte -- set_values() schreibt nur ein Feld,
         # dessen Geraetewert sich GEAENDERT hat (siehe FgControlGroup.set_state).
         self.last: dict | None = None
+        # Vom Geraet gemeldete Form (None = noch unbekannt): bestimmt, welche Felder gelten (_apply_waveform_rows)
+        self.device_waveform: int | None = None
         self.retranslate()
 
     def retranslate(self) -> None:
@@ -1083,6 +1087,7 @@ class _FgChannelBox(QGroupBox):
         for row, text in zip(self.rows, labels):
             self.form.labelForField(row).setText(text)
         self.ampl_spin.setToolTip(tr("Spitze-Spitze, Leerlauf"))
+        self._apply_waveform_rows()
         for button in (self.wave_button, self.freq_button, self.ampl_button, self.offs_button, self.duty_button):
             button.setToolTip(tr("Setzen"))
         self.output_form.labelForField(self.output_layout).setText(tr("Ausgang:"))
@@ -1119,6 +1124,24 @@ class _FgChannelBox(QGroupBox):
             self.wave_combo.setCurrentIndex(self.wave_combo.findData(code))
             self.wave_combo.blockSignals(False)
         self.last = dict(values)
+        if self.device_waveform != values["waveform"]:
+            self.device_waveform = values["waveform"]
+            self._apply_waveform_rows()
+
+    def _apply_waveform_rows(self) -> None:
+        """Felder nach der Form des Geraets (1.0.1): in DC nur "Spannung" (= Offset; Amplitude steht auf 0,01 V,
+        PI-75 a), Frequenz und Tastverhaeltnis gesperrt; das Tastverhaeltnis ist nur bei Puls bedienbar
+        (PI-80 a). Solange die Form unbekannt ist, bleibt alles wie gehabt."""
+        dc = self.device_waveform == WAVE_DC
+        self.form.setRowVisible(self.ampl_row, not dc)
+        self.form.labelForField(self.offs_row).setText(tr("Spannung:") if dc else tr("Offset:"))
+        self.offs_spin.setToolTip(tr("Gleichspannung am Ausgang (Leerlauf)") if dc else "")
+        self.freq_spin.setEnabled(not dc)
+        self.freq_button.setEnabled(not dc)
+        duty_ok = self.device_waveform is None or self.device_waveform == WAVE_PULSE
+        self.duty_spin.setEnabled(duty_ok)
+        self.duty_button.setEnabled(duty_ok)
+        self.duty_spin.setToolTip("" if duty_ok else tr("nur bei Puls"))
 
     def set_output_state(self, on: bool) -> None:
         self.output_on = on
@@ -1223,6 +1246,18 @@ class FgControlGroup(QGroupBox):
         if code is not None:
             self.set_waveform.emit(self._device_id, channel, int(code))
 
+    def refresh_enabled(self) -> None:
+        """Nach dem Aufheben einer Sperre (ControlTab.set_lease): Felder wieder nach der Form freigeben."""
+        for box in self._boxes.values():
+            box._apply_waveform_rows()
+
+    def channel_rows(self, channel: int) -> dict:
+        """Fuer Pruefungen: Sichtbarkeit/Bedienbarkeit der Felder eines Kanals."""
+        box = self._boxes[channel]
+        return {"amplitude_visible": box.form.isRowVisible(box.ampl_row),
+                "offset_label": box.form.labelForField(box.offs_row).text(),
+                "frequency_enabled": box.freq_spin.isEnabled(), "duty_enabled": box.duty_spin.isEnabled()}
+
     def set_state(self, state: dict) -> None:
         """Ausgaenge immer, Feldwerte nur bei Aenderung am Geraet (siehe
         _FgChannelBox.set_values)."""
@@ -1297,10 +1332,13 @@ class FgControlGroup(QGroupBox):
             except (TypeError, ValueError):
                 continue
             self._emit_waveform(n)
-            self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
-            self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
+            code = box.wave_combo.currentData()
+            if code != WAVE_DC:   # PI-75 a: in DC setzt die Form die Amplitude, Frequenz wirkt nicht
+                self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
+                self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
             self.set_offset.emit(self._device_id, n, box.offs_spin.value())
-            self.set_duty.emit(self._device_id, n, box.duty_spin.value())
+            if code == WAVE_PULSE:   # PI-80 a: Tastverhaeltnis nur bei Puls
+                self.set_duty.emit(self._device_id, n, box.duty_spin.value())
         try:
             self._phase_spin.setValue(float(state.get("phase", self._phase_spin.value())))
         except (TypeError, ValueError):
@@ -3883,6 +3921,9 @@ class ControlTab(QWidget):
                 widget.setEnabled(True)
             except RuntimeError:
                 pass   # Widget inzwischen geloescht
+        refresh = getattr(section, "refresh_enabled", None)
+        if refresh is not None:
+            refresh()   # z. B. Funktionsgenerator: Tastverhaeltnis nur bei Puls (PI-80 a)
 
     def lease_text(self, device_id: str) -> str:
         """Fuer Pruefungen: angezeigter Belegungshinweis ("" = frei)."""

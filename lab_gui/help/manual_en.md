@@ -137,6 +137,17 @@ Two identical channel boxes (channel 1 and 2) side by side:
 - The **test sequence** offers actions for frequency, amplitude, offset,
   duty cycle, phase, the shapes sine/square/pulse/triangle/DC and output
   ON/OFF; the channel is chosen in the row.
+- **DC**: The box only shows **Voltage** (= offset), frequency and duty
+  cycle are locked. When switching to DC, LabControl sets the amplitude to
+  0.01 V, because in DC the device outputs about offset + amplitude/2, and
+  with an amplitude of exactly 0 only about a tenth of the offset (measured
+  on the JDS2915). So the output is the voltage + 5 mV. "Set amplitude" is
+  rejected in DC.
+- **Duty cycle** only with **pulse**: with square the device stays at 50 %.
+  Otherwise the field is locked; "Set duty cycle" from a test sequence, MCP
+  or the linked partner is rejected for other shapes (the shape is never
+  switched silently). If the shape at that point of a sequence is known, the
+  sequence does not start at all.
 - The device is found through its CH340 USB-serial converter. Because that
   converter also sits in unrelated devices, a query checks that a function
   generator really answers. A powered-on device is therefore detected up

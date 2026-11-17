@@ -127,6 +127,10 @@ Vorgehen:
   verfuegbar und Aktionen werden abgelehnt -- nicht umgehen, den Nutzer fragen.
   Feld found_on=1: das Netzteil stand beim Verbinden mit Ausgang EIN (Strombegrenzung > 0) -- LabControl hat
   nichts geschaltet; den Nutzer fragen, bevor du es bedienst. Es gilt, bis es ueber LabControl geschaltet wird.
+- Funktionsgenerator JDS2915 (fg): Gleichspannung = FG_WAVE_DC (setzt die Amplitude selbst auf 0,01 V), dann
+  FG_OFFS value=Spannung; am Ausgang liegt Offset + 5 mV (in DC gibt das Geraet Offset + Amplitude/2 aus, bei
+  Amplitude genau 0 nur ~1/10 des Offsets). FG_AMPL ist in DC abgelehnt. FG_DUTY wirkt nur bei FG_WAVE_PULSE
+  und ist sonst abgelehnt (Rechteck bleibt am Geraet 50 %) -- erst die Form setzen, nie umgehen.
 - Batterie-Simulator (battsim, 14 Zellen, Kanal = Zelle): erst BS_REMOTE_ON, dann Sollwerte
   (BS_CELL_VOLT/BS_ALL_VOLT) und Freigaben (BS_CELL_ON/BS_ALL_ON), zuletzt BS_OUT_ON. Ueber dem
   Grenzwert je Zelle (Feld voltage_limit) wird abgelehnt. Istwerte in cellN_voltage, Zustand in
@@ -290,6 +294,9 @@ def control_device(device_id: str, action: str, value: float | None = None,
                 HIL_AOUT channel=1..2 value=mV
       Funktionsgenerator  FG_FREQ (Hz) | FG_AMPL (V, Spitze-Spitze) | FG_OFFS (V) | FG_DUTY (%) |
                 FG_WAVE_SINE/SQUARE/PULSE/TRIANGLE/DC | FG_OUT_ON/FG_OUT_OFF, jeweils channel=1..2
+                DC-Spannung: FG_WAVE_DC (setzt die Amplitude selbst auf 0,01 V), dann FG_OFFS value=Spannung;
+                am Ausgang liegt Offset + 5 mV. FG_AMPL ist in DC abgelehnt. FG_DUTY nur bei FG_WAVE_PULSE
+                (bei Rechteck bleibt das Geraet bei 50 %), sonst abgelehnt -- die Form wird nie still umgeschaltet.
     'value' nur bei Aktionen mit Wert, 'channel' nur beim microHIL und Funktionsgenerator. Bei Erfolg kommt 'ok': true zurueck
     (das Geraet hat bestaetigt); mit 'status': 'pending' ist der Befehl unterwegs, sein Ausgang aber
     unbekannt -- dann mit read_device nachsehen. Fehler kommen als Werkzeugfehler mit Hinweis."""
