@@ -124,6 +124,8 @@ class PartnerDevices(QObject):
     psu_output_state = Signal(str, bool)
     psu_setpoints = Signal(str, float, float)
     psu_ratings = Signal(str, float, float)
+    # PI-81 a: Besitzer hat das Netzteil beim Verbinden mit Ausgang EIN vorgefunden ({"voltage", "current"}) bzw. None
+    psu_found_on = Signal(str, object)
     load_measurement = Signal(str, float, float, float)
     load_function_state = Signal(str, str)
     load_input_state = Signal(str, bool)
@@ -148,6 +150,7 @@ class PartnerDevices(QObject):
         self._online: dict[str, bool] = {}
         self._control: dict[str, bool] = {}
         self._colors: dict[str, str | None] = {}
+        self._found_on: dict[str, bool] = {}            # PI-81 a: zuletzt gemeldet "beim Verbinden EIN"
         self._requests: dict[int, str] = {}             # eigene Aktionsanfragen -> rid
         self._host = ""
         link.snapshot_changed.connect(self.on_snapshot)
@@ -203,6 +206,7 @@ class PartnerDevices(QObject):
             self._online.pop(rid, None)
             self._control.pop(rid, None)
             self._colors.pop(rid, None)
+            self._found_on.pop(rid, None)
             self.device_forgotten.emit(kind, rid)
 
     def forget_all(self) -> None:
@@ -212,6 +216,7 @@ class PartnerDevices(QObject):
         self._online.clear()
         self._control.clear()
         self._colors.clear()
+        self._found_on.clear()
 
     def _set_online(self, kind: str, rid: str, online: bool) -> None:
         if self._online.get(rid) != online:
@@ -234,6 +239,14 @@ class PartnerDevices(QObject):
             ratings = tile.get("ratings") or {}
             if ratings:
                 self.psu_ratings.emit(rid, _num(ratings.get("max_voltage")), _num(ratings.get("max_current")))
+            if "found_on" in f:   # PI-81 a; aeltere Besitzer liefern das Feld nicht
+                found = bool(_flag(f.get("found_on")))
+                if found:
+                    self.psu_found_on.emit(rid, {"voltage": _num(f.get("set_voltage")),
+                                                 "current": _num(f.get("set_current"))})
+                elif self._found_on.get(rid):
+                    self.psu_found_on.emit(rid, None)
+                self._found_on[rid] = found
         elif kind == "load":
             self.load_measurement.emit(rid, _num(f.get("voltage")), _num(f.get("current")), _num(f.get("power")))
             if f.get("mode"):

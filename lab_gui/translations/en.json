@@ -1252,8 +1252,14 @@
   "Art": "Type",
   "Auslösendes Gerät": "Triggering device",
   "Abgeschaltet": "Turned off",
-  "Nicht erreichbar": "Not reachable",
+  "Nicht erreichbar (Ausgang unbekannt)": "Not reachable (output unknown)",
   "Höchstdauer überschritten": "Maximum duration exceeded",
   "Schritt": "Step",
-  "ok": "ok"
+  "ok": "ok",
+  "ALLE AUS: nicht erreichbar, Ausgang unbekannt: {devices}": "ALL OFF: not reachable, output unknown: {devices}",
+  "ALLE AUS am Verbund-Partner {name}: nicht erreichbar, Ausgang unbekannt: {devices}": "ALL OFF at linked partner {name}: not reachable, output unknown: {devices}",
+  "beim Verbinden EIN": "ON when connected",
+  "Beim Verbinden EIN": "On when connected",
+  "{voltage} V / {current} A": "{voltage} V / {current} A",
+  "Ausgang war beim Verbinden EIN (Sollwerte {setpoints}). LabControl hat nichts geschaltet. Der Hinweis verschwindet, sobald das Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet.": "Output was ON when connected (setpoints {setpoints}). LabControl did not switch anything. The marker disappears as soon as the power supply is switched via LabControl or reports output OFF."
 }

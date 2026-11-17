@@ -61,7 +61,9 @@ LOAD_STATE_FIELDS = {"mode": ("Modus", ""), "input": ("Eingang", ""),
                      "setpoint": ("Sollwert", ""), "setpoint_mode": ("Sollwert-Modus", "")}
 # output/set_* seit 0.52.0: der Verbund-Partner zeigt damit Ausgangszustand und Sollwerte in seiner Kachel
 PSU_STATE_FIELDS = {"mode": ("Modus", ""), "output": ("Ausgang", ""),
-                    "set_voltage": ("Sollspannung", "V"), "set_current": ("Strombegrenzung", "A")}
+                    "set_voltage": ("Sollspannung", "V"), "set_current": ("Strombegrenzung", "A"),
+                    # 1.0.1 (PI-81 a): 1 = beim Verbinden mit Ausgang EIN vorgefunden, bis ueber LabControl geschaltet
+                    "found_on": ("Beim Verbinden EIN", "")}
 CAN_STATE_FIELDS = {
     "tx_count": ("Gesendet", ""),
     "rx_count": ("Empfangen", ""),
@@ -135,7 +137,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
 # etc.), damit ein externes Display und die Kachel daneben gleich aussehen.
 KIND_FIELD_ORDER: dict[str, list[str]] = {
     "load": ["voltage", "current", "power", "mode", "input", "setpoint", "setpoint_mode"],
-    "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current"],
+    "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current", "found_on"],
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
     "picoscope": list(PICOSCOPE_STATE_FIELDS),

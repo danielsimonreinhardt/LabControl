@@ -252,6 +252,14 @@ class RunSession(QObject):
         if self._worker_off:
             self.dispatch_devices_off.connect(worker.devices_off_tagged)
             worker.devices_off_done.connect(self._on_devices_off_done)
+        # PI-81 a: ALLE AUS meldet nicht erreichte Geraete; im Lauf (Art "all_off") kommen sie in den Bericht.
+        # _all_off_requested: monotonic() der letzten ALLE-AUS-Anforderung (expect_all_off), _all_off_last:
+        # (monotonic(), Kennungen) der letzten Rueckmeldung
+        self._worker_all_off = hasattr(worker, "all_off_unreachable")
+        self._all_off_requested = 0.0
+        self._all_off_last: tuple[float, list[str]] | None = None
+        if self._worker_all_off:
+            worker.all_off_unreachable.connect(self._on_all_off_unreachable)
         try:
             safety.run_trip_handler = self.handle_safety_trip   # Watchdog im Lauf (PI-79 a)
         except AttributeError:
@@ -590,10 +598,22 @@ class RunSession(QObject):
                     "timed_out": bool(info.get("timed_out")), "devices": [], "off": [], "unreachable": [],
                     "labels": {}}
         if mode == "all_off":
-            # ALLE AUS/NOTAUS: MainWindow schaltet alle Geraete ab (auch beim Partner) -- nur vermerken
+            # ALLE AUS/NOTAUS: MainWindow schaltet alle Geraete ab (auch beim Partner) -- vermerken, und seit
+            # PI-81 a die Geraete, die ALLE AUS nicht erreicht hat (Ausgang unbekannt), in den Bericht
             shutdown["mode"] = "all_off"
-            self._finish_shutdown(shutdown, notify=False)
-            return False
+            requested = self._all_off_requested
+            if not self._worker_all_off or not requested or time.monotonic() - requested > SHUTDOWN_TIMEOUT_S:
+                self._finish_shutdown(shutdown, notify=False)   # kein ALLE AUS angefordert (z. B. Kommandozeile)
+                return False
+            last = self._all_off_last
+            if last is not None and last[0] >= requested:   # Rueckmeldung schon da
+                shutdown["unreachable"] = list(last[1])
+                self._finish_shutdown(shutdown, notify=False)
+                return False
+            self._shutdown_state = {"shutdown": shutdown, "own_tag": 0, "partner": False, "all_off": True,
+                                    "reason": "", "extra_tags": set()}
+            self._shutdown_timer.start(round(SHUTDOWN_TIMEOUT_S * 1000))
+            return True
         if mode == "normal" and info.get("has_block"):
             for row in block_rows:
                 if not row["device_id"]:
@@ -690,17 +710,40 @@ class RunSession(QObject):
 
     def _maybe_finish_shutdown(self) -> None:
         state = self._shutdown_state
-        if state is not None and not state["own_tag"] and not state["partner"]:
+        if state is not None and not state["own_tag"] and not state["partner"] and not state.get("all_off"):
             self._shutdown_timer.stop()
             self._finish_shutdown(state["shutdown"])
+
+    def expect_all_off(self) -> None:
+        """MainWindow._safe_stop hat ALLE AUS beim Worker angefordert (PI-81 a): bricht das einen Lauf ab, wartet
+        die Abschaltung auf dessen Rueckmeldung (all_off_unreachable), damit der Bericht die nicht erreichten
+        Geraete nennt."""
+        self._all_off_requested = time.monotonic()
+
+    @Slot(list)
+    def _on_all_off_unreachable(self, device_ids: list) -> None:
+        """DeviceWorker.all_off_unreachable (PI-81 a): Geraete, die ALLE AUS nicht erreicht hat."""
+        ids = [str(d) for d in device_ids]
+        self._all_off_last = (time.monotonic(), ids)
+        state = self._shutdown_state
+        if state is None or not self._all_off_requested:
+            return
+        self._merge_off([], ids)   # auch bei einer zu ALLE AUS verschaerften Abschaltung
+        if state.get("all_off"):
+            state["all_off"] = False
+            self._maybe_finish_shutdown()
 
     def _on_shutdown_timeout(self) -> None:
         state = self._shutdown_state
         if state is None:
             return
+        if state.get("all_off"):
+            logger.error("Abschaltung beim Abbruch: keine Rueckmeldung von ALLE AUS")
+            state["all_off"] = False
         pending = (state.get("own_ids", []) if state["own_tag"] else []) + \
                   (state.get("partner_ids", []) if state["partner"] else [])
-        logger.error("Abschaltung beim Abbruch: keine Rueckmeldung fuer %s", ", ".join(pending))
+        if pending:
+            logger.error("Abschaltung beim Abbruch: keine Rueckmeldung fuer %s", ", ".join(pending))
         state["own_tag"] = 0
         state["partner"] = False
         self._merge_off([], [d for d in pending if d not in state["shutdown"]["off"]])

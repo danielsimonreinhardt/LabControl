@@ -287,7 +287,10 @@ def _shutdown_html(record: RunRecord, th, td) -> list[str]:
         rows.append((tr("Auslösendes Gerät"), names([shutdown["trigger"]])))
     if shutdown.get("mode") != "all_off":
         rows.append((tr("Abgeschaltet"), names(shutdown.get("off") or [])))
-        rows.append((tr("Nicht erreichbar"), names(shutdown.get("unreachable") or [])))
+        rows.append((tr("Nicht erreichbar (Ausgang unbekannt)"), names(shutdown.get("unreachable") or [])))
+    elif shutdown.get("unreachable"):
+        # PI-81 a: ALLE AUS erreicht ein vorher getrenntes Geraet nicht -- der Bericht nennt es
+        rows.append((tr("Nicht erreichbar (Ausgang unbekannt)"), names(shutdown["unreachable"])))
     if shutdown.get("timed_out"):
         rows.append((tr("Abbruch-Block"), tr("Höchstdauer überschritten")))
     for label, value in rows:

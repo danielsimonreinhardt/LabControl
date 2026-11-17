@@ -661,12 +661,21 @@ class PsuControlGroup(QGroupBox):
         # thematisch besser hierher als ins reine Anzeige-Dashboard.
         self._rename_button = IconButton("mdi.pencil-outline", "")
         self._rename_button.clicked.connect(self._on_rename_clicked)
+        # PI-81 a: gelber Chip, wenn das Netzteil beim Verbinden mit Ausgang EIN (Strombegrenzung > 0) vorgefunden
+        # wurde -- bis es ueber LabControl geschaltet wird oder Ausgang AUS meldet (DeviceWorker.psu_found_on)
+        self._found_on_chip = QLabel()
+        self._found_on_chip.setObjectName("psuFoundOnChip")
+        self._found_on_chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._found_on_chip.hide()
+        self._found_on: dict | None = None
         subtitle_row = QHBoxLayout()
         subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._found_on_chip)
         subtitle_row.addWidget(self._color_button)
         subtitle_row.addWidget(self._rename_button)
         outer.addLayout(subtitle_row)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
+        self._style_found_on_chip(current_palette())
 
         self._form = QFormLayout()
         outer.addLayout(self._form)
@@ -788,6 +797,35 @@ class PsuControlGroup(QGroupBox):
             tr("Gibt das Netzteil zur Bedienung am Gerät frei: LabControl spricht es dann nicht mehr an.")
         )
         self._update_limit_warning()
+        self._render_found_on()
+
+    def set_found_on(self, info: dict | None) -> None:
+        """PI-81 a: beim Verbinden mit Ausgang EIN vorgefunden ({"voltage", "current"}: Sollwerte, None = nicht
+        lesbar) bzw. None -- nur Anzeige, geschaltet wird nichts."""
+        self._found_on = dict(info) if isinstance(info, dict) else None
+        self._render_found_on()
+
+    def found_on_visible(self) -> bool:
+        return not self._found_on_chip.isHidden()
+
+    def _render_found_on(self) -> None:
+        info = self._found_on
+        self._found_on_chip.setVisible(info is not None)
+        if info is None:
+            return
+        self._found_on_chip.setText(tr("beim Verbinden EIN"))
+        volts, amps = info.get("voltage"), info.get("current")
+        setpoints = (tr("{voltage} V / {current} A", voltage=f"{float(volts):g}", current=f"{float(amps):g}")
+                     if volts is not None and amps is not None else tr("unbekannt"))
+        self._found_on_chip.setToolTip(tr(
+            "Ausgang war beim Verbinden EIN (Sollwerte {setpoints}). LabControl hat nichts geschaltet. "
+            "Der Hinweis verschwindet, sobald das Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet.",
+            setpoints=setpoints))
+
+    def _style_found_on_chip(self, palette: Palette) -> None:
+        self._found_on_chip.setStyleSheet(
+            f"color: {palette.warning}; font-weight: bold; border: 1px solid {palette.warning};"
+            f" border-radius: 8px; padding: 0px 6px; background: transparent;")
 
     def _on_manual_toggled(self, checked: bool) -> None:
         self.set_manual.emit(self._device_id, checked)
@@ -891,6 +929,7 @@ class PsuControlGroup(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
+        self._style_found_on_chip(palette)
         for row in (self._voltage_row, self._current_row, self._ovp_row, self._ocp_row):
             row.setStyleSheet(_row_stylesheet(palette))
         self._update_output_buttons()
@@ -2924,6 +2963,8 @@ class ControlTab(QWidget):
         self._sections: dict[str, QWidget] = {}
         # device_id -> (max. Spannung, max. Strom) laut GMAX, siehe set_psu_ratings
         self._psu_ratings: dict[str, tuple[float, float]] = {}
+        # PI-81 a: Netzteile, die beim Verbinden mit Ausgang EIN vorgefunden wurden (set_psu_found_on)
+        self._psu_found_on: dict[str, dict] = {}
         self._section_kind: dict[str, str] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
@@ -2997,6 +3038,8 @@ class ControlTab(QWidget):
             section = PsuControlGroup(device_id, label)
             if device_id in self._psu_ratings:
                 section.set_ratings(*self._psu_ratings[device_id])
+            if device_id in self._psu_found_on:
+                section.set_found_on(self._psu_found_on[device_id])
         elif kind == "hil":
             section = HilControlGroup(device_id, label)
         elif kind == "fg":
@@ -3779,6 +3822,16 @@ class ControlTab(QWidget):
         section = self._sections.get(device_id)
         if isinstance(section, PsuControlGroup):
             section.set_manual_state(manual)
+
+    def set_psu_found_on(self, device_id: str, info: object) -> None:
+        """PI-81 a: Chip "beim Verbinden EIN" (info = {"voltage", "current"}) bzw. weg (None)."""
+        if isinstance(info, dict):
+            self._psu_found_on[device_id] = dict(info)
+        else:
+            self._psu_found_on.pop(device_id, None)
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_found_on(info if isinstance(info, dict) else None)
 
     def _on_preset_save(self, slot: int) -> None:
         devices = {

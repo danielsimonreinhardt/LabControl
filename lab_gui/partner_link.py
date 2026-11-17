@@ -82,6 +82,8 @@ class PartnerLink(QObject):
     action_finished = Signal(int, str, str, bool, str)
     # ok, Meldung
     all_off_finished = Signal(bool, str)
+    # PI-81 a: ALLE AUS hat beim Partner diese Geraete nicht erreicht (IDs beim Partner) -- vor all_off_finished
+    all_off_unreachable = Signal(list)
     # Belegung (V2): ok, Meldung -- Antwort auf acquire_lease
     lease_acquired = Signal(bool, str)
     # Belegung verloren (Lebenszeichen nicht bestaetigt): Grund
@@ -117,8 +119,6 @@ class PartnerLink(QObject):
         self._lease_stop = threading.Event()
         self._polled.connect(self._on_polled)
         self._lease_result.connect(self._on_lease_result)
-        self._off_callbacks: dict[int, object] = {}
-        self._devices_off_result.connect(self._on_devices_off_result)
         self._off_callbacks: dict[int, object] = {}
         self._devices_off_result.connect(self._on_devices_off_result)
 
@@ -442,6 +442,7 @@ class PartnerLink(QObject):
                 failures = exc.payload.get("failures") if isinstance(exc.payload, dict) else None
                 message = error_text(exc.code) + (f": {', '.join(failures)}" if failures else "")
                 logger.error("Verbund: ALLE AUS an %s FEHLGESCHLAGEN (%s): %s", client.base_url, reason, message)
+                self._report_unreachable(client, exc.payload)
                 self.all_off_finished.emit(False, message)
                 return
             except Exception as exc:
@@ -451,8 +452,19 @@ class PartnerLink(QObject):
             ok = payload.get("ok") is True
             logger.warning("Verbund: ALLE AUS an %s (%s) -> %s", client.base_url, reason,
                            "ok" if ok else "unbestätigt")
+            self._report_unreachable(client, payload)
             self.all_off_finished.emit(ok, "" if ok else "unbestätigt")
 
         logger.warning("Verbund: ALLE AUS an %s wird gesendet (%s)", client.base_url, reason)
         threading.Thread(target=run, name="PartnerAllOff", daemon=True).start()
         return True
+
+    def _report_unreachable(self, client, payload) -> None:
+        """PI-81 a: Geraete, die ALLE AUS beim Partner nicht erreicht hat (fehlgeschlagen oder vorher getrennt) --
+        Ausgang unbekannt. Aeltere Partner liefern das Feld nicht."""
+        raw = payload.get("unreachable") if isinstance(payload, dict) else None
+        ids = [str(d) for d in raw if isinstance(d, str) and d] if isinstance(raw, list) else []
+        if ids:
+            logger.warning("Verbund: ALLE AUS an %s: nicht erreichbar, Ausgang unbekannt: %s", client.base_url,
+                           ", ".join(ids))
+            self.all_off_unreachable.emit(ids)

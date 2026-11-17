@@ -237,6 +237,36 @@ Semantic Versioning (`lab_gui/version.py`).
   Freigabe, Abfrage gegen eine Nachbildung der Registerbank; Gegenprobe auf dem alten Stand schlägt fehl;
   `check_jds66xx`, `check_partner_devices`, `check_partner_link`, `check_network_share`, `check_confirm_wait`,
   `check_reconnect_async`, `check_last_switch` unverändert grün); am JDS2915 (COM21) noch nicht.
+- **ALLE AUS meldete nicht erreichbare Geräte nicht; Netzteil morgens EIN (PI-81 a).** Befund aus dem Pi-Log: Am
+  Abend war HCS16 per Verbund eingeschaltet, um 19:58:14 antworteten beide Netzteile nicht mehr („getrennt“), 4 s
+  später fuhr der Pi herunter. Das ALLE AUS beim Beenden fand kein Netzteil mehr vor und schaltete nichts – ohne
+  das zu melden. Die HCS-34xx behalten ihren Ausgang selbst, morgens standen sie auf EIN. Entscheidung a:
+  sichtbar machen, nichts automatisch schalten.
+  - **ALLE AUS nennt, was es nicht erreicht hat:** jedes Gerät mit Ausgang (Netzteil, Last, Generator, microHIL),
+    das in dieser Sitzung verbunden war und beim ALLE AUS nicht mehr verbunden ist oder nicht antwortet, steht als
+    WARNING „… nicht verbunden (getrennt vor … s, zuletzt Ausgang EIN) – Ausgang unbekannt“ im Log, dazu eine
+    Sammelzeile. Wird ein Gerät mit Ausgang EIN getrennt, steht das schon beim Trennen im Log. Die Statuszeile
+    zeigt „ALLE AUS: nicht erreichbar, Ausgang unbekannt: …“, `POST /api/v1/all-off` (MCP `all_off`) liefert die
+    Geräte in `unreachable`, ALLE AUS am Verbund-Partner meldet dessen Liste ebenso. Bricht ALLE AUS einen
+    Testablauf ab, wartet die Abschaltung auf diese Rückmeldung und der Bericht (Abschnitt „Abschaltung beim
+    Abbruch“), `run-result.json` und `get_run` nennen die Geräte unter „Nicht erreichbar (Ausgang unbekannt)“
+    bzw. `shutdown.unreachable`. Beim Abschalten einzelner Geräte (Abbruch eines Laufs, `POST /devices-off` vom
+    Partner, abgelaufene Belegung) gilt dasselbe für den Log. Simulierte Geräte, die man abschaltet, zählen nicht.
+  - **Chip „beim Verbinden EIN“ in der Netzteil-Kachel:** findet LabControl beim Verbinden (Start oder
+    Wiederverbinden) ein Netzteil mit Ausgang EIN und Strombegrenzung > 0 vor, zeigt die Kachel einen gelben Chip
+    (Sollwerte im Tooltip) und der Log eine WARNING. Er verschwindet, sobald das Netzteil über LabControl geschaltet
+    wird (Ausgang, Spannung, Strom, Speicherplatz, Handbedienung – von der Kachel, aus einem Ablauf, über MCP oder
+    den Partner), es Ausgang AUS meldet oder getrennt wird. Der Übergabezustand beim Beenden (Mindestspannung, 0 A,
+    Ausgang EIN – das Gerät hat keine Ausgangstaste) löst ihn nicht aus: mit 0 A liefert der Ausgang nichts. Auch
+    beim Verbund-Partner sichtbar (Feld `found_on` im Kachel-Status, auch in `read_device`).
+  - Nebenbei: `PartnerLink` verband das Ergebnis von „Abschalten einzelner Geräte“ doppelt (harmlos, entfernt).
+
+  Nur Mock geprüft (`check_psu_found_on`: ALLE AUS mit per Poll-Timeout getrenntem Netzteil → WARNING,
+  `unreachable`, Bericht; Verbinden mit 12 V / 0,5 A EIN → Chip, Übergabezustand 1 V / 0 A EIN → kein Chip,
+  Schalten → Chip weg, Partnerfeld; `check_abort_block`, `check_partner_link`, `check_partner_devices`,
+  `check_partner_v2`, `check_verbund_v4`, `check_network_share`, `check_runs_api`, `check_psu_manual`,
+  `check_psu_output`, `check_last_switch`, `check_stale_per_device`, `check_reconnect_async`, `check_control_tab`,
+  `check_translations` unverändert grün); am Pi und an den HCS-34xx noch nicht.
 
 ## [1.0.0] – 2026-11-15
 

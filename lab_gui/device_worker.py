@@ -99,6 +99,14 @@ logger = logging.getLogger(__name__)
 OPERATION_LABELS = {"psu": "Netzteil", "load": "Last", "fg": "Funktionsgenerator", "hil": "microHIL",
                     "battsim": "Batterie-Simulator"}
 READ_ACTIONS = {"HIL_IN_READ", "HIL_AIN_READ", "BS_CELL_READ", "BS_STACK_READ"}
+# PI-81 a: Geraetearten mit Ausgang, deren Trennung ALLE AUS als "Ausgang unbekannt" meldet (Batterie-Simulator:
+# ohne zyklische Botschaften faellt er nach 4,5-6 s selbst in FAIL)
+SESSION_OUTPUT_KINDS = ("psu", "load", "fg", "hil")
+# PI-81 a: Strombegrenzung, ab der ein beim Verbinden eingeschaltet vorgefundenes Netzteil gemeldet wird -- eine
+# halbe Anzeigestelle des HCS-34xx (0,1 A); der Uebergabezustand beim Beenden hat 0 A (_release_psu)
+PSU_FOUND_ON_MIN_CURRENT_A = 0.05
+# PI-81 a: Aktionen, nach denen ein vorgefundenes Netzteil als "ueber LabControl geschaltet" gilt
+PSU_FOUND_ON_CLEAR_ACTIONS = {"PSU_OUT_ON", "PSU_OUT_OFF", "PSU_VOLT", "PSU_CURR", "PSU_RECALL"}
 
 # Meldungen, die sich bei jedem Verbindungsversuch wiederholen (fremder CH340-Port, von einer
 # anderen App gehaltener Port), hoechstens alle 10 min je Port. Vorher bestand das Log zu ~80 %
@@ -458,6 +466,13 @@ class DeviceWorker(QObject):
     # Abschaltung einzelner Geraete mit Kennung (devices_off_tagged, PI-79 a): Kennung, abgeschaltet, nicht
     # erreichbar/fehlgeschlagen (Listen von device_ids)
     devices_off_done = Signal(int, list, list)
+    # PI-81 a: Geraete, die beim ALLE AUS nicht erreichbar bzw. nicht mehr verbunden waren, obwohl sie in dieser
+    # Sitzung verbunden waren -- ihr Ausgang ist unbekannt. Kommt VOR all_off_finished (Liste von device_ids).
+    all_off_unreachable = Signal(list)
+    # PI-81 a: Netzteil beim Verbinden mit Ausgang EIN und Strombegrenzung > 0 vorgefunden: device_id,
+    # {"voltage", "current"} (Sollwerte, None = nicht lesbar) bzw. None, sobald das nicht mehr gilt (Schaltung ueber
+    # LabControl, Ausgang AUS gemeldet, getrennt)
+    psu_found_on = Signal(str, object)
 
     can_connected = Signal(str, bool)        # device_id, online
     # PI-54 (0.65.0): CAN-Kanal fuer canflash freigegeben (True) bzw. wieder geoeffnet (False)
@@ -680,6 +695,16 @@ class DeviceWorker(QObject):
         # PI-77 a: letzte erfolgreiche Schaltung je Geraet und Aktion (Kachel, Preset, Ablauf, MCP/REST, Verbund,
         # ALLE AUS) -- fuer "Warten seit Aktion" hier und beim Verbund-Partner (switch_log.py, thread-sicher)
         self.switch_log = SwitchLog()
+        # PI-81 a: in dieser Sitzung verbundene Geraete mit Ausgang (device_id -> Art), getrennte davon mit dem
+        # zuletzt bekannten Ausgangszustand ({"kind", "output_on": bool | None, "t": monotonic}) -- ALLE AUS meldet
+        # sie als "Ausgang unbekannt"; Netzteile, die beim Verbinden mit Ausgang EIN vorgefunden wurden
+        self._session_devices: dict[str, str] = {}
+        self._session_lost: dict[str, dict] = {}
+        self._load_input_seen: dict[str, bool] = {}
+        self._psu_found_on: dict[str, dict] = {}
+        self.device_added.connect(self._on_session_device_added)
+        self.device_removed.connect(self._on_session_device_removed)
+        self.load_input_state.connect(self._on_session_load_input)
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
@@ -1023,6 +1048,7 @@ class DeviceWorker(QObject):
             psu.close()
             self.psu_connected.emit(SIM_PSU_ID, False)
             self.device_removed.emit("psu", SIM_PSU_ID)
+            self._forget_session_device(SIM_PSU_ID)
 
     def _add_mock_load(self) -> None:
         if SIM_LOAD_ID in self._loads:
@@ -1041,6 +1067,7 @@ class DeviceWorker(QObject):
             load.close()
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
+            self._forget_session_device(SIM_LOAD_ID)
 
     def _add_mock_scpiscope(self) -> None:
         if self._mock_scpiscope_active:
@@ -1160,6 +1187,7 @@ class DeviceWorker(QObject):
             fg.close()
             self.fg_connected.emit(SIM_FG_ID, False)
             self.device_removed.emit("fg", SIM_FG_ID)
+            self._forget_session_device(SIM_FG_ID)
 
     def _add_mock_can(self) -> None:
         if SIM_CAN_ID in self._can_buses:
@@ -1395,6 +1423,7 @@ class DeviceWorker(QObject):
             hil.close()
             self.hil_connected.emit(SIM_HIL_ID, False)
             self.device_removed.emit("hil", SIM_HIL_ID)
+            self._forget_session_device(SIM_HIL_ID)
 
     def _add_mock_picoscope(self) -> None:
         if self._mock_picoscope_active:
@@ -1680,7 +1709,7 @@ class DeviceWorker(QObject):
             self.psu_connected.emit(device_id, True)
             self._psu_manual.discard(device_id)
             self.psu_manual_state.emit(device_id, False)
-            self._adopt_psu_state(device_id)
+            self._adopt_psu_state(device_id, on_connect=True)
         else:
             identity = self._emit_identity("fg", device_id, candidate)
             logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, identity)
@@ -1922,17 +1951,103 @@ class DeviceWorker(QObject):
         self._picoscope_serial = info.serial
         self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
 
-    def _adopt_psu_state(self, device_id: str) -> None:
+    def _adopt_psu_state(self, device_id: str, on_connect: bool = False) -> None:
         """Uebernimmt den Zustand des Geraets in die GUI, ohne ihn zu aendern: Nennwerte, OVP/OCP,
         Sollwerte und Ausgang. Schlaegt das Lesen fehl, folgt die Kachel dem naechsten Abgleich in
         _poll_devices.
 
         Nennwerte VOR OVP/OCP und Sollwerten: die GUI setzt damit erst die Bereiche der Felder, dann
-        passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an)."""
+        passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an).
+
+        on_connect (PI-81 a): beim (Wieder-)Verbinden pruefen, ob das Netzteil mit Ausgang EIN vorgefunden wurde
+        (_check_psu_found_on) -- nicht beim Rueckwechsel aus der Handbedienung, die LabControl selbst uebergeben hat."""
         self._emit_psu_ratings(device_id)
         self._emit_psu_limits(device_id)
+        if on_connect:
+            self._psu_setpoints.pop(device_id, None)   # nur frisch gelesene Sollwerte zaehlen
         self._guard_psu(device_id, lambda psu: self._remember_psu_setpoints(device_id, *psu.get_setpoint()))
         self._guard_psu(device_id, lambda psu: self._emit_psu_output(device_id, psu.get_output()))
+        if on_connect and device_id in self._psus:
+            self._check_psu_found_on(device_id)
+
+    def _check_psu_found_on(self, device_id: str) -> None:
+        """PI-81 a: Ausgang beim Verbinden EIN und Strombegrenzung > 0 -> Hinweis in der Kachel (psu_found_on).
+
+        NICHT fuer den Uebergabezustand, in dem LabControl jedes Netzteil beim Beenden und zur Handbedienung
+        zuruecklaesst (_release_psu: Mindestspannung, 0 A, Ausgang EIN -- das Geraet hat keine Ausgangstaste):
+        mit 0 A Strombegrenzung liefert der Ausgang nichts, egal welche Spannung eingestellt ist. Deshalb
+        entscheidet allein die Strombegrenzung (> PSU_FOUND_ON_MIN_CURRENT_A, eine halbe Anzeigestelle), nicht die
+        Spannung. Sind die Sollwerte nicht lesbar, gilt der Ausgang vorsichtshalber als vorgefunden. Kein
+        automatisches Schalten."""
+        if self._psu_output_seen.get(device_id) is not True:
+            self._set_psu_found_on(device_id, None)
+            return
+        setpoints = self._psu_setpoints.get(device_id)
+        if setpoints is not None and setpoints[1] <= PSU_FOUND_ON_MIN_CURRENT_A:
+            self._set_psu_found_on(device_id, None)
+            return
+        info = {"voltage": setpoints[0] if setpoints else None, "current": setpoints[1] if setpoints else None}
+        logger.warning("Netzteil %s beim Verbinden mit Ausgang EIN vorgefunden (Soll %s) -- nichts geschaltet",
+                       device_id, f"{setpoints[0]:g} V / {setpoints[1]:g} A" if setpoints else "unbekannt")
+        self._set_psu_found_on(device_id, info)
+
+    def _set_psu_found_on(self, device_id: str, info: dict | None) -> None:
+        if info is None:
+            if self._psu_found_on.pop(device_id, None) is not None:
+                logger.info("Netzteil %s: Hinweis 'beim Verbinden EIN' erledigt", device_id)
+                self.psu_found_on.emit(device_id, None)
+            return
+        self._psu_found_on[device_id] = dict(info)
+        self.psu_found_on.emit(device_id, dict(info))
+
+    # -- Sitzung: verbundene und getrennte Geraete (PI-81 a) -------------------
+
+    @Slot(str, str)
+    def _on_session_device_added(self, kind: str, device_id: str) -> None:
+        if kind in SESSION_OUTPUT_KINDS:
+            self._session_devices[device_id] = kind
+            self._session_lost.pop(device_id, None)
+
+    @Slot(str, str)
+    def _on_session_device_removed(self, kind: str, device_id: str) -> None:
+        if kind == "psu":
+            self._set_psu_found_on(device_id, None)
+        if kind not in SESSION_OUTPUT_KINDS or device_id not in self._session_devices:
+            return
+        output_on = (self._psu_output_seen.get(device_id) if kind == "psu"
+                     else self._load_input_seen.get(device_id) if kind == "load" else None)
+        self._session_lost[device_id] = {"kind": kind, "output_on": output_on, "t": time.monotonic()}
+        if output_on:
+            logger.warning("%s %s mit Ausgang EIN getrennt -- Ausgang jetzt unbekannt",
+                           OPERATION_LABELS.get(kind, kind), device_id)
+
+    @Slot(str, bool)
+    def _on_session_load_input(self, device_id: str, on: bool) -> None:
+        self._load_input_seen[device_id] = bool(on)
+
+    def _forget_session_device(self, device_id: str) -> None:
+        """Simulation abgeschaltet: absichtlich entfernt, kein 'Ausgang unbekannt'."""
+        self._session_devices.pop(device_id, None)
+        self._session_lost.pop(device_id, None)
+
+    def session_lost_devices(self) -> dict[str, dict]:
+        """Getrennte Geraete dieser Sitzung (Kopie, fuer Pruefskripte)."""
+        return {d: dict(info) for d, info in self._session_lost.items()}
+
+    def _report_lost(self, what: str, device_ids) -> list[str]:
+        """WARNING je Geraet, das in dieser Sitzung verbunden war und jetzt nicht verbunden ist (PI-81 a).
+        Liefert diese Kennungen (Reihenfolge wie device_ids)."""
+        now = time.monotonic()
+        lost = []
+        for device_id in device_ids:
+            info = self._session_lost.get(device_id)
+            if info is None:
+                continue
+            lost.append(device_id)
+            last = {True: ", zuletzt Ausgang EIN", False: ", zuletzt Ausgang AUS"}.get(info["output_on"], "")
+            logger.warning("%s: %s %s nicht verbunden (getrennt vor %.0f s%s) -- Ausgang unbekannt", what,
+                           OPERATION_LABELS.get(info["kind"], info["kind"]), device_id, now - info["t"], last)
+        return lost
 
     def _emit_psu_ratings(self, device_id: str) -> None:
         """Meldet die Nennwerte (GMAX) des Netzteils an die GUI.
@@ -2269,6 +2384,8 @@ class DeviceWorker(QObject):
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []
+        # PI-81 a: vor dem Abschalten getrennte Geraete dieser Sitzung -- ALLE AUS erreicht sie nicht
+        lost_before = list(self._session_lost)
         for can_id, node in list(self._restbus.items()):   # FT-6: Restbus kann den Pruefling ansteuern
             if node.running:
                 node.set_running(False)
@@ -2309,7 +2426,19 @@ class DeviceWorker(QObject):
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Batterie-Simulator %s", device_id)
                 failures.append(device_id)
+        self._emit_all_off_unreachable(lost_before, failures)
         self.all_off_finished.emit(";".join(failures))
+
+    def _emit_all_off_unreachable(self, lost_before: list[str], failures: list[str]) -> None:
+        """PI-81 a: ALLE AUS meldet, was es nicht erreicht hat -- fehlgeschlagene Geraete und solche, die in dieser
+        Sitzung verbunden waren, aber vorher getrennt wurden (Ausgang unbekannt; das HCS-34xx behaelt seinen
+        Ausgangszustand). Frueher stand davon nichts im Log (Pi-Log: Netzteile 4 s vor dem Herunterfahren getrennt,
+        morgens EIN)."""
+        lost = self._report_lost("ALL OFF", lost_before)
+        unreachable = list(dict.fromkeys(failures + lost))
+        if unreachable:
+            logger.warning("ALL OFF: nicht erreichbar, Ausgang unbekannt: %s", ", ".join(unreachable))
+        self.all_off_unreachable.emit(unreachable)
 
     @Slot(list, str)
     def devices_off(self, device_ids: list, reason: str) -> None:
@@ -2317,7 +2446,8 @@ class DeviceWorker(QObject):
         Verbund-Partners (PI-26 a: Lebenszeichen fehlt -> die belegten Geraete in den sicheren Zustand).
         Meldet wie all_outputs_off ueber all_off_finished (fehlgeschlagene Geraete)."""
         logger.warning("Abschalten einzelner Geraete (reason=%s): %s", reason, ", ".join(device_ids))
-        _off, failures, _unknown = self._devices_off(device_ids)
+        _off, failures, unknown = self._devices_off(device_ids)
+        self._report_lost("Abschalten", unknown)   # PI-81 a
         self.all_off_finished.emit(";".join(failures))
 
     @Slot(int, list, str)
@@ -2327,6 +2457,11 @@ class DeviceWorker(QObject):
         Ein hier nicht verbundenes Geraet zaehlt als nicht erreichbar."""
         logger.warning("Abschalten (reason=%s): %s", reason, ", ".join(device_ids) or "-")
         off, failures, unknown = self._devices_off(device_ids)
+        # PI-81 a: ein hier getrenntes Geraet dieser Sitzung -- Ausgang unbekannt
+        self._report_lost("Abschalten", unknown)
+        if failures or unknown:
+            logger.warning("Abschalten (reason=%s): nicht erreichbar, Ausgang unbekannt: %s", reason,
+                           ", ".join(failures + unknown))
         self.devices_off_done.emit(int(tag), off, failures + unknown)
 
     def _devices_off(self, device_ids: list) -> tuple[list[str], list[str], list[str]]:
@@ -2605,6 +2740,8 @@ class DeviceWorker(QObject):
         """Meldet den Ausgangszustand an die GUI und merkt ihn fuer _poll_devices."""
         self._psu_output_seen[device_id] = on
         self.psu_output_state.emit(device_id, on)
+        if not on:
+            self._set_psu_found_on(device_id, None)   # PI-81 a: Geraet meldet Ausgang AUS
 
     @Slot(str, float)
     def set_psu_ovp(self, device_id: str, volts: float) -> None:
@@ -2919,6 +3056,8 @@ class DeviceWorker(QObject):
         und ALLE AUS (_kill_*)."""
         if ok and kind in OPERATION_LABELS and action not in READ_ACTIONS:
             self.switch_log.note(kind, device_id, action, source)
+        if ok and kind == "psu" and action in PSU_FOUND_ON_CLEAR_ACTIONS:
+            self._set_psu_found_on(device_id, None)   # PI-81 a: ueber LabControl geschaltet
 
     def _dispatch_action(
         self, device_id: str, kind: str, action: str, value: float, channel: int

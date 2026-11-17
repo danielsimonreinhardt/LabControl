@@ -108,6 +108,17 @@ panels together:
   takes over the values set on the device. **When LabControl is closed, every
   power supply is released the same way** (1 V, 0 A, output ON), so that it is
   usable by hand afterwards.
+- **Chip "ON when connected"**: If LabControl finds a power supply with output
+  ON and a current limit above 0 A when it starts or reconnects, the tile (also
+  at the linked partner) shows a yellow chip, the setpoints are in the tooltip.
+  Nothing is switched. The chip disappears as soon as the power supply is
+  switched via LabControl or reports output OFF. The release state on exit
+  (1 V, 0 A, output ON) does not trigger it.
+- **Not reached**: If a device was connected in this session and is
+  disconnected or does not answer at "All off", its output is unknown.
+  LabControl reports it in the status bar, the log, the answer of MCP `all_off`
+  (`unreachable`) and the report of an aborted test run ("Not reachable
+  (output unknown)") – check the device by hand.
 
 ### Function generator (JDS2915 / JDS66xx)
 

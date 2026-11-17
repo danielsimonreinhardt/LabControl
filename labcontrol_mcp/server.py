@@ -125,6 +125,8 @@ Vorgehen:
   fuer 'ist aus' den Zustand per read_device nach einigen Sekunden pruefen, nicht den ersten Messwert.
   Steht ein Netzteil in 'Handbedienung' (Schalter in der Kachel, nur der Nutzer bedient ihn), ist es nicht
   verfuegbar und Aktionen werden abgelehnt -- nicht umgehen, den Nutzer fragen.
+  Feld found_on=1: das Netzteil stand beim Verbinden mit Ausgang EIN (Strombegrenzung > 0) -- LabControl hat
+  nichts geschaltet; den Nutzer fragen, bevor du es bedienst. Es gilt, bis es ueber LabControl geschaltet wird.
 - Batterie-Simulator (battsim, 14 Zellen, Kanal = Zelle): erst BS_REMOTE_ON, dann Sollwerte
   (BS_CELL_VOLT/BS_ALL_VOLT) und Freigaben (BS_CELL_ON/BS_ALL_ON), zuletzt BS_OUT_ON. Ueber dem
   Grenzwert je Zelle (Feld voltage_limit) wird abgelehnt. Istwerte in cellN_voltage, Zustand in
@@ -304,7 +306,9 @@ def control_device(device_id: str, action: str, value: float | None = None,
 def all_off() -> dict:
     """NOTAUS: schaltet ALLE Ausgaenge aller Geraete ab (Last-Eingang, Netzteil-Strom auf 0 A,
     microHIL-Ausgaenge). Geht immer -- auch ohne Steuerrecht, bei laufendem Testablauf und
-    nach einer Sicherheitsabschaltung. Bei Zweifeln oder Auffaelligkeiten sofort aufrufen."""
+    nach einer Sicherheitsabschaltung. Bei Zweifeln oder Auffaelligkeiten sofort aufrufen.
+    'unreachable' nennt Geraete, die ALLE AUS nicht erreicht hat (fehlgeschlagen oder vorher getrennt) --
+    deren Ausgang ist unbekannt (ein HCS-34xx behaelt seinen Zustand): den Nutzer darauf hinweisen."""
     return _checked("POST", "/api/v1/all-off", {})
 
 

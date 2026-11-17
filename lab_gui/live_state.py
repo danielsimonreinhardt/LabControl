@@ -243,6 +243,11 @@ class LiveState(QObject):
     def on_psu_setpoints(self, device_id: str, voltage: float, current: float) -> None:
         self._write(device_id, set_voltage=voltage, set_current=current)
 
+    @Slot(str, object)
+    def on_psu_found_on(self, device_id: str, info: object) -> None:
+        """PI-81 a: beim Verbinden mit Ausgang EIN vorgefunden (1), sonst 0 -- Chip in der Partnerkachel."""
+        self._write(device_id, found_on=int(info is not None))
+
     @Slot(str, bool)
     def on_load_input_state(self, device_id: str, on: bool) -> None:
         self._write(device_id, input=int(bool(on)))

@@ -103,6 +103,18 @@ der Ablauf schaltet, und das auslösende Gerät – oder es läuft der Abbruch-B
     Ein Netzteil in **Handbedienung** spricht LabControl nicht an, auch ALLE AUS nicht. Schalte es dann am Gerät
     ab, siehe [Handbedienung HCS-Netzteil](#handbedienung-hcs-netzteil).
 
+**Nicht erreichte Geräte (seit 1.0.1):** Ein Gerät, das in dieser Sitzung verbunden war und beim ALLE AUS nicht
+mehr verbunden ist oder nicht antwortet, kann ALLE AUS nicht schalten – sein Ausgang ist unbekannt (ein HCS-Netzteil
+behält seinen Zustand). LabControl schaltet dann nichts nach, sondern meldet es:
+
+- Statuszeile „ALLE AUS: nicht erreichbar, Ausgang unbekannt: …“ und je Gerät eine WARNING im Log (mit
+  „zuletzt Ausgang EIN“, wenn es eingeschaltet getrennt wurde)
+- REST/MCP `all_off`: Liste `unreachable`
+- im Bericht eines Testablaufs, den ALLE AUS abgebrochen hat: „Nicht erreichbar (Ausgang unbekannt)“
+
+Prüfe diese Geräte von Hand. Findet LabControl ein Netzteil später beim Verbinden mit Ausgang EIN vor, zeigt die
+Kachel den Chip **beim Verbinden EIN** (siehe [Netzteil](#handbedienung-hcs-netzteil)).
+
 ## Dashboard-Streifen
 
 Am PC sitzt das Dashboard über jeder Seite: je Gerät eine Kachel mit den wichtigsten Messwerten, z. B. Spannung,
@@ -409,6 +421,13 @@ Das HCS-3xxx hat keine Ausgangstaste, und jeder Befehl von LabControl sperrt sei
 
 - **Beim Beenden** gibt LabControl jedes Netzteil genauso frei (1 V, 0 A, Ausgang EIN).
 - **Im Verbund** lässt sich die Handbedienung nur an dem Rechner umschalten, an dem das Netzteil steckt.
+
+**Chip „beim Verbinden EIN“ (seit 1.0.1):** Findet LabControl beim Start oder Wiederverbinden ein Netzteil mit
+Ausgang EIN **und Strombegrenzung über 0 A** vor, zeigt die Kachel einen gelben Chip; der Tooltip nennt die
+Sollwerte. LabControl schaltet dabei nichts. Der Chip verschwindet, sobald du das Netzteil über LabControl schaltest
+(Ausgang, Spannung, Strom, Speicherplatz, Handbedienung – auch aus einem Ablauf, über MCP oder vom Verbund-Partner)
+oder es Ausgang AUS meldet. Der Freigabezustand von oben (1 V, 0 A, Ausgang EIN) löst ihn nicht aus: mit 0 A
+liefert der Ausgang nichts. Der Verbund-Partner zeigt den Chip in seiner Kachel ebenfalls.
 
 !!! warning "Ausgang ist nach der Freigabe eingeschaltet"
     Nach der Freigabe ist der Ausgang **ein**, nur durch 0 A begrenzt. Drehst du am Gerät den Strom auf, liegt

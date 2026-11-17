@@ -99,6 +99,7 @@ class RemoteBridge(QObject):
         self._ids = itertools.count(1)
         self._pending: dict[int, _Pending] = {}
         self._all_off_waiters: list[_Pending] = []
+        self._all_off_unreachable: list[str] = []   # PI-81 a: aus DeviceWorker.all_off_unreachable
         self._write_slots = threading.BoundedSemaphore(MAX_PENDING_WRITES)
         self._tokens = float(RATE_BURST)
         self._refilled = time.monotonic()
@@ -251,12 +252,20 @@ class RemoteBridge(QObject):
         """
         with self._lock:
             waiters, self._all_off_waiters = self._all_off_waiters, []
+            unreachable, self._all_off_unreachable = self._all_off_unreachable, []
         for pending in waiters:
             if failures:
-                pending.result = RemoteResult("error", "all_off_incomplete", failures)
+                pending.result = RemoteResult("error", "all_off_incomplete", failures, unreachable=unreachable)
             else:
-                pending.result = RemoteResult("ok")
+                pending.result = RemoteResult("ok", unreachable=unreachable)
             pending.event.set()
+
+    @Slot(list)
+    def on_all_off_unreachable(self, device_ids: list) -> None:
+        """Verbunden mit DeviceWorker.all_off_unreachable (kommt vor all_off_finished, PI-81 a): nicht erreichte
+        Geraete fuer die Antwort auf POST /all-off ("unreachable")."""
+        with self._lock:
+            self._all_off_unreachable = [str(d) for d in device_ids]
 
     # -- Protokoll ---------------------------------------------------------------
 

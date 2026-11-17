@@ -114,6 +114,17 @@ Sollwerte und den Schaltzustand:
   Gerät eingestellten Werte in die Felder. **Beim Beenden von LabControl wird
   jedes Netzteil genauso freigegeben** (1 V, 0 A, Ausgang EIN), damit es
   danach von Hand benutzbar ist.
+- **Chip „beim Verbinden EIN“**: Findet LabControl beim Start oder
+  Wiederverbinden ein Netzteil mit Ausgang EIN und Strombegrenzung über 0 A vor,
+  zeigt die Kachel (auch beim Verbund-Partner) einen gelben Chip, die Sollwerte
+  stehen im Tooltip. Geschaltet wird nichts. Der Chip verschwindet, sobald das
+  Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet. Der
+  Freigabezustand beim Beenden (1 V, 0 A, Ausgang EIN) löst ihn nicht aus.
+- **Nicht erreicht**: War ein Gerät in dieser Sitzung verbunden und ist es beim
+  „Alle aus“ getrennt oder antwortet nicht, ist sein Ausgang unbekannt.
+  LabControl meldet es in der Statuszeile, im Log, in der Antwort von MCP
+  `all_off` (`unreachable`) und im Bericht eines abgebrochenen Ablaufs
+  („Nicht erreichbar (Ausgang unbekannt)“) – prüfe das Gerät dann von Hand.
 
 ### Funktionsgenerator (JDS2915 / JDS66xx)
 

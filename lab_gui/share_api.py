@@ -129,15 +129,19 @@ class RemoteResult:
     unterwegs, sein Ausgang unbekannt; der Client prueft per GET nach).
     code bei "error": locked, inactive, rate_limited, busy, device_error,
     all_off_incomplete.
+    unreachable (nur ALLE AUS, PI-81 a): Geraete, die ALLE AUS nicht erreicht hat (fehlgeschlagen oder vorher
+    getrennt) -- Ausgang unbekannt.
     """
 
-    __slots__ = ("status", "code", "message", "value")
+    __slots__ = ("status", "code", "message", "value", "unreachable")
 
-    def __init__(self, status: str, code: str = "", message: str = "", value: float = 0.0) -> None:
+    def __init__(self, status: str, code: str = "", message: str = "", value: float = 0.0,
+                 unreachable: list[str] | None = None) -> None:
         self.status = status
         self.code = code
         self.message = message
         self.value = value
+        self.unreachable = list(unreachable or [])
 
 
 def new_token() -> str:
@@ -712,11 +716,13 @@ def _all_off(executor, client: str) -> Response:
     if executor is None:
         return _error(501, "not_implemented")
     result = executor.submit_all_off(client)
+    # PI-81 a: nicht erreichte Geraete (fehlgeschlagen oder vorher getrennt) -- Ausgang unbekannt
+    unreachable = {"unreachable": list(result.unreachable)} if getattr(result, "unreachable", None) else {}
     if result.status == "error" and result.code == "all_off_incomplete":
         failures = [f for f in result.message.split(";") if f]
         return _json(502, {"v": API_VERSION, "ok": False, "error": "all_off_incomplete",
-                           "failures": failures})
-    return _result_response(result, {})
+                           "failures": failures, **unreachable})
+    return _result_response(result, unreachable)
 
 
 DEVICES_OFF_MAX = 50

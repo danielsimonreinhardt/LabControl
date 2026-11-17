@@ -423,6 +423,9 @@ class MainWindow(QMainWindow):
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_setpoints.connect(self.control_tab.set_psu_setpoints)
+        # PI-81 a: Netzteil beim Verbinden mit Ausgang EIN vorgefunden -> Chip in der Kachel, Feld fuer den Partner
+        self._worker.psu_found_on.connect(self.control_tab.set_psu_found_on)
+        self._worker.psu_found_on.connect(self._live_state.on_psu_found_on)
         # PI-43 b: Last-Sollwert und -Modus folgen dem Geraet, egal wer bedient hat
         self._worker.load_setpoint.connect(self._live_state.on_load_setpoint)
         self._worker.load_setpoint.connect(self.control_tab.set_load_setpoint)
@@ -494,6 +497,7 @@ class MainWindow(QMainWindow):
         self._request_partner_battsim.connect(self._worker.set_partner_battsim)
         self.control_tab.operation_source.connect(self._worker.set_operation_source)   # PI-15: Preset im Log
         self._worker.all_off_finished.connect(self._on_all_off_finished)
+        self._worker.all_off_unreachable.connect(self._on_all_off_unreachable)   # PI-81 a
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
         self._safety.tripped.connect(self._on_safety_tripped)
         self._safety.state_changed.connect(self._render_safety_status)
@@ -508,6 +512,9 @@ class MainWindow(QMainWindow):
         die gerade abgeschalteten Ausgaenge wieder ein (seit 0.47.0, auch ohne Verbund)."""
         logger.warning("Safe-Stop ausgelöst: %s", reason)
         self._request_all_off.emit(reason)
+        session = getattr(self, "_run_session", None)
+        if session is not None:
+            session.expect_all_off()   # PI-81 a: der Bericht wartet auf die nicht erreichten Geraete
         if stop_run and self._test_runner.is_running():
             # ohne Abbruch-Block (PI-76 a): ALLE AUS schaltet ohnehin alles ab, ein laufender Block bricht ab
             self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"), mode="all_off")
@@ -533,6 +540,7 @@ class MainWindow(QMainWindow):
         self._partner.snapshot_changed.connect(lambda *_: self._render_partner_chip())
         self._partner.snapshot_changed.connect(self._on_partner_snapshot)
         self._partner.all_off_finished.connect(self._on_partner_all_off_finished)
+        self._partner.all_off_unreachable.connect(self._on_partner_all_off_unreachable)   # PI-81 a
         # Leitstand (V2): Bedienungen eines Testablaufs, Belegung und deren Verlust
         self._partner_host_name = ""
         self._partner_battsim = False
@@ -573,6 +581,7 @@ class MainWindow(QMainWindow):
                 (pd.psu_output_state, (ctrl.set_psu_output_state,)),
                 (pd.psu_setpoints, (ctrl.set_psu_setpoints,)),
                 (pd.psu_ratings, (ctrl.set_psu_ratings,)),
+                (pd.psu_found_on, (ctrl.set_psu_found_on,)),   # PI-81 a
                 (pd.load_measurement, (dash.update_load,)),
                 (pd.load_function_state, (dash.set_load_mode, ctrl.set_load_mode)),
                 (pd.load_setpoint, (ctrl.set_load_setpoint,)),
@@ -1302,6 +1311,21 @@ class MainWindow(QMainWindow):
                 tr("Nicht verbunden: {reason}", reason=tr(link.reason())), "danger")
         chip.show()
 
+    def _on_all_off_unreachable(self, device_ids: list) -> None:
+        """PI-81 a: ALLE AUS hat diese Geraete nicht erreicht (fehlgeschlagen oder vorher getrennt) -- sichtbar
+        machen, nichts schalten. Das Log hat der Worker schon geschrieben."""
+        if not device_ids:
+            return
+        names = ", ".join(self.testcase_tab.device_label(d) or d for d in device_ids)
+        self.statusBar().showMessage(tr("ALLE AUS: nicht erreichbar, Ausgang unbekannt: {devices}", devices=names),
+                                     30000)
+
+    def _on_partner_all_off_unreachable(self, device_ids: list) -> None:
+        if device_ids:
+            self.statusBar().showMessage(
+                tr("ALLE AUS am Verbund-Partner {name}: nicht erreichbar, Ausgang unbekannt: {devices}",
+                   name=self._partner.name(), devices=", ".join(device_ids)), 30000)
+
     def _on_partner_all_off_finished(self, ok: bool, message: str) -> None:
         if ok:
             return
@@ -1867,6 +1891,7 @@ class MainWindow(QMainWindow):
         self._share_bridge.run_requested.connect(self._on_run_command, Qt.ConnectionType.QueuedConnection)
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
+        self._worker.all_off_unreachable.connect(self._share_bridge.on_all_off_unreachable)   # PI-81 a, vorher
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
         self.settings_tab.share_local_bypass_toggled.connect(self._settings.set_share_local_bypass)
         self.settings_tab.program_remove_requested.connect(self._on_program_remove)
