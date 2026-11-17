@@ -149,6 +149,9 @@ Testablaeufe (list_testcases, run_testcase, get_run, stop_run):
 - run_testcase liefert eine Lauf-ID; mit get_run den Stand abfragen (running, step, checks_failed,
   exit_code: 0 bestanden, 1 nicht bestanden, 2 Abbruch/Fehler). Am Ende stehen Bericht/JUnit/Ergebnis bereit
   (get_run mit file='result' liefert die Pruefergebnisse als JSON). stop_run haelt an und schaltet ALLE AUS.
+- 'waiting' in get_run (auch 'run_waiting' in get_status): kind='confirm' = der Ablauf wartet auf eine
+  Bestaetigung (Text in 'text'), die NUR der Nutzer im LabControl-Fenster geben kann -- den Nutzer darauf
+  hinweisen, nicht umgehen. kind='wait_since' = Mindestzeit seit einer Schaltaktion, Rest in 'remaining_s'.
 """
 
 server = MCPServer("labcontrol", instructions=INSTRUCTIONS)
@@ -311,7 +314,7 @@ def run_testcase(testcase: str, variables: dict[str, float] | None = None, varia
 @server.tool(annotations=READ_ONLY)
 def get_run(run_id: str, file: str | None = None) -> dict:
     """Stand eines Laufs (running, step/steps_total, checks_total/checks_failed, status, exit_code, error,
-    Meldungen in 'events'). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
+    Meldungen in 'events', 'waiting': wartet auf Bestaetigung im LabControl-Fenster bzw. Mindestzeit). Mit file='result' stattdessen das Ergebnis als JSON (je Pruefschritt Werte und
     Urteil, Anforderungen, Geraete); file='junit' liefert das JUnit-XML als Text. Den HTML-Bericht oeffnet
     der Nutzer in LabControl oder im Berichtsordner."""
     path = "/api/v1/runs/" + urllib.parse.quote(run_id, safe="")

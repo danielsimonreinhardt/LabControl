@@ -424,7 +424,14 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
 # Laufvariable, die in Bedingungen als cond_source=="variable" gelesen wird.
 # "wait" wartet nur die in duration angegebene Zeitspanne, ohne Geraeteaktion.
 STEP_TYPE_ACTION = "action"
-CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor"}
+# PI-71 a (1.0.1): "confirm" haelt den Lauf an, bis der Nutzer in der Oberflaeche bestaetigt (Text in
+# params["text"]); "wait_since" wartet, bis seit der letzten Ausfuehrung der Aktion `action` an device_kind/
+# device_id in diesem Lauf mindestens `duration` Sekunden vergangen sind (siehe testcase_runner).
+CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor",
+                      "confirm", "wait_since"}
+# Schrittarten, die aeltere Programmversionen still uebersprungen haetten (unbekannter step_type = No-Op):
+# eine Datei mit ihnen bekommt Format 4, das aeltere Versionen mit Meldung ablehnen.
+V4_STEP_TYPES = {"confirm", "wait_since"}
 # "monitor" (0.63.0, FT-7): Block "Ueberwachen … Ende" -- zeitbezogene Pruefung (timing_checks.py) ueber die
 # Schritte im Block; Quelle in den cond_*-Feldern (wie eine Messwert-Bedingung), Art/Grenzen in params["monitor"]
 BLOCK_START_TYPES = {"loop", "while", "if", "monitor"}
@@ -442,6 +449,8 @@ CONTROL_STEP_LABELS = {
     "inc_var": "Variable erhöhen",
     "wait": "Warten",
     "monitor": "Überwachen",
+    "confirm": "Bestätigung",
+    "wait_since": "Warten seit",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -504,7 +513,10 @@ CHECK_FIELD_SYMBOLS = {
 # "params" (Parameter neuer Aktionen, Schema je Aktion), "requirements" (Anforderungs-IDs) und
 # unbekannte Felder bleiben erhalten; dazu "meta" fuer den ganzen Ablauf (siehe TESTCASE_META_KEYS).
 # Ohne diese Inhalte wird weiter Version 2 geschrieben, damit aeltere Programmversionen die Datei lesen.
-FILE_FORMAT_VERSION = 3
+# Version 4 (1.0.1, PI-71 a): wie 3, nur mit Schritten aus V4_STEP_TYPES -- eine aeltere Version laesst die
+# Bestaetigung sonst still aus.
+FILE_FORMAT_VERSION = 4
+_V3 = 3
 _V2 = 2
 
 # Ablauf-Eigenschaften (Datei "meta"): Beschreibung, Anforderungs-IDs des ganzen Ablaufs, ob Netzteil
@@ -826,6 +838,24 @@ def monitor_summary(step: TestStep, labels: dict | None = None) -> str:
     return text + (" · " + tr("abbrechen") if timing_checks.clean_config(config)["abort"] else "")
 
 
+def confirm_text(step: TestStep) -> str:
+    """Text eines Bestaetigungsschritts (PI-71 a)."""
+    return str((step.params or {}).get("text") or "").strip()
+
+
+def wait_since_actions(device_kind: str) -> list[str]:
+    """Aktionen, auf die sich "Warten seit" beziehen kann: alle der Geraeteart ausser Lesen und Signal."""
+    return [code for code in DEVICE_ACTIONS.get(device_kind, {})
+            if code not in READ_ACTIONS and code not in ARB_ACTIONS]
+
+
+def wait_since_summary(step: TestStep, device: str = "") -> str:
+    """"≥ 65 s seit Ausgang EIN (Netzteil 1)" (PI-71 a). device: Anzeigename, sonst Kennung/automatisch."""
+    device = device or step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
+    return tr("≥ {seconds:g} s seit {action} ({device})", seconds=step.duration, device=device,
+              action=action_label(step.device_kind, step.action))
+
+
 def check_summary(step: TestStep) -> str:
     """Anzeigetext einer Pass/Fail-Pruefung, z.B. "U: 11.8–12.2 V".
 
@@ -876,12 +906,17 @@ def needs_v3(steps: list[TestStep], meta: dict | None = None) -> bool:
                                          for step in steps)
 
 
+def needs_v4(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V4_STEP_TYPES for step in steps)
+
+
 def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
     """Dateiinhalt eines Ablaufs (auch fuer REST/Kommandozeile, ohne Datei)."""
-    v3 = needs_v3(steps, meta)
+    v4 = needs_v4(steps)
+    v3 = v4 or needs_v3(steps, meta)
     payload = {
         "format": "labor-testcase",
-        "version": FILE_FORMAT_VERSION if v3 else _V2,
+        "version": FILE_FORMAT_VERSION if v4 else _V3 if v3 else _V2,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
@@ -1016,10 +1051,11 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
     # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
     steps = [replace(step, link={}) for step in steps]   # Bausteine sind flach (keine Verknuepfung in sich)
-    v3 = needs_v3(steps)
+    v4 = needs_v4(steps)   # PI-71 a: Bestaetigung/Warten seit -> Format 3, aeltere Versionen lehnen ab
+    v3 = v4 or needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
-        "version": BLOCK_FILE_FORMAT_VERSION + 1 if v3 else BLOCK_FILE_FORMAT_VERSION,
+        "version": BLOCK_FILE_FORMAT_VERSION + (2 if v4 else 1 if v3 else 0),
         "name": name,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
@@ -1030,7 +1066,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
 def load_block(path: Path) -> tuple[str, list[TestStep]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = int(data.get("version", 0))
-    if version > BLOCK_FILE_FORMAT_VERSION + 1:
+    if version > BLOCK_FILE_FORMAT_VERSION + 2:
         raise ValueError(
             tr(
                 "Baustein-Datei stammt aus einer neueren Programmversion "

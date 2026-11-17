@@ -96,8 +96,11 @@ from testcase_model import (
     carry_v3_fields,
     check_summary,
     condition_summary,
+    confirm_text,
     is_arb_action,
     kind_label,
+    wait_since_actions,
+    wait_since_summary,
     load_block,
     load_device_map,
     load_testcase,
@@ -138,7 +141,10 @@ _PICO_RANGE_BY_CODE = {code: name for name, code in PICO_VOLTAGE_RANGE_CODES.ite
 #   else/end:        keine weiteren Spalten
 #   set_var/inc_var: COL_ACTION = Variablenname, COL_VALUE = Wert, COL_DURATION = Dauer, COL_ENABLED = Aktiv
 #   wait:            COL_DURATION = Wartezeit,                 COL_ENABLED = Aktiv
-CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait", "monitor"}
+#   confirm:         COL_ACTION = Text der Rueckfrage,         COL_ENABLED = Aktiv          (PI-71 a)
+#   wait_since:      COL_ACTION = Geraet, COL_VALUE = Aktion, COL_DURATION = Mindestzeit, COL_ENABLED = Aktiv
+CONTROL_ROW_WITH_CHECKBOX = {"loop", "while", "if", "set_var", "inc_var", "wait", "monitor", "confirm",
+                             "wait_since"}
 
 
 class _NoWheelComboBox(QComboBox):
@@ -543,6 +549,8 @@ class TestcaseTab(QWidget):
     open_report_requested = Signal()
     export_report_pdf_to = Signal(object)  # Path
     notify_requested = Signal(str, str)  # title, message -- siehe main_window._show_notification
+    # PI-71 a: Antwort auf die Rueckfrage eines Bestaetigungsschritts (True = Weiter) -> TestRunner.confirm
+    confirm_answered = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -657,6 +665,13 @@ class TestcaseTab(QWidget):
         self._action_add_set_var = self._add_menu.addAction("")
         self._action_add_inc_var = self._add_menu.addAction("")
         self._action_add_wait = self._add_menu.addAction("")
+        # PI-71 a: Warten seit einer Aktion, Bestaetigung (Neuanlage mit Netzteil EIN / 10 s als Vorgabe)
+        self._action_add_wait_since = self._add_menu.addAction("")
+        self._action_add_confirm = self._add_menu.addAction("")
+        self._action_add_wait_since.triggered.connect(lambda: self._insert_new_step(TestStep(
+            step_type="wait_since", device_kind="psu", action="PSU_OUT_ON", duration=10.0)))
+        self._action_add_confirm.triggered.connect(lambda: self._insert_new_step(TestStep(step_type="confirm")))
+        self._confirm_dialog = None
         self._action_add_action.triggered.connect(lambda: self._insert_new_step(TestStep()))
         self._action_add_loop.triggered.connect(lambda: self._insert_block("loop"))
         self._action_add_while.triggered.connect(lambda: self._insert_block("while"))
@@ -864,6 +879,8 @@ class TestcaseTab(QWidget):
         self._action_add_set_var.setText(tr("Variable setzen"))
         self._action_add_inc_var.setText(tr("Variable erhöhen"))
         self._action_add_wait.setText(tr("Warten"))
+        self._action_add_wait_since.setText(tr("Warten seit Aktion"))
+        self._action_add_confirm.setText(tr("Bestätigung"))
         self._run_button.setToolTip(tr("Start"))
         self._stop_button.setToolTip(tr("Stop"))
         self._pause_button.setToolTip(tr("Weiter") if getattr(self, "_paused", False) else tr("Anhalten"))
@@ -921,6 +938,22 @@ class TestcaseTab(QWidget):
             name_edit: QLineEdit = self._table.cellWidget(row, COL_ACTION)
             if name_edit is not None:
                 name_edit.setPlaceholderText(tr("Variablenname"))
+        if step_type == "confirm":
+            text_edit = self._table.cellWidget(row, COL_ACTION)
+            if isinstance(text_edit, QLineEdit):
+                text_edit.setPlaceholderText(tr("Text der Rückfrage"))
+        if step_type == "wait_since":
+            device_combo = self._table.cellWidget(row, COL_ACTION)
+            if isinstance(device_combo, QComboBox):
+                device_combo.setToolTip(tr("Gerät, an dem die Aktion zählt"))
+                self._populate_device_combo(device_combo, _parse_device_key(device_combo.currentData()))
+            action_combo = self._table.cellWidget(row, COL_VALUE)
+            if isinstance(action_combo, QComboBox):
+                action_combo.setToolTip(tr("Aktion, seit deren letzter Ausführung im Lauf gewartet wird"))
+            duration_spin = self._table.cellWidget(row, COL_DURATION)
+            if duration_spin is not None:
+                duration_spin.setToolTip(tr("Mindestzeit seit der Aktion; kam sie im Lauf noch nicht vor, "
+                                            "wird die volle Zeit gewartet"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._apply_status_style()
@@ -1037,8 +1070,11 @@ class TestcaseTab(QWidget):
     def _refresh_device_combos(self) -> None:
         for row in range(self._table.rowCount()):
             combo = self._table.cellWidget(row, COL_DEVICE)
-            if isinstance(combo, QComboBox):
-                self._populate_device_combo(combo, _parse_device_key(combo.currentData()))
+            if not isinstance(combo, QComboBox):
+                combo = self._table.cellWidget(row, COL_ACTION)   # "Warten seit" (PI-71 a): Geraet in "Aktion"
+                if not getattr(combo, "_wait_since_device", False):
+                    continue
+            self._populate_device_combo(combo, _parse_device_key(combo.currentData()))
 
     def _condition_device_items(self) -> list[tuple[str, str, str]]:
         """Wie _device_combo_items(), aber als (Anzeigetext, kind, device_id)
@@ -1780,6 +1816,44 @@ class TestcaseTab(QWidget):
             self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
             duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
 
+        elif t == "confirm":
+            # PI-71 a: Text der Rueckfrage; der volle Text steht im Tooltip (die Spalte ist schmal)
+            text_edit = QLineEdit(confirm_text(step))
+            text_edit.setToolTip(text_edit.text())
+            text_edit.textChanged.connect(text_edit.setToolTip)
+            self._table.setCellWidget(row_index, COL_ACTION, text_edit)
+
+        elif t == "wait_since":
+            # PI-71 a: Geraet (wie in einer Aktionszeile, auch Partner und Rollen) und Aktion, Mindestzeit
+            device_combo = _NoWheelComboBox()
+            device_combo._wait_since_device = True
+            action_combo = _NoWheelComboBox()
+            self._table.setCellWidget(row_index, COL_ACTION, device_combo)
+            self._table.setCellWidget(row_index, COL_VALUE, action_combo)
+
+            def refresh_since_actions(keep: str | None = None) -> None:
+                kind, _device_id = _parse_device_key(device_combo.currentData())
+                current = keep if keep is not None else action_combo.currentData()
+                action_combo.blockSignals(True)
+                action_combo.clear()
+                for code in wait_since_actions(kind):
+                    action_combo.addItem(action_label(kind, code), code)
+                action_combo.setCurrentIndex(max(action_combo.findData(current), 0))
+                action_combo.blockSignals(False)
+
+            device_combo.currentIndexChanged.connect(lambda _=None: refresh_since_actions())
+            self._populate_device_combo(device_combo, (step.device_kind, step.device_id))
+            refresh_since_actions(step.action)
+
+            duration_spin = SteppedDoubleSpinBox()
+            duration_spin.setRange(0, 36000)
+            duration_spin.setDecimals(1)
+            duration_spin.setPrefix("≥ ")
+            duration_spin.setSuffix(" s")
+            duration_spin.setValue(step.duration)
+            self._table.setCellWidget(row_index, COL_DURATION, duration_spin)
+            duration_spin.valueChanged.connect(lambda _=None, s=duration_spin: self._notify_duration_changed(s))
+
         self._retranslate_control_row(row_index, t)
 
     def _remove_selected_row(self) -> None:
@@ -2377,6 +2451,8 @@ class TestcaseTab(QWidget):
             # params["monitor"] pflegt der Dialog der Zeile; er ist massgeblich (andere params bleiben)
             step.params = {**step.params, "monitor": dict(self._table.cellWidget(row, COL_VALUE)._cond_params
                                                              .get("monitor") or {})}
+        if step_type == "confirm":   # PI-71 a: das Textfeld der Zeile ist massgeblich
+            step.params = {**step.params, "text": self._table.cellWidget(row, COL_ACTION).text().strip()}
         if step_type == STEP_TYPE_ACTION and (step.device_kind in ("uds", "xcp") or step.action == "RESTBUS_SET"):
             # UDS-Parameter (FT-1) pflegt der UDS-Dialog der Zeile; er ist massgeblich
             uds_page = self._table.cellWidget(row, COL_VALUE).widget(6)
@@ -2534,6 +2610,17 @@ class TestcaseTab(QWidget):
         if step_type == "wait":
             duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
             return TestStep(step_type="wait", enabled=enabled, duration=duration_spin.value())
+
+        if step_type == "confirm":   # Text in params["text"], siehe _row_to_step
+            return TestStep(step_type="confirm", enabled=enabled)
+
+        if step_type == "wait_since":
+            device_combo: QComboBox = self._table.cellWidget(row, COL_ACTION)
+            action_combo: QComboBox = self._table.cellWidget(row, COL_VALUE)
+            duration_spin: QDoubleSpinBox = self._table.cellWidget(row, COL_DURATION)
+            kind, device_id = _parse_device_key(device_combo.currentData())
+            return TestStep(step_type="wait_since", enabled=enabled, device_kind=kind, device_id=device_id,
+                            action=action_combo.currentData() or "", duration=duration_spin.value())
 
         # "else"/"end": keine weiteren Felder.
         return TestStep(step_type=step_type)
@@ -2847,8 +2934,16 @@ class TestcaseTab(QWidget):
         if hasattr(self, "_run_view"):
             self._run_view.set_running(self._is_running, self._run_button.isEnabled() and self._current_path is not None)
 
+    def _wait_since_device(self, step: TestStep) -> str:
+        """Anzeigename des Geraets eines "Warten seit"-Schritts ("" = automatisch, wie wait_since_summary)."""
+        return self._device_display(step.device_kind, step.device_id) if step.device_id else ""
+
     def _describe_step(self, step: TestStep) -> str:
         """Eine Zeile je Schritt fuer die Ausfuehren-Ansicht."""
+        if step.step_type == "confirm":
+            return f"{tr(CONTROL_STEP_LABELS['confirm'])}: {confirm_text(step) or '–'}"
+        if step.step_type == "wait_since":
+            return f"{tr('Warten')} {wait_since_summary(step, self._wait_since_device(step))}"
         if step.step_type in CONTROL_STEP_LABELS and step.step_type not in ("wait", "set_var", "inc_var"):
             text = tr(CONTROL_STEP_LABELS[step.step_type])
             if step.step_type == "loop":
@@ -3276,6 +3371,15 @@ class TestcaseTab(QWidget):
                 index=index + 1, total=total, duration=step.duration, iter=self._iteration_text,
             )
             return
+        if step.step_type == "confirm":
+            self._set_status("Schritt {index}/{total}: wartet auf Bestätigung – {prompt} {iter}", index=index + 1,
+                             total=total, prompt=confirm_text(step) or "–", iter=self._iteration_text)
+            return
+        if step.step_type == "wait_since":
+            self._set_status("Schritt {index}/{total}: Warten {detail} {iter}", index=index + 1, total=total,
+                             detail=wait_since_summary(step, self._wait_since_device(step)),
+                             iter=self._iteration_text)
+            return
         label = action_label(step.device_kind, step.action)
         device_display = self._device_display(step.device_kind, step.device_id)
         if is_arb_action(step.action):
@@ -3320,6 +3424,37 @@ class TestcaseTab(QWidget):
             iter=self._iteration_text,
         )
 
+    # -- Bestaetigungsschritt (PI-71 a) ---------------------------------------------
+
+    def on_confirm_requested(self, index: int, text: str) -> None:
+        """Runner wartet auf "Weiter"/"Abbrechen": Rueckfrage zeigen (nicht modal, ALLE AUS bleibt bedienbar)."""
+        from confirm_dialog import ConfirmStepDialog
+
+        self._close_confirm_dialog()
+        dialog = ConfirmStepDialog(index + 1, text, parent=self.window())
+        dialog.answered.connect(self._on_confirm_answered)
+        dialog.finished.connect(dialog.deleteLater)
+        self._confirm_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self.notify_requested.emit(tr("Bestätigung nötig"), text or tr("Weiter?"))
+
+    def confirm_dialog(self):
+        """Offene Rueckfrage oder None (fuer Pruefungen)."""
+        return self._confirm_dialog
+
+    def _on_confirm_answered(self, accepted: bool) -> None:
+        self._confirm_dialog = None
+        self.confirm_answered.emit(accepted)
+        if not accepted:
+            self._on_stop_clicked()   # wie der Stopp-Knopf: Lauf aus, ALLE AUS (MainWindow._safe_stop)
+
+    def _close_confirm_dialog(self) -> None:
+        dialog, self._confirm_dialog = self._confirm_dialog, None
+        if dialog is not None:
+            dialog.dismiss()
+
     def on_step_result(self, index: int, passed: bool, value: float) -> None:
         self._checks_total += 1
         if not passed:
@@ -3354,6 +3489,7 @@ class TestcaseTab(QWidget):
         self._check_results[group.start] = all(self._check_results[row] for row in rows_with_result)
 
     def on_run_finished(self) -> None:
+        self._close_confirm_dialog()
         self._stop_blink()
         self._iteration_text = ""
         self.set_running(False)
@@ -3376,12 +3512,14 @@ class TestcaseTab(QWidget):
         self.notify_requested.emit(tr("Testlauf beendet"), self._status_label.text())
 
     def on_run_stopped(self) -> None:
+        self._close_confirm_dialog()
         self._stop_blink()
         self._iteration_text = ""
         self.set_running(False)
         self._set_status("Gestoppt")
 
     def on_step_failed(self, index: int, message: str) -> None:
+        self._close_confirm_dialog()
         self._reveal_row(index)
         self._stop_blink()
         self._error_row = index
@@ -3401,6 +3539,7 @@ class TestcaseTab(QWidget):
         self.notify_requested.emit(tr("Testlauf-Fehler"), self._status_label.text())
 
     def _on_stop_clicked(self) -> None:
+        self._close_confirm_dialog()
         self.stop_requested.emit()
         self._stop_blink()
         self._iteration_text = ""

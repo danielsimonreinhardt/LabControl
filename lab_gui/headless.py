@@ -249,6 +249,11 @@ def _prepare_steps(path: Path, rig: _Rig):
         return steps, meta, "Geräte eines Verbund-Partners gehen ohne Fenster nicht: " + ", ".join(partner)
     if any(s.enabled and s.step_type == "action" and s.device_kind == "jlink" for s in steps):
         return steps, meta, "J-Link-Schritte gehen ohne Fenster noch nicht"
+    confirms = [i + 1 for i, s in enumerate(steps) if s.enabled and s.step_type == "confirm"]
+    if confirms:
+        # PI-71 a: niemand kann bestaetigen -- vor dem Start ablehnen, nicht still weiterlaufen
+        return steps, meta, (f"Bestätigungsschritt (Schritt {confirms[0]}) braucht das LabControl-Fenster – "
+                             "Ablauf dort starten (oder bei laufender Instanz über sie)")
     return steps, meta, ""
 
 

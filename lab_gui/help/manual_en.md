@@ -380,6 +380,26 @@ The "+" menu additionally offers:
 - **Set variable / Increase variable**: creates a run variable resp.
   changes its value — useful as a counter or to query conditions later
   in the sequence.
+- **Wait since action**: waits until at least the set time has passed
+  since the last execution of an action on a device (columns: device,
+  action, "≥ … s"), e.g. ≥ 10 s since "Output OFF" before switching on
+  again.
+  - Reference: the acknowledgement of the action **in this run**; if it
+    has not occurred yet, the step waits the **full time**.
+  - Device "(automatic)" counts for every device of that kind; partner
+    devices ("@host/…") and roles work as in an action row.
+  - The report notes the actual waiting time.
+- **Confirmation**: pauses the run and shows a prompt with the row's text
+  in the LabControl window.
+  - **Continue** resumes, **Cancel** (also Escape/closing) acts like
+    **Stop** (ALL OFF).
+  - The prompt is not modal: ALL OFF and Stop stay usable.
+  - Visible over the network/MCP ("waiting" in `/api/v1/runs/{id}`), but
+    confirmable **only in the window**.
+  - Without a window (`labcontrol run`) a sequence with a confirmation
+    does not start (exit 3).
+  - Sequences with these two steps are saved in format 4; older versions
+    refuse them instead of silently skipping the confirmation.
 
 A block start and its "End" are always inserted as a pair. The table
 shows nesting as indentation; if the structure is unbalanced (e.g. a

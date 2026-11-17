@@ -28,13 +28,13 @@ MAX_SETPOINTS = 500_000
 @dataclass
 class StepEvent:
     t: float                       # time.time() beim Signalempfang
-    kind: str                      # "started" | "result" | "failed"
+    kind: str                      # "started" | "result" | "failed" | "note" (PI-71 a, Text in message)
     index: int                     # Schrittindex in RunRecord.steps
     iteration: int = 0             # innerste gerade aktive Schleife/While (0 = keine)
     iteration_total: int = 0       # 0 = While/unbegrenzt
     passed: bool | None = None     # nur kind=="result"
     measured: float | None = None  # nur kind=="result"
-    message: str = ""              # nur kind=="failed"
+    message: str = ""              # kind=="failed"/"note"
 
 
 @dataclass
@@ -159,6 +159,14 @@ class RunRecorder(QObject):
         self._record.error_index = index
         self._record.error_message = message
         self._finish("error")
+
+    @Slot(int, str)
+    def on_step_note(self, index: int, text: str) -> None:
+        """Vermerk zu einem Schritt (PI-71 a): bestaetigt/abgebrochen, tatsaechliche Wartezeit bei "Warten seit"."""
+        if not self._active:
+            return
+        self._append_event(StepEvent(t=time.time(), kind="note", index=index, message=text,
+                                     iteration=self._iteration, iteration_total=self._iteration_total))
 
     @Slot()
     def on_run_finished(self) -> None:

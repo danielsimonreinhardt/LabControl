@@ -32,9 +32,11 @@ from testcase_model import (
     action_label,
     battsim_step_detail,
     check_summary,
+    confirm_text,
     kind_label,
     monitor_source,
     monitor_summary,
+    wait_since_summary,
 )
 from version import __version__
 
@@ -181,6 +183,11 @@ def _step_started_text(record: RunRecord, index: int) -> str:
         return tr("Schritt {n}: {var} {op} {value:g}", n=index + 1, var=step.var_name, op=op, value=step.value)
     if step.step_type == "wait":
         return tr("Schritt {n}: Warten ({duration:g} s)", n=index + 1, duration=step.duration)
+    if step.step_type == "confirm":
+        return tr("Schritt {n}: Bestätigung – {prompt}", n=index + 1, prompt=confirm_text(step) or "–")
+    if step.step_type == "wait_since":
+        device = record.device_meta.get(step.device_id, ("", ""))[1] if step.device_id else ""
+        return tr("Schritt {n}: Warten {detail}", n=index + 1, detail=wait_since_summary(step, device))
     device = _device_display(record, step.device_kind, step.device_id)
     action = action_label(step.device_kind, step.action)
     if step.action == "CAN_SEND":
@@ -246,6 +253,8 @@ def _timeline_rows(record: RunRecord) -> list[tuple[str, str, str | None]]:
         elif event.kind == "failed":
             text = tr("FEHLER Schritt {n}: {message}", n=event.index + 1, message=event.message)
             rows.append((offset, text, _COLOR_FAIL))
+        elif event.kind == "note":   # PI-71 a: bestaetigt/abgebrochen, tatsaechliche Wartezeit
+            rows.append((offset, tr("Schritt {n}: {message}", n=event.index + 1, message=event.message), None))
     if record.events_dropped:
         rows.append(("", tr("… {n} weitere Ereignisse ausgelassen", n=record.events_dropped), None))
     return rows

@@ -12,7 +12,8 @@ naechste Sample wird erst verschickt, nachdem der vorherige bestaetigt wurde
 (kein "totes" Nachlegen in die Warteschlange, falls ein Geraet langsamer
 antwortet als das konfigurierte Intervall).
 
-Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, siehe
+Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, seit 1.0.1 auch
+confirm/wait_since -- Bestaetigung im Fenster bzw. Mindestzeit seit einer Aktion, PI-71 a; siehe
 testcase_model.CONTROL_STEP_TYPES) veraendern statt einer Geraete-Aktion nur
 den internen Ausfuehrungszustand: einen Stack offener Bloecke (_Frame) sowie
 einen einfachen Variablenspeicher. _advance() ist deshalb kein simpler
@@ -74,11 +75,14 @@ from testcase_model import (
     READ_ACTIONS,
     BlockMatch,
     TestStep,
+    action_label,
     arb_spacing_ms,
     arb_value,
+    confirm_text,
     is_arb_action,
     kind_label,
     validate_structure,
+    wait_since_summary,
 )
 
 # Eine Messung, die aelter als dieser Wert ist, gilt als "keine aktuelle
@@ -149,6 +153,13 @@ class TestRunner(QObject):
     # FT-12 (PI-58 a): angehalten vor Schritt (Index) bzw. weiter
     paused = Signal(int)
     resumed = Signal()
+    # PI-71 a: Bestaetigungsschritt wartet auf "Weiter"/"Abbrechen" in der Oberflaeche (Index, Text) -- Antwort
+    # ueber confirm(). Nur wenn confirm_available gesetzt ist (Fenster), sonst bricht der Schritt den Lauf ab.
+    confirm_requested = Signal(int, str)
+    # Worauf der Lauf gerade wartet (Bestaetigung, Warten seit), fuer Laufregister/MCP: dict oder None
+    waiting_changed = Signal(object)
+    # Vermerk zu einem Schritt fuer die Laufaufzeichnung (Index, Text), z. B. "bestätigt", tatsaechliche Wartezeit
+    step_note = Signal(int, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -168,6 +179,22 @@ class TestRunner(QObject):
         self._wait_timer = QTimer(self)
         self._wait_timer.setSingleShot(True)
         self._wait_timer.timeout.connect(self._finish_step)
+
+        # -- PI-71 a: Bestaetigung und "Warten seit" ---------------------------------------------
+        # Ohne Fenster (Kommandozeile) kann niemand bestaetigen: dann scheitert der Schritt (RunSession.refusal
+        # laesst solche Ablaeufe dort gar nicht erst starten). MainWindow setzt True.
+        self.confirm_available = False
+        self._confirm_index = -1
+        self._waiting: dict | None = None
+        # (device_kind, device_id, action) -> monotonic() der letzten erfolgreich quittierten Ausfuehrung im Lauf
+        self._action_times: dict[tuple[str, str, str], float] = {}
+        # "Warten seit": eigener, praeziser Timer (der grobe darf bis 5 % zu frueh feuern -- hier gilt eine
+        # Mindestzeit) mit Frist; feuert er doch vor der Frist (Pause, Systemuhr), wird nachgelegt.
+        self._since_deadline = 0.0
+        self._since_timer = QTimer(self)
+        self._since_timer.setSingleShot(True)
+        self._since_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._since_timer.timeout.connect(self._on_since_timeout)
 
         # Zustand einer armierten Pass/Fail-Pruefung: (Schrittindex,
         # aufgeloeste device_id), None wenn keine Pruefung wartet. Der Timeout
@@ -267,6 +294,9 @@ class TestRunner(QObject):
         self._vars = {str(k): float(v) for k, v in (variables or {}).items()}
         self._pending_check = None
         self._run_started = monotonic()
+        self._action_times = {}
+        self._confirm_index = -1
+        self._waiting = None
         self._index = max(0, min(int(start_index), len(steps))) - 1
         self._running = True
         self._advance()
@@ -297,7 +327,7 @@ class TestRunner(QObject):
             return
         held = []
         if not self._arb_active:
-            for timer in (self._timer, self._wait_timer):
+            for timer in (self._timer, self._wait_timer, self._since_timer):
                 if timer.isActive():
                     held.append((timer, max(0, timer.remainingTime())))
                     timer.stop()
@@ -370,6 +400,7 @@ class TestRunner(QObject):
         self._frames = []
         self._vars = {}
         self._clear_monitors()
+        self._clear_waiting()
         self.run_stopped.emit()
 
     def abort(self, message: str) -> None:
@@ -453,6 +484,8 @@ class TestRunner(QObject):
             self._continue_arb()
             return
         step = self._steps[self._index]
+        # PI-71 a: Bezug fuer "Warten seit" -- Zeitpunkt der Quittung (spaeter als das Senden, also vorsichtig)
+        self._action_times[(step.device_kind, step.device_id, step.action)] = monotonic()
         if step.action in READ_ACTIONS:
             self._last_read_value = value
             if step.store_var:
@@ -512,6 +545,7 @@ class TestRunner(QObject):
         self._pending_check = None
         self._pico_retry_timer.stop()
         self._pico_retry_count = 0
+        self._clear_waiting()
         self.step_failed.emit(index, message)
 
     # -- Pass/Fail-Pruefung nach der Wartezeit ---------------------------------
@@ -678,6 +712,29 @@ class TestRunner(QObject):
                     return
                 continue
 
+            if t == "confirm":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                text = confirm_text(step)
+                if not self.confirm_available:
+                    self._fail_at(self._index, tr("Bestätigung „{prompt}“ geht nur im LabControl-Fenster – Lauf "
+                                                  "abgebrochen", prompt=text))
+                    return
+                self._confirm_index = self._index
+                self._set_waiting({"kind": "confirm", "step": self._index + 1, "text": text,
+                                   "message": tr("wartet auf Bestätigung: {prompt}", prompt=text)})
+                self.confirm_requested.emit(self._index, text)
+                return
+
+            if t == "wait_since":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                if self._start_wait_since(step):
+                    return
+                continue
+
             if t in ("set_var", "inc_var"):
                 if not step.enabled:
                     continue
@@ -808,6 +865,76 @@ class TestRunner(QObject):
             # Unbekannter step_type (z.B. aus einer neueren Programmversion
             # geladen) -- als No-Op ueberspringen statt abzustuerzen.
             continue
+
+    # -- Bestaetigung und "Warten seit" (PI-71 a) ----------------------------------
+
+    @Slot(bool)
+    def confirm(self, accepted: bool) -> None:
+        """Antwort auf confirm_requested: Weiter (True) oder Abbrechen (False, wie Stopp). Nur aus der
+        Oberflaeche -- es gibt bewusst keinen Weg ueber Netzwerk/MCP."""
+        if not self._running or self._confirm_index < 0 or self._confirm_index != self._index:
+            return
+        index, self._confirm_index = self._confirm_index, -1
+        self.step_note.emit(index, tr("bestätigt") if accepted else tr("abgebrochen"))
+        if not accepted:
+            self.stop()
+            return
+        self._clear_waiting()
+        self._advance()
+
+    def waiting(self) -> dict | None:
+        return dict(self._waiting) if self._waiting else None
+
+    def _set_waiting(self, info: dict | None) -> None:
+        self._waiting = dict(info) if info else None
+        self.waiting_changed.emit(self.waiting())
+
+    def _clear_waiting(self) -> None:
+        self._confirm_index = -1
+        self._since_timer.stop()
+        if self._waiting is not None:
+            self._set_waiting(None)
+
+    def _last_action_time(self, step: TestStep) -> float | None:
+        """Letzte quittierte Ausfuehrung der Aktion im Lauf. Eine leere Kennung ("automatisch") passt auf jedes
+        Geraet der Art -- vorsichtig: der juengste Treffer zaehlt."""
+        times = [ts for (kind, device_id, action), ts in self._action_times.items()
+                 if kind == step.device_kind and action == step.action
+                 and (device_id == step.device_id or not device_id or not step.device_id)]
+        return max(times) if times else None
+
+    def _start_wait_since(self, step: TestStep) -> bool:
+        """True = wartet (Timer laeuft), False = Frist schon um."""
+        now = monotonic()
+        last = self._last_action_time(step)
+        minimum = max(0.0, step.duration)
+        if last is None:
+            remaining = minimum
+            note = tr("{action} in diesem Lauf noch nicht ausgeführt – volle {seconds:g} s",
+                      action=action_label(step.device_kind, step.action), seconds=minimum)
+        else:
+            remaining = max(0.0, minimum - (now - last))
+            note = tr("{action} vor {elapsed:.1f} s – wartet {remaining:.1f} s",
+                      action=action_label(step.device_kind, step.action), elapsed=now - last, remaining=remaining)
+        self.step_note.emit(self._index, note)
+        if remaining <= 0:
+            return False
+        self._since_deadline = now + remaining
+        self._set_waiting({"kind": "wait_since", "step": self._index + 1, "text": wait_since_summary(step),
+                           "remaining_s": round(remaining, 1), "until": time.time() + remaining,
+                           "message": tr("wartet {summary}", summary=wait_since_summary(step))})
+        self._since_timer.start(max(1, math.ceil(remaining * 1000)))
+        return True
+
+    def _on_since_timeout(self) -> None:
+        if not self._running:
+            return
+        rest = self._since_deadline - monotonic()
+        if rest > 0:
+            self._since_timer.start(max(1, math.ceil(rest * 1000)))
+            return
+        self._clear_waiting()
+        self._advance()
 
     # -- Zeitpruefungen (FT-7, "Ueberwachen … Ende") -------------------------------
 

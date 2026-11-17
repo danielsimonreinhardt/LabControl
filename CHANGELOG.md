@@ -30,6 +30,29 @@ Semantic Versioning (`lab_gui/version.py`).
   Freigabe liefert dafür Modell/Seriennummer und den J-Link-Stand mit; Oszilloskop und J-Link gelten dort nicht
   mehr nach 2 s als veraltet (sie melden nur Änderungen). Mock-verifiziert (`check_partner_devices`,
   `check_partner_link`; Gegenprobe ohne Änderung schlägt fehl); an PC und Pi noch nicht.
+- **Testablauf: „Bestätigung“ und „Warten seit Aktion“ (PI-71 a).** Für Evalboard-Abläufe, bei denen jedes Aus/Ein,
+  Flashen und jeder J-Link-Schritt ein ausdrückliches Ja braucht und Zeitregeln gelten. Beide im Einfügen-Menü.
+  - **Bestätigung:** Zeile mit Text; der Lauf hält an und zeigt im Fenster eine Rückfrage mit **Weiter** und
+    **Abbrechen**. Abbrechen (auch Escape/Schließen) wirkt wie Stop: Lauf aus, ALLE AUS. Die Rückfrage ist nicht
+    modal (ALLE AUS bleibt erreichbar), hat keinen Standardknopf (ein verirrtes Enter bestätigt nichts) und folgt im
+    Touch-Profil dem üblichen Dialogmuster. Über REST/MCP sichtbar (`waiting` in `/api/v1/runs/{id}` und
+    `run_waiting` in `/api/v1/status`, Meldung „wartet auf Bestätigung: …“), aber bewusst nicht bestätigbar.
+  - **Warten seit Aktion:** Gerät, Aktion, „≥ … s“ – wartet, bis seit der letzten Ausführung der Aktion an dem Gerät
+    mindestens so lange vergangen ist (z. B. ≥ 65 s seit Netzteil „Ausgang EIN“). Partnergeräte und Rollen gehen wie
+    in Aktionszeilen. Bezug ist die Quittung der Aktion **im laufenden Ablauf**; kam sie noch nicht vor, wartet der
+    Schritt die volle Zeit. Bewusst nicht der Schaltzeitpunkt aus dem Worker: Kachel, Frontplatte oder der Partner
+    selbst können dazwischen geschaltet haben, ohne dass dieser Rechner es weiß – die volle Zeit ist dann die
+    sichere Annahme. „(automatisch)“ passt auf jedes Gerät der Art (jüngster Treffer zählt), die Frist läuft auf
+    einem genauen Timer und gilt auch nach Anhalten als Mindestzeit.
+  - Bericht und Laufaufzeichnung vermerken „bestätigt“/„abgebrochen“ und die tatsächliche Wartezeit.
+  - Ohne Fenster (`labcontrol run`) startet ein Ablauf mit Bestätigung nicht (Exit 3 mit Meldung), statt mitten im
+    Lauf abzubrechen oder still weiterzulaufen.
+  - Dateiformat 4 (Bausteine: 3) nur für Abläufe mit diesen Schritten: ältere Versionen lehnen sie mit Meldung ab,
+    statt die Bestätigung als unbekannten Schritt still zu überspringen. Andere Abläufe bleiben Format 2/3.
+
+  Mock-verifiziert (`check_confirm_wait`: Format/Laden, Runner mit und ohne vorherige Aktion, Partner, Bestätigen,
+  Abbrechen, Stopp per HTTP, Status über REST, Touch-Profil, Bericht, Kommandozeile; Gegenprobe ohne die Änderung
+  schlägt fehl); am Gerät noch nicht.
 
 ### Geändert
 - **Abschalten bei Verbindungsverlust je Gerät wählbar (PI-68 a).** Bisher schaltete der Besitzer alle vom

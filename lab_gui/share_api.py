@@ -456,6 +456,8 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         # konfiguriert" von "scharf und in Ordnung" unterscheiden.
         "safety": snapshot.get("safety", "off"),
         "test_running": bool(snapshot.get("test_running")),
+        # PI-71 a: worauf der laufende Ablauf wartet ("confirm": nur im LabControl-Fenster bestaetigbar)
+        "run_waiting": snapshot.get("run_waiting"),
         "simulation": bool(app_info.get("simulation")),
         "time": int(time.time()),
         # Uhrzeit mit Millisekunden (seit 0.49.0): der Verbund-Leitstand prueft damit, ob die Uhren

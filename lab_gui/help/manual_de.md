@@ -401,6 +401,26 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
 - **Variable setzen / Variable erhöhen**: legt eine Laufvariable an bzw.
   ändert ihren Wert – nützlich als Zähler oder um Bedingungen später im
   Ablauf abzufragen.
+- **Warten seit Aktion**: wartet, bis seit der letzten Ausführung einer
+  Aktion an einem Gerät mindestens die eingestellte Zeit vergangen ist
+  (Spalten: Gerät, Aktion, „≥ … s“), z. B. ≥ 10 s seit „Ausgang AUS“ vor dem
+  Wiedereinschalten.
+  - Bezug: die Quittung der Aktion **in diesem Lauf**; kam sie noch nicht
+    vor, wartet der Schritt die **volle Zeit**.
+  - Gerät „(automatisch)“ zählt für jedes Gerät der Art; Partnergeräte
+    („@Rechner/…“) und Rollen gehen wie in einer Aktionszeile.
+  - Der Bericht vermerkt die tatsächliche Wartezeit.
+- **Bestätigung**: hält den Lauf an und zeigt im LabControl-Fenster eine
+  Rückfrage mit dem Text der Zeile.
+  - **Weiter** setzt fort, **Abbrechen** (auch Escape/Schließen) wirkt wie
+    **Stop** (ALLE AUS).
+  - Die Rückfrage ist nicht modal: ALLE AUS und Stop bleiben bedienbar.
+  - Über Netzwerk/MCP sichtbar („waiting“ in `/api/v1/runs/{id}`), aber
+    **nur im Fenster** bestätigbar.
+  - Ohne Fenster (`labcontrol run`) startet ein Ablauf mit Bestätigung
+    nicht (Exit 3).
+  - Abläufe mit diesen beiden Schritten speichert LabControl im Format 4;
+    ältere Versionen lehnen sie ab, statt die Bestätigung still auszulassen.
 
 Block-Start und „Ende“ werden immer als Paar eingefügt. Die Tabelle zeigt
 die Verschachtelung als Einrückung; ist die Struktur unausgeglichen (z.B.

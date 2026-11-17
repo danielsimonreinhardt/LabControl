@@ -2334,6 +2334,10 @@ class MainWindow(QMainWindow):
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
+        # PI-71 a: Bestaetigungsschritt per Rueckfrage im Fenster (nur hier, nie ueber Netzwerk/MCP)
+        self._test_runner.confirm_available = True
+        self._test_runner.confirm_requested.connect(self.testcase_tab.on_confirm_requested)
+        self.testcase_tab.confirm_answered.connect(self._test_runner.confirm)
         self._run_session.run_ended.connect(lambda _outcome: self.testcase_tab.set_report_available(True))
         # Laufregister fuer REST/MCP/Kommandozeile (0.59.0): jeder Lauf, auch aus dem Fenster
         self._runs = self._live_state.runs
@@ -2353,6 +2357,8 @@ class MainWindow(QMainWindow):
             lambda index, ok, value: self._run_id and self._runs.step_result(self._run_id, index, ok, value))
         self._test_runner.step_failed.connect(
             lambda index, message: self._run_id and self._runs.step_failed(self._run_id, index, message))
+        self._test_runner.waiting_changed.connect(   # PI-71 a: "wartet auf Bestätigung" fuer REST/MCP
+            lambda info: self._run_id and self._runs.set_waiting(self._run_id, info))
         self._run_session.run_ended.connect(self._on_run_ended_register)
         self.testcase_tab.open_report_requested.connect(self._on_open_report)
         self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)

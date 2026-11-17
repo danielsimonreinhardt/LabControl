@@ -33,7 +33,7 @@ Werkzeugleiste (Symbole, Name im Tooltip):
 
 | Knopf (Tooltip) | Wirkung |
 |---|---|
-| **Zeile hinzufügen** (+) | neuer Aktionsschritt hinter der markierten Zeile; der Pfeil daneben bietet **Aktionsschritt**, **Schleife (n×) … Ende**, **Solange … Ende**, **Wenn … Ende**, **Überwachen … Ende**, **Sonst**, **Ende**, **Variable setzen**, **Variable erhöhen**, **Warten** (Blöcke gleich mit „Ende“) |
+| **Zeile hinzufügen** (+) | neuer Aktionsschritt hinter der markierten Zeile; der Pfeil daneben bietet **Aktionsschritt**, **Schleife (n×) … Ende**, **Solange … Ende**, **Wenn … Ende**, **Überwachen … Ende**, **Sonst**, **Ende**, **Variable setzen**, **Variable erhöhen**, **Warten**, **Warten seit Aktion**, **Bestätigung** (Blöcke gleich mit „Ende“) |
 | **Zeile entfernen** (−), **Nach oben**, **Nach unten** | markierte Zeile entfernen bzw. verschieben; mit der Maus: Zeile an der Nummer (#) greifen und ziehen |
 | **Alle Zeilen löschen** | leert den Ablauf nach Rückfrage, nicht rückgängig zu machen |
 | **Baustein speichern…**, **Baustein einfügen…**, **Verknüpfung zum Baustein lösen** | siehe [Bausteine](#bausteine) |
@@ -87,6 +87,8 @@ Wertebereiche = Grenzen des Eingabefelds; zusätzlich gelten die Grenzwerte aus 
 | **Ende** | schließt den zuletzt geöffneten Block, z. B. „Ende (Schleife)“ |
 | **Variable setzen** / **Variable erhöhen** | setzt eine Variable bzw. addiert einen Wert; die Dauer wartet danach |
 | **Warten** | wartet die Dauer ab, ohne Gerät |
+| **Warten seit Aktion** | wartet, bis seit der letzten Ausführung einer Aktion an einem Gerät mindestens „≥ … s“ vergangen sind (siehe [unten](#bestatigung-und-warten-seit-aktion)) |
+| **Bestätigung** | hält an, bis der Nutzer die Rückfrage im LabControl-Fenster mit **Weiter** beantwortet |
 
 ```mermaid
 flowchart TD
@@ -102,6 +104,44 @@ flowchart TD
   umrandet und **Start** gesperrt; der Tooltip nennt den Fehler („Struktur unvollständig: …“).
 - Variablen entstehen durch „Variable setzen“, durch Lese-Aktionen mit **In Variable speichern:** (siehe
   [Prüfungen](#prufungen)) und durch die Parameter einer Variante.
+
+### Bestätigung und Warten seit Aktion
+
+Für Abläufe, bei denen jedes Ein-/Ausschalten oder Flashen ein ausdrückliches Ja braucht und Zeitregeln gelten
+(Beispiel Evalboard: ≥ 10 s aus vor dem Wiedereinschalten, ≥ 65 s seit dem Einschalten):
+
+```mermaid
+flowchart TD
+    A["1 Netzteil: Ausgang AUS"] --> W1["2 Warten ≥ 10 s seit Ausgang AUS"]
+    W1 --> B["3 Bestätigung „Evalboard einschalten?“"]
+    B -- Weiter --> C["4 Netzteil: Ausgang EIN"]
+    B -- "Abbrechen" --> X["wie Stop: ALLE AUS"]
+    C --> W2["5 Warten ≥ 65 s seit Ausgang EIN"]
+    W2 --> D["6 Prüfschritte …"]
+```
+
+| Zeile | Gerät | Aktion | Wert | Dauer |
+|---|---|---|---|---|
+| **Bestätigung** | – | Text der Rückfrage | – | – |
+| **Warten seit** | Gerät (auch „(automatisch)“, Partner „@Rechner/…“, Rolle) | Aktion des Geräts | – | „≥ … s“ |
+
+**Warten seit Aktion**
+
+- Bezug: Quittung der Aktion **in diesem Lauf** (bei Schleifen die letzte).
+- Kam die Aktion im Lauf noch nicht vor: **volle Zeit** warten.
+- „(automatisch)“ passt auf jedes Gerät der Art – es zählt die jüngste Ausführung.
+- Anhalten verlängert nur; die Frist bleibt eine Mindestzeit.
+- Bericht: z. B. „Ausgang EIN vor 12,3 s – wartet 52,7 s“.
+
+**Bestätigung**
+
+- Rückfrage im Fenster, nicht modal (ALLE AUS und Stop bleiben bedienbar); im Touch-Profil groß wie jeder Dialog.
+- **Weiter** setzt fort; **Abbrechen**, Escape oder Schließen = **Stop** (ALLE AUS).
+- Über Netzwerk/MCP nur sichtbar, nicht bestätigbar: `GET /api/v1/runs/{id}` →
+  `"waiting": {"kind": "confirm", "text": …}` (auch `run_waiting` in `/api/v1/status`).
+- Ohne Fenster (`labcontrol run`): startet nicht, Exit 3 – den Ablauf im Fenster oder über die laufende Instanz
+  starten.
+- Bericht: „bestätigt“ bzw. „abgebrochen“ am Schritt.
 
 ### Bedingungen
 
@@ -404,6 +444,9 @@ Gleiche Prüfungen und Sicherheitsabschaltung wie im Editor; keine Haltepunkte, 
 
 - JSON, Format 3, sobald ein Schritt `params`, `requirements` oder `link` trägt oder der Ablauf Eigenschaften
   (`meta`) hat; sonst Format 2, damit ältere Versionen die Datei lesen.
+- Format 4 (ab 1.0.1), sobald der Ablauf **Bestätigung** (`"step_type": "confirm"`, Text in `params.text`) oder
+  **Warten seit Aktion** (`"wait_since"`: `device_kind`, `device_id`, `action`, `duration` = Mindestzeit) enthält –
+  ältere Versionen lehnen ihn ab, statt die Bestätigung still auszulassen. Bausteine: Format 3.
 - Unbekannte Felder bleiben beim Laden und Speichern erhalten.
 
 Gekürztes Beispiel (die App schreibt je Schritt alle Felder):

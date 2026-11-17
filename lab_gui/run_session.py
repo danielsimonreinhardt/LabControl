@@ -239,6 +239,7 @@ class RunSession(QObject):
         runner.setpoint_sent.connect(recorder.on_setpoint_sent)
         runner.monitor_result.connect(recorder.on_monitor_result)
         runner.iteration_changed.connect(recorder.on_iteration_changed)
+        runner.step_note.connect(recorder.on_step_note)   # PI-71 a: Bestaetigung, tatsaechliche Wartezeit
         worker.load_measurement.connect(recorder.on_load_measurement)
         worker.psu_measurement.connect(recorder.on_psu_measurement)
 
@@ -261,6 +262,10 @@ class RunSession(QObject):
             return tr("Sicherheitsabschaltung zuerst quittieren")
         if self.runner.is_running():
             return tr("Es läuft bereits ein Ablauf")
+        confirms = [i for i, s in enumerate(steps) if s.enabled and s.step_type == "confirm"]
+        if confirms and not self.runner.confirm_available:
+            # PI-71 a: ohne Fenster kann niemand bestaetigen -- vor dem ersten Schalten ablehnen statt mittendrin
+            return tr("Bestätigung in Schritt {n} geht nur im LabControl-Fenster", n=confirms[0] + 1)
         uds_steps_used = [s for s in steps if s.enabled and s.step_type == "action" and s.device_kind == "uds"]
         if any(s.action != "UDS_FLASH" for s in uds_steps_used) and (self.uds is None or not self.uds.configured()):
             return tr("Kein Prüfling (UDS) eingestellt")

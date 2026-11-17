@@ -34,9 +34,11 @@ from testcase_model import (
     action_label,
     arb_shape_label,
     condition_summary,
+    confirm_text,
     is_arb_action,
     kind_label,
     validate_structure,
+    wait_since_summary,
 )
 from theme import current as current_palette
 
@@ -55,6 +57,10 @@ def _step_line(step: TestStep) -> str:
             return f"{tr(CONTROL_STEP_LABELS[step.step_type])}: {step.var_name} {op} {step.value:g}"
         if step.step_type == "wait":
             return f"{tr(CONTROL_STEP_LABELS['wait'])} ({step.duration:g} s)"
+        if step.step_type == "confirm":
+            return f"{tr(CONTROL_STEP_LABELS['confirm'])}: {confirm_text(step) or '–'}"
+        if step.step_type == "wait_since":
+            return f"{tr(CONTROL_STEP_LABELS['wait'])} {wait_since_summary(step)}"
         return tr(CONTROL_STEP_LABELS.get(step.step_type, step.step_type))
     device = step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
     action = action_label(step.device_kind, step.action)

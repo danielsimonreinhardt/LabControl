@@ -309,7 +309,7 @@ Alle Pfade beginnen mit `/api/v1`, Antworten sind JSON.
 | `POST /all-off` | **ALLE AUS** |
 | `GET /testcases` | Abläufe im gemeinsamen Ordner `testcases/` |
 | `POST /runs` | Lauf starten: `{"testcase": "ladetest.json", "vars": {…}, "variant": "…"}` |
-| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen |
+| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen; `waiting` = wartet auf Bestätigung im Fenster bzw. „Warten seit“ |
 | `GET /runs/{id}/result`, `/junit`, `/report` | `run-result.json`, JUnit-XML, HTML-Bericht |
 | `POST /runs/{id}/stop` | Lauf anhalten (wie Stop: ALLE AUS) |
 | `GET /scopes`, `POST /scopes/{id}/acquire` … | Oszilloskope und Erfassungen (siehe `scope_api/README.md`) |
@@ -393,7 +393,7 @@ LabControl auf einem **anderen Rechner**: dessen Adresse eintragen (z. B. `http:
 | `all_off` | ALLE AUS – geht immer |
 | `list_testcases` | gespeicherte Abläufe und letzte Läufe |
 | `run_testcase` | Ablauf starten, optional mit Variablen und `variant`; liefert die Lauf-ID |
-| `get_run` | Stand eines Laufs; `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
+| `get_run` | Stand eines Laufs (auch `waiting`: Bestätigung nur im Fenster); `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
 | `stop_run` | Lauf anhalten (ALLE AUS) |
 | `list_scopes`, `get_scope_capabilities` | Oszilloskope, Kanäle, Bereiche, Triggerarten |
 | `acquire` | Erfassung mit vollständiger Einstellung (V, s); Kennwerte, Warnungen, Hüllkurve, CSV-Pfad |
