@@ -9,7 +9,7 @@ haben ein eigenes Kapitel: [Testabläufe](testablaeufe.md).
 
 ```mermaid
 flowchart TB
-  TOP["Leiste oben: Sicherheits-Chip · SIMULATION · Verbund-Chip · MCP-Chip · Geräte-Chips · Vollbild · ALLE AUS"]
+  TOP["Leiste oben: Uhr · Sicherheits-Chip · SIMULATION · Verbund-Chip · MCP-Chip · Geräte-Chips · Vollbild · ALLE AUS"]
   subgraph MITTE[" "]
     direction LR
     NAV["Navigation links<br/>Steuerung<br/>Testablauf<br/>Verlauf<br/>Ergebnisse<br/>Einstellungen"]
@@ -37,6 +37,7 @@ flowchart TB
 
 | Element | Bedeutung |
 |---|---|
+| Uhr | aktuelle Systemzeit (hh:mm:ss), Datum im Tooltip |
 | Sicherheits-Chip (Schild-Symbol) | **AUS** = kein Grenzwert aktiv, **AKTIV** = Watchdog überwacht, **AUSGELÖST** = Sicherheitsabschaltung, siehe [Sicherheit](#sicherheit) |
 | Chip **SIMULATION** (Reagenzglas, Warnfarbe) | nur bei eingeschaltetem Simulationsmodus, auch in der `.exe` |
 | Verbund-Chip, z. B. „⇄ Pi“ | nur bei eingeschaltetem Verbund: grün = verbunden, gelb = verbunden mit Hinweis oder Partner gesperrt, rot „✕ …“ = nicht verbunden; Tooltip nennt den Grund |

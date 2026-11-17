@@ -9,6 +9,10 @@ Semantic Versioning (`lab_gui/version.py`).
 ## [1.0.1] – 2026-11-15
 
 ### Hinzugefügt
+- **Uhr in der Leiste oben.** Ganz links vor dem Sicherheits-Chip steht jetzt die Systemzeit (hh:mm:ss) als
+  neutraler Chip, am PC und in der Touch-Bedienung; das Datum steht im Tooltip. Feste Breite, damit die Leiste
+  nicht mit jeder Sekunde springt. Mock-verifiziert (`check_touch_ui`, Bilder offscreen hell/dunkel); in der .exe
+  und am Pi-Display noch nicht angesehen.
 - **Ablaufzeilen mit der Maus verschieben.** Im Testablauf-Editor lässt sich eine Zeile an ihrer Nummer
   (Spalte „#“) greifen und an eine neue Stelle ziehen; eine Linie zeigt beim Ziehen die Einfügestelle. Es gelten
   dieselben Regeln wie bei den Pfeil-Knöpfen: ein Baustein wandert über seine Kopfzeile als Ganzes, eine Zeile
@@ -69,6 +73,16 @@ Semantic Versioning (`lab_gui/version.py`).
   PC und Pi noch nicht.
 
 ### Behoben
+- **Vollbild-Knopf am PC schief und zu hoch.** Das Symbol saß links von der Mitte (der Abstand für einen
+  Menüpfeil aus dem Theme galt auch hier), und der Knopf war höher als „ALLE AUS“ daneben. Jetzt sind beide
+  gleich hoch, das Symbol mittig. Mock-verifiziert (`check_touch_ui`, Bild offscreen); in der .exe am PC noch
+  nicht angesehen.
+- **Übersicht wurde nach einer Oszilloskop-Erfassung höher.** Nach der ersten Erfassung über Netzwerk/MCP bekam
+  die Oszilloskop-Kachel eine Zeile „Letzte Erfassung“ dazu, mit ihr wuchs die ganze Übersicht; dasselbe kurz bei
+  „Trennen“. Jetzt stehen „Trennen“ und „Kurve“ als Symbole in der Zeile von „PicoScope 7 öffnen“, ihr Platz ist
+  immer reserviert, Uhrzeit und Kennwerte der Erfassung stehen im Tooltip von „Kurve“. Die Kachel bleibt so hoch
+  wie vorher. Ausführlich zeigt die Erfassung weiter die Kachel unter Steuerung. Mock-verifiziert (Höhe vor/nach
+  einer Erfassung offscreen gemessen, PC und Touch; `check_network_share`); in der .exe noch nicht angesehen.
 - **Gelöschte Geräte blieben beim Verbund-Partner sichtbar.** „Nicht verbundene Geräte löschen“ entfernte ein
   Gerät aus Kacheln, Einstellungen und Editor, nicht aber aus der Netzwerk-Freigabe – der Partner bekam es weiter
   geliefert und zeigte eine getrennte Kachel (am Pi: der gelöschte Funktionsgenerator an COM20 des PCs). Jetzt

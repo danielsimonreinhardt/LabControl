@@ -1655,10 +1655,11 @@ def section_app() -> None:
             check("MCP plot_capture: unbekannte Erfassung -> Werkzeugfehler",
                   out["plot_bad"]["error"] and "unknown_capture" in out["plot_bad"]["text"])
             panel = window.dashboard._panels.get("picoscope:SIM")
-            check("Kachel zeigt die letzte Erfassung",
-                  gui(lambda: panel._capture_row.isVisibleTo(panel)
-                      and "Letzte Erfassung" in panel._capture_label.text()),
-                  gui(lambda: panel._capture_label.text()))
+            check("Kachel: Knopf Kurve da, letzte Erfassung im Tooltip, keine Zusatzzeile (Hoehe gleich)",
+                  gui(lambda: panel._plot_button.isVisibleTo(panel)
+                      and "Letzte Erfassung" in panel._plot_button.toolTip()
+                      and panel._plot_button.parent() is panel._action_row),
+                  gui(lambda: panel._plot_button.toolTip()))
             check("Knopf Kurve oeffnet ein Fenster mit Bild",
                   gui(lambda: (window._show_scope_plot("picoscope:SIM"),
                                any(w.windowTitle().startswith("Letzte Erfassung c-")

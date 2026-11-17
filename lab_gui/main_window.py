@@ -7,10 +7,11 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -69,7 +70,7 @@ from testcase_model import TestStep, is_arb_action
 from testcase_tab import TestcaseTab
 from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
-from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch, touch_icon_path
+from touch_ui import FONT_SCALE, TOP_BUTTON_H_PC, TOUCH_H, NavBar, TopBar, suggest_touch, touch_icon_path
 from touch_ui import sizer as touch_sizer
 from version import __version__
 
@@ -225,7 +226,14 @@ class MainWindow(QMainWindow):
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
         self._status_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # Sicherheits-Chip steht fest links vor dem wischbaren Bereich (TopBar.adopt, leading)
+        # Uhr-Chip (hh:mm:ss, Nutzerwunsch 17.11.2026) und Sicherheits-Chip stehen fest links vor dem
+        # wischbaren Bereich (TopBar.adopt, leading)
+        self._clock_chip = QLabel()
+        self._clock_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(250)   # Sekundenwechsel hoechstens 1/4 s spaet
+        self._clock_timer.timeout.connect(self._tick_clock)
+        self._clock_timer.start()
         self._safety_status_label = QLabel()
         self._safety_status_label.installEventFilter(self)
         self._safety_status_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1333,17 +1341,36 @@ class MainWindow(QMainWindow):
         label.setToolTip(f"{tr('Sicherheit:')} {texts.get(state, state)}")
         self._style_chip(label, color)
 
+    def _render_clock_chip(self) -> None:
+        """Uhr-Chip neutral (Rahmen gedaempft, Ziffern in Schriftfarbe) -- die Zustandsfarben bleiben den
+        Geraeten. Feste Breite, sonst zuckt die Leiste mit jeder Sekunde (Ziffern unterschiedlich breit)."""
+        pal = ThemeManager.instance().palette
+        chip = self._clock_chip
+        self._style_chip(chip, pal.text_muted, text_color=pal.text)
+        font = QFont(chip.font())
+        font.setBold(True)
+        padding = 9 if self._touch else 7
+        chip.setFixedWidth(QFontMetrics(font).horizontalAdvance("00:00:00") + 2 * padding + 12)
+        self._tick_clock()
+
+    def _tick_clock(self) -> None:
+        now = datetime.now()
+        text = now.strftime("%H:%M:%S")
+        if self._clock_chip.text() != text:
+            self._clock_chip.setText(text)
+            self._clock_chip.setToolTip(now.strftime("%d.%m.%Y"))
+
     def _chip_height(self) -> int:
         return STATUS_CHIP_HEIGHT if self._touch else STATUS_CHIP_HEIGHT_PC
 
     def _chip_icon_size(self) -> int:
         return 18 if self._touch else 15
 
-    def _style_chip(self, label: QLabel, color: str) -> None:
+    def _style_chip(self, label: QLabel, color: str, text_color: str | None = None) -> None:
         """Status-Chip (Geraete, Sicherheit): Rahmen und Schrift in der Zustandsfarbe, natuerliche Breite."""
         height = self._chip_height()
         padding = "1px 9px" if self._touch else "0px 7px"
-        label.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color};"
+        label.setStyleSheet(f"color: {text_color or color}; font-weight: bold; border: 1px solid {color};"
                             f" border-radius: {height // 2 - 1}px; padding: {padding}; background: transparent;")
         # Natuerliche Groesse statt die ganze Leiste zu fuellen (am Pi-Display gesehen)
         label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -1372,7 +1399,7 @@ class MainWindow(QMainWindow):
             f"border: 1px solid {pal.danger}; border-radius: {METRICS.radius_sm}px; padding: {padding}; }}"
             f"QPushButton:focus {{ border: {METRICS.focus_width}px solid {pal.focus}; }}"
         )
-        self._all_off_button.setMinimumSize(*((96, 44) if self._touch else (0, 0)))
+        self._all_off_button.setMinimumSize(*((96, TOUCH_H) if self._touch else (0, TOP_BUTTON_H_PC)))
 
     def _wire_registry(self) -> None:
         self._registry.device_known.connect(self.dashboard.on_device_known)
@@ -2005,7 +2032,9 @@ class MainWindow(QMainWindow):
         # ALLE AUS in der Leiste oben
         self.tabs.tabBar().hide()
         self.statusBar().hide()
-        self._top_bar.adopt(self._status_container, [self._all_off_button], leading=self._safety_status_label)
+        self._top_bar.adopt(self._status_container, [self._all_off_button],
+                            leading=[self._clock_chip, self._safety_status_label])
+        self._render_clock_chip()
         # QScrollArea.setWidget zeigt das Widget nicht von selbst
         self._status_container.show()
         self._all_off_button.show()
@@ -2068,6 +2097,7 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:   # Chips (Touch) bzw. "Name: Zustand" (PC)
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_clock_chip()
         self._render_partner_chip()
         self._render_mcp_chip()
         self._render_sim_chip()
@@ -2837,6 +2867,7 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_clock_chip()
         self._render_partner_chip()
         self._render_mcp_chip()
         self._render_sim_chip()
