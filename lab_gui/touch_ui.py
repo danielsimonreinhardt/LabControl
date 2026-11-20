@@ -6,8 +6,8 @@ Gleiche Widgets wie am PC, nur groesser (Raspberry Pi, 1024 x 600):
   Haekchen und Scrollbalken -- kommt zusaetzlich zum Theme-Stylesheet (theme.ThemeManager.set_touch)
 - NavBar: Reiter als Schaltflaechen links (Symbol + Text) statt der Reiterleiste oben; im Touch-Profil
   ist die Uebersicht (Dashboard) dort ein eigener Reiter statt eines festen Streifens
-- TopBar: Leiste oben mit Geraetezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf und
-  ALLE AUS -- ersetzt die Statusleiste, die mit vielen Geraeten breiter als 1024 px wird
+- TopBar: Leiste oben mit Geraetezustand (wischbar), Fernsteuerungs-Hinweis, Vollbild-Knopf (nur am PC)
+  und ALLE AUS -- ersetzt die Statusleiste, die mit vielen Geraeten breiter als 1024 px wird
 
 NavBar und TopBar (shell_qss) gelten seit 0.53.0 auch am PC, dort kleiner und mit dem Dashboard als
 festem Streifen ueber dem Inhalt (Nutzerwunsch 12.11.2026).
@@ -471,6 +471,11 @@ def shell_qss(pal: Palette) -> str:
         background-color: {pal.surface};
         border-bottom: 1px solid {pal.border};
     }}
+    /* Symbol-Knoepfe ohne Menue: das padding-right fuer den Menuepfeil aus theme.py schob das Symbol
+       aus der Mitte (Nutzerhinweis 17.11.2026) */
+    QWidget#touchTopBar QToolButton {{
+        padding: 0px;
+    }}
     QLabel#statusToast {{
         background-color: {pal.surface_alt};
         color: {pal.text};
@@ -491,6 +496,7 @@ def enable_swipe(area: QScrollArea) -> None:
 NAV_WIDTH_PC = 104
 NAV_ICON_PC = QSize(24, 24)
 TOP_BAR_HEIGHT_PC = 42
+TOP_BUTTON_H_PC = 30   # Symbol-Knoepfe und ALLE AUS in der Leiste oben am PC, gleich hoch
 
 
 class NavBar(QWidget):
@@ -607,11 +613,12 @@ class TopBar(QWidget):
         self.retranslate()
         ThemeManager.instance().changed.connect(lambda _pal: self._recolor())
 
-    def adopt(self, status: QWidget, trailing: list[QWidget], leading: QWidget | None = None) -> None:
+    def adopt(self, status: QWidget, trailing: list[QWidget], leading: list[QWidget] | None = None) -> None:
         """Statusanzeige in den wischbaren Bereich, die uebrigen rechts davon (ALLE AUS zuletzt).
-        `leading` steht fest links davor und wischt nicht mit (Sicherheits-Chip, Nutzerwunsch 12.11.2026)."""
-        if leading is not None:
-            self._layout.insertWidget(0, leading)
+        `leading` steht fest links davor und wischt nicht mit (Uhr und Sicherheits-Chip, Nutzerwunsch
+        12.11. und 17.11.2026)."""
+        for index, widget in enumerate(leading or []):
+            self._layout.insertWidget(index, widget)
         self._status_area.setWidget(status)
         self._trailing = trailing
         for widget in trailing[:-1]:
@@ -650,10 +657,13 @@ class TopBar(QWidget):
         if not on:
             self._arrange_button.setChecked(False)
         self._arrange_button.setVisible(on)
-        icon = QSize(26, 26) if on else QSize(20, 20)
+        # Im Touch-Profil (Kiosk am Pi, immer Vollbild) ohne Vollbild-Knopf (Nutzerwunsch 17.11.2026)
+        self._fullscreen_button.setVisible(not on)
+        icon = QSize(26, 26) if on else QSize(18, 18)
         for button in (self._fullscreen_button, self._power_button):
             button.setIconSize(icon)
-            button.setMinimumSize(48 if on else 34, 44 if on else 30)
+            # so hoch wie ALLE AUS daneben (MainWindow._style_all_off_button: TOP_BUTTON_H_*)
+            button.setFixedSize(48 if on else TOP_BUTTON_H_PC, TOUCH_H if on else TOP_BUTTON_H_PC)
 
     def set_power_available(self, on: bool) -> None:
         self._power_button.setVisible(on)

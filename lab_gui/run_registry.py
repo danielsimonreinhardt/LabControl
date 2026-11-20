@@ -33,6 +33,10 @@ class RunEntry:
     error: str = ""
     events: list[dict] = field(default_factory=list)
     files: dict[str, str] = field(default_factory=dict)   # "result" | "junit" | "report" -> Pfad
+    # PI-71 a: worauf der Lauf gerade wartet (TestRunner.waiting_changed), sonst None
+    waiting: dict | None = None
+    # PI-76 a/PI-79 a: Abschaltung beim Abbruch (run_results.shutdown_dict), None = normal beendet/laeuft
+    shutdown: dict | None = None
 
     def public(self, with_events: int = -1) -> dict:
         data = {
@@ -42,6 +46,8 @@ class RunEntry:
             "step": self.step, "steps_total": self.steps_total,
             "checks_total": self.checks_total, "checks_failed": self.checks_failed,
             "error": self.error or None, "files": sorted(self.files),
+            "waiting": _public_waiting(self.waiting),
+            "shutdown": self.shutdown,
         }
         if with_events >= 0:
             data["events"] = self.events[with_events:]
@@ -51,6 +57,20 @@ class RunEntry:
 
 def _iso(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
+
+
+def _public_waiting(waiting: dict | None) -> dict | None:
+    """{"kind": "confirm"|"wait_since"|"release", "step", "text", "message", "since"[, "remaining_s"]} oder None.
+    Eine Bestaetigung geht nur im LabControl-Fenster (PI-71 a) -- hier steht sie nur, damit ein Client darauf
+    hinweisen kann. "release" (PI-74 a, dazu "key" und "timeout_s") gibt ein Programm mit Steuerrecht ueber
+    POST /runs/{id}/continue bzw. MCP continue_run frei."""
+    if not waiting:
+        return None
+    data = {k: v for k, v in waiting.items() if k not in ("until", "since_ts")}
+    data["since"] = _iso(waiting.get("since_ts", time.time()))
+    if "until" in waiting:
+        data["remaining_s"] = round(max(0.0, waiting["until"] - time.time()), 1)
+    return data
 
 
 class RunRegistry:
@@ -103,11 +123,47 @@ class RunRegistry:
                 entry.error = f"Schritt {index + 1}: {message}"
                 self._event(entry, "failed", step=index + 1, message=message)
 
-    def finish(self, run_id: str, status: str, exit_code: int, files: dict[str, str]) -> None:
+    def released(self, run_id: str, index: int, by: str) -> None:
+        """PI-74 a: "Warten auf Freigabe" in Schritt index freigegeben (by: Aufrufer wie im Protokoll)."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is not None:
+                self._event(entry, "released", step=index + 1, by=by)
+
+    def set_waiting(self, run_id: str, info: dict | None) -> None:
+        """PI-71 a: Lauf wartet auf Bestaetigung bzw. "Warten seit" (info) oder nicht mehr (None)."""
         with self._lock:
             entry = self._runs.get(run_id)
             if entry is None:
                 return
+            if info:
+                entry.waiting = dict(info, since_ts=time.time())
+                self._event(entry, "waiting", wait=info.get("kind"), step=info.get("step"), text=info.get("text"))
+            else:
+                entry.waiting = None
+
+    def current_waiting(self) -> dict | None:
+        """Wartezustand des laufenden Laufs (fuer /api/v1/status)."""
+        with self._lock:
+            entry = self._runs.get(self._current) if self._current else None
+            return _public_waiting(entry.waiting) if entry is not None else None
+
+    def finish(self, run_id: str, status: str, exit_code: int, files: dict[str, str],
+               failure: tuple[int, str] | None = None, shutdown: dict | None = None) -> None:
+        """Lauf zu Ende. failure: (Schrittindex, Meldung) des Schrittfehlers aus der Laufaufzeichnung -- traegt
+        "error" nach, falls step_failed das Register nicht (mehr) erreicht hat (Lauf aus dem Fenster: RunSession
+        beendet den Lauf schon im selben Signal, bevor MainWindow eintragen konnte). shutdown: Abschaltung beim
+        Abbruch (PI-79 a), siehe run_results.shutdown_dict."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is None:
+                return
+            if failure is not None and failure[1] and not entry.error:
+                index, message = failure
+                entry.error = f"Schritt {index + 1}: {message}"
+                self._event(entry, "failed", step=index + 1, message=message)
+            entry.waiting = None
+            entry.shutdown = dict(shutdown) if shutdown else None
             entry.status = status
             entry.exit_code = exit_code
             entry.ended = time.time()

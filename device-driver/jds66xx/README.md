@@ -55,6 +55,37 @@ mit Nullpunkt bei 1000, 0,1 %, 0,1 °) steckt vollständig in `driver.py`.
   **Phase** gibt es nur einmal (Kanal 2 relativ zu Kanal 1).
 - Das Protokoll kennt keine Betriebsart „Ausgang aus, Signal an“ – „AUS“ ist die
   Abschaltung des Ausgangs; alle Signalparameter bleiben gespeichert.
+- **DC: Ausgang ≈ Offset + Amplitude/2** (gemessen am JDS2915 am 17.11.2026, CH1
+  ohne Last, PicoScope 10:1):
+
+  | Amplitude | Offset | gemessen |
+  |---|---|---|
+  | 0 V | 0 V | 0,01 V |
+  | 1 V | 0 V | 0,47 V |
+  | 2,5 V | 0 V | 1,21 V |
+  | 5 V | 0 V | 2,41 V |
+  | 2,5 V | 1 V | 2,29 V |
+  | 2,5 V | 2,5 V | 3,73 V |
+  | **0 V** | 2,5 V | **0,22 V** |
+  | 0,01 V | 2,5 V | 2,61 V |
+  | 0,1 V | 2,5 V | 2,57 V |
+
+  **Sonderfall Amplitude genau 0:** der Offset kommt nur zu etwa 1/10 an. Deshalb
+  setzt LabControl in DC die Amplitude auf **0,01 V** (`DC_AMPLITUDE_V`, kleinster
+  Wert ≠ 0) und gibt die Spannung als **Offset** vor (`set_waveform_checked`,
+  `set_offset_checked`); es bleibt ein Rest von Amplitude/2 = **5 mV**
+  (`DC_RESIDUAL_V`) über dem Offset. Die gemessenen 2,61 V bei 2,5 V Offset liegen
+  etwa 0,1 V darüber – Offset-Fehler des Geräts ohne Abgleich, nicht korrigiert.
+  `set_amplitude_checked` lehnt eine Amplitude in DC ab (`FunctionGeneratorValueError`).
+- **Tastgrad wirkt nur bei Puls:** Rechteck 1 kHz mit 10 % und 99 % ergab jeweils
+  50 %, Puls 99 % → 98,9 %, 10 % → 9,97 %. Das Gerät nimmt den Wert in jeder Form
+  an (`:ok`), er wirkt nur bei Puls. `set_duty_checked` lehnt ihn bei jeder anderen
+  Form ab, statt die Form still umzuschalten. `get_duty`/`set_duty` selbst bleiben
+  roh (Register).
+- Die `*_checked`-Funktionen sind Modulfunktionen (wie `read_field`) und gelten für
+  Treiber und Mock gleich; `device_worker` nutzt sie für Kachel, Testablauf und
+  Fernsteuerung. Der Mock bildet das gemessene Verhalten nach
+  (`output_dc_voltage`, `effective_duty`).
 - Werte außerhalb des Bereichs wirft der Treiber als `FunctionGeneratorValueError`
   **vor** dem Senden (Verbindung bleibt), Timeouts als `FunctionGeneratorError`.
 
@@ -68,3 +99,8 @@ Schreiben und Zurücklesen von Frequenz (0,01 Hz … 15 MHz), Amplitude, Offset
 ungültiger Werte ohne Verbindungsabbruch, Erkennung und Steuerung über den
 `DeviceWorker`, ALLE AUS. **Nicht** am Ausgang gemessen (Oszilloskop): die
 tatsächlich anliegende Signalform und Amplitude.
+
+Am 17.11.2026 am Ausgang gemessen (CH1 ohne Last, PicoScope 10:1): DC-Spannung
+abhängig von Amplitude und Offset und Tastgrad bei Rechteck/Puls (Tabellen oben).
+Die Umsetzung (DC mit 0,01 V Amplitude, Tastgrad nur bei Puls) ist nur gegen den
+Mock geprüft: `python tools/check_fg_dc_duty.py`.

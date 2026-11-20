@@ -82,6 +82,8 @@ class PartnerLink(QObject):
     action_finished = Signal(int, str, str, bool, str)
     # ok, Meldung
     all_off_finished = Signal(bool, str)
+    # PI-81 a: ALLE AUS hat beim Partner diese Geraete nicht erreicht (IDs beim Partner) -- vor all_off_finished
+    all_off_unreachable = Signal(list)
     # Belegung (V2): ok, Meldung -- Antwort auf acquire_lease
     lease_acquired = Signal(bool, str)
     # Belegung verloren (Lebenszeichen nicht bestaetigt): Grund
@@ -91,6 +93,8 @@ class PartnerLink(QObject):
 
     # intern: (Generation, Snapshot | None, Fehlercode, Meldung) aus dem Abfrage-Thread
     _polled = Signal(int, object, str, str)
+    # intern: Abschaltung einzelner Geraete (devices_off, PI-79 a): Anfrage-Nr., abgeschaltet, nicht erreichbar
+    _devices_off_result = Signal(int, list, list)
 
     def __init__(self, own_name: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -115,6 +119,8 @@ class PartnerLink(QObject):
         self._lease_stop = threading.Event()
         self._polled.connect(self._on_polled)
         self._lease_result.connect(self._on_lease_result)
+        self._off_callbacks: dict[int, object] = {}
+        self._devices_off_result.connect(self._on_devices_off_result)
 
     # -- Konfiguration -----------------------------------------------------------
 
@@ -373,6 +379,55 @@ class PartnerLink(QObject):
             logger.info("Verbund: Belegung bei %s freigegeben", client.base_url)
             threading.Thread(target=lambda: _quiet(client.lease_release, lease), daemon=True).start()
 
+    def devices_off(self, device_ids: list[str], reason: str, done) -> bool:
+        """Nur die genannten Geraete beim Partner abschalten (Abbruch eines Testablaufs, PI-79 a; POST
+        /devices-off). Eigener Thread wie ALLE AUS. done(abgeschaltet, nicht erreichbar) kommt im GUI-Thread mit
+        den IDs beim Partner. Kennt der Partner die Route nicht (aeltere Version), schaltet er zur Sicherheit
+        ALLES ab (ALLE AUS). False, wenn der Verbund aus ist."""
+        client = self._client
+        if client is None:
+            return False
+        request_id = next(self._request_ids)
+        self._off_callbacks[request_id] = done
+        ids = list(device_ids)
+
+        def run() -> None:
+            try:
+                payload = client.devices_off(ids, reason)
+                if payload.get("ok") is True:
+                    off, failed = ids, []
+                else:   # 202: keine Rueckmeldung in der Wartezeit -- nicht bestaetigt
+                    off, failed = [], ids
+            except PartnerError as exc:
+                if exc.code in ("not_found", "method_not_allowed"):
+                    logger.error("Verbund: %s kennt das Abschalten einzelner Geräte nicht -- ALLE AUS dort",
+                                 client.base_url)
+                    try:
+                        client.all_off()
+                        off, failed = ids, []
+                    except Exception:  # noqa: BLE001
+                        off, failed = [], ids
+                else:
+                    failures = exc.payload.get("failures") if isinstance(exc.payload, dict) else None
+                    failed = [str(d) for d in failures if str(d) in ids] if failures else ids
+                    off = [d for d in ids if d not in failed]
+                    logger.error("Verbund: Abschalten an %s (%s): %s", client.base_url, reason, error_text(exc.code))
+            except Exception:  # noqa: BLE001 -- nie den Thread verlieren
+                logger.exception("Verbund: Abschalten an %s fehlgeschlagen", client.base_url)
+                off, failed = [], ids
+            logger.warning("Verbund: Abschalten an %s (%s): aus %s, nicht erreichbar %s", client.base_url, reason,
+                           ", ".join(off) or "-", ", ".join(failed) or "-")
+            self._devices_off_result.emit(request_id, off, failed)
+
+        logger.warning("Verbund: Abschalten an %s wird gesendet (%s): %s", client.base_url, reason, ", ".join(ids))
+        threading.Thread(target=run, name="PartnerDevicesOff", daemon=True).start()
+        return True
+
+    def _on_devices_off_result(self, request_id: int, off: list, failed: list) -> None:
+        done = self._off_callbacks.pop(request_id, None)
+        if done is not None:
+            done(list(off), list(failed))
+
     def all_off(self, reason: str) -> bool:
         """ALLE AUS am Partner (PI-27 a). Eigener Thread, damit es nie hinter Bedienungen wartet.
         False, wenn der Verbund aus ist (dann gibt es nichts weiterzureichen)."""
@@ -387,6 +442,7 @@ class PartnerLink(QObject):
                 failures = exc.payload.get("failures") if isinstance(exc.payload, dict) else None
                 message = error_text(exc.code) + (f": {', '.join(failures)}" if failures else "")
                 logger.error("Verbund: ALLE AUS an %s FEHLGESCHLAGEN (%s): %s", client.base_url, reason, message)
+                self._report_unreachable(client, exc.payload)
                 self.all_off_finished.emit(False, message)
                 return
             except Exception as exc:
@@ -396,8 +452,19 @@ class PartnerLink(QObject):
             ok = payload.get("ok") is True
             logger.warning("Verbund: ALLE AUS an %s (%s) -> %s", client.base_url, reason,
                            "ok" if ok else "unbestätigt")
+            self._report_unreachable(client, payload)
             self.all_off_finished.emit(ok, "" if ok else "unbestätigt")
 
         logger.warning("Verbund: ALLE AUS an %s wird gesendet (%s)", client.base_url, reason)
         threading.Thread(target=run, name="PartnerAllOff", daemon=True).start()
         return True
+
+    def _report_unreachable(self, client, payload) -> None:
+        """PI-81 a: Geraete, die ALLE AUS beim Partner nicht erreicht hat (fehlgeschlagen oder vorher getrennt) --
+        Ausgang unbekannt. Aeltere Partner liefern das Feld nicht."""
+        raw = payload.get("unreachable") if isinstance(payload, dict) else None
+        ids = [str(d) for d in raw if isinstance(d, str) and d] if isinstance(raw, list) else []
+        if ids:
+            logger.warning("Verbund: ALLE AUS an %s: nicht erreichbar, Ausgang unbekannt: %s", client.base_url,
+                           ", ".join(ids))
+            self.all_off_unreachable.emit(ids)

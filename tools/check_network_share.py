@@ -765,7 +765,7 @@ def section_scopes() -> None:
               call("GET", "/api/v1/scopes")[1]["scopes"][0]["state"] == "connected")
         time.sleep(0.3)
         service._close_idle()
-        service._executor.submit(lambda: None).result()   # Trennen im Scope-Thread abwarten
+        service._executor_for(sid).submit(lambda: None).result()   # Trennen im Scope-Thread abwarten
         check("nach Ablauf der Frist getrennt", call("GET", "/api/v1/scopes")[1]["scopes"][0]["state"] == "idle")
     finally:
         scope_service.IDLE_CLOSE_S = saved
@@ -1596,11 +1596,12 @@ def section_app() -> None:
                 {"name": "release", "tool": "release_scope", "args": {"scope_id": "picoscope:SIM"}},
             ]
             out = _run_mcp_probe(mcp_python, base, token, steps)
-            check("MCP: 16 Werkzeuge angeboten (5 Steuerung + 7 Oszilloskop + 4 Testlauf)",
-                  out["tools"] == ["acquire", "all_off", "control_device", "get_capture", "get_run",
+            check("MCP: 19 Werkzeuge angeboten (5 Steuerung + 9 Oszilloskop + 5 Testlauf)",
+                  out["tools"] == ["acquire", "all_off", "arm", "continue_run", "control_device", "get_capture",
+                                   "get_run",
                                    "get_scope_capabilities", "get_status", "list_devices", "list_scopes",
                                    "list_testcases", "measure", "plot_capture", "read_device", "release_scope",
-                                   "run_testcase", "stop_run"],
+                                   "run_testcase", "stop_run", "wait_capture"],
                   str(out["tools"]))
             check("MCP: Sicherheitshinweise fuer den Assistenten mitgeliefert",
                   "Hardware" in out["instructions"] and "all_off" in out["instructions"])
@@ -1655,10 +1656,11 @@ def section_app() -> None:
             check("MCP plot_capture: unbekannte Erfassung -> Werkzeugfehler",
                   out["plot_bad"]["error"] and "unknown_capture" in out["plot_bad"]["text"])
             panel = window.dashboard._panels.get("picoscope:SIM")
-            check("Kachel zeigt die letzte Erfassung",
-                  gui(lambda: panel._capture_row.isVisibleTo(panel)
-                      and "Letzte Erfassung" in panel._capture_label.text()),
-                  gui(lambda: panel._capture_label.text()))
+            check("Kachel: Knopf Kurve da, letzte Erfassung im Tooltip, keine Zusatzzeile (Hoehe gleich)",
+                  gui(lambda: panel._plot_button.isVisibleTo(panel)
+                      and "Letzte Erfassung" in panel._plot_button.toolTip()
+                      and panel._plot_button.parent() is panel._action_row),
+                  gui(lambda: panel._plot_button.toolTip()))
             check("Knopf Kurve oeffnet ein Fenster mit Bild",
                   gui(lambda: (window._show_scope_plot("picoscope:SIM"),
                                any(w.windowTitle().startswith("Letzte Erfassung c-")

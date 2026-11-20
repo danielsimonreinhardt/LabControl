@@ -23,18 +23,20 @@ from testcase_model import TestStep
 MAX_EVENTS = 5000
 # Sollwerte der Arbitraersignal-Schritte (bei 100 ms gut 13 h)
 MAX_SETPOINTS = 500_000
+# Oszilloskop-Erfassungen mit Bild (PI-72 a) -- je ~50 KB PNG im Speicher und im Bericht
+MAX_SCOPE_CAPTURES = 50
 
 
 @dataclass
 class StepEvent:
     t: float                       # time.time() beim Signalempfang
-    kind: str                      # "started" | "result" | "failed"
+    kind: str                      # "started" | "result" | "failed" | "note" (PI-71 a, Text in message)
     index: int                     # Schrittindex in RunRecord.steps
     iteration: int = 0             # innerste gerade aktive Schleife/While (0 = keine)
     iteration_total: int = 0       # 0 = While/unbegrenzt
     passed: bool | None = None     # nur kind=="result"
     measured: float | None = None  # nur kind=="result"
-    message: str = ""              # nur kind=="failed"
+    message: str = ""              # kind=="failed"/"note"
 
 
 @dataclass
@@ -64,6 +66,15 @@ class RunRecord:
     setpoints: list = field(default_factory=list)
     # Ergebnisse der Bloecke "Ueberwachen" (0.63.0, FT-7), dicts von TestRunner.monitor_result
     monitors: list = field(default_factory=list)
+    # Oszilloskop-Erfassungen der Schritte "Auf Erfassung warten" (1.0.1, PI-72 a), dicts von RunSession:
+    # index, arm_index, device_id, capture_id, csv_path, triggered, measurement, channel, value, unit, summary,
+    # warnings, t, png (Bild fuer den Bericht, fehlt wenn das Zeichnen scheiterte)
+    scope_captures: list = field(default_factory=list)
+    # Abschaltung beim Abbruch (1.0.1, PI-76 a/PI-79 a, RunSession._shutdown), None = normal beendet:
+    # mode ("block" | "standard" | "watchdog" | "all_off"), cause ("failed"/"stopped"), message, trigger,
+    # block (Schritte des Abbruch-Blocks: step, ok, message, device_id) oder None, fallback (Fehler im Block ->
+    # Standard-Abschaltung), timed_out, devices (vorgesehen), off, unreachable, labels (device_id -> Name)
+    shutdown: dict | None = None
 
 
 class RunRecorder(QObject):
@@ -160,6 +171,14 @@ class RunRecorder(QObject):
         self._record.error_message = message
         self._finish("error")
 
+    @Slot(int, str)
+    def on_step_note(self, index: int, text: str) -> None:
+        """Vermerk zu einem Schritt (PI-71 a): bestaetigt/abgebrochen, tatsaechliche Wartezeit bei "Warten seit"."""
+        if not self._active:
+            return
+        self._append_event(StepEvent(t=time.time(), kind="note", index=index, message=text,
+                                     iteration=self._iteration, iteration_total=self._iteration_total))
+
     @Slot()
     def on_run_finished(self) -> None:
         if not self._active or self._record is None:
@@ -179,6 +198,13 @@ class RunRecorder(QObject):
             return
         if len(self._record.monitors) < MAX_EVENTS:
             self._record.monitors.append(dict(result))
+
+    @Slot(int, object)
+    def on_scope_capture(self, _index: int, entry: dict) -> None:
+        if not self._active or self._record is None:
+            return
+        if len(self._record.scope_captures) < MAX_SCOPE_CAPTURES:
+            self._record.scope_captures.append(dict(entry))
 
     @Slot(int, str, str, float)
     def on_setpoint_sent(self, index: int, device_id: str, target: str, value: float) -> None:

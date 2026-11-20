@@ -32,12 +32,15 @@ versehentliches verschachteltes Acquire verstecken statt es zu verklemmen.
 from __future__ import annotations
 
 import copy
+import os
 import threading
 import time
 
 from PySide6.QtCore import QObject, Slot
 
-from field_catalog import FIELD_DEFS, LOAD_MODE_SHORT
+from field_catalog import (
+    DEFAULT_STALE_TIMEOUT_S, FIELD_DEFS, LOAD_MODE_SHORT, STATE_ONLY_KINDS, kind_stale_timeout_s,
+)
 from i18n import tr
 from lease_table import LeaseTable
 from pairing import PairingTable
@@ -46,8 +49,10 @@ from run_registry import RunRegistry
 # Ab wann ein Wert als "steht" gilt. Bewusst identisch zu
 # safety.STALE_TIMEOUT_S (dort loest dieselbe Frist den Watchdog aus) --
 # ein Wert, den der Sicherheits-Watchdog als veraltet ansieht, soll auch
-# ueber die Netzwerk-Freigabe als veraltet erscheinen.
-STALE_TIMEOUT_S = 2.0
+# ueber die Netzwerk-Freigabe als veraltet erscheinen. Standard; je Geraeteart
+# gilt field_catalog.kind_stale_timeout_s (Funktionsgenerator 5 s, PI-78 a) --
+# so kommt die passende Grenze auch beim Verbund-Partner an ("stale" der Kachel).
+STALE_TIMEOUT_S = DEFAULT_STALE_TIMEOUT_S
 
 # Voreinstellung der Netzwerk-Freigabe. Bewusst vollstaendig inert: aus,
 # nur Loopback, nichts freigegeben, Token noetig. Ein Upgrade einer
@@ -137,6 +142,9 @@ class LiveState(QObject):
         self._partner_ip = ""
         # Kachelfarbe je eigenem Geraet (Settings.panel_color): der Verbund-Partner zeigt sie mit (PI-43 b)
         self._colors: dict[str, str] = {}
+        # PI-77 a: switch_log.SwitchLog des DeviceWorkers (thread-sicher, MainWindow setzt ihn) -- je Kachel
+        # die letzte Schaltung je Aktion als Alter in s ("last_switch"), fuer "Warten seit Aktion" beim Partner
+        self.switch_log = None
 
     @Slot(str, object)
     def set_panel_color(self, device_id: str, color_key) -> None:
@@ -196,6 +204,13 @@ class LiveState(QObject):
     def on_label_changed(self, kind: str, device_id: str, label: str) -> None:
         self.on_device_known(kind, device_id, label)
 
+    def forget(self, device_id: str) -> None:
+        """Geraet vergessen ("Nicht verbundene Geraete loeschen", MainWindow._forget_device): sonst lieferte
+        /api/v1/values es weiter und der Verbund-Partner zeigte eine getrennte Kachel (1.0.1)."""
+        with self._lock:
+            self._devices.pop(device_id, None)
+            self._colors.pop(device_id, None)
+
     def set_online(self, device_id: str, online: bool) -> None:
         with self._lock:
             self._entry(device_id)["online"] = bool(online)
@@ -227,6 +242,11 @@ class LiveState(QObject):
     @Slot(str, float, float)
     def on_psu_setpoints(self, device_id: str, voltage: float, current: float) -> None:
         self._write(device_id, set_voltage=voltage, set_current=current)
+
+    @Slot(str, object)
+    def on_psu_found_on(self, device_id: str, info: object) -> None:
+        """PI-81 a: beim Verbinden mit Ausgang EIN vorgefunden (1), sonst 0 -- Chip in der Partnerkachel."""
+        self._write(device_id, found_on=int(info is not None))
 
     @Slot(str, bool)
     def on_load_input_state(self, device_id: str, on: bool) -> None:
@@ -271,7 +291,25 @@ class LiveState(QObject):
 
     @Slot(str, str, str, str)
     def on_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
-        self._write(device_id, status=status)
+        # Modell/Seriennummer seit 1.0.1 (PI-67 a, Kachel beim Verbund-Partner); leer = letzten Stand behalten
+        # (wie PicoscopePanel.set_state)
+        self._write(device_id, status=status, **({"model": variant} if variant else {}),
+                    **({"serial": serial} if serial else {}))
+
+    @Slot(str, dict)
+    def on_jlink_state(self, device_id: str, state: dict) -> None:
+        """J-Link (jlink_service.state_changed, 1.0.1 PI-67 a): Stand der letzten Bedienung fuer die Anzeige-
+        Kachel beim Verbund-Partner. Nur der Dateiname, nicht der Pfad auf diesem Rechner."""
+        vtref = state.get("vtref")
+        self._write(device_id, **{
+            "target": state.get("device") or None, "interface": state.get("interface") or None,
+            "speed": state.get("speed") or None, "core": state.get("core") or None,
+            "vtref": vtref if isinstance(vtref, (int, float)) else None,
+            "busy": int(bool(state.get("busy"))), "action": state.get("action") or None,
+            "result": int(bool(state["ok"])) if "ok" in state else None,
+            "message": state.get("message") or None, "time": state.get("time") or None,
+            "file": os.path.basename(state.get("last_file") or "") or None,
+        })
 
     @Slot(str, object)
     def on_fg_state(self, device_id: str, state: dict) -> None:
@@ -431,7 +469,9 @@ class LiveState(QObject):
         for entry in devices.values():
             age = now - entry.pop("ts")
             entry["age_s"] = round(age, 3)
-            entry["stale"] = age > STALE_TIMEOUT_S
+            # Oszilloskope/J-Link melden nur Aenderungen -- ihr Stand gilt, bis ein neuer kommt (1.0.1, PI-67 a)
+            kind = entry.get("kind")
+            entry["stale"] = age > kind_stale_timeout_s(kind) and kind not in STATE_ONLY_KINDS
         return {
             "devices": devices,
             "share": share,
@@ -448,6 +488,10 @@ class LiveState(QObject):
             "partner": partner,
             "partner_ip": partner_ip,
             "colors": colors,
+            # Laufender Ablauf wartet auf Bestaetigung/"Warten seit" (PI-71 a) bzw. Freigabe (PI-74 a), sonst None
+            "run_waiting": self.runs.current_waiting(),
+            # Letzte Schaltung je Geraet und Aktion (PI-77 a): {device_id: {action: {"age_s", "source"}}}
+            "last_switch": self.switch_log.ages() if self.switch_log is not None else {},
         }
 
     def share_config(self) -> dict:

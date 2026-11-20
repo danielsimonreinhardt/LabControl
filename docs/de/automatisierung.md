@@ -304,15 +304,17 @@ Alle Pfade beginnen mit `/api/v1`, Antworten sind JSON.
 | `GET /status` | Version, Sperrzustand (`lock`), Watchdog, ob der Aufrufer steuern darf (`remote_control`) |
 | `GET /tiles` | freigegebene Geräte (Kacheln) |
 | `GET /tiles/{id}` | ein Gerät mit Messwerten |
-| `GET /values[?tiles=id1,id2]` | Messwerte mehrerer Geräte, mit erlaubten Aktionen und Sperrgrund |
+| `GET /values[?tiles=id1,id2]` | Messwerte mehrerer Geräte, mit erlaubten Aktionen und Sperrgrund; `last_switch` = letzte erfolgreiche Schaltung je Aktion über LabControl als `{"age_s", "source"}` (Alter in s, Quelle z. B. `Kachel`, `Ablauf`, `MCP/REST`, `Verbund`; leer seit dem Start) |
 | `POST /tiles/{id}/actions` | eine Aktion, z. B. `{"action": "PSU_VOLT", "value": 5.0}` |
 | `POST /all-off` | **ALLE AUS** |
 | `GET /testcases` | Abläufe im gemeinsamen Ordner `testcases/` |
 | `POST /runs` | Lauf starten: `{"testcase": "ladetest.json", "vars": {…}, "variant": "…"}` |
-| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen |
+| `GET /runs`, `GET /runs/{id}` | Läufe bzw. Stand eines Laufs mit Meldungen; `waiting` = wartet auf Bestätigung im Fenster, „Warten seit“ bzw. Freigabe (`kind: "release"`); `error` = Meldung des fehlgeschlagenen Schritts |
 | `GET /runs/{id}/result`, `/junit`, `/report` | `run-result.json`, JUnit-XML, HTML-Bericht |
 | `POST /runs/{id}/stop` | Lauf anhalten (wie Stop: ALLE AUS) |
+| `POST /runs/{id}/continue` | Schritt „Warten auf Freigabe“ freigeben: `{"key": "…", "step": n, "by": "…"}` (alles optional); Steuerrecht nötig, eine Bestätigung geht hierüber nicht (`409 confirm_local_only`) |
 | `GET /scopes`, `POST /scopes/{id}/acquire` … | Oszilloskope und Erfassungen (siehe `scope_api/README.md`) |
+| `POST /scopes/{id}/arm`, `POST /captures/{cid}/wait` | scharf schalten (sofort zurück mit `capture_id`) bzw. auf den Trigger warten: `{"timeout_s": 20}` |
 
 Außerhalb von `/api/v1`: `GET /` (Übersicht im Browser) und `GET /display` (Live-Anzeige freigegebener Werte;
 Parameter `tiles`, `refresh` in Sekunden, `fmt=text` für Klartext).
@@ -393,12 +395,15 @@ LabControl auf einem **anderen Rechner**: dessen Adresse eintragen (z. B. `http:
 | `all_off` | ALLE AUS – geht immer |
 | `list_testcases` | gespeicherte Abläufe und letzte Läufe |
 | `run_testcase` | Ablauf starten, optional mit Variablen und `variant`; liefert die Lauf-ID |
-| `get_run` | Stand eines Laufs; `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
+| `get_run` | Stand eines Laufs (auch `waiting`: Bestätigung nur im Fenster, Freigabe über `continue_run`; `error` bei Schrittfehler); `file="result"` = Ergebnis als JSON, `file="junit"` = JUnit-XML |
 | `stop_run` | Lauf anhalten (ALLE AUS) |
+| `continue_run` | Schritt „Warten auf Freigabe“ freigeben (`run_id`, optional `key`, `step`); keine Bestätigung |
 | `list_scopes`, `get_scope_capabilities` | Oszilloskope, Kanäle, Bereiche, Triggerarten |
 | `acquire` | Erfassung mit vollständiger Einstellung (V, s); Kennwerte, Warnungen, Hüllkurve, CSV-Pfad |
-| `get_capture`, `measure`, `plot_capture` | Ausschnitt, neu berechnete Kennwerte, Kurve als Bild |
-| `release_scope` | Verbindung zum Oszilloskop sofort trennen |
+| `arm` | scharf schalten, kehrt sofort mit `capture_id` zurück; dazwischen kann geschaltet werden |
+| `wait_capture` | Ergebnis einer scharfen Erfassung holen (wie `acquire`), sonst nach `timeout_s` `state: "armed"` |
+| `get_capture`, `measure`, `plot_capture` | Ausschnitt, neu berechnete Kennwerte, Kurve als Bild; scharf: nur der Zustand |
+| `release_scope` | Verbindung zum Oszilloskop sofort trennen, bricht eine scharfe Erfassung ab |
 
 **Oszilloskop** (Einzelheiten in `scope_api/README.md`):
 
@@ -407,6 +412,32 @@ LabControl auf einem **anderen Rechner**: dessen Adresse eintragen (z. B. `http:
   liegt als CSV in `captures/`.
 - Das Gerät bleibt 60 s nach der letzten Erfassung offen (Kachel „Verbunden (MCP)“), PicoScope 7 kann es so lange
   nicht öffnen – `release_scope` oder „Trennen“ auf der Kachel geben es frei.
+
+**Einschaltvorgang messen** (scharf schalten, dann schalten):
+
+```mermaid
+sequenceDiagram
+    participant C as Claude (MCP)
+    participant L as LabControl
+    participant O as Oszilloskop
+    C->>L: arm(Kanal, Pegel, Flanke, Fenster)
+    L->>O: einstellen, Einzelerfassung starten
+    O-->>L: wartet auf Trigger
+    L-->>C: capture_id, state "armed"
+    C->>L: control_device(PSU_OUT_ON)
+    O-->>L: Trigger, Daten
+    C->>L: wait_capture(capture_id)
+    L-->>C: Kennwerte, Hüllkurve, csv_path
+```
+
+- `arm` blockiert nur, bis das Gerät scharf ist (beim PicoScope inkl. Öffnen ~5 s), nicht bis zum Trigger.
+  `arm_timeout_s` (Standard 60 s, höchstens 3600 s) begrenzt, wie lange es scharf bleibt.
+- `wait_capture` wartet höchstens `timeout_s` (je Aufruf bis 50 s). Ohne Trigger kommt `state: "armed"` mit
+  `expires_in_s`; die Erfassung bleibt scharf, also erneut warten oder `release_scope`. Ist sie schon getriggert
+  und werden die Daten noch gelesen (UNI-T: einige Sekunden), wartet `wait_capture` bis zu 20 s länger, sonst
+  `state: "triggered"`.
+- Je Oszilloskop eine scharfe Erfassung (sonst `scope_armed`); `list_scopes` zeigt `state: "armed"` und
+  `armed_capture`. Ein Testablauf, der das Oszilloskop braucht, bricht sie ab (`cancelled`).
 
 ## Sicherheit beim Fernsteuern
 

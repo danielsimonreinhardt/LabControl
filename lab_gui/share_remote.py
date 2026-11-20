@@ -84,6 +84,8 @@ class RemoteBridge(QObject):
     # verbund (gekoppelter Partner, PI-39 b), program (gekoppeltes Programm, PI-44 b)
     action_requested = Signal(int, str, str, str, float, int, bool, bool, bool)
     all_off_requested = Signal(int, str)                       # id, client
+    # Abschalten einzelner Geraete (POST /devices-off, PI-79 a): id, Geraete, Grund, client
+    devices_off_requested = Signal(int, list, str, str)
     # Verbund (PI-32 a): id, ID beim Partner, qualifizierte ID, kind, action, value, channel, client
     partner_action_requested = Signal(int, str, str, str, str, float, int, str)
     # Verbund (PI-43 b): id, eigene Geraete-ID, {"label"?, "color"?}
@@ -97,6 +99,7 @@ class RemoteBridge(QObject):
         self._ids = itertools.count(1)
         self._pending: dict[int, _Pending] = {}
         self._all_off_waiters: list[_Pending] = []
+        self._all_off_unreachable: list[str] = []   # PI-81 a: aus DeviceWorker.all_off_unreachable
         self._write_slots = threading.BoundedSemaphore(MAX_PENDING_WRITES)
         self._tokens = float(RATE_BURST)
         self._refilled = time.monotonic()
@@ -211,6 +214,15 @@ class RemoteBridge(QObject):
         self._audit(client, "ALLE AUS", result)
         return result
 
+    def submit_devices_off(self, devices: list[str], reason: str, client: str) -> RemoteResult:
+        """Nur diese Geraete abschalten (share_api._devices_off, PI-79 a). Wie ALLE AUS ohne Drosselung -- es ist
+        die sichere Richtung. Der GUI-Thread meldet ueber complete() (devices_off_incomplete mit den
+        fehlgeschlagenen Geraeten als Semikolon-Liste)."""
+        result = self._wait(lambda req_id: self.devices_off_requested.emit(req_id, list(devices), reason, client),
+                            ALL_OFF_TIMEOUT_S)
+        self._audit(client, f"Abschalten {', '.join(devices)}" + (f" ({reason})" if reason else ""), result)
+        return result
+
     # -- GUI-Thread -----------------------------------------------------------
 
     @Slot(int, bool, str, str, float)
@@ -240,12 +252,20 @@ class RemoteBridge(QObject):
         """
         with self._lock:
             waiters, self._all_off_waiters = self._all_off_waiters, []
+            unreachable, self._all_off_unreachable = self._all_off_unreachable, []
         for pending in waiters:
             if failures:
-                pending.result = RemoteResult("error", "all_off_incomplete", failures)
+                pending.result = RemoteResult("error", "all_off_incomplete", failures, unreachable=unreachable)
             else:
-                pending.result = RemoteResult("ok")
+                pending.result = RemoteResult("ok", unreachable=unreachable)
             pending.event.set()
+
+    @Slot(list)
+    def on_all_off_unreachable(self, device_ids: list) -> None:
+        """Verbunden mit DeviceWorker.all_off_unreachable (kommt vor all_off_finished, PI-81 a): nicht erreichte
+        Geraete fuer die Antwort auf POST /all-off ("unreachable")."""
+        with self._lock:
+            self._all_off_unreachable = [str(d) for d in device_ids]
 
     # -- Protokoll ---------------------------------------------------------------
 

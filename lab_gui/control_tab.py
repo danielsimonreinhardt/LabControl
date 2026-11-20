@@ -52,6 +52,8 @@ from jds66xx.driver import (
     MAX_FREQUENCY_HZ,
     MAX_OFFSET_V,
     MIN_FREQUENCY_HZ,
+    WAVE_DC,
+    WAVE_PULSE,
     WAVEFORMS,
     waveform_name,
 )
@@ -661,12 +663,21 @@ class PsuControlGroup(QGroupBox):
         # thematisch besser hierher als ins reine Anzeige-Dashboard.
         self._rename_button = IconButton("mdi.pencil-outline", "")
         self._rename_button.clicked.connect(self._on_rename_clicked)
+        # PI-81 a: gelber Chip, wenn das Netzteil beim Verbinden mit Ausgang EIN (Strombegrenzung > 0) vorgefunden
+        # wurde -- bis es ueber LabControl geschaltet wird oder Ausgang AUS meldet (DeviceWorker.psu_found_on)
+        self._found_on_chip = QLabel()
+        self._found_on_chip.setObjectName("psuFoundOnChip")
+        self._found_on_chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._found_on_chip.hide()
+        self._found_on: dict | None = None
         subtitle_row = QHBoxLayout()
         subtitle_row.addWidget(self._subtitle, 1)
+        subtitle_row.addWidget(self._found_on_chip)
         subtitle_row.addWidget(self._color_button)
         subtitle_row.addWidget(self._rename_button)
         outer.addLayout(subtitle_row)
         ThemeManager.instance().changed.connect(self._on_theme_changed)
+        self._style_found_on_chip(current_palette())
 
         self._form = QFormLayout()
         outer.addLayout(self._form)
@@ -724,6 +735,9 @@ class PsuControlGroup(QGroupBox):
         # -- dieser Hinweis vergleicht die Eingabefelder live, statt den
         # Nutzer erst beim Klick auf "Setzen" scheitern zu lassen.
         self._limit_warning = QLabel("")
+        # Partnerkachel (ControlTab.set_remote): OVP/OCP des Partners sind hier unbekannt, die Felder
+        # stehen auf ihrem Startwert (1 V / 0 A) -- dann keine Warnung, der Besitzer prueft selbst (1.0.1)
+        self._limits_known = True
         self._limit_warning.setWordWrap(True)
         self._limit_warning.setStyleSheet(f"color: {current_palette().warning}; background: transparent;")
         outer.addWidget(self._limit_warning)
@@ -785,6 +799,35 @@ class PsuControlGroup(QGroupBox):
             tr("Gibt das Netzteil zur Bedienung am Gerät frei: LabControl spricht es dann nicht mehr an.")
         )
         self._update_limit_warning()
+        self._render_found_on()
+
+    def set_found_on(self, info: dict | None) -> None:
+        """PI-81 a: beim Verbinden mit Ausgang EIN vorgefunden ({"voltage", "current"}: Sollwerte, None = nicht
+        lesbar) bzw. None -- nur Anzeige, geschaltet wird nichts."""
+        self._found_on = dict(info) if isinstance(info, dict) else None
+        self._render_found_on()
+
+    def found_on_visible(self) -> bool:
+        return not self._found_on_chip.isHidden()
+
+    def _render_found_on(self) -> None:
+        info = self._found_on
+        self._found_on_chip.setVisible(info is not None)
+        if info is None:
+            return
+        self._found_on_chip.setText(tr("beim Verbinden EIN"))
+        volts, amps = info.get("voltage"), info.get("current")
+        setpoints = (tr("{voltage} V / {current} A", voltage=f"{float(volts):g}", current=f"{float(amps):g}")
+                     if volts is not None and amps is not None else tr("unbekannt"))
+        self._found_on_chip.setToolTip(tr(
+            "Ausgang war beim Verbinden EIN (Sollwerte {setpoints}). LabControl hat nichts geschaltet. "
+            "Der Hinweis verschwindet, sobald das Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet.",
+            setpoints=setpoints))
+
+    def _style_found_on_chip(self, palette: Palette) -> None:
+        self._found_on_chip.setStyleSheet(
+            f"color: {palette.warning}; font-weight: bold; border: 1px solid {palette.warning};"
+            f" border-radius: 8px; padding: 0px 6px; background: transparent;")
 
     def _on_manual_toggled(self, checked: bool) -> None:
         self.set_manual.emit(self._device_id, checked)
@@ -854,8 +897,17 @@ class PsuControlGroup(QGroupBox):
         self._ocp_spin.blockSignals(False)
         self._update_limit_warning()
 
+    def set_limits_unknown(self) -> None:
+        """Partnerkachel: OVP/OCP liegen beim Besitzer, die Warnung entfaellt (ControlTab.set_remote)."""
+        self._limits_known = False
+        self._update_limit_warning()
+
     def _update_limit_warning(self) -> None:
         messages = []
+        if not self._limits_known:
+            self._limit_warning.setText("")
+            self._limit_warning.setVisible(False)
+            return
         if self._voltage_spin.value() > self._ovp_spin.value():
             messages.append(
                 tr(
@@ -879,6 +931,7 @@ class PsuControlGroup(QGroupBox):
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._limit_warning.setStyleSheet(f"color: {palette.warning}; background: transparent;")
+        self._style_found_on_chip(palette)
         for row in (self._voltage_row, self._current_row, self._ovp_row, self._ocp_row):
             row.setStyleSheet(_row_stylesheet(palette))
         self._update_output_buttons()
@@ -1024,6 +1077,8 @@ class _FgChannelBox(QGroupBox):
         # Zuletzt zurueckgelesene Werte -- set_values() schreibt nur ein Feld,
         # dessen Geraetewert sich GEAENDERT hat (siehe FgControlGroup.set_state).
         self.last: dict | None = None
+        # Vom Geraet gemeldete Form (None = noch unbekannt): bestimmt, welche Felder gelten (_apply_waveform_rows)
+        self.device_waveform: int | None = None
         self.retranslate()
 
     def retranslate(self) -> None:
@@ -1032,6 +1087,7 @@ class _FgChannelBox(QGroupBox):
         for row, text in zip(self.rows, labels):
             self.form.labelForField(row).setText(text)
         self.ampl_spin.setToolTip(tr("Spitze-Spitze, Leerlauf"))
+        self._apply_waveform_rows()
         for button in (self.wave_button, self.freq_button, self.ampl_button, self.offs_button, self.duty_button):
             button.setToolTip(tr("Setzen"))
         self.output_form.labelForField(self.output_layout).setText(tr("Ausgang:"))
@@ -1068,6 +1124,24 @@ class _FgChannelBox(QGroupBox):
             self.wave_combo.setCurrentIndex(self.wave_combo.findData(code))
             self.wave_combo.blockSignals(False)
         self.last = dict(values)
+        if self.device_waveform != values["waveform"]:
+            self.device_waveform = values["waveform"]
+            self._apply_waveform_rows()
+
+    def _apply_waveform_rows(self) -> None:
+        """Felder nach der Form des Geraets (1.0.1): in DC nur "Spannung" (= Offset; Amplitude steht auf 0,01 V,
+        PI-75 a), Frequenz und Tastverhaeltnis gesperrt; das Tastverhaeltnis ist nur bei Puls bedienbar
+        (PI-80 a). Solange die Form unbekannt ist, bleibt alles wie gehabt."""
+        dc = self.device_waveform == WAVE_DC
+        self.form.setRowVisible(self.ampl_row, not dc)
+        self.form.labelForField(self.offs_row).setText(tr("Spannung:") if dc else tr("Offset:"))
+        self.offs_spin.setToolTip(tr("Gleichspannung am Ausgang (Leerlauf)") if dc else "")
+        self.freq_spin.setEnabled(not dc)
+        self.freq_button.setEnabled(not dc)
+        duty_ok = self.device_waveform is None or self.device_waveform == WAVE_PULSE
+        self.duty_spin.setEnabled(duty_ok)
+        self.duty_button.setEnabled(duty_ok)
+        self.duty_spin.setToolTip("" if duty_ok else tr("nur bei Puls"))
 
     def set_output_state(self, on: bool) -> None:
         self.output_on = on
@@ -1172,6 +1246,18 @@ class FgControlGroup(QGroupBox):
         if code is not None:
             self.set_waveform.emit(self._device_id, channel, int(code))
 
+    def refresh_enabled(self) -> None:
+        """Nach dem Aufheben einer Sperre (ControlTab.set_lease): Felder wieder nach der Form freigeben."""
+        for box in self._boxes.values():
+            box._apply_waveform_rows()
+
+    def channel_rows(self, channel: int) -> dict:
+        """Fuer Pruefungen: Sichtbarkeit/Bedienbarkeit der Felder eines Kanals."""
+        box = self._boxes[channel]
+        return {"amplitude_visible": box.form.isRowVisible(box.ampl_row),
+                "offset_label": box.form.labelForField(box.offs_row).text(),
+                "frequency_enabled": box.freq_spin.isEnabled(), "duty_enabled": box.duty_spin.isEnabled()}
+
     def set_state(self, state: dict) -> None:
         """Ausgaenge immer, Feldwerte nur bei Aenderung am Geraet (siehe
         _FgChannelBox.set_values)."""
@@ -1246,10 +1332,13 @@ class FgControlGroup(QGroupBox):
             except (TypeError, ValueError):
                 continue
             self._emit_waveform(n)
-            self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
-            self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
+            code = box.wave_combo.currentData()
+            if code != WAVE_DC:   # PI-75 a: in DC setzt die Form die Amplitude, Frequenz wirkt nicht
+                self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
+                self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
             self.set_offset.emit(self._device_id, n, box.offs_spin.value())
-            self.set_duty.emit(self._device_id, n, box.duty_spin.value())
+            if code == WAVE_PULSE:   # PI-80 a: Tastverhaeltnis nur bei Puls
+                self.set_duty.emit(self._device_id, n, box.duty_spin.value())
         try:
             self._phase_spin.setValue(float(state.get("phase", self._phase_spin.value())))
         except (TypeError, ValueError):
@@ -2087,6 +2176,12 @@ class PicoscopeControlGroup(QGroupBox):
         self._capture_text = text
         self._retranslate()
 
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (1.0.1, PI-67 a): nur Status und Geraet -- Erfassungen, Trennen und
+        PicoScope 7 nur am Rechner, an dem das Oszilloskop haengt."""
+        self._button_row.hide()
+        _hide_form_row(self._capture_label)
+
     def set_label(self, label: str) -> None:
         self.setTitle(label)
 
@@ -2129,6 +2224,7 @@ class JLinkControlGroup(QGroupBox):
         self._device_id = device_id
         self._color_key: str | None = None
         self._state: dict = {}
+        self._display_only = False
         self.setTitle(label)
         outer = QVBoxLayout(self)
         self._subtitle = QLabel()
@@ -2161,7 +2257,7 @@ class JLinkControlGroup(QGroupBox):
         self._flash_button = IconButton("mdi.download", "")
         for button, action in ((self._check_button, "JLINK_CHECK"), (self._reset_button, "JLINK_RESET"),
                                (self._halt_button, "JLINK_HALT"), (self._go_button, "JLINK_GO")):
-            button.clicked.connect(lambda _c=False, a=action: self.action_requested.emit(self._device_id, a, ""))
+            button.clicked.connect(lambda _c=False, a=action: self._request(a, ""))
         self._flash_button.clicked.connect(self._on_flash_clicked)
         self._buttons = (self._check_button, self._reset_button, self._halt_button, self._go_button,
                          self._flash_button)
@@ -2222,7 +2318,17 @@ class JLinkControlGroup(QGroupBox):
             self, tr("Firmware-Datei wählen"), start,
             tr("Firmware (*.hex *.srec *.s19 *.mot *.elf *.axf *.out);;Alle Dateien (*)"))
         if path:
-            self.action_requested.emit(self._device_id, "JLINK_FLASH", path)
+            self._request("JLINK_FLASH", path)
+
+    def _request(self, action: str, path: str) -> None:
+        if not self._display_only:
+            self.action_requested.emit(self._device_id, action, path)
+
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (1.0.1, PI-67 a): Ziel, Zielspannung und letzte Bedienung -- Pruefen,
+        Reset, Anhalten, Starten und Flashen nur am Rechner, an dem der J-Link haengt."""
+        self._display_only = True
+        self._button_row.hide()
 
     def set_state(self, state: dict) -> None:
         self._state = dict(state)
@@ -2895,6 +3001,8 @@ class ControlTab(QWidget):
         self._sections: dict[str, QWidget] = {}
         # device_id -> (max. Spannung, max. Strom) laut GMAX, siehe set_psu_ratings
         self._psu_ratings: dict[str, tuple[float, float]] = {}
+        # PI-81 a: Netzteile, die beim Verbinden mit Ausgang EIN vorgefunden wurden (set_psu_found_on)
+        self._psu_found_on: dict[str, dict] = {}
         self._section_kind: dict[str, str] = {}
         # Rohe (gespeicherte) Panel-Farbwahl je Geraet -- unabhaengig vom
         # An/Aus-Schalter (siehe set_panel_colors_enabled), damit eine
@@ -2968,6 +3076,8 @@ class ControlTab(QWidget):
             section = PsuControlGroup(device_id, label)
             if device_id in self._psu_ratings:
                 section.set_ratings(*self._psu_ratings[device_id])
+            if device_id in self._psu_found_on:
+                section.set_found_on(self._psu_found_on[device_id])
         elif kind == "hil":
             section = HilControlGroup(device_id, label)
         elif kind == "fg":
@@ -3089,13 +3199,18 @@ class ControlTab(QWidget):
             for widget in (found if isinstance(found, list) else [found]):
                 if isinstance(widget, QWidget):
                     _hide_form_row(widget)
+        if hasattr(section, "set_limits_unknown"):
+            section.set_limits_unknown()
+        if hasattr(section, "set_display_only"):   # Oszilloskop, J-Link: nur Anzeige (PI-67 a)
+            section.set_display_only()
         self._relayout_grid()
 
     def set_remote_controllable(self, device_id: str, allowed: bool) -> None:
-        """Bedienbar nur, wenn der Partner es erlaubt (Freigabe "Steuern", Fernsteuerung dort an, frei)."""
+        """Bedienbar nur, wenn der Partner es erlaubt (Freigabe "Steuern", Fernsteuerung dort an, frei).
+        Anzeige-Kacheln (Oszilloskop, J-Link) haben keine Bedienung -- Umbenennen/Farbe bleiben dort an."""
         section = self._sections.get(device_id)
         if section is not None:
-            section.setEnabled(allowed)
+            section.setEnabled(allowed or hasattr(section, "set_display_only"))
 
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 
@@ -3568,6 +3683,9 @@ class ControlTab(QWidget):
     def set_picoscope_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
+    def set_scpiscope_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)   # Partnerkachel (MainWindow._on_partner_device_online)
+
     def update_picoscope_state(self, device_id: str, status: str, variant: str, serial: str) -> None:
         section = self._sections.get(device_id)
         if isinstance(section, PicoscopeControlGroup):
@@ -3743,6 +3861,16 @@ class ControlTab(QWidget):
         if isinstance(section, PsuControlGroup):
             section.set_manual_state(manual)
 
+    def set_psu_found_on(self, device_id: str, info: object) -> None:
+        """PI-81 a: Chip "beim Verbinden EIN" (info = {"voltage", "current"}) bzw. weg (None)."""
+        if isinstance(info, dict):
+            self._psu_found_on[device_id] = dict(info)
+        else:
+            self._psu_found_on.pop(device_id, None)
+        section = self._sections.get(device_id)
+        if isinstance(section, PsuControlGroup):
+            section.set_found_on(info if isinstance(info, dict) else None)
+
     def _on_preset_save(self, slot: int) -> None:
         devices = {
             device_id: section.capture_state()
@@ -3793,6 +3921,9 @@ class ControlTab(QWidget):
                 widget.setEnabled(True)
             except RuntimeError:
                 pass   # Widget inzwischen geloescht
+        refresh = getattr(section, "refresh_enabled", None)
+        if refresh is not None:
+            refresh()   # z. B. Funktionsgenerator: Tastverhaeltnis nur bei Puls (PI-80 a)
 
     def lease_text(self, device_id: str) -> str:
         """Fuer Pruefungen: angezeigter Belegungshinweis ("" = frei)."""

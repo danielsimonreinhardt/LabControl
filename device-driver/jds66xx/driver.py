@@ -77,6 +77,23 @@ ARBITRARY_FIRST, ARBITRARY_LAST = 101, 160
 
 _REPLY_RE = re.compile(r"^:r(\d+)=(.*?)\.?$")
 
+# Frische-Grenze (s) fuer diese Geraeteart (PI-78 a): so lange darf der letzte gemeldete Zustand alt
+# sein, bevor er als veraltet gilt (Watchdog im Testablauf, "stale" der Freigabe). Hoeher als der
+# Standard von 2 s, weil der Generator ueber eine geteilte serielle Leitung und mit eigenem Takt
+# abgefragt wird (device_worker.FG_POLL_INTERVAL_MS) -- ein Zyklus darf sich verzoegern, ohne
+# dass ein Lauf abbricht. Gelesen von lab_gui/field_catalog.stale_timeout_s.
+STALE_TIMEOUT_S = 5.0
+
+# Abfrage im Betrieb (device_worker._poll_fgs, PI-78 a): je Zyklus immer die Ausgaenge (EIN/AUS
+# beider Kanaele in einem Register), dazu rollierend einige der uebrigen Felder. (Feld, Kanal);
+# Kanal 0 = kanalunabhaengig. Nach einem eigenen Schreibbefehl liest der Worker das betroffene
+# Feld sofort zurueck (siehe readback_fields).
+POLL_FAST_FIELDS: tuple[tuple[str, int], ...] = (("outputs", 0),)
+POLL_SLOW_FIELDS: tuple[tuple[str, int], ...] = tuple(
+    (field, channel) for channel in CHANNELS
+    for field in ("waveform", "frequency", "amplitude", "offset", "duty")
+) + (("phase", 0),)
+
 
 class FunctionGeneratorError(RuntimeError):
     """Fehler bei der Kommunikation mit dem Funktionsgenerator (Verbindung
@@ -392,6 +409,104 @@ class JDS66xx:
             channels=(self.get_channel_state(1), self.get_channel_state(2)),
             phase=self.get_phase(),
         )
+
+
+# -- Einzelfelder fuer die Abfrage im Betrieb (PI-78 a) ---------------------------------
+# Modulfunktionen statt Methoden, damit sie fuer Treiber und Mock gleich gelten (nur die get_*-
+# Methoden werden benutzt).
+
+def read_field(gen, field: str, channel: int = 0):
+    """Ein Feld lesen (eine Registerabfrage): "outputs" -> (bool, bool), "phase" -> Grad, sonst
+    der Wert des Kanals."""
+    if field == "outputs":
+        return gen.get_outputs()
+    if field == "phase":
+        return gen.get_phase()
+    getter = {"waveform": gen.get_waveform, "frequency": gen.get_frequency, "amplitude": gen.get_amplitude,
+              "offset": gen.get_offset, "duty": gen.get_duty}[field]
+    return getter(channel)
+
+
+def readback_fields(field: str, channel: int = 0) -> tuple[tuple[str, int], ...]:
+    """Felder, die nach dem Schreiben von `field` zurueckgelesen werden: das Feld selbst, dazu was
+    das Geraet dabei still anpassen kann (Amplitude wird frequenzabhaengig begrenzt, siehe
+    README; die Form kann die Frequenz klemmen). Offset: in DC setzt set_offset_checked auch die
+    Amplitude (PI-75 a)."""
+    if field in ("outputs", "phase"):
+        return ((field, 0),)
+    if field == "waveform":
+        return (("waveform", channel), ("frequency", channel), ("amplitude", channel))
+    if field in ("frequency", "offset"):
+        return ((field, channel), ("amplitude", channel))
+    return ((field, channel),)
+
+
+# -- DC und Tastgrad (PI-75 a, PI-80 a; gemessen am JDS2915 am 17.11.2026, CH1 ohne Last) ------------
+#
+# DC: Am Ausgang liegt etwa Offset + Amplitude/2 (Amplitude 0/1/2,5/5 V bei Offset 0 -> 0,01/0,47/1,21/
+# 2,41 V; Amplitude 2,5 V bei Offset 1/2,5 V -> 2,29/3,73 V). Sonderfall Amplitude genau 0: der Offset kommt
+# nur zu etwa 1/10 an (Offset 2,5 V -> 0,22 V), mit 0,01 V bzw. 0,1 V Amplitude dagegen 2,61/2,57 V. Deshalb
+# setzt LabControl in DC die Amplitude auf DC_AMPLITUDE_V (kleinster Wert != 0) und gibt die Spannung als
+# Offset vor; der Rest der halben Amplitude (DC_RESIDUAL_V, 5 mV) bleibt.
+# Tastgrad: Rechteck 1 kHz mit 10 % und 99 % ergab jeweils 50 %, Puls 99 %/10 % ergab 98,9 %/9,97 % -- das
+# Register wirkt nur bei Puls. Das Geraet nimmt den Wert in jeder Form an (:ok), er wirkt nur nicht.
+
+DC_AMPLITUDE_V = 0.01
+DC_RESIDUAL_V = DC_AMPLITUDE_V / 2
+DUTY_WAVEFORMS = (WAVE_PULSE,)
+
+
+def duty_refusal(code: int, channel: int) -> str:
+    """Text, warum der Tastgrad bei dieser Form nicht gesetzt wird ("" = Puls, geht)."""
+    if code in DUTY_WAVEFORMS:
+        return ""
+    return (f"Tastgrad wirkt nur bei Kurvenform Puls -- Kanal {channel} steht auf {waveform_name(code)} "
+            f"(erst Kurvenform Puls waehlen)")
+
+
+def amplitude_refusal(code: int, channel: int) -> str:
+    """Text, warum in dieser Form keine Amplitude gesetzt wird ("" = geht)."""
+    if code != WAVE_DC:
+        return ""
+    return (f"In DC gibt es keine Amplitude -- Kanal {channel}: die Spannung ist der Offset "
+            f"(Amplitude bleibt {DC_AMPLITUDE_V:g} V)")
+
+
+def set_waveform_checked(gen, channel: int, code: int) -> None:
+    """Form setzen; bei DC zugleich die Amplitude auf DC_AMPLITUDE_V, damit am Ausgang der Offset liegt."""
+    gen.set_waveform(channel, code)
+    if code == WAVE_DC:
+        gen.set_amplitude(channel, DC_AMPLITUDE_V)
+
+
+def set_amplitude_checked(gen, channel: int, volts: float) -> None:
+    """Amplitude setzen -- in DC abgelehnt (FunctionGeneratorValueError), siehe amplitude_refusal."""
+    check_channel(channel)
+    check_amplitude(volts)
+    refusal = amplitude_refusal(gen.get_waveform(channel), channel)
+    if refusal:
+        raise FunctionGeneratorValueError(refusal)
+    gen.set_amplitude(channel, volts)
+
+
+def set_offset_checked(gen, channel: int, volts: float) -> None:
+    """Offset setzen; in DC ist das die Ausgangsspannung -- steht die Amplitude dort nicht auf DC_AMPLITUDE_V
+    (am Geraet verstellt), wird sie vorher gesetzt."""
+    check_channel(channel)
+    check_offset(volts)
+    if gen.get_waveform(channel) == WAVE_DC and abs(gen.get_amplitude(channel) - DC_AMPLITUDE_V) > 1e-6:
+        gen.set_amplitude(channel, DC_AMPLITUDE_V)
+    gen.set_offset(channel, volts)
+
+
+def set_duty_checked(gen, channel: int, percent: float) -> None:
+    """Tastgrad setzen -- nur bei Puls, sonst FunctionGeneratorValueError (kein stilles Umschalten der Form)."""
+    check_channel(channel)
+    check_duty(percent)
+    refusal = duty_refusal(gen.get_waveform(channel), channel)
+    if refusal:
+        raise FunctionGeneratorValueError(refusal)
+    gen.set_duty(channel, percent)
 
 
 if __name__ == "__main__":

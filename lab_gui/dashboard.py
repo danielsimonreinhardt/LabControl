@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 from field_catalog import LOAD_MODE_SHORT
 from i18n import Translator, tr
 from icons import IconButton
-from jds66xx.driver import waveform_name
+from jds66xx.driver import WAVE_DC, waveform_name
 from microhil_panel import MicroHilPanel
 from no_device_tile import NoDeviceTile, OfflineBadge, offline_group_qss
 from picoscope2000.driver import launch_app as launch_picoscope_app
@@ -773,6 +773,8 @@ class DashboardWidget(QGroupBox):
         if panel is not None:
             from remote_badge import attach
             attach(panel, host)
+            if hasattr(panel, "set_display_only"):   # Oszilloskop: ohne Knoepfe (PI-67 a)
+                panel.set_display_only()
 
     # -- Anordnen mit Uebersicht (arrange_overlay.py) ----------------------------------
 
@@ -1573,6 +1575,10 @@ class DashboardWidget(QGroupBox):
         self._set_online(device_id, online)
 
     @Slot(str, bool)
+    def set_scpiscope_online(self, device_id: str, online: bool) -> None:
+        self._set_online(device_id, online)   # Partnerkachel (MainWindow._on_partner_device_online)
+
+    @Slot(str, bool)
     def set_battsim_online(self, device_id: str, online: bool) -> None:
         self._set_online(device_id, online)
 
@@ -1666,6 +1672,10 @@ class DashboardWidget(QGroupBox):
         for n, (on, ch) in enumerate(zip(state["outputs"], state["channels"]), start=1):
             if not on:
                 panel.set_value(f"fg_ch{n}", tr("aus"))
+                continue
+            if ch["waveform"] == WAVE_DC:
+                # PI-75 a: in DC ist die Spannung der Offset (Amplitude 0,01 V), Frequenz/Amplitude sagen nichts
+                panel.set_value(f"fg_ch{n}", f"{tr(waveform_name(ch['waveform']))}  {ch['offset']:.2f} V")
                 continue
             panel.set_value(
                 f"fg_ch{n}",

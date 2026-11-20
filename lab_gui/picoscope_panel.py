@@ -24,10 +24,12 @@ lab_gui/scope_service.py) und trennt nach 60 s ohne Erfassung von selbst.
 Der Knopf "Trennen" gibt es sofort frei; "PicoScope 7 oeffnen" trennt
 ebenfalls vorher, sonst koennte die App das Geraet nicht oeffnen.
 
-Letzte Erfassung (seit 0.18.0): eine Zeile mit Uhrzeit und Kennwerten der
-letzten Erfassung ueber Netzwerk/MCP und ein Knopf "Kurve", der sie als Bild
+Letzte Erfassung (seit 0.18.0): Knopf "Kurve" in der Statuszeile, der sie als Bild
 zeigt (main_window._show_scope_plot, gezeichnet von scope_plot.py) -- damit
-der Nutzer sieht, was der Assistent gemessen hat.
+der Nutzer sieht, was der Assistent gemessen hat. Uhrzeit und Kennwerte stehen seit 1.0.1
+im Tooltip statt in einer eigenen Zeile: die Zeile machte die Kachel und damit das ganze
+Dashboard nach der ersten Erfassung hoeher (Nutzerhinweis 17.11.2026). Ausfuehrlich zeigt
+sie die Steuerungs-Kachel (control_tab).
 
 Seit 0.21.0 auch fuer SCPI-Oszilloskope (Geraeteart "scpiscope", UNI-T
 MSO1000HD ueber LAN): dieselbe Kachel ohne den Knopf "PicoScope 7 oeffnen"
@@ -76,6 +78,7 @@ class PicoscopePanel(QGroupBox):
         super().__init__()
         self._device_id = device_id
         self._with_launch = with_launch
+        self._display_only = False   # Partnergeraet (set_display_only)
         self._online = True
         self._status = "busy"
         self._variant = ""
@@ -109,27 +112,23 @@ class PicoscopePanel(QGroupBox):
         status_layout.addWidget(self._status_text)
         status_layout.addWidget(self._variant_label)
         status_layout.addStretch()
+        outer.addWidget(status_row)
         # Nur sichtbar, solange der ScopeService das Geraet haelt (status "mcp").
         self._release_button = IconButton("mdi.lan-disconnect", "")   # nur Symbol (Review KN-3 a)
         self._release_button.clicked.connect(lambda: self.release_requested.emit(self._device_id))
         self._release_button.setVisible(False)
-        status_layout.addWidget(self._release_button)
-        outer.addWidget(status_row)
-
-        # Letzte Erfassung ueber Netzwerk/MCP -- erst sichtbar, wenn es eine gibt.
-        capture_row = QWidget()
-        capture_row.setStyleSheet(_button_row_stylesheet(current_palette()))
-        capture_layout = QHBoxLayout(capture_row)
-        capture_layout.setContentsMargins(0, 0, 0, 0)
-        self._capture_label = QLabel()
-        self._capture_label.setWordWrap(True)
+        # Letzte Erfassung ueber Netzwerk/MCP -- erst sichtbar, wenn es eine gibt; Kennwerte im Tooltip,
+        # damit die Kachel gleich hoch bleibt (siehe Modul-Docstring)
+        self._capture_text = ""
         self._plot_button = IconButton("mdi.chart-line", "")
         self._plot_button.clicked.connect(lambda: self.plot_requested.emit(self._device_id))
-        capture_layout.addWidget(self._capture_label, 1)
-        capture_layout.addWidget(self._plot_button)
-        capture_row.setVisible(False)
-        self._capture_row = capture_row
-        outer.addWidget(capture_row)
+        self._plot_button.setVisible(False)
+        # Platz der beiden Symbol-Knoepfe immer freihalten: sonst wird die Kachel hoeher, sobald einer
+        # erscheint, und mit ihr das ganze Dashboard (Nutzerhinweis 17.11.2026)
+        for button in (self._release_button, self._plot_button):
+            policy = button.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            button.setSizePolicy(policy)
 
         # Anders als die uebrigen Dashboard-Kacheln (reine Statusanzeige)
         # erwartet diese Kachel aktive Bedienung -- ein normaler, neutral
@@ -143,7 +142,17 @@ class PicoscopePanel(QGroupBox):
         self._launch_button.setObjectName("picoscopeLaunchButton")
         self._launch_button.set_color_override(current_palette().surface)
         self._launch_button.clicked.connect(self.launch_requested)
-        outer.addWidget(self._launch_button)
+        # Eine Zeile fuer alle Knoepfe: "PicoScope 7 oeffnen" ist ohnehin so hoch wie die Symbol-Knoepfe,
+        # die Kachel bleibt damit so hoch wie vor "Kurve"/"Trennen"
+        action_row = QWidget()   # Stylesheet in _apply_style (mit der Regel fuer den Start-Knopf)
+        self._action_row = action_row
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.addWidget(self._launch_button, 1)
+        action_layout.addStretch()
+        action_layout.addWidget(self._release_button)
+        action_layout.addWidget(self._plot_button)
+        outer.addWidget(action_row)
         # "PicoScope 7 öffnen" nur am PC (Review KN-3, Notiz): im Touch-Profil (Pi) gibt es das Programm nicht
         self._launch_button.setVisible(with_launch and not ThemeManager.instance().touch)
 
@@ -157,12 +166,14 @@ class PicoscopePanel(QGroupBox):
     def _retranslate(self) -> None:
         self._launch_button.setText(tr("PicoScope 7 öffnen"))
         self._status_text.setText(tr(STATUS_TEXT.get(self._status, "Unbekannt")))
-        self._plot_button.setToolTip(tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen"))
+        tip = tr("Letzte Erfassung über Netzwerk/MCP als Bild anzeigen")
+        if self._capture_text:
+            tip = tr("Letzte Erfassung: {summary}", summary=self._capture_text) + "\n" + tip
+        self._plot_button.setToolTip(tip)
         self._release_button.setToolTip(tr("Verbindung für Erfassungen über Netzwerk/MCP sofort trennen"))
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._status_row.setStyleSheet(_button_row_stylesheet(palette))
-        self._capture_row.setStyleSheet(_button_row_stylesheet(palette))
         self._apply_style(palette)
         self._apply_status_icon(palette)
         self._apply_variant_style(palette)
@@ -171,13 +182,22 @@ class PicoscopePanel(QGroupBox):
 
     def _apply_variant_style(self, palette: Palette) -> None:
         self._variant_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
-        self._capture_label.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
 
     def set_last_capture(self, text: str) -> None:
         """Kurztext der letzten Erfassung (scope_plot.summary), z.B.
         "11:31:00 · A 3.35 Vss 1.000 kHz"."""
-        self._capture_label.setText(tr("Letzte Erfassung: {summary}", summary=text))
-        self._capture_row.setVisible(True)
+        self._capture_text = text
+        self._retranslate()
+        self._plot_button.setVisible(not self._display_only)
+
+    def set_display_only(self) -> None:
+        """Kachel eines Partnergeraets (Verbund, 1.0.1 PI-67 a): nur Status und Modell -- Erfassen, Trennen und
+        PicoScope 7 gibt es nur an dem Rechner, an dem das Oszilloskop haengt."""
+        self._display_only = True
+        self._with_launch = False
+        self._launch_button.setVisible(False)
+        self._release_button.setVisible(False)
+        self._plot_button.setVisible(False)
 
     def _apply_status_icon(self, palette: Palette) -> None:
         icon_name = STATUS_ICON.get(self._status, "mdi.help-circle-outline")
@@ -208,6 +228,8 @@ class PicoscopePanel(QGroupBox):
             f"QPushButton#picoscopeLaunchButton:pressed {{"
             f" background-color: {palette.accent_hover}; }}"
         )
+        # Die Knopfzeile hat ein eigenes Stylesheet, das naeher am Knopf liegt und sonst gewinnt
+        self._action_row.setStyleSheet(_button_row_stylesheet(palette) + button_rule)
         if not self._online:
             self.setStyleSheet(offline_group_qss(palette) + button_rule)   # Theme-Farben (seit 0.38.3)
             return
@@ -240,7 +262,7 @@ class PicoscopePanel(QGroupBox):
         self._variant = variant or self._variant
         self._serial = serial or self._serial
         variant, serial = self._variant, self._serial
-        self._release_button.setVisible(status == "mcp")
+        self._release_button.setVisible(status == "mcp" and not self._display_only)
         self._apply_status_icon(current_palette())
         self._retranslate()
         # Nur die kurze Typenbezeichnung sichtbar (Nutzerfeedback: "reicht

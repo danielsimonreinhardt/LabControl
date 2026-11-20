@@ -108,6 +108,17 @@ panels together:
   takes over the values set on the device. **When LabControl is closed, every
   power supply is released the same way** (1 V, 0 A, output ON), so that it is
   usable by hand afterwards.
+- **Chip "ON when connected"**: If LabControl finds a power supply with output
+  ON and a current limit above 0 A when it starts or reconnects, the tile (also
+  at the linked partner) shows a yellow chip, the setpoints are in the tooltip.
+  Nothing is switched. The chip disappears as soon as the power supply is
+  switched via LabControl or reports output OFF. The release state on exit
+  (1 V, 0 A, output ON) does not trigger it.
+- **Not reached**: If a device was connected in this session and is
+  disconnected or does not answer at "All off", its output is unknown.
+  LabControl reports it in the status bar, the log, the answer of MCP `all_off`
+  (`unreachable`) and the report of an aborted test run ("Not reachable
+  (output unknown)") – check the device by hand.
 
 ### Function generator (JDS2915 / JDS66xx)
 
@@ -126,6 +137,17 @@ Two identical channel boxes (channel 1 and 2) side by side:
 - The **test sequence** offers actions for frequency, amplitude, offset,
   duty cycle, phase, the shapes sine/square/pulse/triangle/DC and output
   ON/OFF; the channel is chosen in the row.
+- **DC**: The box only shows **Voltage** (= offset), frequency and duty
+  cycle are locked. When switching to DC, LabControl sets the amplitude to
+  0.01 V, because in DC the device outputs about offset + amplitude/2, and
+  with an amplitude of exactly 0 only about a tenth of the offset (measured
+  on the JDS2915). So the output is the voltage + 5 mV. "Set amplitude" is
+  rejected in DC.
+- **Duty cycle** only with **pulse**: with square the device stays at 50 %.
+  Otherwise the field is locked; "Set duty cycle" from a test sequence, MCP
+  or the linked partner is rejected for other shapes (the shape is never
+  switched silently). If the shape at that point of a sequence is known, the
+  sequence does not start at all.
 - The device is found through its CH340 USB-serial converter. Because that
   converter also sits in unrelated devices, a query checks that a function
   generator really answers. A powered-on device is therefore detected up
@@ -271,7 +293,8 @@ asking first if something is already loaded or entered), **Load** and **Save**.
   row type (see below). Clicking the button itself inserts a new action
   step directly.
 - **"–" button**: removes the selected row.
-- **Up/down arrows**: move the selected row.
+- **Up/down arrows**: move the selected row. With the mouse: grab a row by its
+  number (column “#”) and drag it to the new position.
 - **Puzzle piece with plus** ("Save block…"): saves a selected,
   contiguous range of rows as a reusable **block** in its own file
   (folder `blocks/`). The dialog checks that the chosen range is
@@ -344,6 +367,26 @@ them or require an empty memory. A mismatch counts as a violated check and
 aborts the run. "Read DID" returns the value of the chosen element for a
 range check and for a variable (conditions in "If"/"While").
 
+### Oscilloscope: Arm and Wait for capture
+
+The **Oscilloscope** (PicoScope) and the **Oscilloscope (LAN)** (UNI-T
+MSO1000HD) offer two actions to capture an event that a later step causes
+(e.g. switching on with 12 V):
+
+- **Arm**: **"Oscilloscope parameters…"** sets channel (also the trigger
+  source), range (±V at the probe tip), probe, coupling, edge, level,
+  window and pre-trigger. The step is done as soon as the oscilloscope waits
+  for the trigger; the following steps keep running.
+- **Wait for capture**: maximum time, measurement (maximum, peak-to-peak,
+  frequency, rise time …) and channel. Without a trigger within the maximum
+  time the step fails. The measurement can be checked and stored in a
+  variable; the report shows the curve as an image and names the CSV file.
+- Stop, errors and the end of the run cancel a capture that is still armed
+  and release the oscilloscope.
+- Not combined with the measurement actions (Maximum … RMS) on the same
+  PicoScope in one sequence; only in the window, not on the partner.
+  Sequences with these steps are saved in format 5.
+
 ### Flow control
 
 The "+" menu additionally offers:
@@ -379,6 +422,71 @@ The "+" menu additionally offers:
 - **Set variable / Increase variable**: creates a run variable resp.
   changes its value — useful as a counter or to query conditions later
   in the sequence.
+- **Wait since action**: waits until at least the set time has passed
+  since the last execution of an action on a device (columns: device,
+  action, "≥ … s"), e.g. ≥ 10 s since "Output OFF" before switching on
+  again.
+  - Reference: the last **successful** switching through LabControl –
+    from this run, the tile, a preset, MCP/REST, the link partner or
+    ALL OFF. The device's front panel does not count.
+  - It is remembered on the computer the device is connected to; the
+    link partner receives the age of the switching with the regular sync.
+  - If nothing is known (not switched since LabControl started, no
+    connection to the partner), the step waits the **full time**.
+  - Device "(automatic)" counts for every device of that kind; partner
+    devices ("@host/…") and roles work as in an action row.
+  - The report notes when and where the last switching came from and the
+    actual waiting time.
+- **Confirmation**: pauses the run and shows a prompt with the row's text
+  in the LabControl window.
+  - **Continue** resumes, **Cancel** (also Escape/closing) acts like
+    **Stop** (abort block or shutdown, see below).
+  - The prompt is not modal: ALL OFF and Stop stay usable.
+  - Visible over the network/MCP ("waiting" in `/api/v1/runs/{id}`), but
+    confirmable **only in the window**.
+  - Without a window (`labcontrol run`) a sequence with a confirmation
+    does not start (exit 3).
+  - Sequences with these two steps are saved in format 4; older versions
+    refuse them instead of silently skipping the confirmation.
+- **Wait for release**: pauses the run until a **program** releases it
+  (columns: identifier, maximum time "≤ … s") – the counterpart to the
+  confirmation, which only a person gives in the window.
+  - Release via `POST /api/v1/runs/{id}/continue` or the MCP tool
+    `continue_run`, only with control permission (paired program or
+    "Claude (MCP) may control"). A given identifier or step number must
+    match the waiting step.
+  - Without a release within the maximum time the step fails (abort block
+    or shutdown, see below).
+  - The report notes who released it and when.
+  - Needs network sharing: without it or without a window
+    (`labcontrol run`) the sequence does not start. Format 6.
+- **Abort block … End**: steps that run only when the run is aborted –
+  never when it ends normally. Always added at the end of the sequence
+  (with "Power supply – Output OFF" as the first step); at most one per
+  sequence, top level only.
+  - Runs on: Stop (button, REST/MCP), step error, a violated check or
+    monitor limit with "abort", "Cancel" at a confirmation, the maximum
+    time of "Wait for release", connection loss in the Verbund.
+  - Allowed: device actions that set an output or setpoint (power supply,
+    load, microHIL, function generator, battery simulator, CAN/rest bus)
+    and **Wait** – in any order, e.g. generator off, wait 1 s, 24 V off,
+    12 V off. Not allowed: checks, read actions, confirmation, release,
+    oscilloscope, J-Link, UDS, XCP, arbitrary signal, variables, blocks.
+    At most 60 s.
+  - Devices not named in the block stay as they are.
+  - If a step fails (device gone, refused), the remaining steps still run;
+    afterwards the devices switched by the sequence are turned off for
+    safety (standard shutdown).
+  - Safety shutdown and ALL OFF do not run the block.
+  - Sequences with an abort block are saved in format 7.
+
+**Off on abort** (bottom, next to the report button): shows what an abort
+turns off. Without an abort block these are the devices the sequence
+switches (actions, including building blocks and roles), plus the device
+that triggers the abort (e.g. the source of a violated check or monitor).
+Devices that are only read – such as a power supply measured only in
+"Monitor" – stay as they are, also at the Verbund partner. With an abort
+block it shows the block's devices.
 
 A block start and its "End" are always inserted as a pair. The table
 shows nesting as indentation; if the structure is unbalanced (e.g. a
@@ -432,12 +540,16 @@ times — otherwise a check can fail incorrectly.
   running, the table is locked, the current step is highlighted and
   shown in the status line (including the current loop/while iteration,
   if applicable).
-- **Stop** (square): aborts the run and immediately switches off all outputs
-  (safety shutdown).
+- **Stop** (square): aborts the run: the abort block runs first; without
+  one, the devices switched by the sequence are turned off. To turn
+  everything off: **ALL OFF**.
 - **Report button** (enabled after every run): opens a post-run report
   as an HTML page in the browser, or exports it as PDF. The report
   contains the sequence, all check results, and a chart of the recorded
-  measurements.
+  measurements; after an abort also "Shutdown on abort" (abort block or
+  standard shutdown, the block's steps with their result, devices turned
+  off and not reachable). The same is in `get_run` and the result JSON as
+  `shutdown`.
 - With desktop notifications enabled (see Settings), a system
   notification reports the run finishing or failing, even if the window
   is not in the foreground.
@@ -489,7 +601,7 @@ time-window-limited ring buffer of the live charts.
   (1024 × 600). Larger text and controls, larger buttons in the navigation
   on the left, the overview (dashboard) as its own page instead of a fixed
   strip, a swipeable device status at the top and the **Arrange** button (move cross).
-  The full-screen button at the top exists on the PC too; on the Raspberry
+  The full-screen button at the top exists only on the PC; on the Raspberry
   Pi LabControl starts in full screen. On Linux there is also a power button: after a
   confirmation it shuts the computer down or restarts it, LabControl
   releases the power supplies first. Number fields in the tiles have large
@@ -787,7 +899,11 @@ the tile title (tooltip: computer name). What does not work over the link
 (manual mode, OVP/OCP and memory slots of the power supply, PWM and 12 V outputs
 of the microHIL, the battery simulator's limit, sending CAN frames) is missing
 from the partner tile; the partner's CAN bus is shown in the overview only.
-**Both computers show the same:** a tile's fields (voltage setpoint, current
+**The partner's oscilloscopes and J-Link** only show their state: PicoScope and
+UNI-T with status (free, busy, connected (MCP)) and model, the J-Link with target,
+target voltage and the last operation with its result. Capturing, flashing,
+checking and reset only work on the computer the device is plugged into; Claude
+sees them in the device list but cannot control them. **Both computers show the same:** a tile's fields (voltage setpoint, current
 limit, load mode and setpoint, function generator, cell values) follow the
 device, no matter on which computer, via Claude or in a test sequence it was
 operated; a field someone is typing in is left alone. Name and tile colour belong
@@ -816,8 +932,10 @@ notice reminds you. Which devices may be read and controlled is still set by
 each computer in its own share list.
 
 **In a link, ALL OFF acts on both computers**: the button, ALL OFF via MCP or
-the network and a safety shutdown also switch everything off at the partner.
-Stopping a test sequence or a failed step only affects the own computer. The
+the network and a safety shutdown without a running test sequence also switch
+everything off at the partner. Stop, error or safety shutdown of a test sequence
+only turn off the devices the sequence switches and the triggering one – also
+those of the partner, nothing else there. The
 bar at the top shows the link as a chip "⇄ Pi" (connected) or "✕ Pi"
 (disconnected). Closing the app switches nothing off at the partner. ALL OFF
 also aborts a running test sequence, so that its next step does not switch the
@@ -831,8 +949,10 @@ station). On start it **reserves** the partner devices the sequence operates:
 at the partner their tiles show "reserved by <computer> · <sequence>" and are
 locked (manual control, ALL OFF and the safety shutdown stay available), and
 operations from anywhere else are rejected. The control station reports every
-second; **if that stops for 3 seconds** (network gone, crash), the partner
-switches the reserved devices off and the control station aborts the sequence.
+second; **if that stops for 3 seconds** (network gone, crash), the control
+station aborts the sequence and the partner lifts the reservation and switches
+the reserved devices off. Exception: devices without a tick in the column "Off
+on link loss" (there under Settings → Network) stay as they are.
 After the sequence ends the reservation is lifted. Connect Pi and PC by cable,
 not via Wi-Fi. The link carries the operations of the partner tile (setpoints,
 outputs, channels), but not arbitrary waveforms, read steps or CAN messages –
@@ -853,7 +973,9 @@ and forwards commands for them to the partner. This needs “Claude (MCP) may
 control” ticked at the PC; the partner needs nothing else.
 Before the first command the PC reserves the device at the partner ("reserved
 by PC · Claude (MCP)") and reports every second; if that stops for 3 seconds,
-the partner switches the device off. The reservation ends after 10 minutes
+the reservation ends and the device is switched off (unless "Off on link loss"
+is unticked). Otherwise it
+ends after 10 minutes
 without a command from Claude, on ALL OFF, a safety shutdown, the start of a
 test sequence or when the link is changed; nothing is switched off then. Only
 callers on the same computer get the partner devices.
@@ -876,8 +998,12 @@ out – remove it on one of them.
 For every known device, the Settings tab offers its own section of
 limits (max. voltage/current, plus max. power for the load). If a live
 measurement exceeds an enabled limit **of that specific device**, the
-software immediately switches off **all** outputs — regardless of
-whether a testcase is currently running.
+software immediately switches off:
+
+- **without a test sequence** all outputs (also at the Verbund partner);
+- **during a test sequence** only the devices the sequence switches and the
+  triggering device (e.g. the power supply with too much current). Devices
+  that are only read stay on. The abort block does not run.
 
 - A triggered alarm "latches": it stays active until confirmed via the
   **Acknowledge** button in the red banner at the top of the window —
@@ -899,7 +1025,8 @@ whether a testcase is currently running.
 - **Power supply/load interlock** (Settings → Safety): pairs of a power
   supply and a load connected to the same point. In a test sequence,
   "Output ON" is rejected while the other device of the pair is on or its
-  state is unknown; the run then ends with an error and ALL OFF. A sequence
+  state is unknown; the run then ends with an error (abort block or shutdown
+  of the sequence's devices). A sequence
   can lift this in "Test sequence properties…" (source/sink). Tiles, presets
   and the network are not interlocked. Only devices of this computer count.
 
@@ -914,7 +1041,7 @@ device with icon and short name: ✓ connected (green), ✕ disconnected
 (red), Ⓗ manual control (orange), e.g. "✓ PSU1". The full name is in the
 tooltip; clicking the chips opens "Device status" with all devices. The
 connection is retried automatically every 3 seconds as long as a device
-is unreachable. The full-screen button and the "ALL OFF" button follow on
+is unreachable. The full-screen button (not in touch mode) and the "ALL OFF" button follow on
 the right. App messages appear briefly as a notice at the bottom of the
 window.
 

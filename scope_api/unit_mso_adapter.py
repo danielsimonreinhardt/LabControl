@@ -114,15 +114,16 @@ class UnitMsoScope:
 
     # -- Erfassung --------------------------------------------------------------
 
-    def acquire(self, request: AcquireRequest) -> Capture:
+    def acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture:
+        """cancel/on_armed/on_triggered: scharf schalten (PI-72 a), siehe base.ScopeDriver."""
         try:
-            return self._acquire(request)
+            return self._acquire(request, cancel, on_armed, on_triggered)
         except MSO1000HDValueError as exc:
             raise ScopeError("device_error", f"Gerät hat abgelehnt: {exc}") from exc
         except MSO1000HDError as exc:
             raise ScopeError("device_error", str(exc)) from exc
 
-    def _acquire(self, request: AcquireRequest) -> Capture:
+    def _acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture:
         warnings: list[str] = []
         numbers: dict[str, int] = {}
         for ch in request.channels:
@@ -198,7 +199,9 @@ class UnitMsoScope:
             dev.clear_errors()
 
         # -- Erfassen --------------------------------------------------------------
-        forced = self._run_single(trig.mode, trig.timeout_s, H_DIVS * actual_scale_s)
+        forced = self._run_single(trig.mode, trig.timeout_s, H_DIVS * actual_scale_s, cancel, on_armed)
+        if on_triggered is not None:
+            on_triggered()   # Erfassung im Gerät fertig, ab hier nur noch Lesen (dauert bei 250 kS als ASCII)
 
         # -- Daten -----------------------------------------------------------------
         channels: dict[str, ChannelData] = {}
@@ -289,14 +292,23 @@ class UnitMsoScope:
         possible = int(rate_max * H_DIVS * scale)
         return scale, depth[1], min(needed, depth[0], max(possible, 2))
 
-    def _run_single(self, mode: str, timeout_s: float, window_s: float) -> bool:
+    def _run_single(self, mode: str, timeout_s: float, window_s: float, cancel=None, on_armed=None) -> bool:
         """Startet eine Einzelerfassung und wartet auf STOP. True = erzwungen
-        (FORCe statt echter Trigger, bei none und auto ohne Flanke)."""
+        (FORCe statt echter Trigger, bei none und auto ohne Flanke).
+        Scharf schalten (PI-72 a): on_armed() beim ersten Status ungleich STOP (spaetestens vor der
+        Rueckkehr), cancel bricht mit STOP ab. HARDWARE-PRUEFUNG: nur gegen den Simulator geprueft."""
         dev = self._device
         dev.run()
         started = time.monotonic()
         armed_seen = False
         forced = False
+
+        def armed() -> None:
+            nonlocal on_armed
+            if on_armed is not None:
+                callback, on_armed = on_armed, None
+                callback()
+
         # none: sofort erzwingen; sonst Wartezeit + ein Fenster (Pre-Trigger füllen).
         trigger_deadline = started if mode == "none" else started + timeout_s + window_s
         hard_deadline = trigger_deadline + window_s + WAIT_MARGIN_S
@@ -305,8 +317,13 @@ class UnitMsoScope:
             now = time.monotonic()
             if status != "STOP":
                 armed_seen = True
+                armed()
             elif armed_seen or now - started > ARM_GRACE_S + window_s:
+                armed()
                 return forced
+            if cancel is not None and cancel.is_set():
+                dev.stop()
+                raise ScopeError("cancelled", "Erfassung abgebrochen.")
             if now >= trigger_deadline and not forced:
                 if mode == "single":
                     dev.stop()

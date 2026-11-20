@@ -18,7 +18,9 @@ Netzwerk-Freigabe -- wer das spaeter angeht, faengt bei diesem Kommentar an.
 """
 from __future__ import annotations
 
+from jds66xx.driver import STALE_TIMEOUT_S as FG_STALE_TIMEOUT_S
 from microhil.driver import AIN_COUNT, IN_COUNT, OUT_COUNT, PWR12_COUNT, RELAY_COUNT
+from verbund_ids import split as split_device_id
 
 # -- Plotbare Signale (Verlauf-Tab) ---------------------------------------
 # field_key -> (deutscher Basis-Anzeigename, Einheit); die Einheit ist
@@ -59,12 +61,22 @@ LOAD_STATE_FIELDS = {"mode": ("Modus", ""), "input": ("Eingang", ""),
                      "setpoint": ("Sollwert", ""), "setpoint_mode": ("Sollwert-Modus", "")}
 # output/set_* seit 0.52.0: der Verbund-Partner zeigt damit Ausgangszustand und Sollwerte in seiner Kachel
 PSU_STATE_FIELDS = {"mode": ("Modus", ""), "output": ("Ausgang", ""),
-                    "set_voltage": ("Sollspannung", "V"), "set_current": ("Strombegrenzung", "A")}
+                    "set_voltage": ("Sollspannung", "V"), "set_current": ("Strombegrenzung", "A"),
+                    # 1.0.1 (PI-81 a): 1 = beim Verbinden mit Ausgang EIN vorgefunden, bis ueber LabControl geschaltet
+                    "found_on": ("Beim Verbinden EIN", "")}
 CAN_STATE_FIELDS = {
     "tx_count": ("Gesendet", ""),
     "rx_count": ("Empfangen", ""),
 }
-PICOSCOPE_STATE_FIELDS = {"status": ("Status", "")}
+# model/serial seit 1.0.1 (PI-67 a): der Verbund-Partner zeigt damit dieselbe Kachel
+PICOSCOPE_STATE_FIELDS = {"status": ("Status", ""), "model": ("Modell", ""), "serial": ("Seriennummer", "")}
+# J-Link (1.0.1, PI-67 a): Stand der letzten Bedienung (jlink_service), fuer die Anzeige beim Verbund-Partner.
+# result: 1 = ok, 0 = Fehler, leer = noch keine Bedienung; busy: 1 waehrend eine Bedienung laeuft.
+JLINK_STATE_FIELDS = {
+    "target": ("Ziel", ""), "interface": ("Schnittstelle", ""), "speed": ("Takt", "kHz"), "core": ("Kern", ""),
+    "vtref": ("Zielspannung", "V"), "busy": ("Läuft", ""), "action": ("Aktion", ""), "result": ("Ergebnis", ""),
+    "message": ("Meldung", ""), "time": ("Uhrzeit", ""), "file": ("Datei", ""),
+}
 # Funktionsgenerator: je Kanal Ausgang (0/1), Wellenform (Text), Frequenz,
 # Amplitude (Spitze-Spitze), Offset, Tastverhaeltnis; dazu die Phase. Nicht im
 # Verlauf-Tab plotbar (siehe KIND_FIELDS) -- es sind Einstellungen, keine
@@ -116,6 +128,7 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
     **{("scpiscope", f): v for f, v in PICOSCOPE_STATE_FIELDS.items()},
     **{("fg", f): v for f, v in FG_STATE_FIELDS.items()},
     **{("battsim", f): v for f, v in BATTSIM_STATE_FIELDS.items()},
+    **{("jlink", f): v for f, v in JLINK_STATE_FIELDS.items()},
 }
 
 # Anzeigereihenfolge je Geraeteart -- bestimmt, in welcher Reihenfolge die
@@ -124,14 +137,37 @@ FIELD_DEFS: dict[tuple[str, str], tuple[str, str]] = {
 # etc.), damit ein externes Display und die Kachel daneben gleich aussehen.
 KIND_FIELD_ORDER: dict[str, list[str]] = {
     "load": ["voltage", "current", "power", "mode", "input", "setpoint", "setpoint_mode"],
-    "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current"],
+    "psu": ["voltage", "current", "mode", "output", "set_voltage", "set_current", "found_on"],
     "can": ["tx_count", "rx_count"],
     "hil": list(HIL_SIGNAL_FIELDS),
-    "picoscope": ["status"],
-    "scpiscope": ["status"],
+    "picoscope": list(PICOSCOPE_STATE_FIELDS),
+    "scpiscope": list(PICOSCOPE_STATE_FIELDS),
+    "jlink": list(JLINK_STATE_FIELDS),
     "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
     "battsim": list(BATTSIM_STATE_FIELDS),
 }
+
+# Geraete, die nur bei einer Aenderung melden (Zustand statt laufender Messwerte): ihr Stand veraltet nicht
+# (live_state.snapshot setzt kein "stale"), sonst galten sie nach 2 s beim Verbund-Partner als getrennt.
+STATE_ONLY_KINDS = ("picoscope", "scpiscope", "jlink")
+
+# Frische-Grenze (s) je Geraeteart (PI-78 a): ab wann der letzte Wert eines Geraets als veraltet gilt --
+# Watchdog im Testablauf (safety), Bedingungen/Pruefungen (testcase_runner) und "stale" der Freigabe
+# (live_state; beim Verbund-Partner kommt es so mit der Kachel an). Standard 2 s; eine Geraeteart, die
+# ihre Werte langsamer liefert, nennt ihre Grenze im Treiber.
+DEFAULT_STALE_TIMEOUT_S = 2.0
+KIND_STALE_TIMEOUT_S: dict[str, float] = {"fg": FG_STALE_TIMEOUT_S}
+
+
+def kind_stale_timeout_s(kind: str) -> float:
+    return KIND_STALE_TIMEOUT_S.get(kind, DEFAULT_STALE_TIMEOUT_S)
+
+
+def stale_timeout_s(device_id: str) -> float:
+    """Frische-Grenze eines Geraets aus seiner ID ("fg:COM21", auch Partnergeraete
+    "@raspberrypi/fg:COM21" -- die Art steht vor dem ':')."""
+    _host, local_id = split_device_id(device_id)
+    return kind_stale_timeout_s(local_id.partition(":")[0])
 
 # Last-Funktionscode -> kompakte Anzeige. get_function() liefert auf echter
 # Hardware bereits die Kurzform (CC/CV/CR/CW, siehe korad_kel102/README.md

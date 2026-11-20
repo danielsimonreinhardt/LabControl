@@ -33,6 +33,9 @@ COUPLINGS = ("DC", "AC")
 # Obergrenze für das Warten auf einen Trigger -- hält den Scope-Thread nicht
 # beliebig lange fest (ALLE AUS und andere Anfragen warten sonst mit).
 MAX_TRIGGER_TIMEOUT_S = 30.0
+# Scharf geschaltete Erfassung (arm, PI-72 a/PI-73 a): wartet im Hintergrund, abbrechbar
+# (release, Laufende) -- darf deshalb länger warten als eine blockierende Erfassung.
+MAX_ARM_TIMEOUT_S = 3600.0
 
 
 class ScopeError(RuntimeError):
@@ -40,7 +43,8 @@ class ScopeError(RuntimeError):
 
     Codes: invalid_request, setting_not_supported, level_out_of_range,
     duration_too_long, trigger_timeout, device_error, unknown_capture,
-    unknown_measurement. `details` landet unverändert in der Antwort, z.B. der
+    unknown_measurement, cancelled (scharfe Erfassung abgebrochen), capture_pending
+    (Erfassung noch scharf, noch keine Daten), scope_armed (Gerät wartet auf einen Trigger). `details` landet unverändert in der Antwort, z.B. der
     nächste erlaubte Wert.
     """
 
@@ -165,10 +169,11 @@ class AcquireRequest:
     trigger: Trigger = field(default_factory=Trigger)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AcquireRequest":
+    def from_dict(cls, data: dict, max_timeout_s: float = MAX_TRIGGER_TIMEOUT_S) -> "AcquireRequest":
         """Baut eine Anfrage aus JSON (HTTP/MCP) und prüft Form und Typen.
 
         Geräteabhängige Grenzen (Bereiche, Speicher) prüft erst der Adapter.
+        max_timeout_s: Obergrenze für trigger.timeout_s (scharf schalten: MAX_ARM_TIMEOUT_S).
         """
         if not isinstance(data, dict):
             raise ScopeError("invalid_request", "Anfrage muss ein JSON-Objekt sein.")
@@ -238,9 +243,9 @@ class AcquireRequest:
                                  f"Trigger-Quelle {source!r} muss einer der erfassten Kanäle sein.",
                                  allowed=sorted(seen))
         timeout = _positive(raw_trigger.get("timeout_s", 1.0), "trigger.timeout_s")
-        if timeout > MAX_TRIGGER_TIMEOUT_S:
-            raise ScopeError("invalid_request", f"'trigger.timeout_s' höchstens {MAX_TRIGGER_TIMEOUT_S:g} s.",
-                             max=MAX_TRIGGER_TIMEOUT_S)
+        if timeout > max_timeout_s:
+            raise ScopeError("invalid_request", f"'trigger.timeout_s' höchstens {max_timeout_s:g} s.",
+                             max=max_timeout_s)
         trigger = Trigger(
             mode=mode,
             source=source if mode != "none" else None,
@@ -326,12 +331,17 @@ class Capture:
 
 
 class ScopeDriver(Protocol):
-    """Was ein Adapter können muss. Aufrufe kommen aus EINEM Thread (ScopeService)."""
+    """Was ein Adapter können muss. Aufrufe kommen aus EINEM Thread je Gerät (ScopeService).
+
+    acquire: cancel (threading.Event) bricht das Warten auf den Trigger ab (ScopeError "cancelled"),
+    on_armed() ruft der Adapter, sobald das Gerät auf den Trigger wartet, on_triggered(), sobald die
+    Erfassung im Gerät fertig ist und nur noch gelesen wird (scharf schalten, PI-72 a).
+    """
 
     scope_id: str
 
     def capabilities(self) -> Capabilities: ...
 
-    def acquire(self, request: AcquireRequest) -> Capture: ...
+    def acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture: ...
 
     def close(self) -> None: ...

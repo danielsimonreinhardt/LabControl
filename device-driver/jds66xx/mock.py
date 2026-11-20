@@ -7,12 +7,21 @@ Funktionen wie im echten Treiber geprueft, damit der Mock dieselben Eingaben
 ablehnt (FunctionGeneratorValueError) -- ein Mock, der alles schluckt, wuerde
 Fehler verstecken, die erst an echter Hardware auffallen. Nicht simuliert wird
 die waveformabhaengige Frequenzklemmung des Geraets.
+
+Nachgebildet (seit 1.0.1, PI-75 a/PI-80 a, Messung am JDS2915 vom 17.11.2026):
+was am Ausgang anliegt -- output_dc_voltage() in DC (Offset + Amplitude/2,
+bei Amplitude genau 0 nur etwa 1/10 des Offsets) und effective_duty() (der
+Tastgrad wirkt nur bei Puls, Rechteck bleibt 50 %). Wie das Geraet nimmt der
+Mock jeden Tastgrad an, auch wenn er nicht wirkt.
 """
 from __future__ import annotations
 
 from jds66xx.driver import (
     CHANNELS,
+    WAVE_DC,
+    WAVE_PULSE,
     WAVE_SINE,
+    WAVE_SQUARE,
     ChannelState,
     State,
     check_amplitude,
@@ -119,6 +128,32 @@ class MockJDS66xx:
     def set_phase(self, degrees: float) -> None:
         check_phase(degrees)
         self._phase = (round(degrees * 10) % 3600) / 10.0
+
+    # -- Was am Ausgang anliegt (Messung 17.11.2026, nur Mock) ----------------------
+
+    # Amplitude genau 0 in DC: Offset 2,5 V ergab 0,22 V
+    DC_ZERO_AMPLITUDE_FACTOR = 0.22 / 2.5
+
+    def output_dc_voltage(self, channel: int) -> float | None:
+        """Gleichspannung am Ausgang (Leerlauf) in DC, None in anderen Formen. Wie gemessen: Offset +
+        Amplitude/2, bei Amplitude genau 0 kommt der Offset nur zu etwa 1/10 an."""
+        check_channel(channel)
+        c = self._channels[channel]
+        if c.waveform != WAVE_DC:
+            return None
+        if c.amplitude == 0.0:
+            return round(c.offset * self.DC_ZERO_AMPLITUDE_FACTOR, 4)
+        return round(c.offset + c.amplitude / 2.0, 4)
+
+    def effective_duty(self, channel: int) -> float | None:
+        """Tastgrad am Ausgang: der eingestellte nur bei Puls, Rechteck immer 50 %, sonst None."""
+        check_channel(channel)
+        c = self._channels[channel]
+        if c.waveform == WAVE_PULSE:
+            return c.duty
+        if c.waveform == WAVE_SQUARE:
+            return 50.0
+        return None
 
     # -- Gesamtzustand -----------------------------------------------------------
 

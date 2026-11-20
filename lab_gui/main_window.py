@@ -7,10 +7,11 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 
 import qtawesome as qta
 from PySide6.QtCore import QByteArray, QEvent, QMetaObject, QPoint, QThread, QTimer, QUrl, Q_ARG, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -34,6 +35,7 @@ import app_logging
 import data_store
 import instruments
 import remote_actions
+import switch_log
 import system_power
 import verbund_ids
 from control_tab import ControlTab
@@ -69,7 +71,7 @@ from testcase_model import TestStep, is_arb_action
 from testcase_tab import TestcaseTab
 from theme import METRICS, PANEL_COLOR_ORDER, Palette, ThemeManager, no_own_background
 from timeline_tab import TimelineTab
-from touch_ui import FONT_SCALE, NavBar, TopBar, suggest_touch, touch_icon_path
+from touch_ui import FONT_SCALE, TOP_BUTTON_H_PC, TOUCH_H, NavBar, TopBar, suggest_touch, touch_icon_path
 from touch_ui import sizer as touch_sizer
 from version import __version__
 
@@ -110,7 +112,8 @@ class MainWindow(QMainWindow):
     # Signal statt direktem Methodenaufruf, damit die Verbindung ueber eine
     # Queued Connection in den Worker-Thread gelangt. Testablauf-Aktionen gehen
     # seit 0.58.0 ueber die RunSession (run_session.py).
-    _dispatch_share_action = Signal(int, str, str, str, float, int)  # id, device_id, kind, action, value, channel
+    # id, device_id, kind, action, value, channel, Herkunft (MCP/REST, Programm, Verbund -- PI-77 a)
+    _dispatch_share_action = Signal(int, str, str, str, float, int, str)
 
     # An den DeviceWorker weitergereichte Sicherheitsabschaltung (Watchdog-Trip,
     # Stop-Button, Schrittfehler, manueller Panic-Button) -- eigenes Signal aus
@@ -121,6 +124,7 @@ class MainWindow(QMainWindow):
     _restbus_push = Signal(dict)                     # FT-6: Restbus-Einstellungen an den Worker
     # Nur bestimmte Geraete abschalten (abgelaufene Verbund-Belegung, PI-26 a): device_ids, reason
     _request_devices_off = Signal(list, str)
+    _request_devices_off_tagged = Signal(int, list, str)   # PI-79 a: POST /devices-off vom Verbund-Partner
     # PI-28: Partner fuehrt einen Batterie-Simulator -> hier kein 0x130 von Hand/aus Ablaeufen
     _request_partner_battsim = Signal(bool)
 
@@ -225,7 +229,14 @@ class MainWindow(QMainWindow):
         self._status_layout = QHBoxLayout(self._status_container)
         self._status_layout.setContentsMargins(0, 0, 0, 0)
         self._status_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # Sicherheits-Chip steht fest links vor dem wischbaren Bereich (TopBar.adopt, leading)
+        # Uhr-Chip (hh:mm:ss, Nutzerwunsch 17.11.2026) und Sicherheits-Chip stehen fest links vor dem
+        # wischbaren Bereich (TopBar.adopt, leading)
+        self._clock_chip = QLabel()
+        self._clock_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(250)   # Sekundenwechsel hoechstens 1/4 s spaet
+        self._clock_timer.timeout.connect(self._tick_clock)
+        self._clock_timer.start()
         self._safety_status_label = QLabel()
         self._safety_status_label.installEventFilter(self)
         self._safety_status_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -339,6 +350,8 @@ class MainWindow(QMainWindow):
             scpi_scopes=self._settings.scpi_scopes,
         )
         self._worker.moveToThread(self._thread)
+        # PI-77 a: letzte Schaltung je Geraet/Aktion -- der Verbund-Partner liest sie ueber die Freigabe mit
+        self._live_state.switch_log = self._worker.switch_log
 
         self._worker.device_added.connect(self._registry.on_device_added)
         self._worker.device_removed.connect(self._registry.on_device_removed)
@@ -410,6 +423,9 @@ class MainWindow(QMainWindow):
         self._worker.load_function_state.connect(self.dashboard.set_load_mode)
         self._worker.psu_output_state.connect(self.control_tab.set_psu_output_state)
         self._worker.psu_setpoints.connect(self.control_tab.set_psu_setpoints)
+        # PI-81 a: Netzteil beim Verbinden mit Ausgang EIN vorgefunden -> Chip in der Kachel, Feld fuer den Partner
+        self._worker.psu_found_on.connect(self.control_tab.set_psu_found_on)
+        self._worker.psu_found_on.connect(self._live_state.on_psu_found_on)
         # PI-43 b: Last-Sollwert und -Modus folgen dem Geraet, egal wer bedient hat
         self._worker.load_setpoint.connect(self._live_state.on_load_setpoint)
         self._worker.load_setpoint.connect(self.control_tab.set_load_setpoint)
@@ -472,6 +488,8 @@ class MainWindow(QMainWindow):
         self._worker.psu_measurement.connect(self._safety.on_psu_measurement)
         self._worker.can_stats.connect(self._safety.on_can_stats)
         self._worker.hil_digital_state.connect(self._safety.on_hil_digital_state)
+        self._worker.fg_state.connect(self._safety.on_fg_state)   # Heartbeat (PI-78 a)
+        self._worker.battsim_state.connect(self._safety.on_battsim_state)
         self._worker.device_removed.connect(self._safety.on_device_removed)
         self._safety.all_off_requested.connect(self._worker.all_outputs_off)
         self._request_all_off.connect(self._worker.all_outputs_off)
@@ -479,6 +497,7 @@ class MainWindow(QMainWindow):
         self._request_partner_battsim.connect(self._worker.set_partner_battsim)
         self.control_tab.operation_source.connect(self._worker.set_operation_source)   # PI-15: Preset im Log
         self._worker.all_off_finished.connect(self._on_all_off_finished)
+        self._worker.all_off_unreachable.connect(self._on_all_off_unreachable)   # PI-81 a
         self._settings.safety_limits_changed.connect(self._safety.set_limits)
         self._safety.tripped.connect(self._on_safety_tripped)
         self._safety.state_changed.connect(self._render_safety_status)
@@ -493,8 +512,12 @@ class MainWindow(QMainWindow):
         die gerade abgeschalteten Ausgaenge wieder ein (seit 0.47.0, auch ohne Verbund)."""
         logger.warning("Safe-Stop ausgelöst: %s", reason)
         self._request_all_off.emit(reason)
+        session = getattr(self, "_run_session", None)
+        if session is not None:
+            session.expect_all_off()   # PI-81 a: der Bericht wartet auf die nicht erreichten Geraete
         if stop_run and self._test_runner.is_running():
-            self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"))
+            # ohne Abbruch-Block (PI-76 a): ALLE AUS schaltet ohnehin alles ab, ein laufender Block bricht ab
+            self._test_runner.abort(tr("ALLE AUS – Ablauf abgebrochen"), mode="all_off")
         if propagate:
             self._partner.all_off(reason)
         self._passthrough.release("ALLE AUS")
@@ -504,6 +527,10 @@ class MainWindow(QMainWindow):
     def _wire_partner(self) -> None:
         self.settings_tab.partner_config_edited.connect(lambda cfg: self._settings.set_partner_config(**cfg))
         self._settings.partner_config_changed.connect(self._on_partner_config)
+        # PI-68 a: je Geraet, ob es bei Verbindungsverlust abgeschaltet wird (Spalte in der Freigabe-Tabelle)
+        self.settings_tab.set_keep_on_loss(self._settings.keep_on_loss)
+        self.settings_tab.share_off_on_loss_changed.connect(self._settings.set_off_on_loss)
+        self._settings.keep_on_loss_changed.connect(self.settings_tab.set_keep_on_loss)
         # Kopplung (pairing.py): fragende Seite (Knopf "Koppeln…") und bestaetigende Seite (_check_pairing)
         self.settings_tab.partner_pair_requested.connect(self._start_pairing)
         self._pair_session: PairingSession | None = None
@@ -513,6 +540,7 @@ class MainWindow(QMainWindow):
         self._partner.snapshot_changed.connect(lambda *_: self._render_partner_chip())
         self._partner.snapshot_changed.connect(self._on_partner_snapshot)
         self._partner.all_off_finished.connect(self._on_partner_all_off_finished)
+        self._partner.all_off_unreachable.connect(self._on_partner_all_off_unreachable)   # PI-81 a
         # Leitstand (V2): Bedienungen eines Testablaufs, Belegung und deren Verlust
         self._partner_host_name = ""
         self._partner_battsim = False
@@ -543,14 +571,17 @@ class MainWindow(QMainWindow):
         pd = self._partner_devices
         dash, ctrl = self.dashboard, self.control_tab
         pd.device_known.connect(self._on_partner_device_known)
-        pd.device_forgotten.connect(lambda _kind, rid: (dash.forget_device(rid), ctrl.forget_device(rid)))
+        pd.device_forgotten.connect(lambda _kind, rid: (dash.forget_device(rid), ctrl.forget_device(rid),
+                                                        self._forget_status_chip(rid)))
         pd.online_changed.connect(self._on_partner_device_online)
+        pd.label_changed.connect(self._on_label_changed_status)
         pd.control_changed.connect(ctrl.set_remote_controllable)
         for signal, slots in (
                 (pd.psu_measurement, (dash.update_psu,)),
                 (pd.psu_output_state, (ctrl.set_psu_output_state,)),
                 (pd.psu_setpoints, (ctrl.set_psu_setpoints,)),
                 (pd.psu_ratings, (ctrl.set_psu_ratings,)),
+                (pd.psu_found_on, (ctrl.set_psu_found_on,)),   # PI-81 a
                 (pd.load_measurement, (dash.update_load,)),
                 (pd.load_function_state, (dash.set_load_mode, ctrl.set_load_mode)),
                 (pd.load_setpoint, (ctrl.set_load_setpoint,)),
@@ -562,7 +593,10 @@ class MainWindow(QMainWindow):
                 (pd.fg_state, (dash.update_fg, ctrl.set_fg_state)),
                 (pd.hil_digital_state, (dash.update_hil_digital, ctrl.set_hil_digital_state)),
                 (pd.hil_relay_state, (dash.update_hil_relays, ctrl.set_hil_relay_state)),
-                (pd.hil_analog_input, (dash.update_hil_analog_in,))):
+                (pd.hil_analog_input, (dash.update_hil_analog_in,)),
+                # Oszilloskope und J-Link: nur Anzeige (1.0.1, PI-67 a)
+                (pd.picoscope_state, (dash.update_picoscope_state, ctrl.update_picoscope_state)),
+                (pd.jlink_state, (dash.update_jlink, ctrl.set_jlink_state))):
             for slot in slots:
                 signal.connect(slot)
         pd.action_failed.connect(self._on_partner_tile_action_failed)
@@ -574,12 +608,15 @@ class MainWindow(QMainWindow):
         if kind != "can":   # CAN des Partners: nur Zaehler in der Uebersicht, Senden geht nicht ueber den Verbund
             self.control_tab.on_device_known(kind, rid, label)   # section_created -> _on_control_section_created
             self.control_tab.set_remote(rid, host or "")
+        self._on_device_known_status(kind, rid, label)   # Chip auch fuer Partnergeraete (1.0.1)
 
     def _on_partner_device_online(self, kind: str, rid: str, online: bool) -> None:
         for view in (self.dashboard, self.control_tab):
             setter = getattr(view, f"set_{kind}_online", None)
             if setter is not None:
                 setter(rid, online)
+        self._device_online[rid] = online
+        self._render_status_label(rid)
 
     def _on_partner_tile_action_failed(self, rid: str, action: str, message: str) -> None:
         """Bedienung einer Partnerkachel abgelehnt: kurz an der Kachel zeigen (Touch hat keine Statusleiste)."""
@@ -886,11 +923,13 @@ class MainWindow(QMainWindow):
 
     def _wire_jlink(self) -> None:
         self._jlink = JLinkService(self)
+        self._jlink.switch_log = self._worker.switch_log   # PI-77 a: Reset & Co. fuer "Warten seit Aktion"
         self._pending_jlink_req = 0
         self._jlink.device_added.connect(self._on_jlink_added)
         self._jlink.device_removed.connect(self._on_jlink_removed)
         self._jlink.state_changed.connect(self.dashboard.update_jlink)
         self._jlink.state_changed.connect(self.control_tab.set_jlink_state)
+        self._jlink.state_changed.connect(self._live_state.on_jlink_state)   # Kachel beim Partner (PI-67 a)
         self._jlink.finished.connect(self._on_jlink_finished)
         self.control_tab.jlink_action_requested.connect(
             lambda device_id, action, path: self._jlink.run(device_id, action, path, source="Kachel"))
@@ -1160,18 +1199,29 @@ class MainWindow(QMainWindow):
             logger.warning("Kopplung %s", "bestätigt" if accept else "abgelehnt")
 
     def _check_leases(self) -> None:
-        """Alle 250 ms: Belegungen ohne Lebenszeichen abschalten, Kacheln sperren/freigeben."""
+        """Alle 250 ms: Belegungen ohne Lebenszeichen aufheben, die Geraete mit Haken "Aus bei
+        Verbindungsverlust" abschalten (PI-68 a), Kacheln sperren/freigeben."""
         self._check_pairing()
         leases = self._live_state.leases
         for lease in leases.pop_expired():
-            names = ", ".join(self._device_labels.get(d, d) for d in lease.devices)
-            logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden abgeschaltet: %s",
-                         lease.holder, lease.ttl_s, names)
-            self._request_devices_off.emit(list(lease.devices),
-                                           f"Verbund-Lebenszeichen fehlt ({lease.holder_name()})")
-            self.statusBar().showMessage(
-                tr("Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}",
-                   holder=lease.holder_name(), devices=names), 30000)
+            off = [d for d in lease.devices if self._settings.off_on_loss(d)]
+            keep = [d for d in lease.devices if d not in off]
+            messages = []
+            if off:
+                names = ", ".join(self._device_labels.get(d, d) for d in off)
+                logger.error("Verbund: kein Lebenszeichen von %s seit %.0f s - belegte Geräte werden "
+                             "abgeschaltet: %s", lease.holder, lease.ttl_s, names)
+                self._request_devices_off.emit(off, f"Verbund-Lebenszeichen fehlt ({lease.holder_name()})")
+                messages.append(tr("Verbund: kein Lebenszeichen von {holder} – abgeschaltet: {devices}",
+                                   holder=lease.holder_name(), devices=names))
+            if keep:
+                names = ", ".join(self._device_labels.get(d, d) for d in keep)
+                logger.warning("Verbund: kein Lebenszeichen von %s seit %.0f s - Belegung aufgehoben, "
+                               "Geräte bleiben im Zustand: %s", lease.holder, lease.ttl_s, names)
+                messages.append(tr("Verbund: kein Lebenszeichen von {holder} – Belegung aufgehoben: {devices}",
+                                   holder=lease.holder_name(), devices=names))
+            if messages:
+                self.statusBar().showMessage(" · ".join(messages), 30000)
         view = {device_id: tr("belegt durch {holder} · {run}", holder=lease.holder_name(),
                               run=lease.run or tr("Testablauf"))
                 for device_id, lease in leases.snapshot().items()}
@@ -1261,6 +1311,21 @@ class MainWindow(QMainWindow):
                 tr("Nicht verbunden: {reason}", reason=tr(link.reason())), "danger")
         chip.show()
 
+    def _on_all_off_unreachable(self, device_ids: list) -> None:
+        """PI-81 a: ALLE AUS hat diese Geraete nicht erreicht (fehlgeschlagen oder vorher getrennt) -- sichtbar
+        machen, nichts schalten. Das Log hat der Worker schon geschrieben."""
+        if not device_ids:
+            return
+        names = ", ".join(self.testcase_tab.device_label(d) or d for d in device_ids)
+        self.statusBar().showMessage(tr("ALLE AUS: nicht erreichbar, Ausgang unbekannt: {devices}", devices=names),
+                                     30000)
+
+    def _on_partner_all_off_unreachable(self, device_ids: list) -> None:
+        if device_ids:
+            self.statusBar().showMessage(
+                tr("ALLE AUS am Verbund-Partner {name}: nicht erreichbar, Ausgang unbekannt: {devices}",
+                   name=self._partner.name(), devices=", ".join(device_ids)), 30000)
+
     def _on_partner_all_off_finished(self, ok: bool, message: str) -> None:
         if ok:
             return
@@ -1283,10 +1348,16 @@ class MainWindow(QMainWindow):
     # -- Sicherheits-Watchdog: Banner + Statusanzeige --------------------------
 
     def _on_safety_tripped(self, device_id: str, reason: str) -> None:
-        self._test_runner.stop()
-        # Die eigenen Ausgaenge schaltet der Watchdog selbst ab (all_off_requested); der Partner
-        # bekommt ALLE AUS dazu (PI-27 a).
-        self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
+        handled, self._run_session.trip_handled = self._run_session.trip_handled, False
+        if handled:
+            # PI-79 a: der Lauf hat den Trip uebernommen (RunSession.handle_safety_trip) -- abgeschaltet werden die
+            # Geraete, die der Ablauf schaltet, und das ausloesende, auch beim Verbund-Partner; kein ALLE AUS
+            logger.warning("Sicherheitsabschaltung %s im Testlauf: Abschaltung der Ablauf-Geräte", device_id)
+        else:
+            self._test_runner.stop(mode="all_off")
+            # Ohne Lauf schaltet der Watchdog die eigenen Ausgaenge selbst ab (all_off_requested); der Partner
+            # bekommt ALLE AUS dazu (PI-27 a).
+            self._partner.all_off(f"Sicherheitsabschaltung {device_id}")
         self._passthrough.release("Sicherheitsabschaltung")
         self._safety_banner_label.setText(reason)
         self._safety_banner.show()
@@ -1309,17 +1380,36 @@ class MainWindow(QMainWindow):
         label.setToolTip(f"{tr('Sicherheit:')} {texts.get(state, state)}")
         self._style_chip(label, color)
 
+    def _render_clock_chip(self) -> None:
+        """Uhr-Chip neutral (Rahmen gedaempft, Ziffern in Schriftfarbe) -- die Zustandsfarben bleiben den
+        Geraeten. Feste Breite, sonst zuckt die Leiste mit jeder Sekunde (Ziffern unterschiedlich breit)."""
+        pal = ThemeManager.instance().palette
+        chip = self._clock_chip
+        self._style_chip(chip, pal.text_muted, text_color=pal.text)
+        font = QFont(chip.font())
+        font.setBold(True)
+        padding = 9 if self._touch else 7
+        chip.setFixedWidth(QFontMetrics(font).horizontalAdvance("00:00:00") + 2 * padding + 12)
+        self._tick_clock()
+
+    def _tick_clock(self) -> None:
+        now = datetime.now()
+        text = now.strftime("%H:%M:%S")
+        if self._clock_chip.text() != text:
+            self._clock_chip.setText(text)
+            self._clock_chip.setToolTip(now.strftime("%d.%m.%Y"))
+
     def _chip_height(self) -> int:
         return STATUS_CHIP_HEIGHT if self._touch else STATUS_CHIP_HEIGHT_PC
 
     def _chip_icon_size(self) -> int:
         return 18 if self._touch else 15
 
-    def _style_chip(self, label: QLabel, color: str) -> None:
+    def _style_chip(self, label: QLabel, color: str, text_color: str | None = None) -> None:
         """Status-Chip (Geraete, Sicherheit): Rahmen und Schrift in der Zustandsfarbe, natuerliche Breite."""
         height = self._chip_height()
         padding = "1px 9px" if self._touch else "0px 7px"
-        label.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color};"
+        label.setStyleSheet(f"color: {text_color or color}; font-weight: bold; border: 1px solid {color};"
                             f" border-radius: {height // 2 - 1}px; padding: {padding}; background: transparent;")
         # Natuerliche Groesse statt die ganze Leiste zu fuellen (am Pi-Display gesehen)
         label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -1348,7 +1438,7 @@ class MainWindow(QMainWindow):
             f"border: 1px solid {pal.danger}; border-radius: {METRICS.radius_sm}px; padding: {padding}; }}"
             f"QPushButton:focus {{ border: {METRICS.focus_width}px solid {pal.focus}; }}"
         )
-        self._all_off_button.setMinimumSize(*((96, 44) if self._touch else (0, 0)))
+        self._all_off_button.setMinimumSize(*((96, TOUCH_H) if self._touch else (0, TOP_BUTTON_H_PC)))
 
     def _wire_registry(self) -> None:
         self._registry.device_known.connect(self.dashboard.on_device_known)
@@ -1746,12 +1836,17 @@ class MainWindow(QMainWindow):
         self.control_tab.forget_device(device_id)
         self.settings_tab.forget_device(device_id)
         self.testcase_tab.forget_device(device_id)
+        self._forget_status_chip(device_id)
+        self._live_state.forget(device_id)
+
+    def _forget_status_chip(self, device_id: str) -> None:
         status_label = self._status_labels.pop(device_id, None)
         if status_label is not None:
             self._status_layout.removeWidget(status_label)
             status_label.deleteLater()
         self._device_labels.pop(device_id, None)
         self._device_online.pop(device_id, None)
+        self._device_kinds.pop(device_id, None)
 
     def _wire_share(self) -> None:
         """Netzwerk-Freigabe: Einstellungen <-> Settings <-> LiveState/Server.
@@ -1786,10 +1881,17 @@ class MainWindow(QMainWindow):
             self._on_share_action, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.all_off_requested.connect(
             self._on_share_all_off, Qt.ConnectionType.QueuedConnection)
+        # PI-79 a: Verbund-Partner schaltet beim Abbruch nur die Geraete dieses Rechners ab, die sein Ablauf schaltet
+        self._share_off_pending: set[int] = set()
+        self._share_bridge.devices_off_requested.connect(
+            self._on_share_devices_off, Qt.ConnectionType.QueuedConnection)
+        self._request_devices_off_tagged.connect(self._worker.devices_off_tagged)
+        self._worker.devices_off_done.connect(self._on_worker_devices_off_done)
         self._share_bridge.meta_requested.connect(self._on_share_meta, Qt.ConnectionType.QueuedConnection)
         self._share_bridge.run_requested.connect(self._on_run_command, Qt.ConnectionType.QueuedConnection)
         self._dispatch_share_action.connect(self._worker.execute_remote_action)
         self._worker.remote_action_completed.connect(self._share_bridge.on_worker_result)
+        self._worker.all_off_unreachable.connect(self._share_bridge.on_all_off_unreachable)   # PI-81 a, vorher
         self._worker.all_off_finished.connect(self._share_bridge.on_all_off_finished)
         self.settings_tab.share_local_bypass_toggled.connect(self._settings.set_share_local_bypass)
         self.settings_tab.program_remove_requested.connect(self._on_program_remove)
@@ -1844,13 +1946,15 @@ class MainWindow(QMainWindow):
                 or (local and self._settings.share_config["local_bypass"])):
             self._share_bridge.complete(request_id, False, "inactive", "", 0.0)
             return
-        self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel)
+        source = (switch_log.SOURCE_VERBUND if verbund else switch_log.SOURCE_PROGRAM if program
+                  else switch_log.SOURCE_REMOTE)
+        self._dispatch_share_action.emit(request_id, device_id, kind, action, value, channel, source)
 
     def _on_share_meta(self, request_id: int, device_id: str, meta: dict) -> None:
         """Name/Kachelfarbe vom Verbund-Partner (PI-43 b): wie eine Aenderung an diesem Rechner uebernehmen --
         der Besitzer fuehrt, der Partner sieht das Ergebnis mit dem naechsten Abgleich."""
         kind = self._device_kinds.get(device_id)
-        if kind is None:
+        if kind is None or device_id.startswith("@"):   # Partnergeraete stehen seit 1.0.1 auch hier (Chips)
             self._share_bridge.complete(request_id, False, "unknown_tile", "", 0.0)
             return
         color = meta.get("color", "__keep__")
@@ -1976,7 +2080,9 @@ class MainWindow(QMainWindow):
         # ALLE AUS in der Leiste oben
         self.tabs.tabBar().hide()
         self.statusBar().hide()
-        self._top_bar.adopt(self._status_container, [self._all_off_button], leading=self._safety_status_label)
+        self._top_bar.adopt(self._status_container, [self._all_off_button],
+                            leading=[self._clock_chip, self._safety_status_label])
+        self._render_clock_chip()
         # QScrollArea.setWidget zeigt das Widget nicht von selbst
         self._status_container.show()
         self._all_off_button.show()
@@ -2039,6 +2145,7 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:   # Chips (Touch) bzw. "Name: Zustand" (PC)
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_clock_chip()
         self._render_partner_chip()
         self._render_mcp_chip()
         self._render_sim_chip()
@@ -2222,10 +2329,11 @@ class MainWindow(QMainWindow):
         bekannten Geraeten bereits belegte Farben ausgenommen. Gemeinsame
         Vergabe-Logik fuer _on_panel_colors_enabled_changed (10e) und
         _on_device_known_panel_color (BUGS.md #15)."""
-        unassigned = [d for d in device_ids if self._settings.panel_color(d) is None]
+        # Partnergeraete (seit 1.0.1 in _device_labels, Status-Chips): Farbe vergibt der Besitzer
+        unassigned = [d for d in device_ids if not d.startswith("@") and self._settings.panel_color(d) is None]
         if not unassigned:
             return
-        used = {self._settings.panel_color(d) for d in self._device_labels} - {None}
+        used = {self._settings.panel_color(d) for d in self._device_labels if not d.startswith("@")} - {None}
         free = [c for c in PANEL_COLOR_ORDER if c not in used] or list(PANEL_COLOR_ORDER)
         for i, device_id in enumerate(unassigned):
             self._settings.set_panel_color(device_id, free[i % len(free)])
@@ -2271,6 +2379,8 @@ class MainWindow(QMainWindow):
                                        self._interlock, live_state=self._live_state,
                                        scope_service=self._scope_service, parent=self)
         self._run_session.partner_router = self._route_partner_action
+        self._run_session.partner_switch_lookup = self._partner_last_switch   # PI-77 a
+        self._run_session.partner_devices_off = self._partner_devices_off     # PI-79 a
         # Messmittel (FT-8): Kennungen aus dem Worker (verbunden in _setup_worker vor dem Thread-Start),
         # Kalibrierdaten aus messmittel.json im gemeinsamen Ordner
         self._run_session.instruments = self._instruments
@@ -2304,6 +2414,13 @@ class MainWindow(QMainWindow):
         self._test_runner.run_finished.connect(self.testcase_tab.on_run_finished)
         self._test_runner.run_stopped.connect(self.testcase_tab.on_run_stopped)
         self._test_runner.iteration_changed.connect(self.testcase_tab.on_iteration_changed)
+        self._test_runner.abort_step_started.connect(self.testcase_tab.on_abort_step_started)   # PI-76 a
+        # PI-71 a: Bestaetigungsschritt per Rueckfrage im Fenster (nur hier, nie ueber Netzwerk/MCP)
+        self._test_runner.confirm_available = True
+        self._test_runner.confirm_requested.connect(self.testcase_tab.on_confirm_requested)
+        self.testcase_tab.confirm_answered.connect(self._test_runner.confirm)
+        # PI-74 a: "Warten auf Freigabe" gibt ein Programm ueber REST/MCP frei -- nur moeglich, solange der Server laeuft
+        self._test_runner.release_available = self._share_server.is_running
         self._run_session.run_ended.connect(lambda _outcome: self.testcase_tab.set_report_available(True))
         # Laufregister fuer REST/MCP/Kommandozeile (0.59.0): jeder Lauf, auch aus dem Fenster
         self._runs = self._live_state.runs
@@ -2321,19 +2438,22 @@ class MainWindow(QMainWindow):
             lambda index, _step: self._run_id and self._runs.step_started(self._run_id, index))
         self._test_runner.step_result.connect(
             lambda index, ok, value: self._run_id and self._runs.step_result(self._run_id, index, ok, value))
-        self._test_runner.step_failed.connect(
-            lambda index, message: self._run_id and self._runs.step_failed(self._run_id, index, message))
+        # Schrittfehler: KEIN eigener Eintrag ueber step_failed -- RunSession beendet den Lauf schon im selben
+        # Signal (vorher verbunden), _run_id ist danach None. _on_run_ended_register traegt die Meldung aus der
+        # Laufaufzeichnung nach (Fehler "error" leer in get_run, 1.0.1).
+        self._test_runner.released.connect(   # PI-74 a: wer freigegeben hat, als Meldung im Register
+            lambda index, by: self._run_id and self._runs.released(self._run_id, index, by))
+        self._test_runner.waiting_changed.connect(   # PI-71 a: "wartet auf Bestätigung" fuer REST/MCP
+            lambda info: self._run_id and self._runs.set_waiting(self._run_id, info))
         self._run_session.run_ended.connect(self._on_run_ended_register)
         self.testcase_tab.open_report_requested.connect(self._on_open_report)
         self.testcase_tab.export_report_pdf_to.connect(self._on_export_report_pdf)
 
-        # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete
-        # Messung, verletzte Pass/Fail-Pruefung mit "Bei Verletzung abbrechen",
-        # Verriegelung) schaltet sofort alle Ausgaenge ab, statt auf das manuelle
-        # Quittieren per Stop-Button zu warten (siehe testcase_tab.on_step_failed).
-        self._test_runner.step_failed.connect(
-            lambda _index, message: self._safe_stop(f"step failed: {message}")
-        )
+        # Unbeaufsichtigte Laeufe: ein Schrittfehler (Geraetefehler, veraltete Messung, verletzte Pruefung mit
+        # "Bei Verletzung abbrechen", Verriegelung) und der Stopp schalten ab, ohne auf das Quittieren per
+        # Stop-Knopf zu warten -- seit 1.0.1 (PI-76 a/PI-79 a) nicht mehr ALLE AUS, sondern der Abbruch-Block des
+        # Ablaufs bzw. die Geraete, die der Ablauf schaltet, und das ausloesende (RunSession._shutdown), BEVOR
+        # step_failed/run_stopped kommen.
 
         self.testcase_tab.run_requested.connect(self._on_run_requested)
         # Debuggen (FT-12, PI-58 a): nur fuer Laeufe aus dem Fenster
@@ -2344,8 +2464,8 @@ class MainWindow(QMainWindow):
         self._test_runner.paused.connect(
             lambda index: self.testcase_tab.on_paused(index, self._test_runner.debug_snapshot()))
         self._test_runner.resumed.connect(self.testcase_tab.on_resumed)
-        self.testcase_tab.stop_requested.connect(self._test_runner.stop)
-        self.testcase_tab.stop_requested.connect(lambda: self._safe_stop("stop button"))
+        # Stopp: Abbruch-Block bzw. Abschaltung der geschalteten Geraete (PI-76 a/PI-79 a), kein ALLE AUS mehr
+        self.testcase_tab.stop_requested.connect(lambda: self._test_runner.stop())
 
     def _on_run_requested(self) -> None:
         self.testcase_tab.refresh_linked_blocks()   # geaenderte verknuepfte Bausteine (0.61.2, PI-49 b)
@@ -2520,9 +2640,23 @@ class MainWindow(QMainWindow):
                 answer(False, "not_running")
                 return
             logger.info("Testlauf %s über das Netzwerk angehalten (%s)", run_id, client)
-            self._test_runner.stop()
-            self._safe_stop(f"run stop via network ({client})")
+            self._test_runner.stop()   # Abbruch-Block bzw. geschaltete Geraete aus (PI-76 a/PI-79 a)
             answer(True)
+            return
+        if command == "continue":
+            # PI-74 a: "Warten auf Freigabe" -- Steuerrecht hat share_api schon geprueft (wie bei stop)
+            run_id = payload.get("run", "")
+            if run_id != self._runs.current_id() or not self._test_runner.is_running():
+                answer(False, "not_running")
+                return
+            waiting = self._test_runner.waiting() or {}
+            by = client + (f" ({payload['by']})" if payload.get("by") else "")
+            code = self._test_runner.release(by, payload.get("key"), payload.get("step"))
+            if code:
+                answer(False, code, waiting.get("message", ""))
+                return
+            logger.info("Testlauf %s: Schritt %s über das Netzwerk freigegeben (%s)", run_id, waiting.get("step"), by)
+            answer(True, "", str(waiting.get("step") or ""))
             return
         if command != "start":
             answer(False, "unknown_command")
@@ -2586,8 +2720,10 @@ class MainWindow(QMainWindow):
             # Lauf von der Kommandozeile (FP-4 a): immer ALLE AUS, nur an diesem Rechner
             self._run_all_off_at_end = False
             self._request_all_off.emit("cli: Lauf beendet")
-        elif record is not None and (record.meta or {}).get("all_off_at_end") and outcome != "stopped":
-            # Ablauf-Eigenschaft "Am Ende ALLE AUS" (0.70.0, DR-5); Fehler/Stopp schalten ohnehin ab
+        elif record is not None and (record.meta or {}).get("all_off_at_end") and outcome in ("passed",
+                                                                                               "failed_checks"):
+            # Ablauf-Eigenschaft "Am Ende ALLE AUS" (0.70.0, DR-5) nur bei normalem Ende; Fehler/Stopp schalten
+            # ueber Abbruch-Block bzw. die geschalteten Geraete ab (PI-76 a/PI-79 a), nicht alles
             self._request_all_off.emit("Ablauf beendet (Am Ende ALLE AUS)")
         if run_id is None or record is None:
             return
@@ -2608,7 +2744,8 @@ class MainWindow(QMainWindow):
                 files[key] = str(path)
         except OSError as exc:
             logger.warning("Ergebnisse des Laufs %s nicht geschrieben: %s", run_id, exc)
-        self._runs.finish(run_id, outcome, exit_code(record), files)
+        failure = (record.error_index, record.error_message) if record.error_message else None
+        self._runs.finish(run_id, outcome, exit_code(record), files, failure, run_results.shutdown_dict(record))
         data_store.store().sync_now()
 
     def _route_partner_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> bool:
@@ -2619,6 +2756,58 @@ class MainWindow(QMainWindow):
             return False
         self._send_partner_test_action(remote_id, device_id, kind, action, value, channel)
         return True
+
+    def _partner_devices_off(self, device_ids: list[str], reason: str, done) -> bool:
+        """RunSession.partner_devices_off (PI-79 a): Geraete des Verbund-Partners beim Abbruch abschalten -- nur
+        diese, nicht ALLE AUS. done(abgeschaltet, nicht erreichbar) mit den Kennungen "@rechner/id"."""
+        mapping = {}
+        for device_id in device_ids:
+            remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
+            if remote_id is not None:
+                mapping[remote_id] = device_id
+        unknown = [d for d in device_ids if d not in mapping.values()]
+        if not mapping:
+            return False
+
+        def finished(off: list, failed: list) -> None:
+            done([mapping.get(r, r) for r in off], [mapping.get(r, r) for r in failed] + unknown)
+
+        return self._partner.devices_off(sorted(mapping), reason, finished)
+
+    def _on_share_devices_off(self, request_id: int, devices: list, reason: str, client: str) -> None:
+        """POST /devices-off (Verbund-Partner bricht einen Lauf ab, PI-79 a): wie ALLE AUS ohne weitere Pruefung,
+        aber nur fuer die genannten Geraete und ohne einen hier laufenden Ablauf anzuhalten."""
+        logger.warning("Abschalten auf Anfrage von %s (%s): %s", client, reason or "-", ", ".join(devices))
+        self._share_off_pending.add(request_id)
+        self._request_devices_off_tagged.emit(-request_id, list(devices), f"remote devices-off ({client})")
+
+    def _on_worker_devices_off_done(self, tag: int, _off: list, failed: list) -> None:
+        if tag >= 0 or -tag not in self._share_off_pending:
+            return
+        self._share_off_pending.discard(-tag)
+        self._share_bridge.complete(-tag, not failed, "devices_off_incomplete" if failed else "",
+                                    ";".join(failed), 0.0)
+
+    def _partner_last_switch(self, _kind: str, device_id: str, action: str) -> switch_log.LastSwitch | None:
+        """RunSession.partner_switch_lookup (PI-77 a): letzte Schaltung eines Partnergeraets laut Besitzer, aus
+        dem sekuendlichen Abgleich (Kachelfeld "last_switch", Alter statt Uhrzeit). None = kein Partnergeraet."""
+        remote_id = verbund_ids.partner_device(device_id, self._partner_host_name)
+        if remote_id is None:
+            return None
+        now = time.monotonic()
+        name = self._partner.name()
+        snap = self._partner.snapshot()
+        if snap is None or not self._partner.is_connected():
+            return switch_log.LastSwitch(None, tr("keine Verbindung zu {name}", name=name), now)
+        tile = next((t for t in snap.tiles if t.get("id") == remote_id), None)
+        if tile is None:
+            return switch_log.LastSwitch(None, tr("{name} meldet das Gerät nicht", name=name), now)
+        info = switch_log.from_tile(tile, action, snap.values_received, snap.values_sent)
+        if info.at is not None:
+            return info._replace(source=tr("{source} am {name}", source=tr(info.source), name=name))
+        if info.source == switch_log.OWNER_WITHOUT_TIMES:
+            return info._replace(source=tr("{name} meldet keine Schaltzeiten (ältere Version)", name=name))
+        return info._replace(source=tr("am {name} seit dessen Start nicht geschaltet", name=name))
 
     def _resolve_device_id(self, kind: str, device_id: str) -> tuple[str | None, str]:
         return self._directory.resolve(kind, device_id)
@@ -2731,6 +2920,12 @@ class MainWindow(QMainWindow):
             return tr(STATUS_KIND_SHORT[kind]) + number.group(1)
         return label if len(label) <= 10 else label[:9] + "…"
 
+    def _status_full_name(self, device_id: str) -> str:
+        label = self._device_labels.get(device_id, device_id)
+        if device_id.startswith("@"):
+            return f"{self._partner.name() or verbund_ids.split(device_id)[0]} · {label}"
+        return label
+
     def _on_label_changed_status(self, kind: str, device_id: str, label: str) -> None:
         self._device_labels[device_id] = label
         self._render_status_label(device_id)
@@ -2743,8 +2938,10 @@ class MainWindow(QMainWindow):
         symbol, state, chip_color = self._status_state(device_id)
         # Kurzer Chip mit Symbol statt "Name: Zustand" -- die volle Zeile passte ab vier Geraeten nicht mehr und war
         # vor allem an der Farbe lesbar (GUI-Review UX-1; seit PI-17 a auch am PC). Tipp/Klick -> Liste.
-        status_label.setText(f"{symbol} {self._short_name(device_id)}")
-        status_label.setToolTip(f"{label}: {state}")
+        # Partnergeraet (1.0.1): derselbe Chip mit "⇄" wie der Verbund-Chip, Rechnername im Tooltip
+        remote = device_id.startswith("@")
+        status_label.setText(f"{symbol} {self._short_name(device_id)}" + (" ⇄" if remote else ""))
+        status_label.setToolTip(f"{self._status_full_name(device_id)}: {state}")
         self._style_chip(status_label, chip_color)
 
     def _show_status_details(self) -> None:
@@ -2766,7 +2963,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(mcp)
         for device_id in self._status_labels:
             symbol, state, color = self._status_state(device_id)
-            row = QLabel(f"{symbol}  {self._device_labels.get(device_id, device_id)} – {state}")
+            row = QLabel(f"{symbol}  {self._status_full_name(device_id)} – {state}")
             row.setStyleSheet(f"color: {color}; font-weight: bold;")
             layout.addWidget(row)
         if not self._status_labels:
@@ -2793,6 +2990,7 @@ class MainWindow(QMainWindow):
         for device_id in self._status_labels:
             self._render_status_label(device_id)
         self._render_safety_status(self._safety.current_state())
+        self._render_clock_chip()
         self._render_partner_chip()
         self._render_mcp_chip()
         self._render_sim_chip()

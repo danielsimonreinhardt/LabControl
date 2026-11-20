@@ -144,18 +144,44 @@ zu 30 s.
 | Feld | Bedeutung |
 |---|---|
 | Form | Sinus, Rechteck, Puls, Dreieck, DC u. a. |
-| Frequenz | bis 15 MHz, Auflösung 0,01 Hz |
-| Amplitude | Spitze-Spitze im Leerlauf, 0 … 20 V |
-| Offset | ±9,99 V |
-| Tastverhältnis | in % |
+| Frequenz | bis 15 MHz, Auflösung 0,01 Hz; in DC gesperrt |
+| Amplitude | Spitze-Spitze im Leerlauf, 0 … 20 V; in DC ausgeblendet |
+| Offset | ±9,99 V; in DC heißt das Feld **Spannung** |
+| Tastverhältnis | in %, nur bei **Puls** bedienbar |
 | Ausgang EIN / AUS | schaltet den Ausgang, alle Signalwerte bleiben gespeichert |
 | Phase (Kanal 2 zu 1) | nur einmal vorhanden |
+
+**DC (seit 1.0.1):** In DC liegt am Ausgang die eingestellte **Spannung** an. Gemessen (JDS2915, ohne Last) gibt
+das Gerät in DC etwa **Offset + Amplitude/2** aus; bei Amplitude genau 0 kommt der Offset aber nur zu etwa 1/10 an
+(2,5 V → 0,22 V). LabControl setzt deshalb beim Umschalten auf DC die Amplitude auf **0,01 V** und gibt die
+Spannung als Offset vor. Am Ausgang liegt die Spannung plus **5 mV** (halbe Amplitude), dazu der Offset-Fehler des
+Geräts (gemessen etwa +0,1 V bei 2,5 V).
+
+```mermaid
+flowchart LR
+  W["Form DC"] --> A["Amplitude 0,01 V<br/>(automatisch)"]
+  S["Spannung = Offset"] --> O["Ausgang ≈ Spannung + 5 mV"]
+  A --> O
+```
+
+| Aktion in DC | Wirkung |
+|---|---|
+| Wellenform DC (`FG_WAVE_DC`) | Form DC, Amplitude 0,01 V |
+| Offset setzen (`FG_OFFS`) | Spannung am Ausgang; eine am Gerät verstellte Amplitude wird vorher wieder 0,01 V |
+| Amplitude setzen (`FG_AMPL`) | **abgelehnt** mit Meldung (Schritt scheitert) |
+
+**Tastverhältnis nur bei Puls (seit 1.0.1):** Gemessen wirkt es nur bei der Form **Puls** (99 % → 98,9 %), bei
+Rechteck bleibt das Signal bei 50 %, egal was eingestellt ist. `FG_DUTY` (Testablauf, MCP, REST, Verbund) ist bei
+jeder anderen Form **abgelehnt**; die Form wird nie still umgeschaltet. Ein Ablauf, der an einer Stelle mit
+bekannter Form (Wellenform-Schritt davor, ohne Blockgrenze dazwischen) das Tastverhältnis bei Rechteck setzt oder
+in DC die Amplitude, startet gar nicht erst; sonst scheitert der Schritt im Lauf.
 
 **Grenzen:**
 
 - Amplitude frequenzabhängig begrenzt: bei 15 MHz **still auf 10 V**. LabControl liest zurück und zeigt den
   tatsächlich eingestellten Wert.
-- Was wirklich am Ausgang anliegt, ist nicht mit einem Oszilloskop nachgemessen.
+- Am Ausgang gemessen (Oszilloskop) sind nur DC und Tastverhältnis (17.11.2026); die Umsetzung in LabControl ist
+  nur gegen die Nachbildung geprüft.
 
 ## Oszilloskop PicoScope 2204A/2205A
 

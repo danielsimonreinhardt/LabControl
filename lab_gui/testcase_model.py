@@ -16,6 +16,9 @@ from jds66xx.driver import MAX_OFFSET_V as FG_MAX_OFFSET_V
 from jds66xx.driver import MIN_FREQUENCY_HZ as FG_MIN_FREQUENCY_HZ
 from microhil.driver import AOUT_MAX_MV
 from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
+from scope_steps import CHECK_FIELD as SCOPE_CHECK_FIELD
+from scope_steps import SCOPE_ACTIONS, SCOPE_WAIT
+from scope_steps import unit as scope_unit
 
 # Interner Aktionscode -> deutscher Basis-Anzeigename (Uebersetzungsschluessel
 # fuer i18n.tr, siehe action_label()), je Geraeteart ("load"/"psu").
@@ -126,6 +129,10 @@ PICO_ACTIONS = {
     "PICO_VRMS": "Effektivwert (RMS)",
 }
 PICO_READ_ACTIONS = {"PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS"}
+# Oszilloskop "Scharf schalten" / "Auf Erfassung warten" (1.0.1, PI-72 a, scope_steps.py): PicoScope UND UNI-T
+# ("scpiscope"), ueber den ScopeService statt den DeviceWorker. Der Warteschritt liefert einen Kennwert wie eine
+# Lese-Aktion (Pruefung, Variable).
+SCOPE_READ_ACTIONS = {SCOPE_WAIT}
 
 # Funktionsgenerator (siehe jds66xx/driver.py). Wie bei microHIL bezieht sich
 # jede Aktion auf einen Kanal (1/2), der im generischen Kanal-Slot
@@ -225,7 +232,8 @@ def battsim_step_detail(step) -> str:
 # sind global eindeutig (je Praefix HIL_/PICO_), ein Kind-Check zusaetzlich
 # zur Codepruefung ist daher nicht noetig (siehe testcase_runner.py:
 # on_action_completed/_finish_step).
-READ_ACTIONS = HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS | UDS_READ_ACTIONS | XCP_READ_ACTIONS
+READ_ACTIONS = (HIL_READ_ACTIONS | PICO_READ_ACTIONS | BATTSIM_READ_ACTIONS | UDS_READ_ACTIONS | XCP_READ_ACTIONS
+                | SCOPE_READ_ACTIONS)
 
 # Arbiträrsignal-Aktionscode je Geraeteart -> Liste der Aktionscodes, die als
 # Zielgroesse (das tatsaechlich modulierte Sollwert-Kommando) waehlbar sind.
@@ -277,7 +285,8 @@ DEVICE_ACTIONS = {
     "psu": PSU_ACTIONS,
     "can": CAN_ACTIONS,
     "hil": HIL_ACTIONS,
-    "picoscope": PICO_ACTIONS,
+    "picoscope": {**PICO_ACTIONS, **SCOPE_ACTIONS},
+    "scpiscope": dict(SCOPE_ACTIONS),
     "fg": FG_ACTIONS,
     "battsim": BATTSIM_ACTIONS,
     "jlink": JLINK_ACTIONS,
@@ -292,6 +301,7 @@ DEVICE_KIND_LABELS = {
     "can": "CAN-Bus",
     "hil": "microHIL",
     "picoscope": "Oszilloskop",
+    "scpiscope": "Oszilloskop (LAN)",
     "fg": "Funktionsgenerator",
     "battsim": "Batterie-Simulator",
     "jlink": "J-Link",
@@ -349,6 +359,7 @@ VALUELESS_ACTIONS = {
     *JLINK_ACTIONS,
     *UDS_ACTIONS,
     *XCP_ACTIONS,
+    *SCOPE_ACTIONS,
 }
 
 # Einheit/Min/Max fuer das Wert-Feld je Aktionscode (Einheiten sind
@@ -414,6 +425,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     **{code: ("", 0, 0) for code in JLINK_ACTIONS},
     **{code: ("", 0, 0) for code in UDS_ACTIONS},
     **{code: ("", 0, 0) for code in XCP_ACTIONS},
+    **{code: ("", 0, 0) for code in SCOPE_ACTIONS},
 }
 
 # Kontrollfluss-Schritttypen (Ablaufsteuerung) neben dem normalen
@@ -424,10 +436,31 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
 # Laufvariable, die in Bedingungen als cond_source=="variable" gelesen wird.
 # "wait" wartet nur die in duration angegebene Zeitspanne, ohne Geraeteaktion.
 STEP_TYPE_ACTION = "action"
-CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor"}
+# PI-71 a (1.0.1): "confirm" haelt den Lauf an, bis der Nutzer in der Oberflaeche bestaetigt (Text in
+# params["text"]); "wait_since" wartet, bis seit der letzten Ausfuehrung der Aktion `action` an device_kind/
+# device_id in diesem Lauf mindestens `duration` Sekunden vergangen sind (siehe testcase_runner).
+# PI-74 a (1.0.1): "await_release" haelt den Lauf an, bis ein Programm mit Steuerrecht ihn ueber REST/MCP
+# (continue_run) freigibt; Kennung in params["key"], Hoechstzeit in `duration` (danach FAIL). Bewusst getrennt von
+# "confirm", das nur am Bildschirm geht -- am Ablauf ist sichtbar, ob ein Mensch oder ein Programm freigibt.
+CONTROL_STEP_TYPES = {"loop", "while", "if", "else", "end", "set_var", "inc_var", "wait", "monitor",
+                      "confirm", "wait_since", "await_release", "on_abort"}
+# Schrittarten, die aeltere Programmversionen still uebersprungen haetten (unbekannter step_type = No-Op):
+# eine Datei mit ihnen bekommt Format 4, das aeltere Versionen mit Meldung ablehnen.
+V4_STEP_TYPES = {"confirm", "wait_since"}
+# Format 5 (1.0.1, PI-72 a): Oszilloskop-Schritte "Scharf schalten"/"Auf Erfassung warten" -- eine aeltere Version
+# schickte sie an den DeviceWorker bzw. kennt das UNI-T im Ablauf gar nicht; sie lehnt die Datei mit Meldung ab.
+V5_ACTIONS = set(SCOPE_ACTIONS)
+# Format 6 (1.0.1, PI-74 a): Schritt "Warten auf Freigabe" -- eine aeltere Version liesse ihn still aus.
+V6_STEP_TYPES = {"await_release"}
+# Format 7 (1.0.1, PI-76 a): Abbruch-Block -- eine aeltere Version liefe ihn als normale Schritte mit bzw. liesse
+# ihn beim Abbruch weg und schaltete alles ab; sie lehnt die Datei mit Meldung ab.
+V7_STEP_TYPES = {"on_abort"}
 # "monitor" (0.63.0, FT-7): Block "Ueberwachen … Ende" -- zeitbezogene Pruefung (timing_checks.py) ueber die
 # Schritte im Block; Quelle in den cond_*-Feldern (wie eine Messwert-Bedingung), Art/Grenzen in params["monitor"]
-BLOCK_START_TYPES = {"loop", "while", "if", "monitor"}
+# "on_abort" (1.0.1, PI-76 a): Block "Abbruch-Block … Ende" -- laeuft NICHT im normalen Ablauf, sondern nur bei
+# einem Abbruch (Stopp, Fehler, verletzte Pruefung/Grenze, Abbrechen bei der Bestaetigung, Freigabe-Hoechstzeit,
+# Verbindungsverlust), siehe testcase_runner. Hoechstens einer je Ablauf, nur auf oberster Ebene.
+BLOCK_START_TYPES = {"loop", "while", "if", "monitor", "on_abort"}
 CONDITION_STEP_TYPES = {"while", "if"}
 
 # step_type-Basis-Anzeigenamen (Uebersetzungsschluessel), analog zu
@@ -442,6 +475,10 @@ CONTROL_STEP_LABELS = {
     "inc_var": "Variable erhöhen",
     "wait": "Warten",
     "monitor": "Überwachen",
+    "confirm": "Bestätigung",
+    "wait_since": "Warten seit",
+    "await_release": "Warten auf Freigabe",
+    "on_abort": "Abbruch-Block",
 }
 
 COND_SOURCES = ("measurement", "time", "variable")
@@ -453,6 +490,8 @@ COND_FIELD_UNITS = {
     "voltage": "V", "current": "A", "power": "W", "hil_ain": "mV", "hil_in": "",
     "pico_vmax": "mV", "pico_vmin": "mV", "pico_vpp": "mV", "pico_vrms": "mV",
     "bs_cell": "V", "bs_stack": "V",
+    # Kennwert eines Oszilloskop-Warteschritts: Einheit je Kennwert (V, s, Hz, %), siehe check_unit()
+    SCOPE_CHECK_FIELD: "",
 }
 COND_FIELD_LABELS = {"voltage": "Spannung", "current": "Strom", "power": "Leistung"}
 
@@ -487,6 +526,9 @@ PICO_READ_CHECK_FIELD = {
 # Batterie-Simulator: Lese-Aktionen wie oben, Wert in V.
 BATTSIM_CHECK_FIELD_LABELS = {"bs_cell": "Zellspannung", "bs_stack": "Stapelspannung"}
 BATTSIM_READ_CHECK_FIELD = {"BS_CELL_READ": "bs_cell", "BS_STACK_READ": "bs_stack"}
+# Oszilloskop "Auf Erfassung warten" (PI-72 a): der in params["measurement"] gewaehlte Kennwert
+SCOPE_CHECK_FIELD_LABELS = {SCOPE_CHECK_FIELD: "Kennwert"}
+SCOPE_READ_CHECK_FIELD = {SCOPE_WAIT: SCOPE_CHECK_FIELD}
 
 # Kurzsymbole fuer die kompakte Pruefungs-Zusammenfassung in der
 # Testcase-Tabelle (siehe check_summary()) -- sprachunabhaengig, daher nicht
@@ -496,7 +538,7 @@ BATTSIM_READ_CHECK_FIELD = {"BS_CELL_READ": "bs_cell", "BS_STACK_READ": "bs_stac
 CHECK_FIELD_SYMBOLS = {
     "voltage": "U", "current": "I", "power": "P", "hil_ain": "AIN", "hil_in": "IN",
     "pico_vmax": "VMAX", "pico_vmin": "VMIN", "pico_vpp": "VPP", "pico_vrms": "VRMS",
-    "bs_cell": "UZ", "bs_stack": "US", "uds_value": "DID", "xcp_value": "XCP",
+    "bs_cell": "UZ", "bs_stack": "US", "uds_value": "DID", "xcp_value": "XCP", SCOPE_CHECK_FIELD: "Oszi",
 }
 
 # Aktuelle Testablauf-Dateiversion (siehe save_steps/load_steps). Version 1
@@ -504,7 +546,15 @@ CHECK_FIELD_SYMBOLS = {
 # "params" (Parameter neuer Aktionen, Schema je Aktion), "requirements" (Anforderungs-IDs) und
 # unbekannte Felder bleiben erhalten; dazu "meta" fuer den ganzen Ablauf (siehe TESTCASE_META_KEYS).
 # Ohne diese Inhalte wird weiter Version 2 geschrieben, damit aeltere Programmversionen die Datei lesen.
-FILE_FORMAT_VERSION = 3
+# Version 4 (1.0.1, PI-71 a): wie 3, nur mit Schritten aus V4_STEP_TYPES -- eine aeltere Version laesst die
+# Bestaetigung sonst still aus. Version 5 (1.0.1, PI-72 a): wie 4, nur mit Oszilloskop-Schritten (V5_ACTIONS).
+# Version 6 (1.0.1, PI-74 a): wie 5, nur mit "Warten auf Freigabe" (V6_STEP_TYPES).
+# Version 7 (1.0.1, PI-76 a): wie 6, nur mit Abbruch-Block (V7_STEP_TYPES).
+FILE_FORMAT_VERSION = 7
+_V6 = 6
+_V5 = 5
+_V4 = 4
+_V3 = 3
 _V2 = 2
 
 # Ablauf-Eigenschaften (Datei "meta"): Beschreibung, Anforderungs-IDs des ganzen Ablaufs, ob Netzteil
@@ -703,7 +753,7 @@ class BlockMatch:
 
 
 def validate_structure(
-    steps: list[TestStep],
+    steps: list[TestStep], abort_rules: bool = True,
 ) -> tuple[dict[int, BlockMatch], list[int], list[tuple[int, str]]]:
     """Prueft die Verschachtelung der Block-Marker (loop/while/if/else/end).
 
@@ -716,7 +766,8 @@ def validate_structure(
         Blocks selbst, der Blockinhalt eine Ebene tiefer.
       - errors: (Zeilenindex, Fehlermeldung) fuer strukturelle Probleme --
         "end" ohne offenen Block, "else" ausserhalb/doppelt in einem "if",
-        am Dateiende nicht geschlossene Bloecke.
+        am Dateiende nicht geschlossene Bloecke; mit abort_rules auch die Regeln
+        des Abbruch-Blocks (PI-76 a, siehe _abort_block_errors).
     """
     matching: dict[int, BlockMatch] = {}
     depths = [0] * len(steps)
@@ -763,7 +814,159 @@ def validate_structure(
     for start_index, _kind, _else_index in stack:
         errors.append((start_index, tr("Block nicht geschlossen (fehlendes „Ende“)")))
 
+    if abort_rules:
+        errors.extend(_abort_block_errors(steps, matching, depths))
+        errors.sort(key=lambda item: item[0])
     return matching, depths, errors
+
+
+# -- Abbruch-Block (1.0.1, PI-76 a) und Abschaltung beim Abbruch (PI-79 a) --------------------------------------
+#
+# Ein Abbruch-Block enthaelt nur Schritte, die ohne Mensch, Programm oder Messung in begrenzter Zeit sicher
+# durchlaufen: Geraeteaktionen, die einen Ausgang/Sollwert setzen (Netzteil, Last, microHIL, Funktionsgenerator,
+# Batterie-Simulator, CAN-Frame/Restbus), und Warten. Nicht erlaubt: Pruefungen und Lese-Aktionen (koennen gerade
+# im Fehlerfall scheitern), Bestaetigung/Freigabe (niemand muss beim Abbruch etwas tun), Oszilloskop, J-Link, UDS,
+# XCP (lange Laufzeiten, kein Ausgang), Arbitraersignal (laeuft ueber die Schrittdauer), Variablen und Bloecke.
+ABORT_BLOCK_MAX_S = 60.0
+ABORT_BLOCK_DEVICE_KINDS = ("psu", "load", "hil", "fg", "battsim", "can")
+# Geraetearten, die die Abschaltung kennt (device_worker._kill_*; CAN: Restbus anhalten)
+OFF_DEVICE_KINDS = ("psu", "load", "hil", "fg", "battsim")
+
+
+def abort_block_range(steps: list[TestStep]) -> tuple[int, int] | None:
+    """(Start, Ende) des ersten Abbruch-Blocks (Indizes der Marker-Zeilen) oder None."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    for i, step in enumerate(steps):
+        if step.step_type == "on_abort" and i in matching:
+            return i, matching[i].end_index
+    return None
+
+
+def abort_block_steps(steps: list[TestStep]) -> list[int]:
+    """Indizes der aktiven Schritte im Abbruch-Block (leer = kein Block oder nur deaktivierte Schritte)."""
+    span = abort_block_range(steps)
+    if span is None or not steps[span[0]].enabled:
+        return []
+    return [i for i in range(span[0] + 1, span[1]) if steps[i].enabled and steps[i].step_type in ("action", "wait")]
+
+
+def abort_step_problem(step: TestStep) -> str:
+    """"" = darf im Abbruch-Block stehen, sonst der Grund."""
+    if step.step_type == "wait":
+        return ""
+    if step.step_type != STEP_TYPE_ACTION:
+        return tr("Im Abbruch-Block gehen nur Geräteaktionen und Warten")
+    if step.device_kind not in ABORT_BLOCK_DEVICE_KINDS:
+        return tr("{kind} geht im Abbruch-Block nicht", kind=kind_label(step.device_kind))
+    if step.action in READ_ACTIONS or step.action in ARB_ACTIONS:
+        return tr("{action} geht im Abbruch-Block nicht", action=action_label(step.device_kind, step.action))
+    if step.check_enabled:
+        return tr("Prüfungen gehen im Abbruch-Block nicht")
+    return ""
+
+
+def _abort_block_errors(steps: list[TestStep], matching: dict, depths: list[int]) -> list[tuple[int, str]]:
+    errors: list[tuple[int, str]] = []
+    starts = [i for i, s in enumerate(steps) if s.step_type == "on_abort"]
+    for n, start in enumerate(starts):
+        if n:
+            errors.append((start, tr("Nur ein Abbruch-Block je Ablauf")))
+            continue
+        if depths[start] != 0:
+            errors.append((start, tr("Der Abbruch-Block steht nur auf oberster Ebene, nicht in einem Block")))
+            continue
+        match = matching.get(start)
+        if match is None:
+            continue   # nicht geschlossen, schon gemeldet
+        total = 0.0
+        for i in range(start + 1, match.end_index):
+            step = steps[i]
+            problem = abort_step_problem(step)
+            if problem:
+                errors.append((i, problem))
+            elif step.enabled:
+                total += max(0.0, step.duration)
+        if total > ABORT_BLOCK_MAX_S:
+            errors.append((start, tr("Abbruch-Block dauert {seconds:g} s – höchstens {limit:g} s", seconds=total,
+                                     limit=ABORT_BLOCK_MAX_S)))
+    return errors
+
+
+def switching_step(step: TestStep) -> bool:
+    """Schaltet dieser (aktive Aktions-)Schritt ein Geraet, das die Abschaltung kennt? Lesen zaehlt nicht."""
+    if step.step_type != STEP_TYPE_ACTION or not step.enabled:
+        return False
+    if step.device_kind == "can":
+        return step.action == "RESTBUS_START"
+    return step.device_kind in OFF_DEVICE_KINDS and step.action not in READ_ACTIONS
+
+
+def switched_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
+    """(Geraeteart, device_id) aller Geraete, die der Ablauf schaltet (PI-79 a), in Reihenfolge des ersten
+    Auftretens -- auch im Abbruch-Block, ohne Schritte in deaktivierten Bloecken. device_id "" = automatisch."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    result: list[tuple[str, str]] = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        if step.step_type in BLOCK_START_TYPES and not step.enabled and index in matching:
+            index = matching[index].end_index + 1
+            continue
+        if switching_step(step) and (step.device_kind, step.device_id) not in result:
+            result.append((step.device_kind, step.device_id))
+        index += 1
+    return result
+
+
+FG_WAVE_ACTION_NAMES = {"FG_WAVE_SINE": "Sinus", "FG_WAVE_SQUARE": "Rechteck", "FG_WAVE_PULSE": "Puls",
+                        "FG_WAVE_TRIANGLE": "Dreieck", "FG_WAVE_DC": "DC"}
+
+
+def fg_waveform_refusal(steps: list[TestStep]) -> tuple[int, str] | None:
+    """PI-75 a/PI-80 a: (Index, Grund) des ersten Funktionsgenerator-Schritts, der an seiner Stelle nicht zur
+    Kurvenform passt -- "Tastverhältnis setzen" bei einer anderen Form als Puls, "Amplitude setzen" in DC. None =
+    nichts statisch erkennbar.
+
+    Bewusst vorsichtig: bekannt ist die Form nur nach einem "Wellenform …"-Schritt desselben Geraets und Kanals
+    davor auf derselben Ebene; jede Blockzeile (Schleife, Wenn, Sonst, Ende, Ueberwachen, Abbruch-Block) loescht
+    das Wissen, weil dort ein anderer Weg oder ein zweiter Durchlauf hinfuehren kann. Was hier nicht erkennbar
+    ist, lehnt der Worker zur Laufzeit ab (Schritt scheitert)."""
+    matching, _depths, _errors = validate_structure(steps, abort_rules=False)
+    known: dict[tuple[str, int], str] = {}
+    skip_until = -1
+    for index, step in enumerate(steps):
+        if index <= skip_until:
+            continue
+        if step.step_type in BLOCK_START_TYPES and not step.enabled and index in matching:
+            skip_until = matching[index].end_index   # deaktivierter Block laeuft nicht
+            known.clear()
+            continue
+        if step.step_type in BLOCK_START_TYPES or step.step_type in ("else", "end"):
+            known.clear()
+            continue
+        if not step.enabled or step.step_type != STEP_TYPE_ACTION or step.device_kind != "fg":
+            continue
+        key = (step.device_id, int(step.hil_channel))
+        if step.action in FG_WAVE_ACTION_NAMES:
+            known[key] = step.action
+        elif step.action == "FG_DUTY" and key in known and known[key] != "FG_WAVE_PULSE":
+            return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal {channel} "
+                             "steht hier auf {wave}", n=index + 1, channel=key[1],
+                             wave=tr(FG_WAVE_ACTION_NAMES[known[key]]))
+        elif step.action == "FG_AMPL" and known.get(key) == "FG_WAVE_DC":
+            return index, tr("Schritt {n}: in DC gibt es keine Amplitude – die Spannung gibt „Offset setzen“ vor "
+                             "(Kanal {channel})", n=index + 1, channel=key[1])
+    return None
+
+
+def abort_block_devices(steps: list[TestStep]) -> list[tuple[str, str]]:
+    """(Geraeteart, device_id) der Aktionen im Abbruch-Block, in Reihenfolge des ersten Auftretens."""
+    result: list[tuple[str, str]] = []
+    for i in abort_block_steps(steps):
+        step = steps[i]
+        if step.step_type == STEP_TYPE_ACTION and (step.device_kind, step.device_id) not in result:
+            result.append((step.device_kind, step.device_id))
+    return result
 
 
 def condition_summary(step: TestStep) -> str:
@@ -826,6 +1029,46 @@ def monitor_summary(step: TestStep, labels: dict | None = None) -> str:
     return text + (" · " + tr("abbrechen") if timing_checks.clean_config(config)["abort"] else "")
 
 
+def confirm_text(step: TestStep) -> str:
+    """Text eines Bestaetigungsschritts (PI-71 a)."""
+    return str((step.params or {}).get("text") or "").strip()
+
+
+def wait_since_actions(device_kind: str) -> list[str]:
+    """Aktionen, auf die sich "Warten seit" beziehen kann: alle der Geraeteart ausser Lesen und Signal."""
+    return [code for code in DEVICE_ACTIONS.get(device_kind, {})
+            if code not in READ_ACTIONS and code not in ARB_ACTIONS]
+
+
+def wait_since_summary(step: TestStep, device: str = "") -> str:
+    """"≥ 65 s seit Ausgang EIN (Netzteil 1)" (PI-71 a). device: Anzeigename, sonst Kennung/automatisch."""
+    device = device or step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
+    return tr("≥ {seconds:g} s seit {action} ({device})", seconds=step.duration, device=device,
+              action=action_label(step.device_kind, step.action))
+
+
+RELEASE_KEY_MAX = 60   # Laenge der Freigabe-Kennung (Editor; REST nimmt bis zu 100 Zeichen an)
+
+
+def release_key(step: TestStep) -> str:
+    """Kennung eines Schritts "Warten auf Freigabe" (PI-74 a), "" = keine."""
+    return str((step.params or {}).get("key") or "").strip()
+
+
+def release_summary(step: TestStep) -> str:
+    """"„flash_ok“ (≤ 30 s)" bzw. "(≤ 30 s)" ohne Kennung (PI-74 a)."""
+    key = release_key(step)
+    limit = tr("≤ {seconds:g} s", seconds=step.duration)
+    return f"„{key}“ ({limit})" if key else f"({limit})"
+
+
+def check_unit(step: TestStep) -> str:
+    """Einheit des geprueften Werts; beim Oszilloskop-Warteschritt die des gewaehlten Kennwerts (PI-72 a)."""
+    if step.check_field == SCOPE_CHECK_FIELD:
+        return scope_unit(step.params)
+    return COND_FIELD_UNITS.get(step.check_field, "")
+
+
 def check_summary(step: TestStep) -> str:
     """Anzeigetext einer Pass/Fail-Pruefung, z.B. "U: 11.8–12.2 V".
 
@@ -836,7 +1079,9 @@ def check_summary(step: TestStep) -> str:
     if not step.check_enabled:
         return ""
     symbol = CHECK_FIELD_SYMBOLS.get(step.check_field, step.check_field)
-    unit = COND_FIELD_UNITS.get(step.check_field, "")
+    if step.check_field == SCOPE_CHECK_FIELD:
+        symbol = str((step.params or {}).get("measurement") or "vmax")
+    unit = check_unit(step)
     return f"{symbol}: {step.check_min:g}–{step.check_max:g} {unit}".rstrip()
 
 
@@ -876,12 +1121,33 @@ def needs_v3(steps: list[TestStep], meta: dict | None = None) -> bool:
                                          for step in steps)
 
 
+def needs_v4(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V4_STEP_TYPES for step in steps)
+
+
+def needs_v5(steps: list[TestStep]) -> bool:
+    return any(step.step_type == STEP_TYPE_ACTION and step.action in V5_ACTIONS for step in steps)
+
+
+def needs_v6(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V6_STEP_TYPES for step in steps)
+
+
+def needs_v7(steps: list[TestStep]) -> bool:
+    return any(step.step_type in V7_STEP_TYPES for step in steps)
+
+
 def testcase_payload(steps: list[TestStep], known_devices: dict | None = None, meta: dict | None = None) -> dict:
     """Dateiinhalt eines Ablaufs (auch fuer REST/Kommandozeile, ohne Datei)."""
-    v3 = needs_v3(steps, meta)
+    v7 = needs_v7(steps)
+    v6 = v7 or needs_v6(steps)
+    v5 = v6 or needs_v5(steps)
+    v4 = v5 or needs_v4(steps)
+    v3 = v4 or needs_v3(steps, meta)
     payload = {
         "format": "labor-testcase",
-        "version": FILE_FORMAT_VERSION if v3 else _V2,
+        "version": (FILE_FORMAT_VERSION if v7 else _V6 if v6 else _V5 if v5 else _V4 if v4 else _V3 if v3
+                    else _V2),
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
     }
@@ -1016,10 +1282,14 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
     # Bausteine bleiben Format 1; Felder aus v3 nur, wenn ein Schritt sie traegt (aeltere Versionen
     # koennten den Baustein dann nicht laden, aber auch nichts damit anfangen)
     steps = [replace(step, link={}) for step in steps]   # Bausteine sind flach (keine Verknuepfung in sich)
-    v3 = needs_v3(steps)
+    v7 = needs_v7(steps)   # PI-76 a: Abbruch-Block -> Format 6
+    v6 = v7 or needs_v6(steps)   # PI-74 a: Warten auf Freigabe -> Format 5
+    v5 = v6 or needs_v5(steps)   # PI-72 a: Oszilloskop-Schritte -> Format 4
+    v4 = v5 or needs_v4(steps)   # PI-71 a: Bestaetigung/Warten seit -> Format 3, aeltere Versionen lehnen ab
+    v3 = v4 or needs_v3(steps)
     payload = {
         "format": "labor-testcase-block",
-        "version": BLOCK_FILE_FORMAT_VERSION + 1 if v3 else BLOCK_FILE_FORMAT_VERSION,
+        "version": BLOCK_FILE_FORMAT_VERSION + (5 if v7 else 4 if v6 else 3 if v5 else 2 if v4 else 1 if v3 else 0),
         "name": name,
         "steps": [_step_to_item(step, v3) for step in steps],
         "devices": device_map(steps, known_devices or {}),
@@ -1030,7 +1300,7 @@ def save_block(steps: list[TestStep], name: str, path: Path, known_devices: dict
 def load_block(path: Path) -> tuple[str, list[TestStep]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     version = int(data.get("version", 0))
-    if version > BLOCK_FILE_FORMAT_VERSION + 1:
+    if version > BLOCK_FILE_FORMAT_VERSION + 5:
         raise ValueError(
             tr(
                 "Baustein-Datei stammt aus einer neueren Programmversion "

@@ -300,7 +300,7 @@ def main() -> int:
           spin(app, 2.0, lambda: not window_a._worker._partner_has_battsim))
     spin(app, 4.0, lambda: window_a._worker._partner_has_battsim)   # naechste echte Abfrage stellt alles wieder her
 
-    print("lost -- Lebenszeichen fehlt")
+    print("lost -- Lebenszeichen fehlt (Standard: abschalten, PI-68 a)")
     status, body = http_async(app, port_a, TOKEN_A, "POST", quoted + "/actions", {"action": "PSU_OUT_ON"})
     check("Belegung fuer Claude aktiv", status == 200 and leases_b.holder_of(dw.SIM_PSU_ID) is not None)
     t0 = time.monotonic()

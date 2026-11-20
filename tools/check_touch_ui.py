@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -130,6 +131,15 @@ def main() -> int:
           w._safety_status_label.parentWidget() is w._top_bar and w._safety_status_label.isVisible()
           and not area.isAncestorOf(w._safety_status_label)
           and w._safety_status_label.geometry().right() < area.geometry().left())
+    clock = w._clock_chip
+    check("Uhr-Chip ganz links vor dem Sicherheits-Chip, hh:mm:ss (Nutzerwunsch 17.11.2026)",
+          clock.parentWidget() is w._top_bar and clock.isVisible()
+          and clock.geometry().right() < w._safety_status_label.geometry().left()
+          and re.fullmatch(r"\d\d:\d\d:\d\d", clock.text()) is not None
+          and clock.height() == w._safety_status_label.height(), f"{clock.text()!r} {clock.geometry()}")
+    before, width = clock.text(), clock.width()
+    QTest.qWait(1100)
+    check("Uhr laeuft, Breite bleibt", clock.text() != before and clock.width() == width, f"{before} {clock.text()}")
     area.horizontalScrollBar().setValue(area.horizontalScrollBar().maximum())
     app.processEvents()
     check("Sicherheits-Chip bleibt beim Wischen sichtbar", w._safety_status_label.isVisible()
@@ -432,6 +442,7 @@ def main() -> int:
     check("UX-8: schmale Scrollleiste (Positionsanzeige)", bar.sizeHint().width() <= 10, str(bar.sizeHint().width()))
 
     print("Vollbild und Ausschalten")
+    check("Touch: kein Vollbild-Knopf in der Leiste", w._top_bar._fullscreen_button.isHidden())
     w._toggle_fullscreen()
     app.processEvents()
     check("Vollbild-Knopf: an, Symbol folgt", w.isFullScreen() and w._top_bar._fullscreen)
@@ -465,6 +476,12 @@ def main() -> int:
           w._top_bar.isVisible() and w._top_bar.isAncestorOf(w._all_off_button) and w._all_off_button.isVisible()
           and w._top_bar.height() < 52 and not w._top_bar._arrange_button.isVisible()
           and not w.statusBar().isVisible())
+    check("PC: Vollbild-Knopf wieder da", w._top_bar._fullscreen_button.isVisible())
+    fb, ao = w._top_bar._fullscreen_button.geometry(), w._all_off_button.geometry()
+    check("PC: Vollbild-Knopf so hoch wie ALLE AUS, auf einer Linie", fb.height() == ao.height() and fb.top() == ao.top(),
+          f"{fb.top()}/{fb.height()} vs {ao.top()}/{ao.height()}")
+    check("PC: Symbol mittig (kein Menuepfeil-Abstand rechts)",
+          "padding: 0px" in app.styleSheet() and "touchTopBar QToolButton" in app.styleSheet())
     check("Dashboard wieder als Streifen ueber den Seiten, fuenf Seiten, Navigation schmal",
           w.dashboard.parent() is w.tabs.parent() and visible_tabs(w) == 5 and not w.tabs.tabBar().isVisible()
           and w._nav.isVisible() and w._nav.width() < 124 and w.dashboard.isVisible())

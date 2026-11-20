@@ -9,7 +9,7 @@ haben ein eigenes Kapitel: [Testabläufe](testablaeufe.md).
 
 ```mermaid
 flowchart TB
-  TOP["Leiste oben: Sicherheits-Chip · SIMULATION · Verbund-Chip · MCP-Chip · Geräte-Chips · Vollbild · ALLE AUS"]
+  TOP["Leiste oben: Uhr · Sicherheits-Chip · SIMULATION · Verbund-Chip · MCP-Chip · Geräte-Chips · Vollbild · ALLE AUS"]
   subgraph MITTE[" "]
     direction LR
     NAV["Navigation links<br/>Steuerung<br/>Testablauf<br/>Verlauf<br/>Ergebnisse<br/>Einstellungen"]
@@ -37,12 +37,13 @@ flowchart TB
 
 | Element | Bedeutung |
 |---|---|
+| Uhr | aktuelle Systemzeit (hh:mm:ss), Datum im Tooltip |
 | Sicherheits-Chip (Schild-Symbol) | **AUS** = kein Grenzwert aktiv, **AKTIV** = Watchdog überwacht, **AUSGELÖST** = Sicherheitsabschaltung, siehe [Sicherheit](#sicherheit) |
 | Chip **SIMULATION** (Reagenzglas, Warnfarbe) | nur bei eingeschaltetem Simulationsmodus, auch in der `.exe` |
 | Verbund-Chip, z. B. „⇄ Pi“ | nur bei eingeschaltetem Verbund: grün = verbunden, gelb = verbunden mit Hinweis oder Partner gesperrt, rot „✕ …“ = nicht verbunden; Tooltip nennt den Grund |
 | Chip **MCP** | nur bei eingeschalteter Netzwerk-Freigabe: grün = Claude (MCP) darf steuern, grau = nur lesen |
 | Geräte-Chips, z. B. „✓ NT1“ | je Gerät Kurzname und Zustand: ✓ verbunden (grün), ✕ getrennt (rot), Ⓗ Handbedienung (orange) |
-| Vollbild | Fenster im Vollbild bzw. zurück |
+| Vollbild | Fenster im Vollbild bzw. zurück (nur am PC, nicht in der Touch-Bedienung) |
 | **ALLE AUS** | schaltet sofort alle Ausgänge ab |
 
 - Kurznamen: **NT** Netzteil, **Last**, **CAN**, **HIL**, **Scope** Oszilloskop, **FG** Funktionsgenerator,
@@ -60,18 +61,24 @@ Testablaufs und nach einer Sicherheitsabschaltung.
 flowchart LR
   subgraph BEIDE["auch beim Verbund-Partner"]
     K["Knopf ALLE AUS"]
-    NW["REST und MCP"]
-    SA["Sicherheitsabschaltung"]
+    NW["REST und MCP all_off"]
+    SA["Sicherheitsabschaltung<br/>ohne Testablauf"]
   end
   subgraph LOKAL["nur dieser Rechner"]
-    ST["Stop im Testablauf"]
-    FS["fehlgeschlagener Schritt"]
     CL["Lauf-Ende von der<br/>Kommandozeile"]
-    EG["Lauf-Ende mit<br/>„Am Ende ALLE AUS“"]
+    EG["normales Lauf-Ende mit<br/>„Am Ende ALLE AUS“"]
+  end
+  subgraph ABL["nur Geräte des Ablaufs (auch beim Partner)"]
+    ST["Stop, fehlgeschlagener Schritt,<br/>Sicherheitsabschaltung im Lauf"]
   end
   BEIDE --> AA(["ALLE AUS"])
   LOKAL --> AA
+  ST --> AB(["Abbruch-Block bzw. geschaltete<br/>Geräte + Auslöser aus"])
 ```
+
+Stop, Fehler und Sicherheitsabschaltung **im Testablauf** schalten seit 1.0.1 nicht mehr alles ab, sondern nur, was
+der Ablauf schaltet, und das auslösende Gerät – oder es läuft der Abbruch-Block des Ablaufs
+([Testabläufe](testablaeufe.md#abbruch-abbruch-block-und-abschaltung)).
 
 | Gerät | Wirkung von ALLE AUS |
 |---|---|
@@ -82,7 +89,7 @@ flowchart LR
 | Batterie-Simulator | Ausgang gesperrt, die Fernsteuerung bleibt bestehen |
 | CAN-Interface | ein laufender Restbus wird gestoppt |
 | Testablauf | bricht mit „ALLE AUS – Ablauf abgebrochen“ ab |
-| Verbund | bei Knopf, REST/MCP und Sicherheitsabschaltung schaltet der Partner-Rechner ebenfalls alles ab |
+| Verbund | bei Knopf, REST/MCP und Sicherheitsabschaltung ohne Testablauf schaltet der Partner-Rechner ebenfalls alles ab |
 
 **Am Ende eines Laufs:**
 
@@ -95,6 +102,18 @@ flowchart LR
 !!! warning "Handbedienung ist von ALLE AUS ausgenommen"
     Ein Netzteil in **Handbedienung** spricht LabControl nicht an, auch ALLE AUS nicht. Schalte es dann am Gerät
     ab, siehe [Handbedienung HCS-Netzteil](#handbedienung-hcs-netzteil).
+
+**Nicht erreichte Geräte (seit 1.0.1):** Ein Gerät, das in dieser Sitzung verbunden war und beim ALLE AUS nicht
+mehr verbunden ist oder nicht antwortet, kann ALLE AUS nicht schalten – sein Ausgang ist unbekannt (ein HCS-Netzteil
+behält seinen Zustand). LabControl schaltet dann nichts nach, sondern meldet es:
+
+- Statuszeile „ALLE AUS: nicht erreichbar, Ausgang unbekannt: …“ und je Gerät eine WARNING im Log (mit
+  „zuletzt Ausgang EIN“, wenn es eingeschaltet getrennt wurde)
+- REST/MCP `all_off`: Liste `unreachable`
+- im Bericht eines Testablaufs, den ALLE AUS abgebrochen hat: „Nicht erreichbar (Ausgang unbekannt)“
+
+Prüfe diese Geräte von Hand. Findet LabControl ein Netzteil später beim Verbinden mit Ausgang EIN vor, zeigt die
+Kachel den Chip **beim Verbinden EIN** (siehe [Netzteil](#handbedienung-hcs-netzteil)).
 
 ## Dashboard-Streifen
 
@@ -138,7 +157,7 @@ Klick wiederherstellen.
 |---|---|
 | Netzteil | Spannung, Strom, Ausgang ein/aus |
 | Elektronische Last | Modus, Sollwert, Eingang ein/aus (nur wenn der Zustand vom Gerät bekannt war) |
-| Funktionsgenerator | je Kanal Form, Frequenz, Amplitude, Offset, Tastverhältnis, Ausgang; Phase |
+| Funktionsgenerator | je Kanal Form, Frequenz, Amplitude, Offset, Tastverhältnis (nur bei Puls), Ausgang; Phase; in DC nur „Spannung“ |
 | microHIL | Digitalausgänge, Analogausgänge, PWM, Relais, 12-V-Ausgänge, Stromgrenzen |
 | Batterie-Simulator | Sollwerte und Freigaben der Zellen, **nicht** Fernsteuerung und Ausgang |
 | CAN, Oszilloskop, J-Link, Prüfling | nichts |
@@ -292,10 +311,13 @@ Netzteil/Last. Sie ersetzen keine Schutzfunktion am Gerät wie OVP/OCP des Netzt
 ```mermaid
 flowchart LR
   M["Messwert von<br/>Netzteil oder Last"] --> W{"über einem<br/>aktiven Grenzwert?"}
-  W -- ja --> T["Sicherheitsabschaltung:<br/>alle Ausgänge aus,<br/>Ablauf stoppt"]
+  W -- ja --> L{"Testablauf<br/>läuft?"}
+  L -- nein --> T["Sicherheitsabschaltung:<br/>alle Ausgänge aus"]
+  L -- ja --> TL["Sicherheitsabschaltung:<br/>Geräte des Ablaufs +<br/>auslösendes aus, Ablauf stoppt"]
   R["Testablauf läuft"] --> S{"Gerät getrennt oder<br/>2 s ohne Messwert?"}
-  S -- ja --> T
+  S -- ja --> TL
   T --> B["rotes Banner,<br/>Chip AUSGELÖST"]
+  TL --> B
   B --> Q["Quittieren"]
   Q --> F["wieder frei"]
 ```
@@ -315,12 +337,15 @@ gesetztem Häkchen.
 | Auslöser | Wann | Meldung im Banner |
 |---|---|---|
 | Grenzwert | jede Messung des Geräts liegt über einem aktiven Grenzwert, mit oder ohne Testablauf | „Grenzwert überschritten: …“ |
-| veraltete Messwerte | nur im Testablauf: beteiligtes Gerät getrennt oder 2 s ohne Messwert (schützt unbeaufsichtigte Läufe) | „Messwerte veraltet für Gerät …“ |
+| veraltete Messwerte | nur im Testablauf: beteiligtes Gerät getrennt oder 2 s ohne Messwert, Funktionsgenerator 5 s (schützt unbeaufsichtigte Läufe) | „Messwerte veraltet für Gerät …“ |
 
 Folgen der **Sicherheitsabschaltung**:
 
-- alle Ausgänge aus wie bei ALLE AUS, im Verbund auch beim Partner,
-- ein laufender Testablauf stoppt,
+- ohne Testablauf: alle Ausgänge aus wie bei ALLE AUS, im Verbund auch beim Partner,
+- im Testablauf: der Lauf stoppt, abgeschaltet werden nur die Geräte, die der Ablauf schaltet, und das
+  auslösende Gerät (Grenzwert verletzt, veraltet oder getrennt), auch beim Partner. Nur gelesene Geräte, etwa ein
+  Netzteil, das nur in „Überwachen“ gemessen wird, bleiben an. Der Abbruch-Block läuft dabei **nicht**,
+- welche Geräte abgeschaltet wurden und welche nicht erreichbar waren, steht im Bericht und in `get_run`,
 - rotes Banner mit dem Grund, Chip **AUSGELÖST**.
 
 !!! warning "Der Watchdog prüft Messwerte, nicht Sollwerte"
@@ -367,7 +392,7 @@ flowchart LR
   Q -- nein --> OK["wird eingeschaltet"]
   Q -- ja --> X{"Ablauf erlaubt<br/>Quelle/Senke?"}
   X -- ja --> OK
-  X -- nein --> F["abgelehnt: Lauf endet<br/>mit Fehler und ALLE AUS"]
+  X -- nein --> F["abgelehnt: Lauf endet<br/>mit Fehler (Abbruch)"]
 ```
 
 - Meldung bei Ablehnung: „Verriegelung: … ist eingeschaltet“.
@@ -396,6 +421,13 @@ Das HCS-3xxx hat keine Ausgangstaste, und jeder Befehl von LabControl sperrt sei
 
 - **Beim Beenden** gibt LabControl jedes Netzteil genauso frei (1 V, 0 A, Ausgang EIN).
 - **Im Verbund** lässt sich die Handbedienung nur an dem Rechner umschalten, an dem das Netzteil steckt.
+
+**Chip „beim Verbinden EIN“ (seit 1.0.1):** Findet LabControl beim Start oder Wiederverbinden ein Netzteil mit
+Ausgang EIN **und Strombegrenzung über 0 A** vor, zeigt die Kachel einen gelben Chip; der Tooltip nennt die
+Sollwerte. LabControl schaltet dabei nichts. Der Chip verschwindet, sobald du das Netzteil über LabControl schaltest
+(Ausgang, Spannung, Strom, Speicherplatz, Handbedienung – auch aus einem Ablauf, über MCP oder vom Verbund-Partner)
+oder es Ausgang AUS meldet. Der Freigabezustand von oben (1 V, 0 A, Ausgang EIN) löst ihn nicht aus: mit 0 A
+liefert der Ausgang nichts. Der Verbund-Partner zeigt den Chip in seiner Kachel ebenfalls.
 
 !!! warning "Ausgang ist nach der Freigabe eingeschaltet"
     Nach der Freigabe ist der Ausgang **ein**, nur durch 0 A begrenzt. Drehst du am Gerät den Strom auf, liegt

@@ -87,7 +87,8 @@ class PicoScope2000Scope:
 
     # -- Erfassung ---------------------------------------------------------------
 
-    def acquire(self, request: AcquireRequest) -> Capture:
+    def acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture:
+        """cancel/on_armed/on_triggered: scharf schalten (PI-72 a), siehe base.ScopeDriver."""
         warnings: list[str] = []
         configs: dict[str, ChannelConfig] = {}
         scope_ranges: dict[str, float] = {}
@@ -140,14 +141,23 @@ class PicoScope2000Scope:
             trigger_index = min(samples - 1, int(round(samples * -delay_pct / 100.0)))
 
         wait_s = samples * interval_s + WAIT_MARGIN_S + (trig.timeout_s if trig.mode != "none" else 0.0)
+        hooks = {}
+        if cancel is not None:
+            hooks["cancel"] = cancel
+        if on_armed is not None:
+            hooks["on_armed"] = on_armed
         try:
-            raw = self._device.run_block_raw(trigger, timebase, samples, wait_s)
+            raw = self._device.run_block_raw(trigger, timebase, samples, wait_s, **hooks)
         except PicoScope2000TriggerTimeout as exc:
+            if cancel is not None and cancel.is_set():
+                raise ScopeError("cancelled", "Erfassung abgebrochen.") from exc
             raise ScopeError("trigger_timeout",
                              f"Kein Trigger auf Kanal {trig.source} ({trig.edge}, {trig.level_v:g} V) innerhalb "
                              f"von {trig.timeout_s:g} s.", timeout_s=trig.timeout_s) from exc
         except PicoScope2000Error as exc:
             raise ScopeError("device_error", str(exc)) from exc
+        if on_triggered is not None:
+            on_triggered()
 
         channels: dict[str, ChannelData] = {}
         for name, setting in settings.items():

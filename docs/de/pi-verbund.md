@@ -317,8 +317,15 @@ Optional legt **Anzeigename:** fest, wie der Partner heißt; sonst gilt sein Rec
   des Batterie-Simulators.
 - Gesperrt, solange beim Besitzer ein Testlauf läuft, eine Sicherheitsabschaltung besteht oder die Werte veraltet
   sind. Eine abgelehnte Bedienung zeigt ihren Grund kurz an der Kachel.
-- Oszilloskope und J-Link bleiben am eigenen Rechner. Dasselbe LAN-Oszilloskop an beiden Rechnern: Hinweis in Chip
-  und Einstellungen.
+- Oszilloskope (PicoScope, UNI-T) und J-Link des Partners: **nur Anzeige**, mit Status-Chip wie die anderen.
+
+  | Gerät | Kachel zeigt | geht nur am Besitzer |
+  |---|---|---|
+  | PicoScope, UNI-T | Status (frei / belegt / Verbunden (MCP)), Modell, Seriennummer | Erfassen, Trennen, Kurve, PicoScope 7 |
+  | J-Link | Ziel, Zielspannung, letzte Bedienung mit Ergebnis, Datei | Prüfen, Reset, Anhalten, Starten, Flashen |
+
+  Umbenennen und Kachelfarbe gehen an den Besitzer. Claude sieht sie in `list_devices`, steuern und messen kann es
+  sie über den Verbund nicht. Dasselbe LAN-Oszilloskop an beiden Rechnern: Hinweis in Chip und Einstellungen.
 - Werte von Partner-Netzteilen, -Lasten und -microHILs laufen im Sekundentakt auch in Verlauf und Aufzeichnung.
 
 ### ALLE AUS im Verbund
@@ -359,12 +366,15 @@ sequenceDiagram
   L->>B: Bedienung (z. B. Spannung setzen)
   B-->>L: bestätigt
   L->>B: Belegung freigeben (Laufende)
-  Note over B: Fehlt das Lebenszeichen 3 s,<br/>schaltet B die belegten Geräte ab
+  Note over B: Fehlt das Lebenszeichen 3 s,<br/>hebt B die Belegung auf<br/>und schaltet ab (je Gerät abwählbar)
 ```
 
 - **Belegung:** Kachel beim Besitzer gesperrt mit „belegt durch <Rechner> · <Ablauf>“. Die Handbedienung des
   Netzteils bleibt möglich; Bedienungen anderer werden abgelehnt.
-- **Lebenszeichen:** Der Leitstand bricht den Lauf nach 3 s ohne bestätigtes Lebenszeichen ab.
+- **Lebenszeichen:** Der Leitstand bricht den Lauf nach 3 s ohne bestätigtes Lebenszeichen ab. Der Besitzer hebt
+  die Belegung dann auf und schaltet die belegten Geräte ab. Ausnahme: Geräte, bei denen beim Besitzer unter
+  Einstellungen → Netzwerk in der Spalte „Aus bei Verbindungsverlust“ kein Haken steht – sie bleiben, wie sie sind
+  (z. B. das Netzteil, das ein Board dauerhaft versorgt).
 - **Rate-Grenze:** höchstens 5 Fernbefehle je Sekunde, damit ALLE AUS immer durchkommt. Arbiträrsignale und Rampen
   auf Partner-Netzteilen halten daher mindestens 220 ms zwischen zwei Sollwerten.
 - **Nicht über den Verbund:** Leseschritte, CAN-Schritte, J-Link. Solche Abläufe starten mit Meldung nicht, ebenso

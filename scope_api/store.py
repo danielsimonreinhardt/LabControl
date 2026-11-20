@@ -34,10 +34,19 @@ class CaptureStore:
         self._lock = threading.Lock()
         self._counter = 0
 
-    def add(self, capture: Capture) -> str:
+    def reserve_id(self) -> str:
+        """Neue capture_id ohne Erfassung -- scharf geschaltete Erfassung (PI-73 a) bekommt ihre Kennung
+        schon beim Scharfschalten, die Daten folgen mit add(capture, capture_id)."""
         with self._lock:
-            self._counter = (self._counter + 1) % 100
-            capture_id = f"c-{datetime.now():%Y%m%d-%H%M%S}-{self._counter:02d}"
+            return self._next_id()
+
+    def _next_id(self) -> str:
+        self._counter = (self._counter + 1) % 100
+        return f"c-{datetime.now():%Y%m%d-%H%M%S}-{self._counter:02d}"
+
+    def add(self, capture: Capture, capture_id: str | None = None) -> str:
+        with self._lock:
+            capture_id = capture_id or self._next_id()
             capture.capture_id = capture_id
             self._captures[capture_id] = capture
             while len(self._captures) > self._capacity:

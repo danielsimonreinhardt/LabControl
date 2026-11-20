@@ -25,3 +25,6 @@ labcontrol_mcp/.mcp.json
 # Oszilloskop-Erfassungen (scope_service.py, CSV je Erfassung)
 lab_gui/captures/
 captures/
+
+# Archiv der claude.ai-Artefakte (PI-83 b: nur lokal und auf dem Netzlaufwerk, nicht im oeffentlichen Repo)
+/archiv/

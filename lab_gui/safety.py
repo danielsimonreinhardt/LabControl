@@ -17,6 +17,11 @@ Der Monitor selbst loest nur aus (tripped/all_off_requested) -- das
 tatsaechliche Abschalten uebernimmt DeviceWorker.all_outputs_off() im
 Worker-Thread (siehe main_window._wire_safety).
 
+Waehrend eines Testlaufs (1.0.1, PI-79 a) schaltet ein Trip nicht mehr alles ab, sondern nur die Geraete,
+die der Ablauf schaltet, und das ausloesende Geraet: run_trip_handler (RunSession.handle_safety_trip) uebernimmt
+dann die Abschaltung (ohne Abbruch-Block). Nur wenn kein Lauf den Trip uebernimmt (oder die Uebergabe
+scheitert), kommt all_off_requested wie bisher. NOTAUS/ALLE AUS bleibt davon unberuehrt.
+
 Ein Trip ist "latchend": er bleibt bestehen, bis acknowledge() aufgerufen
 wird (Quittieren-Button im Trip-Banner), damit ein unbeaufsichtigter Lauf
 nicht unbemerkt automatisch weiterlaeuft. Ein Temperaturkanal liesse sich
@@ -31,6 +36,7 @@ import time
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+from field_catalog import DEFAULT_STALE_TIMEOUT_S, stale_timeout_s
 from i18n import tr
 from testcase_model import COND_FIELD_LABELS
 
@@ -57,8 +63,9 @@ SAFETY_LIMIT_FIELDS: dict[str, list[tuple[str, str, float, float, float]]] = {
 # Absenkung auf 100ms) statt an das Poll-Intervall gekoppelt -- toleriert
 # einzelne verpasste/verzoegerte Zyklen (z.B. wenn ein Poll wegen mehrerer
 # Geraete laenger braucht als das Timer-Intervall), ohne eine tatsaechlich
-# getrennte/eingefrorene Quelle zu uebersehen.
-STALE_TIMEOUT_S = 2.0
+# getrennte/eingefrorene Quelle zu uebersehen. Das ist der Standard; eine Geraeteart mit langsamerer
+# Abfrage hat ihre eigene Grenze (field_catalog.stale_timeout_s, z. B. Funktionsgenerator, PI-78 a).
+STALE_TIMEOUT_S = DEFAULT_STALE_TIMEOUT_S
 STALE_CHECK_MS = 500
 
 # Aktions-Feldname (siehe SAFETY_LIMIT_FIELDS) -> Messgroesse im
@@ -97,6 +104,8 @@ class SafetyMonitor(QObject):
         self._tripped = False
         self._last_seen: dict[str, float] = {}
         self._supervised: set[str] = set()
+        # (device_id, Grund) -> True, wenn ein laufender Testablauf die Abschaltung uebernimmt (PI-79 a)
+        self.run_trip_handler = None
 
         self._stale_timer = QTimer(self)
         self._stale_timer.setInterval(STALE_CHECK_MS)
@@ -162,6 +171,20 @@ class SafetyMonitor(QObject):
         kein hil_* -Signal den Watchdog je erreichte."""
         self._last_seen[device_id] = time.monotonic()
 
+    @Slot(str, object)
+    def on_fg_state(self, device_id: str, _state: object) -> None:
+        """Heartbeat fuer die Verbindungsueberwachung, analog zu on_can_stats: der Funktionsgenerator
+        hat keine SAFETY_LIMIT_FIELDS, meldet seinen Zustand aber bei jeder Abfrage (device_worker.
+        _poll_fgs). Ohne diesen Slot brach jeder Lauf mit einem Generator-Schritt nach STALE_TIMEOUT_S
+        als "veraltet" ab, auch in einem reinen Warteschritt (PI-78 a, an Hardware beobachtet)."""
+        self._last_seen[device_id] = time.monotonic()
+
+    @Slot(str, object)
+    def on_battsim_state(self, device_id: str, _state: object) -> None:
+        """Heartbeat wie on_fg_state: der Batterie-Simulator meldet seinen Zustand nur, solange er
+        antwortet (device_worker._update_battsims), sonst device_removed."""
+        self._last_seen[device_id] = time.monotonic()
+
     @Slot(str, float, float, bool)
     def on_psu_measurement(
         self, device_id: str, voltage: float, current: float, _constant_current: bool
@@ -216,7 +239,8 @@ class SafetyMonitor(QObject):
         now = time.monotonic()
         for device_id in list(self._supervised):
             last = self._last_seen.get(device_id)
-            if last is None or (now - last) > STALE_TIMEOUT_S:
+            # Grenze je Geraeteart (PI-78 a): der Generator wird langsamer abgefragt als Netzteil/Last
+            if last is None or (now - last) > stale_timeout_s(device_id):
                 self._trip(device_id, tr("Messwerte veraltet für Gerät '{device_id}'", device_id=device_id))
                 return
 
@@ -234,6 +258,15 @@ class SafetyMonitor(QObject):
             return
         self._tripped = True
         logger.error("Sicherheitsabbruch: %s", reason)
-        self.all_off_requested.emit(reason)
+        handled = False
+        handler = self.run_trip_handler
+        if handler is not None:
+            try:
+                handled = bool(handler(device_id, reason))
+            except Exception:  # noqa: BLE001 -- dann wie ohne Lauf: alles aus
+                logger.exception("Sicherheitsabbruch: Uebergabe an den Testlauf gescheitert -- ALLE AUS")
+                handled = False
+        if not handled:
+            self.all_off_requested.emit(reason)
         self.tripped.emit(device_id, reason)
         self.state_changed.emit(self._state())

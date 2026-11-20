@@ -251,7 +251,28 @@ def main() -> int:
     check("Lauf abgebrochen mit 'ALLE AUS'", failed and "ALLE AUS" in failed[-1], str(failed))
     check("Belegung freigegeben", spin(app, 3.0, lambda: leases_b.holder_of(dw.SIM_PSU_ID) is None))
 
-    print("lost -- Partner nicht mehr erreichbar")
+    print("keep -- Lebenszeichen fehlt, Haken 'Aus bei Verbindungsverlust' herausgenommen (PI-68 a)")
+    table = window_b.settings_tab._share_table
+    off_box = table._box(dw.SIM_PSU_ID, table.COL_OFF_ON_LOSS)
+    check("Standard je Geraet: abschalten", window_b._settings.off_on_loss(dw.SIM_PSU_ID) is True)
+    check("... und so in der Freigabe-Tabelle", off_box is not None and off_box.isChecked() and off_box.isEnabled())
+    off_box.setChecked(False)   # wie ein Klick in der Tabelle
+    check("Haken heraus -> Geraet bleibt an", window_b._settings.off_on_loss(dw.SIM_PSU_ID) is False
+          and dw.SIM_PSU_ID in window_b._settings._data.get("partner_keep_on_loss", []))
+    mock_b.set_output(True)
+    leases_b.acquire([dw.SIM_PSU_ID], "pc-test", "Probe", ttl_s=1.0)
+    spin(app, 0.5)
+    check("Kachel belegt", window_b.control_tab.lease_text(dw.SIM_PSU_ID) != "")
+    spin(app, 2.0, lambda: leases_b.holder_of(dw.SIM_PSU_ID) is None)
+    spin(app, 1.0)
+    check("Belegung aufgehoben", leases_b.holder_of(dw.SIM_PSU_ID) is None)
+    check("Ausgang bleibt EIN", mock_b.get_output() is True, str(mock_b.get_output()))
+    check("Kachel wieder frei", window_b.control_tab.lease_text(dw.SIM_PSU_ID) == "")
+    mock_b.set_output(False)
+    off_box.setChecked(True)
+    check("Haken wieder an -> abschalten", window_b._settings.off_on_loss(dw.SIM_PSU_ID) is True)
+
+    print("lost -- Partner nicht mehr erreichbar (Abschalten an)")
     failed.clear()
     window_a._on_run_requested()
     started = spin(app, 10.0, lambda: window_a._test_runner.is_running()

@@ -6,6 +6,7 @@ globalen Simulationsmodus.
 from __future__ import annotations
 
 import math
+import time
 
 from picoscope2000.common import (
     MAX_ADC,
@@ -151,7 +152,10 @@ class MockPicoScope2000:
         return 10.0 * 2 ** timebase, max_samples
 
     def run_block_raw(self, trigger: TriggerConfig, timebase: int, num_samples: int,
-                      wait_s: float) -> RawBlock:
+                      wait_s: float, cancel=None, on_armed=None) -> RawBlock:
+        """Wie driver.PicoScope2000.run_block_raw. Ohne cancel antwortet der Mock sofort (auch mit
+        Trigger-Timeout); scharf geschaltet (cancel uebergeben, PI-72 a) wartet er wie das Geraet bis zur
+        Frist bzw. zum Abbruch und prueft dabei die vom Pruefskript aenderbaren Signale erneut."""
         import numpy as np
 
         if not self._channels:
@@ -162,6 +166,8 @@ class MockPicoScope2000:
         dt = timing[0] * 1e-9
         if self._rng is None:
             self._rng = np.random.default_rng(2204)
+        if on_armed is not None:
+            on_armed()
 
         trigger_index = int(round(num_samples * -trigger.delay_pct / 100.0))
         t_trigger = None
@@ -172,16 +178,18 @@ class MockPicoScope2000:
             if cfg is None:
                 raise PicoScope2000Error(f"Trigger-Quelle {source!r} ist nicht aktiv.")
             level = trigger.threshold_adc / MAX_ADC * RANGE_VOLTS[cfg.range_code]
-            grid = np.linspace(0.0, self.trigger_search_s, 200_001)
-            v = self._ideal(source, grid, cfg)
-            if trigger.direction == 0:
-                hits = np.nonzero((v[:-1] <= level) & (v[1:] > level))[0]
-            else:
-                hits = np.nonzero((v[:-1] >= level) & (v[1:] < level))[0]
-            if hits.size:
-                i = int(hits[0])
-                t_trigger = grid[i] + (level - v[i]) / (v[i + 1] - v[i]) * (grid[i + 1] - grid[i])
-            elif trigger.auto_trigger_ms == 0:
+            t_trigger = self._find_trigger(source, cfg, level, trigger.direction)
+            if t_trigger is None and cancel is not None:
+                started = time.monotonic()
+                limit = wait_s if trigger.auto_trigger_ms == 0 else trigger.auto_trigger_ms / 1000.0
+                while t_trigger is None:
+                    if cancel.is_set():
+                        raise PicoScope2000TriggerTimeout("Erfassung abgebrochen.")
+                    if time.monotonic() - started > limit:
+                        break
+                    time.sleep(0.01)
+                    t_trigger = self._find_trigger(source, cfg, level, trigger.direction)
+            if t_trigger is None and trigger.auto_trigger_ms == 0:
                 raise PicoScope2000TriggerTimeout(f"Kein Trigger innerhalb von {wait_s:.1f} s.")
         t0 = (t_trigger if t_trigger is not None else 1.234e-4) - trigger_index * dt
         t = t0 + np.arange(num_samples) * dt
@@ -193,6 +201,21 @@ class MockPicoScope2000:
             overflow[name] = bool(np.any(np.abs(v) > full_scale))
             adc[name] = np.clip(np.round(v / full_scale * MAX_ADC), -MAX_ADC, MAX_ADC).astype(int).tolist()
         return RawBlock(sample_interval_ns=timing[0], adc=adc, overflow=overflow)
+
+    def _find_trigger(self, source: str, cfg: ChannelConfig, level: float, direction: int):
+        """Zeitpunkt der ersten Flanke im Suchbereich, sonst None."""
+        import numpy as np
+
+        grid = np.linspace(0.0, self.trigger_search_s, 200_001)
+        v = self._ideal(source, grid, cfg)
+        if direction == 0:
+            hits = np.nonzero((v[:-1] <= level) & (v[1:] > level))[0]
+        else:
+            hits = np.nonzero((v[:-1] >= level) & (v[1:] < level))[0]
+        if not hits.size:
+            return None
+        i = int(hits[0])
+        return grid[i] + (level - v[i]) / (v[i + 1] - v[i]) * (grid[i + 1] - grid[i])
 
     def _ideal(self, name: str, t, cfg: ChannelConfig):
         signal = self.signals.get(name) or Constant(0.0)

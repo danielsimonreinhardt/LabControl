@@ -431,12 +431,15 @@ class PicoScope2000:
         return float(time_interval.value), int(max_samples.value)
 
     def run_block_raw(self, trigger: TriggerConfig, timebase: int, num_samples: int,
-                      wait_s: float) -> RawBlock:
+                      wait_s: float, cancel=None, on_armed=None) -> RawBlock:
         """Eine Blockerfassung mit den per configure_channels() gesetzten Kanaelen.
 
         Wartet hoechstens wait_s auf das Ende (Trigger + Erfassung). Danach wird
         die Erfassung per ps2000_stop abgebrochen und PicoScope2000TriggerTimeout
         geworfen -- anders als capture_block() gibt es keine Endlosschleife.
+        Scharf schalten (PI-72 a): on_armed() nach ps2000_run_block (Geraet wartet auf den
+        Trigger); ein gesetztes cancel (threading.Event) stoppt wie die Frist.
+        HARDWARE-PRUEFUNG: cancel/on_armed nur gegen den Mock geprueft.
         """
         enabled = list(getattr(self, "_enabled", []))
         if not enabled:
@@ -457,6 +460,8 @@ class PicoScope2000:
                 _ps.ps2000_run_block(self._chandle, num_samples, timebase, 1, ctypes.byref(time_indisposed_ms)),
                 "ps2000_run_block",
             )
+            if on_armed is not None:
+                on_armed()
             deadline = time.monotonic() + wait_s
             while True:
                 ready = _ps.ps2000_ready(self._chandle)
@@ -464,6 +469,9 @@ class PicoScope2000:
                     break
                 if ready < 0:
                     raise PicoScope2000Error(f"ps2000_ready meldet Fehler ({ready}) -- Geraet getrennt?")
+                if cancel is not None and cancel.is_set():
+                    _ps.ps2000_stop(self._chandle)
+                    raise PicoScope2000TriggerTimeout("Erfassung abgebrochen.")
                 if time.monotonic() > deadline:
                     _ps.ps2000_stop(self._chandle)
                     raise PicoScope2000TriggerTimeout(f"Kein Trigger innerhalb von {wait_s:.1f} s.")

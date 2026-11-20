@@ -12,7 +12,9 @@ naechste Sample wird erst verschickt, nachdem der vorherige bestaetigt wurde
 (kein "totes" Nachlegen in die Warteschlange, falls ein Geraet langsamer
 antwortet als das konfigurierte Intervall).
 
-Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, siehe
+Kontrollfluss-Schritte (loop/while/if/else/end/set_var/inc_var/wait, seit 1.0.1 auch
+confirm/wait_since -- Bestaetigung im Fenster bzw. Mindestzeit seit einer Aktion, PI-71 a -- und
+await_release -- Freigabe durch ein Programm ueber REST/MCP mit Hoechstzeit, PI-74 a; siehe
 testcase_model.CONTROL_STEP_TYPES) veraendern statt einer Geraete-Aktion nur
 den internen Ausfuehrungszustand: einen Stack offener Bloecke (_Frame) sowie
 einen einfachen Variablenspeicher. _advance() ist deshalb kein simpler
@@ -53,6 +55,15 @@ step_result gemeldet (rote Zeile im Editor) und weitergemacht. Deaktivierte
 Schritte werden uebersprungen (bei einem Block-Start ueberspringt das
 Deaktivieren den GESAMTEN Block). Dieser Runner laeuft im GUI-Thread,
 blockiert ihn aber nicht (Wartezeiten laufen ueber QTimer statt time.sleep).
+
+Abbruch (1.0.1, PI-76 a/PI-79 a): Endet der Lauf durch Fehler, verletzte Pruefung/Grenze, Stopp, "Abbrechen" bei
+der Bestaetigung, Freigabe-Hoechstzeit oder Verbindungsverlust, laeuft zuerst der Abbruch-Block des Ablaufs
+(falls vorhanden; Schritte in Reihenfolge, ein Fehler haelt den Rest nicht auf, hoechstens
+testcase_model.ABORT_BLOCK_MAX_S), danach die Abschaltung (shutdown_handler, RunSession: ohne Block bzw. nach einem
+Fehler im Block die vom Ablauf geschalteten Geraete und das ausloesende). Erst dann kommen step_failed bzw.
+run_stopped -- bis dahin gilt der Lauf als laufend (is_running), die Belegung beim Verbund-Partner bleibt also
+bestehen. Sicherheitsabschaltung (mode "watchdog") und ALLE AUS (mode "all_off") ueberspringen den Block bzw.
+brechen ihn ab. Ein normal beendeter Lauf (run_finished) fuehrt den Block nicht aus.
 """
 from __future__ import annotations
 
@@ -66,27 +77,37 @@ from time import monotonic
 from PySide6.QtCore import QElapsedTimer, QObject, Qt, QTimer, Signal, Slot
 
 from device_worker import PICOSCOPE_RETRY_MESSAGE
+from field_catalog import DEFAULT_STALE_TIMEOUT_S, stale_timeout_s
 from i18n import tr
 from variants import resolve_refs
+from scope_steps import SCOPE_ACTIONS
 from testcase_model import (
+    ABORT_BLOCK_MAX_S,
     ARB_RAMP,
     COND_FIELD_UNITS,
     READ_ACTIONS,
     BlockMatch,
     TestStep,
+    abort_block_steps,
+    action_label,
     arb_spacing_ms,
     arb_value,
+    confirm_text,
     is_arb_action,
+    release_key,
+    release_summary,
     kind_label,
     validate_structure,
+    wait_since_summary,
 )
 
 # Eine Messung, die aelter als dieser Wert ist, gilt als "keine aktuelle
 # Messung" (siehe _eval_condition) -- bewusst als absoluter Wert (deutlich
 # groesser als device_worker.POLL_INTERVAL_MS) statt an das Poll-Intervall
 # gekoppelt, toleriert einzelne verpasste/verzoegerte Zyklen, ohne eine
-# tatsaechlich getrennte/eingefrorene Quelle zu uebersehen.
-MEASUREMENT_STALE_S = 2.0
+# tatsaechlich getrennte/eingefrorene Quelle zu uebersehen. Standard; je Geraet
+# gilt field_catalog.stale_timeout_s (gleiche Grenze wie der Watchdog, PI-78 a).
+MEASUREMENT_STALE_S = DEFAULT_STALE_TIMEOUT_S
 
 # Verzoegerung vor einem automatischen Retry nach PICOSCOPE_RETRY_MESSAGE
 # (siehe device_worker._execute_picoscope_action) -- muss laenger sein als
@@ -98,6 +119,20 @@ MEASUREMENT_STALE_S = 2.0
 # sondern irgendwann regulaer fehlschlaegt.
 PICOSCOPE_RETRY_DELAY_S = 6.0
 PICOSCOPE_MAX_RETRIES = 3
+
+# "Warten seit Aktion" an einem Partnergeraet (PI-77 a): der Stand des Besitzers kommt mit dem sekuendlichen
+# Abgleich. Waere die Frist laut einem Stand von VOR dem Schrittbeginn schon um, wartet der Schritt auf einen
+# neueren (eine Schaltung kurz vor dem Schritt fehlt darin evtl. noch) -- so oft nachsehen, hoechstens so lange,
+# danach vorsichtshalber die volle Zeit ab Schrittbeginn.
+SINCE_FRESH_POLL_MS = 200
+SINCE_FRESH_TIMEOUT_S = 5.0
+# Waechst die Frist beim Nachsehen um mehr als das, gab es eine neue Schaltung (Vermerk); kleinere Spruenge
+# sind Laufzeitschwankungen des Abgleichs und verlaengern nur still
+SINCE_NEW_SWITCH_S = 1.0
+
+# Abbruch waehrend eine Aktion noch unterwegs ist: so lange auf deren Quittung warten, bevor der Abbruch-Block
+# beginnt (PI-76 a; Netzteil am Verbund-Partner quittiert in unter 1 s, ein Geraet mit Wiederholung in wenigen)
+ABORT_DRAIN_S = 5.0
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +163,9 @@ class TestRunner(QObject):
     execute_uds = Signal(int, object)
     # Schrittindex, TestStep -- XCP am Pruefling (FT-10), ausgefuehrt von RunSession/XcpService
     execute_xcp = Signal(int, object)
+    # Schrittindex, TestStep -- Oszilloskop scharf schalten / auf Erfassung warten (1.0.1, PI-72 a), ausgefuehrt
+    # von RunSession ueber den ScopeService; Ergebnis wie immer ueber on_action_completed (bzw. fail_check)
+    execute_scope = Signal(int, object)
     step_started = Signal(int, object)         # index, TestStep
     step_failed = Signal(int, str)             # index, Fehlermeldung
     # Ergebnis einer Pass/Fail-Pruefung: index, bestanden, Messwert. Wird auch
@@ -149,6 +187,18 @@ class TestRunner(QObject):
     # FT-12 (PI-58 a): angehalten vor Schritt (Index) bzw. weiter
     paused = Signal(int)
     resumed = Signal()
+    # PI-71 a: Bestaetigungsschritt wartet auf "Weiter"/"Abbrechen" in der Oberflaeche (Index, Text) -- Antwort
+    # ueber confirm(). Nur wenn confirm_available gesetzt ist (Fenster), sonst bricht der Schritt den Lauf ab.
+    confirm_requested = Signal(int, str)
+    # Worauf der Lauf gerade wartet (Bestaetigung, Warten seit, Freigabe), fuer Laufregister/MCP: dict oder None
+    waiting_changed = Signal(object)
+    # Vermerk zu einem Schritt fuer die Laufaufzeichnung (Index, Text), z. B. "bestätigt", tatsaechliche Wartezeit
+    step_note = Signal(int, str)
+    # PI-74 a: "Warten auf Freigabe" freigegeben (Index, wer) -- fuer das Laufregister (REST/MCP)
+    released = Signal(int, str)
+    # PI-76 a: Schritt des Abbruch-Blocks beginnt (Index, TestStep) bzw. ist fertig (Index, ok, Meldung)
+    abort_step_started = Signal(int, object)
+    abort_step_done = Signal(int, bool, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -168,6 +218,63 @@ class TestRunner(QObject):
         self._wait_timer = QTimer(self)
         self._wait_timer.setSingleShot(True)
         self._wait_timer.timeout.connect(self._finish_step)
+
+        # -- PI-71 a: Bestaetigung und "Warten seit" ---------------------------------------------
+        # Ohne Fenster (Kommandozeile) kann niemand bestaetigen: dann scheitert der Schritt (RunSession.refusal
+        # laesst solche Ablaeufe dort gar nicht erst starten). MainWindow setzt True.
+        self.confirm_available = False
+        self._confirm_index = -1
+        self._waiting: dict | None = None
+        # (device_kind, device_id, action) -> monotonic() der letzten erfolgreich quittierten Ausfuehrung im Lauf
+        self._action_times: dict[tuple[str, str, str], float] = {}
+        # "Warten seit": eigener, praeziser Timer (der grobe darf bis 5 % zu frueh feuern -- hier gilt eine
+        # Mindestzeit) mit Frist; feuert er doch vor der Frist (Pause, Systemuhr), wird nachgelegt.
+        self._since_deadline = 0.0
+        # PI-77 a: Bezug auch ausserhalb des Laufs -- (device_kind, device_id, action) -> switch_log.LastSwitch | None
+        # (RunSession: eigener Worker bzw. Besitzer im Verbund). None = nur Ausfuehrungen in diesem Lauf.
+        self.switch_lookup = None
+        self._since_step: TestStep | None = None
+        self._since_started = 0.0
+        self._since_gave_up = False   # kein aktueller Stand vom Besitzer -> volle Zeit, nicht weiter nachfragen
+        self._since_timer = QTimer(self)
+        self._since_timer.setSingleShot(True)
+        self._since_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._since_timer.timeout.connect(self._on_since_timeout)
+
+        # -- PI-74 a: "Warten auf Freigabe" ------------------------------------------------------
+        # Freigeben kann nur ein Programm mit Steuerrecht ueber REST/MCP (MainWindow -> release()). Ohne
+        # erreichbaren Server kann niemand freigeben: dann lehnt RunSession.refusal den Lauf ab, der Schritt
+        # selbst scheitert sofort. Wert: bool oder Aufruf ohne Argumente (MainWindow: laeuft der Server?).
+        self.release_available = False
+        self._release_index = -1
+        self._release_granted = False
+        self._release_timer = QTimer(self)
+        self._release_timer.setSingleShot(True)
+        self._release_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._release_timer.timeout.connect(self._on_release_timeout)
+
+        # -- PI-76 a/PI-79 a: Abbruch (Abbruch-Block, danach Abschaltung) -----------------------
+        # Laufender Abbruch oder None: kind ("failed"/"stopped"), index, message, mode ("normal"/"watchdog"/
+        # "all_off"), trigger ((Geraeteart, device_id) des ausloesenden Geraets oder None), block (Indizes),
+        # pos, results, phase ("block"/"shutdown"), waiting_ack, timed_out
+        self._abort: dict | None = None
+        # (info) -> True, wenn die Abschaltung laeuft und spaeter finish_abort() kommt (RunSession); None oder
+        # False = sofort fertig
+        self.shutdown_handler = None
+        # (mode, trigger) -- Sicherheitsabschaltung/ALLE AUS, waehrend die Abschaltung schon laeuft (RunSession)
+        self.escalate_handler = None
+        self._abort_timer = QTimer(self)         # Hoechstdauer des Abbruch-Blocks
+        self._abort_timer.setSingleShot(True)
+        self._abort_timer.timeout.connect(self._on_abort_timeout)
+        self._abort_wait_timer = QTimer(self)     # Warten / Schrittdauer im Abbruch-Block
+        self._abort_wait_timer.setSingleShot(True)
+        self._abort_wait_timer.timeout.connect(self._abort_next)
+        # Eine beim Abbruch noch unquittierte Aktion des Laufs: erst ihre Quittung abwarten (hoechstens
+        # ABORT_DRAIN_S), sonst gaelte sie als Quittung des ersten Schritts im Abbruch-Block
+        self._awaiting_ack = False
+        self._abort_drain_timer = QTimer(self)
+        self._abort_drain_timer.setSingleShot(True)
+        self._abort_drain_timer.timeout.connect(self._end_drain)
 
         # Zustand einer armierten Pass/Fail-Pruefung: (Schrittindex,
         # aufgeloeste device_id), None wenn keine Pruefung wartet. Der Timeout
@@ -245,12 +352,16 @@ class TestRunner(QObject):
         self._last_read_value = 0.0
 
     def is_running(self) -> bool:
-        return self._running
+        """Auch waehrend des Abbruchs (Abbruch-Block, Abschaltung) -- erst danach ist der Lauf zu Ende."""
+        return self._running or self._abort is not None
+
+    def is_aborting(self) -> bool:
+        return self._abort is not None
 
     def start(self, steps: list[TestStep], variables: dict[str, float] | None = None, start_index: int = 0) -> None:
         """variables: Startwerte der Laufvariablen (Kommandozeile --var name=wert, 0.58.0). start_index: ab
         dieser Zeile (FT-12 "Ab hier starten", nur auf oberster Ebene, siehe start_refusal)."""
-        if self._running:
+        if self.is_running():
             return
         self._steps = steps
         self._reset_debug()
@@ -266,7 +377,14 @@ class TestRunner(QObject):
         self._frames = []
         self._vars = {str(k): float(v) for k, v in (variables or {}).items()}
         self._pending_check = None
+        self._awaiting_ack = False
         self._run_started = monotonic()
+        self._action_times = {}
+        self._since_step = None
+        self._confirm_index = -1
+        self._release_index = -1
+        self._release_granted = False
+        self._waiting = None
         self._index = max(0, min(int(start_index), len(steps))) - 1
         self._running = True
         self._advance()
@@ -281,7 +399,7 @@ class TestRunner(QObject):
         _matching, depths, errors = validate_structure(steps)
         if errors:
             return errors[0][1]
-        if depths[start_index] != 0 or steps[start_index].step_type in ("else", "end"):
+        if depths[start_index] != 0 or steps[start_index].step_type in ("else", "end", "on_abort"):
             return tr("Ab hier starten geht nur auf oberster Ebene, nicht innerhalb eines Blocks")
         return ""
 
@@ -297,7 +415,7 @@ class TestRunner(QObject):
             return
         held = []
         if not self._arb_active:
-            for timer in (self._timer, self._wait_timer):
+            for timer in (self._timer, self._wait_timer, self._since_timer, self._release_timer):
                 if timer.isActive():
                     held.append((timer, max(0, timer.remainingTime())))
                     timer.stop()
@@ -354,7 +472,13 @@ class TestRunner(QObject):
             return False
         return self._pause_requested or self._step_mode or index in self._breakpoints
 
-    def stop(self) -> None:
+    def stop(self, mode: str = "normal") -> None:
+        """Stopp (Knopf, REST/MCP, "Abbrechen" bei der Bestaetigung): Abbruch-Block, dann Abschaltung, dann
+        run_stopped. mode "all_off": ohne Block (alles wird ohnehin abgeschaltet). Waehrend eines Abbruchs
+        wirkungslos -- ausser "watchdog"/"all_off", die einen laufenden Abbruch-Block abbrechen."""
+        if self._abort is not None:
+            self._escalate(mode, None, "")
+            return
         if not self._running:
             return
         self._reset_debug()
@@ -367,18 +491,22 @@ class TestRunner(QObject):
         self._pico_retry_timer.stop()
         self._pico_retry_count = 0
         self._running = False
-        self._frames = []
-        self._vars = {}
+        self._frames = []   # Variablen bleiben bis zum naechsten Start (Parameter im Abbruch-Block)
         self._clear_monitors()
-        self.run_stopped.emit()
+        self._clear_waiting()
+        self._begin_abort("stopped", max(self._index, 0), "", mode, None)
 
-    def abort(self, message: str) -> None:
-        """Bricht einen laufenden Ablauf mit Fehlermeldung ab (wie ein fehlgeschlagener Schritt):
-        ALLE AUS waehrend des Laufs, Verbindungsverlust zum Verbund-Partner (PI-26 a)."""
+    def abort(self, message: str, mode: str = "normal", trigger: tuple[str, str] | None = None) -> None:
+        """Bricht einen laufenden Ablauf mit Fehlermeldung ab (wie ein fehlgeschlagener Schritt): Verbindungsverlust
+        zum Verbund-Partner (PI-26 a), Zeitlimit der Kommandozeile; mode "all_off" bei ALLE AUS, "watchdog" bei der
+        Sicherheitsabschaltung (trigger: ausloesendes Geraet, PI-79 a)."""
+        if self._abort is not None:
+            self._escalate(mode, trigger, message)
+            return
         if self._running:
             self._timer.stop()
             self._arb_timer.stop()
-            self._fail_at(max(self._index, 0), message)
+            self._fail_at(max(self._index, 0), message, mode=mode, trigger=trigger, derive_trigger=False)
 
     # -- Messwert-Cache (fuer while/if-Bedingungen) ---------------------------
 
@@ -440,6 +568,14 @@ class TestRunner(QObject):
 
     @Slot(bool, str, float)
     def on_action_completed(self, success: bool, message: str, value: float) -> None:
+        abort = self._abort
+        self._awaiting_ack = False
+        if abort is not None:
+            if abort.get("draining"):
+                self._end_drain()   # Quittung der beim Abbruch noch laufenden Aktion
+            elif abort["waiting_ack"]:
+                self._abort_action_done(success, message)   # Schritt des Abbruch-Blocks (PI-76 a)
+            return
         if not self._running:
             return  # Ergebnis eines bereits gestoppten Laufs -- ignorieren
         if not success:
@@ -453,6 +589,8 @@ class TestRunner(QObject):
             self._continue_arb()
             return
         step = self._steps[self._index]
+        # PI-71 a: Bezug fuer "Warten seit" -- Zeitpunkt der Quittung (spaeter als das Senden, also vorsichtig)
+        self._action_times[(step.device_kind, step.device_id, step.action)] = monotonic()
         if step.action in READ_ACTIONS:
             self._last_read_value = value
             if step.store_var:
@@ -468,6 +606,7 @@ class TestRunner(QObject):
         (Exit 1 statt 2, run_session.failed_by_check)."""
         if not self._running:
             return
+        self._awaiting_ack = False
         self.step_result.emit(self._index, False, value)
         self._fail_at(self._index, message)
 
@@ -500,9 +639,16 @@ class TestRunner(QObject):
         if not self._running:
             return
         step = self._steps[self._index]
+        self._awaiting_ack = True
         self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value, step.hil_channel)
 
-    def _fail_at(self, index: int, message: str) -> None:
+    def _fail_at(self, index: int, message: str, mode: str = "normal",
+                 trigger: tuple[str, str] | None = None, derive_trigger: bool = True) -> None:
+        """Lauf scheitert an Schritt `index`. trigger: ausloesendes Geraet (PI-79 a); ohne Angabe das Geraet des
+        Schritts (Aktion, Pruefung) bzw. die Quelle der Ueberwachung/Bedingung -- nicht bei einem Abbruch von
+        aussen (abort: Verbindungsverlust, Zeitlimit), der kein Geraet des Schritts betrifft."""
+        if trigger is None and derive_trigger:
+            trigger = self._trigger_of(index)
         self._reset_debug()
         self._clear_monitors()
         self._running = False
@@ -512,7 +658,183 @@ class TestRunner(QObject):
         self._pending_check = None
         self._pico_retry_timer.stop()
         self._pico_retry_count = 0
-        self.step_failed.emit(index, message)
+        self._clear_waiting()
+        self._begin_abort("failed", index, message, mode, trigger)
+
+    def _trigger_of(self, index: int) -> tuple[str, str] | None:
+        """(Geraeteart, device_id) des Geraets, an dem Schritt `index` gescheitert ist ("" = automatisch)."""
+        if not 0 <= index < len(self._steps):
+            return None
+        step = self._steps[index]
+        if step.step_type == "action":
+            return step.device_kind, step.device_id
+        if step.step_type == "monitor":
+            entry = self._monitors.get(index)
+            if entry is not None:
+                return entry[1]["kind"], entry[1]["device_id"]
+            return step.cond_device_kind, step.cond_device_id
+        if step.step_type in ("while", "if") and step.cond_source == "measurement":
+            return step.cond_device_kind, step.cond_device_id
+        return None
+
+    # -- Abbruch: Abbruch-Block und Abschaltung (PI-76 a, PI-79 a) ---------------------------
+
+    def _begin_abort(self, kind: str, index: int, message: str, mode: str,
+                     trigger: tuple[str, str] | None) -> None:
+        block = abort_block_steps(self._steps) if mode == "normal" else []
+        self._abort = {"kind": kind, "index": index, "message": message, "mode": mode, "trigger": trigger,
+                       "block": block, "pos": 0, "results": [], "phase": "block", "waiting_ack": False,
+                       "timed_out": False, "has_block": bool(block), "cancelled": ""}
+        if not block:
+            self._after_abort_block()
+            return
+        logger.warning("Testablauf: Abbruch-Block (%d Schritte)", len(block))
+        self._abort_timer.start(round(ABORT_BLOCK_MAX_S * 1000))
+        if self._awaiting_ack:
+            self._abort["draining"] = True
+            self._abort_drain_timer.start(round(ABORT_DRAIN_S * 1000))
+            return
+        self._abort_next()
+
+    def _end_drain(self) -> None:
+        a = self._abort
+        self._abort_drain_timer.stop()
+        if a is None or not a.get("draining"):
+            return
+        a["draining"] = False
+        self._abort_next()
+
+    def _abort_next(self) -> None:
+        a = self._abort
+        if a is None or a["phase"] != "block":
+            return
+        while a["pos"] < len(a["block"]):
+            index = a["block"][a["pos"]]
+            step = self._steps[index]
+            self.abort_step_started.emit(index, step)
+            if (step.params or {}).get("refs"):
+                problem = resolve_refs(step, self._vars)
+                if problem:
+                    self._abort_result(index, False, problem)
+                    continue
+            if step.step_type == "wait":
+                self._abort_result(index, True, "")
+                if step.duration > 0:
+                    self._abort_wait_timer.start(max(0, round(step.duration * 1000)))
+                    return
+                continue
+            a["waiting_ack"] = True
+            self._index = index
+            self._dispatch_action(index, step)
+            return
+        self._abort_timer.stop()
+        self._after_abort_block()
+
+    def _abort_result(self, index: int, ok: bool, message: str) -> None:
+        a = self._abort
+        a["results"].append({"index": index, "ok": ok, "message": message})
+        a["pos"] += 1
+        self.abort_step_done.emit(index, ok, message)
+        if not ok:
+            logger.error("Abbruch-Block, Schritt %d: %s", index + 1, message)
+
+    def _abort_action_done(self, success: bool, message: str) -> None:
+        a = self._abort
+        a["waiting_ack"] = False
+        index = a["block"][a["pos"]]
+        step = self._steps[index]
+        if success:
+            self._action_times[(step.device_kind, step.device_id, step.action)] = monotonic()
+        self._abort_result(index, success, message)
+        if success and step.duration > 0:
+            self._abort_wait_timer.start(max(0, round(step.duration * 1000)))
+            return
+        self._abort_next()
+
+    def _on_abort_timeout(self) -> None:
+        a = self._abort
+        if a is None or a["phase"] != "block":
+            return
+        a["timed_out"] = True
+        self._cancel_block(tr("nicht ausgeführt – Abbruch-Block länger als {seconds:g} s",
+                              seconds=ABORT_BLOCK_MAX_S))
+        self._after_abort_block()
+
+    def _cancel_block(self, reason: str) -> None:
+        """Rest des Abbruch-Blocks nicht mehr ausfuehren (Hoechstdauer, Sicherheitsabschaltung, ALLE AUS)."""
+        a = self._abort
+        self._abort_wait_timer.stop()
+        self._abort_timer.stop()
+        self._abort_drain_timer.stop()
+        a["waiting_ack"] = False
+        a["draining"] = False
+        a["cancelled"] = reason
+        while a["pos"] < len(a["block"]):
+            self._abort_result(a["block"][a["pos"]], False, reason)
+
+    def _escalate(self, mode: str, trigger: tuple[str, str] | None, message: str) -> None:
+        """Sicherheitsabschaltung oder ALLE AUS waehrend eines Abbruchs: Block abbrechen, harte Abschaltung."""
+        a = self._abort
+        if mode == "normal" or a is None:
+            return   # zweiter Stopp/Abbruch: der laufende Abbruch geht weiter
+        if a["mode"] == "all_off" or (a["mode"] == mode and trigger is None):
+            return
+        logger.warning("Testablauf: Abbruch wird zu %s (%s)", mode, message)
+        a["mode"] = mode
+        if trigger is not None:
+            a["trigger"] = trigger
+        if a["phase"] == "block":
+            self._cancel_block(tr("nicht ausgeführt – ALLE AUS") if mode == "all_off" else
+                               tr("nicht ausgeführt – Sicherheitsabschaltung"))
+            self._after_abort_block()
+            return
+        handler = self.escalate_handler
+        if handler is not None:
+            try:
+                handler(mode, trigger)
+            except Exception:  # noqa: BLE001 -- die Abschaltung darf nicht an der Weitergabe scheitern
+                logger.exception("Abbruch: Verschaerfung nicht weitergegeben")
+
+    def _after_abort_block(self) -> None:
+        a = self._abort
+        if a is None or a["phase"] != "block":
+            return
+        a["phase"] = "shutdown"
+        info = self.abort_info()
+        pending = False
+        handler = self.shutdown_handler
+        if handler is not None:
+            try:
+                pending = bool(handler(info))
+            except Exception:  # noqa: BLE001 -- ohne Abschaltung trotzdem sauber enden
+                logger.exception("Abschaltung beim Abbruch gescheitert")
+                pending = False
+        if not pending:
+            self.finish_abort()
+
+    def abort_info(self) -> dict | None:
+        """Stand des Abbruchs fuer RunSession/Bericht."""
+        a = self._abort
+        if a is None:
+            return None
+        results = [dict(r) for r in a["results"]]
+        return {"kind": a["kind"], "index": a["index"], "message": a["message"], "mode": a["mode"],
+                "trigger": a["trigger"], "has_block": a["has_block"], "block": results,
+                "block_ok": a["has_block"] and all(r["ok"] for r in results) and not a["cancelled"],
+                "timed_out": a["timed_out"], "cancelled": a["cancelled"]}
+
+    def finish_abort(self) -> None:
+        """Abschaltung fertig: jetzt endet der Lauf (step_failed bzw. run_stopped)."""
+        a, self._abort = self._abort, None
+        if a is None:
+            return
+        self._abort_timer.stop()
+        self._abort_wait_timer.stop()
+        self._abort_drain_timer.stop()
+        if a["kind"] == "failed":
+            self.step_failed.emit(a["index"], a["message"])
+        else:
+            self.run_stopped.emit()
 
     # -- Pass/Fail-Pruefung nach der Wartezeit ---------------------------------
 
@@ -562,7 +884,7 @@ class TestRunner(QObject):
                 self._fail_at(self._index, message)
                 return
         self._pending_check = (self._index, device_id)
-        self._check_timeout.start(round(MEASUREMENT_STALE_S * 1000))
+        self._check_timeout.start(round(stale_timeout_s(device_id) * 1000))
 
     def _maybe_complete_check(self, device_id: str) -> None:
         if not self._running or self._pending_check is None:
@@ -647,27 +969,14 @@ class TestRunner(QObject):
                 self.step_started.emit(self._index, step)
                 if is_arb_action(step.action):
                     self._start_arb(step)
-                elif step.action == "CAN_SEND":
-                    self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
-                elif step.action.startswith("RESTBUS_"):
-                    params = step.params or {}
-                    value = params.get("value", step.value)
-                    self.execute_restbus.emit(step.device_id, step.action, str(params.get("message", "")),
-                                              str(params.get("signal", "")),
-                                              f"{value:g}" if isinstance(value, (int, float)) else str(value))
-                elif step.device_kind == "jlink":
-                    # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
-                    self.execute_jlink.emit(step.device_id, step.action, step.file_path)
-                elif step.device_kind == "xcp":
-                    self.execute_xcp.emit(self._index, step)
-                elif step.device_kind == "uds":
-                    # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
-                    self.execute_uds.emit(self._index, step)
                 else:
-                    self.execute_action.emit(
-                        step.device_id, step.device_kind, step.action, step.value, step.hil_channel
-                    )
+                    self._dispatch_action(self._index, step)
                 return
+
+            if t == "on_abort":
+                # PI-76 a: der Abbruch-Block laeuft nur bei einem Abbruch (siehe _begin_abort)
+                self._index = self._matching[self._index].end_index
+                continue
 
             if t == "wait":
                 if not step.enabled:
@@ -677,6 +986,36 @@ class TestRunner(QObject):
                     self._timer.start(max(0, round(step.duration * 1000)))
                     return
                 continue
+
+            if t == "confirm":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                text = confirm_text(step)
+                if not self.confirm_available:
+                    self._fail_at(self._index, tr("Bestätigung „{prompt}“ geht nur im LabControl-Fenster – Lauf "
+                                                  "abgebrochen", prompt=text))
+                    return
+                self._confirm_index = self._index
+                self._set_waiting({"kind": "confirm", "step": self._index + 1, "text": text,
+                                   "message": tr("wartet auf Bestätigung: {prompt}", prompt=text)})
+                self.confirm_requested.emit(self._index, text)
+                return
+
+            if t == "wait_since":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                if self._start_wait_since(step):
+                    return
+                continue
+
+            if t == "await_release":
+                if not step.enabled:
+                    continue
+                self.step_started.emit(self._index, step)
+                self._start_await_release(step)
+                return
 
             if t in ("set_var", "inc_var"):
                 if not step.enabled:
@@ -808,6 +1147,222 @@ class TestRunner(QObject):
             # Unbekannter step_type (z.B. aus einer neueren Programmversion
             # geladen) -- als No-Op ueberspringen statt abzustuerzen.
             continue
+
+    def _dispatch_action(self, index: int, step: TestStep) -> None:
+        """Aktion an den passenden Dienst schicken; Ergebnis kommt ueber on_action_completed (bzw. fail_check)."""
+        self._awaiting_ack = True
+        if step.action == "CAN_SEND":
+            self.execute_can_send.emit(step.device_id, step.can_id, step.can_data, step.can_extended)
+        elif step.action.startswith("RESTBUS_"):
+            params = step.params or {}
+            value = params.get("value", step.value)
+            self.execute_restbus.emit(step.device_id, step.action, str(params.get("message", "")),
+                                      str(params.get("signal", "")),
+                                      f"{value:g}" if isinstance(value, (int, float)) else str(value))
+        elif step.device_kind == "jlink":
+            # Eigener Weg (JLinkService statt DeviceWorker), Ergebnis wieder ueber on_action_completed
+            self.execute_jlink.emit(step.device_id, step.action, step.file_path)
+        elif step.device_kind == "xcp":
+            self.execute_xcp.emit(index, step)
+        elif step.action in SCOPE_ACTIONS:
+            self.execute_scope.emit(index, step)
+        elif step.device_kind == "uds":
+            # UDS (FT-1): Ergebnis ueber on_action_completed bzw. fail_check (Erwartung verletzt)
+            self.execute_uds.emit(index, step)
+        else:
+            self.execute_action.emit(step.device_id, step.device_kind, step.action, step.value, step.hil_channel)
+
+    # -- Bestaetigung und "Warten seit" (PI-71 a) ----------------------------------
+
+    @Slot(bool)
+    def confirm(self, accepted: bool) -> None:
+        """Antwort auf confirm_requested: Weiter (True) oder Abbrechen (False, wie Stopp). Nur aus der
+        Oberflaeche -- es gibt bewusst keinen Weg ueber Netzwerk/MCP."""
+        if not self._running or self._confirm_index < 0 or self._confirm_index != self._index:
+            return
+        index, self._confirm_index = self._confirm_index, -1
+        self.step_note.emit(index, tr("bestätigt") if accepted else tr("abgebrochen"))
+        if not accepted:
+            self.stop()
+            return
+        self._clear_waiting()
+        self._advance()
+
+    def waiting(self) -> dict | None:
+        return dict(self._waiting) if self._waiting else None
+
+    def _set_waiting(self, info: dict | None) -> None:
+        self._waiting = dict(info) if info else None
+        self.waiting_changed.emit(self.waiting())
+
+    def _clear_waiting(self) -> None:
+        self._confirm_index = -1
+        self._release_index = -1
+        self._release_granted = False
+        self._since_timer.stop()
+        self._release_timer.stop()
+        if self._waiting is not None:
+            self._set_waiting(None)
+
+    def _last_action_time(self, step: TestStep) -> float | None:
+        """Letzte quittierte Ausfuehrung der Aktion im Lauf. Eine leere Kennung ("automatisch") passt auf jedes
+        Geraet der Art -- vorsichtig: der juengste Treffer zaehlt."""
+        times = [ts for (kind, device_id, action), ts in self._action_times.items()
+                 if kind == step.device_kind and action == step.action
+                 and (device_id == step.device_id or not device_id or not step.device_id)]
+        return max(times) if times else None
+
+    def _since_reference(self, step: TestStep) -> tuple[float | None, str, float]:
+        """(monotonic() der juengsten bekannten Ausfuehrung | None, Quelle bzw. Grund, Stand ab).
+
+        Bezug sind die Ausfuehrungen in diesem Lauf und (PI-77 a) jede Schaltung ueber LabControl, die der
+        Besitzer des Geraets kennt (switch_lookup: Kachel, MCP/REST, Verbund-Partner, ALLE AUS ...). "Stand ab":
+        ab wann die Auskunft gilt (lokal jetzt, beim Partner die letzte Abfrage)."""
+        now = monotonic()
+        own = self._last_action_time(step)
+        info = None
+        if self.switch_lookup is not None:
+            try:
+                info = self.switch_lookup(step.device_kind, step.device_id, step.action)
+            except Exception:  # noqa: BLE001 -- Nachsehen darf den Lauf nicht anhalten; ohne Auskunft volle Zeit
+                logger.exception("Letzte Schaltung von %s nicht lesbar", step.device_id or step.device_kind)
+        fresh = info.fresh_since if info is not None else now
+        if info is not None and info.at is not None and (own is None or info.at > own):
+            return info.at, tr(info.source) if info.source else "?", fresh
+        if own is not None:
+            return own, tr("Ablauf"), fresh
+        return None, info.source if info is not None else "", fresh
+
+    def _since_waiting(self, step: TestStep, remaining: float) -> None:
+        self._set_waiting({"kind": "wait_since", "step": self._index + 1, "text": wait_since_summary(step),
+                           "remaining_s": round(remaining, 1), "until": time.time() + remaining,
+                           "message": tr("wartet {summary}", summary=wait_since_summary(step))})
+
+    def _start_wait_since(self, step: TestStep) -> bool:
+        """True = wartet (Timer laeuft), False = Frist schon um."""
+        now = monotonic()
+        minimum = max(0.0, step.duration)
+        self._since_step = step
+        self._since_started = now
+        self._since_gave_up = False
+        last, source, fresh = self._since_reference(step)
+        action = action_label(step.device_kind, step.action)
+        if last is None:
+            deadline = now + minimum
+            note = (tr("{action}: letzter Zeitpunkt unbekannt ({reason}) – volle {seconds:g} s",
+                       action=action, reason=source, seconds=minimum) if source else
+                    tr("{action} seit dem Start von LabControl noch nicht ausgeführt – volle {seconds:g} s",
+                       action=action, seconds=minimum))
+        else:
+            deadline = last + minimum
+            note = tr("{action} zuletzt vor {elapsed:.1f} s ({source}) – wartet {remaining:.1f} s",
+                      action=action, elapsed=now - last, source=source, remaining=max(0.0, deadline - now))
+        self.step_note.emit(self._index, note)
+        self._since_deadline = deadline
+        if deadline <= now and fresh >= now:
+            return False
+        self._since_waiting(step, max(0.0, deadline - now))
+        self._since_timer.start(max(1, math.ceil((deadline - now) * 1000)) if deadline > now
+                                else SINCE_FRESH_POLL_MS)
+        return True
+
+    def _on_since_timeout(self) -> None:
+        """Frist um (oder nachsehen): neu nachsehen -- eine Schaltung waehrend des Wartens (Kachel, Partner) oder
+        ein neuerer Stand des Besitzers verlaengert die Frist, nie verkuerzt sie."""
+        if not self._running or self._since_step is None:
+            return
+        step = self._since_step
+        now = monotonic()
+        minimum = max(0.0, step.duration)
+        action = action_label(step.device_kind, step.action)
+        last, source, fresh = self._since_reference(step)
+        if last is not None and last + minimum > self._since_deadline:
+            if last + minimum - self._since_deadline > SINCE_NEW_SWITCH_S:
+                self.step_note.emit(self._index, tr(
+                    "{action} erneut ausgeführt ({source}) – wartet weitere {remaining:.1f} s", action=action,
+                    source=source, remaining=max(0.0, last + minimum - now)))
+            self._since_deadline = last + minimum
+            self._since_waiting(step, max(0.0, self._since_deadline - now))
+        if fresh < self._since_started and not self._since_gave_up:
+            if now - self._since_started < SINCE_FRESH_TIMEOUT_S:
+                if self._since_deadline <= now:
+                    self._since_timer.start(SINCE_FRESH_POLL_MS)
+                    return
+            else:
+                self._since_gave_up = True
+                full = self._since_started + minimum
+                if full > self._since_deadline:
+                    self._since_deadline = full
+                    self.step_note.emit(self._index, tr(
+                        "{action}: kein aktueller Stand vom Besitzer – volle {seconds:g} s", action=action,
+                        seconds=minimum))
+                    self._since_waiting(step, max(0.0, full - now))
+        rest = self._since_deadline - now
+        if rest > 0:
+            self._since_timer.start(max(1, math.ceil(rest * 1000)))
+            return
+        self._clear_waiting()
+        self._advance()
+
+    # -- Warten auf Freigabe (PI-74 a) ---------------------------------------------
+
+    def release_possible(self) -> bool:
+        available = self.release_available
+        return bool(available()) if callable(available) else bool(available)
+
+    def _start_await_release(self, step: TestStep) -> None:
+        key = release_key(step)
+        if not self.release_possible():
+            self._fail_at(self._index, tr("Warten auf Freigabe geht nur mit Netzwerkfreigabe (REST/MCP) – Lauf "
+                                          "abgebrochen"))
+            return
+        limit = max(0.0, step.duration)
+        self._release_index = self._index
+        self._release_granted = False
+        self._set_waiting({"kind": "release", "step": self._index + 1, "key": key, "text": key,
+                           "timeout_s": limit, "remaining_s": round(limit, 1), "until": time.time() + limit,
+                           "message": tr("wartet auf Freigabe {summary}", summary=release_summary(step))})
+        self._release_timer.start(max(1, math.ceil(limit * 1000)))
+
+    def release(self, who: str, key: str | None = None, step: int | None = None) -> str:
+        """Freigabe eines wartenden Schritts "Warten auf Freigabe" (PI-74 a) -- nur ueber REST/MCP (MainWindow
+        prueft vorher das Steuerrecht). key/step (1-basiert), falls angegeben, muessen zum wartenden Schritt
+        passen. "" = freigegeben, sonst Fehlercode: not_running, confirm_local_only (wartet auf eine
+        Bestaetigung, die nur im Fenster geht), not_waiting_release, release_mismatch."""
+        if not self._running:
+            return "not_running"
+        if self._release_index < 0 or self._release_index != self._index or self._release_granted:
+            return "confirm_local_only" if self._confirm_index >= 0 else "not_waiting_release"
+        step_obj = self._steps[self._release_index]
+        if (key is not None and key.strip() != release_key(step_obj)) or (
+                step is not None and int(step) != self._release_index + 1):
+            return "release_mismatch"
+        index = self._release_index
+        self.step_note.emit(index, tr("freigegeben von {who} um {time}", who=who or "?",
+                                      time=time.strftime("%H:%M:%S")))
+        self.released.emit(index, who or "")
+        if self._paused:
+            # Angehalten (FT-12): freigegeben, weiter erst nach "Weiter" -- der gehaltene Timer feuert dann sofort
+            self._release_granted = True
+            self._held_timers = [(timer, 0 if timer is self._release_timer else remaining)
+                                 for timer, remaining in self._held_timers]
+            if self._waiting is not None:
+                self._set_waiting(None)
+            return ""
+        self._clear_waiting()
+        self._advance()
+        return ""
+
+    def _on_release_timeout(self) -> None:
+        if not self._running or self._release_index < 0:
+            return
+        if self._release_granted:   # waehrend einer Pause freigegeben
+            self._clear_waiting()
+            self._advance()
+            return
+        step = self._steps[self._release_index]
+        self._fail_at(self._release_index, tr("keine Freigabe {summary} – Höchstzeit abgelaufen",
+                                              summary=release_summary(step)))
 
     # -- Zeitpruefungen (FT-7, "Ueberwachen … Ende") -------------------------------
 
@@ -970,7 +1525,7 @@ class TestRunner(QObject):
             device_id = step.cond_device_id
             if device_id:
                 entry = self._measurements.get(device_id)
-                if entry is None or (monotonic() - entry[3]) > MEASUREMENT_STALE_S:
+                if entry is None or (monotonic() - entry[3]) > stale_timeout_s(device_id):
                     return None, tr(
                         "Keine aktuelle Messung für Gerät '{device_id}'", device_id=device_id
                     )
@@ -1011,7 +1566,7 @@ class TestRunner(QObject):
         device_id = step.cond_device_id
         if device_id:
             entry = self._hil_measurements.get(device_id)
-            if entry is None or (monotonic() - entry[2]) > MEASUREMENT_STALE_S:
+            if entry is None or (monotonic() - entry[2]) > stale_timeout_s(device_id):
                 return None, tr(
                     "Keine aktuelle Messung für Gerät '{device_id}'", device_id=device_id
                 )
@@ -1097,7 +1652,7 @@ class TestRunner(QObject):
         candidates = [
             did
             for did, entry in measurements.items()
-            if did.startswith(prefix) and (monotonic() - entry[-1]) <= MEASUREMENT_STALE_S
+            if did.startswith(prefix) and (monotonic() - entry[-1]) <= stale_timeout_s(did)
         ]
         if not candidates:
             return None, "missing"
@@ -1120,6 +1675,7 @@ class TestRunner(QObject):
         self._arb_last_send_ms = self._arb_clock.elapsed()
         value = arb_value(step, self._arb_last_send_ms / 1000.0)
         self.setpoint_sent.emit(self._index, step.device_id, step.arb_target, value)
+        self._awaiting_ack = True
         self.execute_action.emit(step.device_id, step.device_kind, step.arb_target, value, step.hil_channel)
 
     def _continue_arb(self) -> None:

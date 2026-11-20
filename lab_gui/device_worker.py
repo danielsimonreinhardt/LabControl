@@ -32,9 +32,17 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from jds66xx.driver import (
+    POLL_FAST_FIELDS as FG_POLL_FAST_FIELDS,
+    POLL_SLOW_FIELDS as FG_POLL_SLOW_FIELDS,
     FunctionGeneratorError,
     FunctionGeneratorValueError,
     JDS66xx,
+    read_field as fg_read_field,
+    readback_fields as fg_readback_fields,
+    set_amplitude_checked as fg_set_amplitude,
+    set_duty_checked as fg_set_duty,
+    set_offset_checked as fg_set_offset,
+    set_waveform_checked as fg_set_waveform,
     WAVE_DC,
     WAVE_PULSE,
     WAVE_SINE,
@@ -87,12 +95,22 @@ from unit_mso1000hd.driver import (
     register_resource as scpi_register_resource,
 )
 
+from switch_log import SOURCE_ALL_OFF, SOURCE_REMOTE, SOURCE_RUN, SwitchLog
+
 logger = logging.getLogger(__name__)
 
 # Bedienungen ins Log (PI-15): Bezeichnung je Geraeteart und Aktionen, die nur lesen (nicht protokolliert)
 OPERATION_LABELS = {"psu": "Netzteil", "load": "Last", "fg": "Funktionsgenerator", "hil": "microHIL",
                     "battsim": "Batterie-Simulator"}
 READ_ACTIONS = {"HIL_IN_READ", "HIL_AIN_READ", "BS_CELL_READ", "BS_STACK_READ"}
+# PI-81 a: Geraetearten mit Ausgang, deren Trennung ALLE AUS als "Ausgang unbekannt" meldet (Batterie-Simulator:
+# ohne zyklische Botschaften faellt er nach 4,5-6 s selbst in FAIL)
+SESSION_OUTPUT_KINDS = ("psu", "load", "fg", "hil")
+# PI-81 a: Strombegrenzung, ab der ein beim Verbinden eingeschaltet vorgefundenes Netzteil gemeldet wird -- eine
+# halbe Anzeigestelle des HCS-34xx (0,1 A); der Uebergabezustand beim Beenden hat 0 A (_release_psu)
+PSU_FOUND_ON_MIN_CURRENT_A = 0.05
+# PI-81 a: Aktionen, nach denen ein vorgefundenes Netzteil als "ueber LabControl geschaltet" gilt
+PSU_FOUND_ON_CLEAR_ACTIONS = {"PSU_OUT_ON", "PSU_OUT_OFF", "PSU_VOLT", "PSU_CURR", "PSU_RECALL"}
 
 # Meldungen, die sich bei jedem Verbindungsversuch wiederholen (fremder CH340-Port, von einer
 # anderen App gehaltener Port), hoechstens alle 10 min je Port. Vorher bestand das Log zu ~80 %
@@ -179,14 +197,18 @@ PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
 SCPISCOPE_PROBE_INTERVAL_MS = 10000
 SCPISCOPE_PROBE_TIMEOUT_S = 2.0
 
-# Eigenes Poll-Intervall fuer den Funktionsgenerator: ein voller Zustand sind
-# 13 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
-# Tastverhaeltnis, Phase). Der Generator hat keine Messwerte, die sich von
-# selbst aendern -- nur ein Handeingriff am Geraet ist zu erkennen, dafuer
-# reicht ein langsamer Takt und er nimmt dem gemeinsamen Poll-Zyklus von
-# Last/Netzteil keine Zeit weg. Nach jedem eigenen Schreibbefehl wird der
-# Zustand ohnehin sofort neu gelesen (siehe _guard_fg/_emit_fg_state).
-FG_POLL_INTERVAL_MS = 2000
+# Eigenes Poll-Intervall fuer den Funktionsgenerator. Ein voller Zustand sind
+# 12 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
+# Tastverhaeltnis, Phase); er wird nur beim Verbinden ganz gelesen. Je
+# Zyklus (PI-78 a) nur die Ausgaenge (jds66xx.driver.POLL_FAST_FIELDS)
+# und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen Felder: 4 statt 12
+# Abfragen, dafuer alle 0,5 s statt alle 2 s -- EIN/AUS ist nach spaetestens
+# 0,5 s aktuell, ein Handeingriff an den Signalparametern nach etwa 2 s
+# (11 Felder, 3 je Zyklus), und der Zustand kommt oft genug fuer den Watchdog
+# (Grenze siehe jds66xx.driver.STALE_TIMEOUT_S). Nach jedem eigenen
+# Schreibbefehl wird das betroffene Feld sofort zurueckgelesen (_guard_fg).
+FG_POLL_INTERVAL_MS = 500
+FG_SLOW_FIELDS_PER_POLL = 3
 
 # Ein CH340-Port (siehe jds66xx.driver.USB_VID) kann ein FREMDES Geraet tragen.
 # Ein Port, der den Handshake nicht besteht, wird deshalb nicht alle
@@ -445,6 +467,16 @@ class DeviceWorker(QObject):
     # Bewusst NICHT action_completed -- das gehoert dem TestRunner.
     remote_action_completed = Signal(int, bool, str, float)
     all_off_finished = Signal(str)           # Semikolon-Liste fehlgeschlagener Geraete, "" = alles ok
+    # Abschaltung einzelner Geraete mit Kennung (devices_off_tagged, PI-79 a): Kennung, abgeschaltet, nicht
+    # erreichbar/fehlgeschlagen (Listen von device_ids)
+    devices_off_done = Signal(int, list, list)
+    # PI-81 a: Geraete, die beim ALLE AUS nicht erreichbar bzw. nicht mehr verbunden waren, obwohl sie in dieser
+    # Sitzung verbunden waren -- ihr Ausgang ist unbekannt. Kommt VOR all_off_finished (Liste von device_ids).
+    all_off_unreachable = Signal(list)
+    # PI-81 a: Netzteil beim Verbinden mit Ausgang EIN und Strombegrenzung > 0 vorgefunden: device_id,
+    # {"voltage", "current"} (Sollwerte, None = nicht lesbar) bzw. None, sobald das nicht mehr gilt (Schaltung ueber
+    # LabControl, Ausgang AUS gemeldet, getrennt)
+    psu_found_on = Signal(str, object)
 
     can_connected = Signal(str, bool)        # device_id, online
     # PI-54 (0.65.0): CAN-Kanal fuer canflash freigegeben (True) bzw. wieder geoeffnet (False)
@@ -521,7 +553,7 @@ class DeviceWorker(QObject):
     # [{"waveform", "frequency", "amplitude", "offset", "duty"} x2], "phase"}.
     # Ein dict statt vieler Einzelsignale, weil der Generator kein schnell
     # veraenderlicher Messwert ist, sondern ein Satz Einstellungen, der nur
-    # als Ganzes gelesen wird (siehe FG_POLL_INTERVAL_MS).
+    # als Ganzes gemeldet wird (gelesen teils rollierend, siehe FG_POLL_INTERVAL_MS).
     fg_state = Signal(str, object)
 
     # Batterie-Simulator (Geraeteart "battsim", CAN-Knoten an einem
@@ -562,6 +594,11 @@ class DeviceWorker(QObject):
         # Port -> monotonic()-Zeitpunkt, vor dem er nicht erneut geprobt wird
         # (siehe FG_REPROBE_INTERVAL_S).
         self._fg_probe_after: dict[str, float] = {}
+        # Zuletzt gelesener Zustand je Generator (Format wie fg_state) und Position der rollierenden
+        # Abfrage in FG_POLL_SLOW_FIELDS (PI-78 a)
+        self._fg_cache: dict[str, dict] = {}
+        self._fg_slow_index: dict[str, int] = {}
+        self._last_slow_fg_log = 0.0
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
         # Zuletzt bekannte Sollwerte je Netzteil [V, A] (_note_setpoint, PI-43 b)
@@ -659,6 +696,19 @@ class DeviceWorker(QObject):
         self._test_running = False
         self._simulation_mode = simulation_mode
         self._operation_source = "Kachel"   # Herkunft der Kachel-Bedienungen (set_operation_source, PI-15)
+        # PI-77 a: letzte erfolgreiche Schaltung je Geraet und Aktion (Kachel, Preset, Ablauf, MCP/REST, Verbund,
+        # ALLE AUS) -- fuer "Warten seit Aktion" hier und beim Verbund-Partner (switch_log.py, thread-sicher)
+        self.switch_log = SwitchLog()
+        # PI-81 a: in dieser Sitzung verbundene Geraete mit Ausgang (device_id -> Art), getrennte davon mit dem
+        # zuletzt bekannten Ausgangszustand ({"kind", "output_on": bool | None, "t": monotonic}) -- ALLE AUS meldet
+        # sie als "Ausgang unbekannt"; Netzteile, die beim Verbinden mit Ausgang EIN vorgefunden wurden
+        self._session_devices: dict[str, str] = {}
+        self._session_lost: dict[str, dict] = {}
+        self._load_input_seen: dict[str, bool] = {}
+        self._psu_found_on: dict[str, dict] = {}
+        self.device_added.connect(self._on_session_device_added)
+        self.device_removed.connect(self._on_session_device_removed)
+        self.load_input_state.connect(self._on_session_load_input)
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._reconnect_timer = QTimer(self)
@@ -1002,6 +1052,7 @@ class DeviceWorker(QObject):
             psu.close()
             self.psu_connected.emit(SIM_PSU_ID, False)
             self.device_removed.emit("psu", SIM_PSU_ID)
+            self._forget_session_device(SIM_PSU_ID)
 
     def _add_mock_load(self) -> None:
         if SIM_LOAD_ID in self._loads:
@@ -1020,6 +1071,7 @@ class DeviceWorker(QObject):
             load.close()
             self.load_connected.emit(SIM_LOAD_ID, False)
             self.device_removed.emit("load", SIM_LOAD_ID)
+            self._forget_session_device(SIM_LOAD_ID)
 
     def _add_mock_scpiscope(self) -> None:
         if self._mock_scpiscope_active:
@@ -1134,10 +1186,12 @@ class DeviceWorker(QObject):
 
     def _remove_mock_fg(self) -> None:
         fg = self._fgs.pop(SIM_FG_ID, None)
+        self._fg_cache.pop(SIM_FG_ID, None)
         if fg is not None:
             fg.close()
             self.fg_connected.emit(SIM_FG_ID, False)
             self.device_removed.emit("fg", SIM_FG_ID)
+            self._forget_session_device(SIM_FG_ID)
 
     def _add_mock_can(self) -> None:
         if SIM_CAN_ID in self._can_buses:
@@ -1373,6 +1427,7 @@ class DeviceWorker(QObject):
             hil.close()
             self.hil_connected.emit(SIM_HIL_ID, False)
             self.device_removed.emit("hil", SIM_HIL_ID)
+            self._forget_session_device(SIM_HIL_ID)
 
     def _add_mock_picoscope(self) -> None:
         if self._mock_picoscope_active:
@@ -1498,8 +1553,8 @@ class DeviceWorker(QObject):
         self._reconnect_done.emit("fg", device_id, candidate, "")
 
     def _emit_fg_state(self, device_id: str) -> None:
-        """Liest den vollen Zustand und meldet ihn per fg_state. Ein Fehler wird
-        wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
+        """Liest den vollen Zustand und meldet ihn per fg_state (beim Verbinden, Simulation).
+        Ein Fehler wird wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
         fg = self._fgs.get(device_id)
         if fg is None:
             return
@@ -1508,7 +1563,7 @@ class DeviceWorker(QObject):
         except FunctionGeneratorError as exc:
             self._drop_fg(device_id, str(exc))
             return
-        self.fg_state.emit(device_id, {
+        self._fg_cache[device_id] = {
             "outputs": list(state.outputs),
             "channels": [
                 {"waveform": c.waveform, "frequency": c.frequency, "amplitude": c.amplitude,
@@ -1516,10 +1571,46 @@ class DeviceWorker(QObject):
                 for c in state.channels
             ],
             "phase": state.phase,
-        })
+        }
+        self._publish_fg_state(device_id)
+
+    def _publish_fg_state(self, device_id: str) -> None:
+        """Zwischenstand als Kopie melden (das dict geht ueber die Thread-Grenze)."""
+        state = self._fg_cache[device_id]
+        self.fg_state.emit(device_id, {"outputs": list(state["outputs"]),
+                                       "channels": [dict(c) for c in state["channels"]],
+                                       "phase": state["phase"]})
+
+    def _read_fg_fields(self, device_id: str, fields) -> bool:
+        """Liest einzelne Felder (je eine Registerabfrage, siehe jds66xx.driver.read_field) in den
+        Zwischenstand und meldet ihn. Ohne Zwischenstand den vollen Zustand. False = Verbindung tot
+        (Geraet entfernt)."""
+        fg = self._fgs.get(device_id)
+        if fg is None:
+            return False
+        state = self._fg_cache.get(device_id)
+        if state is None:
+            self._emit_fg_state(device_id)
+            return device_id in self._fgs
+        try:
+            for field, channel in fields:
+                value = fg_read_field(fg, field, channel)
+                if field == "outputs":
+                    state["outputs"] = [bool(value[0]), bool(value[1])]
+                elif field == "phase":
+                    state["phase"] = value
+                else:
+                    state["channels"][channel - 1][field] = value
+        except FunctionGeneratorError as exc:
+            self._drop_fg(device_id, str(exc))
+            return False
+        self._publish_fg_state(device_id)
+        return True
 
     def _drop_fg(self, device_id: str, reason: str) -> None:
         fg = self._fgs.pop(device_id, None)
+        self._fg_cache.pop(device_id, None)
+        self._fg_slow_index.pop(device_id, None)
         if fg is None:
             return
         logger.warning("Funktionsgenerator %s getrennt: %s", device_id, reason)
@@ -1528,8 +1619,24 @@ class DeviceWorker(QObject):
         self.device_removed.emit("fg", device_id)
 
     def _poll_fgs(self) -> None:
+        """Je Generator die schnellen Felder und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen
+        (PI-78 a, siehe FG_POLL_INTERVAL_MS)."""
+        timings: dict[str, float] = {}
+        t_start = time.monotonic()
         for device_id in list(self._fgs):
-            self._emit_fg_state(device_id)
+            t_dev = time.monotonic()
+            index = self._fg_slow_index.get(device_id, 0)
+            slow = [FG_POLL_SLOW_FIELDS[(index + n) % len(FG_POLL_SLOW_FIELDS)]
+                    for n in range(FG_SLOW_FIELDS_PER_POLL)]
+            self._fg_slow_index[device_id] = (index + FG_SLOW_FIELDS_PER_POLL) % len(FG_POLL_SLOW_FIELDS)
+            self._read_fg_fields(device_id, list(FG_POLL_FAST_FIELDS) + slow)
+            timings[device_id] = time.monotonic() - t_dev
+        total = time.monotonic() - t_start
+        # Wie in _poll: der Generator teilt sich den Worker-Thread mit allen anderen Geraeten
+        if total > POLL_SLOW_S and t_start - self._last_slow_fg_log >= POLL_SLOW_LOG_EVERY_S:
+            self._last_slow_fg_log = t_start
+            detail = ", ".join(f"{d} {t * 1000:.0f} ms" for d, t in sorted(timings.items(), key=lambda kv: -kv[1]))
+            logger.warning("Poll-Zyklus langsam (Funktionsgenerator): %.0f ms gesamt (%s)", total * 1000, detail)
 
     def _reconnect_psus(self) -> None:
         candidates = _resolve_device_ids("psu", HCS34xx.discover_ports())
@@ -1606,7 +1713,7 @@ class DeviceWorker(QObject):
             self.psu_connected.emit(device_id, True)
             self._psu_manual.discard(device_id)
             self.psu_manual_state.emit(device_id, False)
-            self._adopt_psu_state(device_id)
+            self._adopt_psu_state(device_id, on_connect=True)
         else:
             identity = self._emit_identity("fg", device_id, candidate)
             logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, identity)
@@ -1848,17 +1955,103 @@ class DeviceWorker(QObject):
         self._picoscope_serial = info.serial
         self.picoscope_state.emit(PICOSCOPE_ID, "free", info.variant, info.serial)
 
-    def _adopt_psu_state(self, device_id: str) -> None:
+    def _adopt_psu_state(self, device_id: str, on_connect: bool = False) -> None:
         """Uebernimmt den Zustand des Geraets in die GUI, ohne ihn zu aendern: Nennwerte, OVP/OCP,
         Sollwerte und Ausgang. Schlaegt das Lesen fehl, folgt die Kachel dem naechsten Abgleich in
         _poll_devices.
 
         Nennwerte VOR OVP/OCP und Sollwerten: die GUI setzt damit erst die Bereiche der Felder, dann
-        passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an)."""
+        passen die Werte hinein (Signale desselben Threads kommen in Sendereihenfolge an).
+
+        on_connect (PI-81 a): beim (Wieder-)Verbinden pruefen, ob das Netzteil mit Ausgang EIN vorgefunden wurde
+        (_check_psu_found_on) -- nicht beim Rueckwechsel aus der Handbedienung, die LabControl selbst uebergeben hat."""
         self._emit_psu_ratings(device_id)
         self._emit_psu_limits(device_id)
+        if on_connect:
+            self._psu_setpoints.pop(device_id, None)   # nur frisch gelesene Sollwerte zaehlen
         self._guard_psu(device_id, lambda psu: self._remember_psu_setpoints(device_id, *psu.get_setpoint()))
         self._guard_psu(device_id, lambda psu: self._emit_psu_output(device_id, psu.get_output()))
+        if on_connect and device_id in self._psus:
+            self._check_psu_found_on(device_id)
+
+    def _check_psu_found_on(self, device_id: str) -> None:
+        """PI-81 a: Ausgang beim Verbinden EIN und Strombegrenzung > 0 -> Hinweis in der Kachel (psu_found_on).
+
+        NICHT fuer den Uebergabezustand, in dem LabControl jedes Netzteil beim Beenden und zur Handbedienung
+        zuruecklaesst (_release_psu: Mindestspannung, 0 A, Ausgang EIN -- das Geraet hat keine Ausgangstaste):
+        mit 0 A Strombegrenzung liefert der Ausgang nichts, egal welche Spannung eingestellt ist. Deshalb
+        entscheidet allein die Strombegrenzung (> PSU_FOUND_ON_MIN_CURRENT_A, eine halbe Anzeigestelle), nicht die
+        Spannung. Sind die Sollwerte nicht lesbar, gilt der Ausgang vorsichtshalber als vorgefunden. Kein
+        automatisches Schalten."""
+        if self._psu_output_seen.get(device_id) is not True:
+            self._set_psu_found_on(device_id, None)
+            return
+        setpoints = self._psu_setpoints.get(device_id)
+        if setpoints is not None and setpoints[1] <= PSU_FOUND_ON_MIN_CURRENT_A:
+            self._set_psu_found_on(device_id, None)
+            return
+        info = {"voltage": setpoints[0] if setpoints else None, "current": setpoints[1] if setpoints else None}
+        logger.warning("Netzteil %s beim Verbinden mit Ausgang EIN vorgefunden (Soll %s) -- nichts geschaltet",
+                       device_id, f"{setpoints[0]:g} V / {setpoints[1]:g} A" if setpoints else "unbekannt")
+        self._set_psu_found_on(device_id, info)
+
+    def _set_psu_found_on(self, device_id: str, info: dict | None) -> None:
+        if info is None:
+            if self._psu_found_on.pop(device_id, None) is not None:
+                logger.info("Netzteil %s: Hinweis 'beim Verbinden EIN' erledigt", device_id)
+                self.psu_found_on.emit(device_id, None)
+            return
+        self._psu_found_on[device_id] = dict(info)
+        self.psu_found_on.emit(device_id, dict(info))
+
+    # -- Sitzung: verbundene und getrennte Geraete (PI-81 a) -------------------
+
+    @Slot(str, str)
+    def _on_session_device_added(self, kind: str, device_id: str) -> None:
+        if kind in SESSION_OUTPUT_KINDS:
+            self._session_devices[device_id] = kind
+            self._session_lost.pop(device_id, None)
+
+    @Slot(str, str)
+    def _on_session_device_removed(self, kind: str, device_id: str) -> None:
+        if kind == "psu":
+            self._set_psu_found_on(device_id, None)
+        if kind not in SESSION_OUTPUT_KINDS or device_id not in self._session_devices:
+            return
+        output_on = (self._psu_output_seen.get(device_id) if kind == "psu"
+                     else self._load_input_seen.get(device_id) if kind == "load" else None)
+        self._session_lost[device_id] = {"kind": kind, "output_on": output_on, "t": time.monotonic()}
+        if output_on:
+            logger.warning("%s %s mit Ausgang EIN getrennt -- Ausgang jetzt unbekannt",
+                           OPERATION_LABELS.get(kind, kind), device_id)
+
+    @Slot(str, bool)
+    def _on_session_load_input(self, device_id: str, on: bool) -> None:
+        self._load_input_seen[device_id] = bool(on)
+
+    def _forget_session_device(self, device_id: str) -> None:
+        """Simulation abgeschaltet: absichtlich entfernt, kein 'Ausgang unbekannt'."""
+        self._session_devices.pop(device_id, None)
+        self._session_lost.pop(device_id, None)
+
+    def session_lost_devices(self) -> dict[str, dict]:
+        """Getrennte Geraete dieser Sitzung (Kopie, fuer Pruefskripte)."""
+        return {d: dict(info) for d, info in self._session_lost.items()}
+
+    def _report_lost(self, what: str, device_ids) -> list[str]:
+        """WARNING je Geraet, das in dieser Sitzung verbunden war und jetzt nicht verbunden ist (PI-81 a).
+        Liefert diese Kennungen (Reihenfolge wie device_ids)."""
+        now = time.monotonic()
+        lost = []
+        for device_id in device_ids:
+            info = self._session_lost.get(device_id)
+            if info is None:
+                continue
+            lost.append(device_id)
+            last = {True: ", zuletzt Ausgang EIN", False: ", zuletzt Ausgang AUS"}.get(info["output_on"], "")
+            logger.warning("%s: %s %s nicht verbunden (getrennt vor %.0f s%s) -- Ausgang unbekannt", what,
+                           OPERATION_LABELS.get(info["kind"], info["kind"]), device_id, now - info["t"], last)
+        return lost
 
     def _emit_psu_ratings(self, device_id: str) -> None:
         """Meldet die Nennwerte (GMAX) des Netzteils an die GUI.
@@ -2115,7 +2308,11 @@ class DeviceWorker(QObject):
             self.device_removed.emit("psu", device_id)
             return False, str(exc)
 
-    def _guard_fg(self, device_id: str, action: Callable[[JDS66xx], None]) -> tuple[bool, str]:
+    def _guard_fg(self, device_id: str, action: Callable[[JDS66xx], None],
+                  readback: tuple[str, int] | None = None) -> tuple[bool, str]:
+        """readback: (Feld, Kanal), das `action` schreibt -- danach wird nur dieses Feld (und was das
+        Geraet dabei anpassen kann, jds66xx.driver.readback_fields) zurueckgelesen (PI-78 a); None =
+        voller Zustand."""
         fg = self._fgs.get(device_id)
         if fg is None:
             return False, "Funktionsgenerator nicht verbunden"
@@ -2129,7 +2326,10 @@ class DeviceWorker(QObject):
             return False, str(exc)
         # Sofort den echten Zustand zuruecklesen, damit Dashboard und Control-Tab
         # zeigen, was das Geraet tatsaechlich angenommen hat (z.B. gerundet).
-        self._emit_fg_state(device_id)
+        if readback is None:
+            self._emit_fg_state(device_id)
+        else:
+            self._read_fg_fields(device_id, fg_readback_fields(*readback))
         return True, ""
 
     def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
@@ -2188,6 +2388,8 @@ class DeviceWorker(QObject):
         """
         logger.info("ALL OFF angefordert (reason=%s)", reason)
         failures: list[str] = []
+        # PI-81 a: vor dem Abschalten getrennte Geraete dieser Sitzung -- ALLE AUS erreicht sie nicht
+        lost_before = list(self._session_lost)
         for can_id, node in list(self._restbus.items()):   # FT-6: Restbus kann den Pruefling ansteuern
             if node.running:
                 node.set_running(False)
@@ -2228,7 +2430,19 @@ class DeviceWorker(QObject):
             except Exception:  # noqa: BLE001 -- Watchdog darf nie haengenbleiben
                 logger.exception("ALL OFF: unerwarteter Fehler bei Batterie-Simulator %s", device_id)
                 failures.append(device_id)
+        self._emit_all_off_unreachable(lost_before, failures)
         self.all_off_finished.emit(";".join(failures))
+
+    def _emit_all_off_unreachable(self, lost_before: list[str], failures: list[str]) -> None:
+        """PI-81 a: ALLE AUS meldet, was es nicht erreicht hat -- fehlgeschlagene Geraete und solche, die in dieser
+        Sitzung verbunden waren, aber vorher getrennt wurden (Ausgang unbekannt; das HCS-34xx behaelt seinen
+        Ausgangszustand). Frueher stand davon nichts im Log (Pi-Log: Netzteile 4 s vor dem Herunterfahren getrennt,
+        morgens EIN)."""
+        lost = self._report_lost("ALL OFF", lost_before)
+        unreachable = list(dict.fromkeys(failures + lost))
+        if unreachable:
+            logger.warning("ALL OFF: nicht erreichbar, Ausgang unbekannt: %s", ", ".join(unreachable))
+        self.all_off_unreachable.emit(unreachable)
 
     @Slot(list, str)
     def devices_off(self, device_ids: list, reason: str) -> None:
@@ -2236,24 +2450,61 @@ class DeviceWorker(QObject):
         Verbund-Partners (PI-26 a: Lebenszeichen fehlt -> die belegten Geraete in den sicheren Zustand).
         Meldet wie all_outputs_off ueber all_off_finished (fehlgeschlagene Geraete)."""
         logger.warning("Abschalten einzelner Geraete (reason=%s): %s", reason, ", ".join(device_ids))
+        _off, failures, unknown = self._devices_off(device_ids)
+        self._report_lost("Abschalten", unknown)   # PI-81 a
+        self.all_off_finished.emit(";".join(failures))
+
+    @Slot(int, list, str)
+    def devices_off_tagged(self, tag: int, device_ids: list, reason: str) -> None:
+        """Abschaltung beim Abbruch eines Testablaufs (PI-79 a) bzw. vom Verbund-Partner (POST /devices-off):
+        nur die genannten Geraete. Ergebnis ueber devices_off_done (nicht all_off_finished -- das weckt ALLE AUS).
+        Ein hier nicht verbundenes Geraet zaehlt als nicht erreichbar."""
+        logger.warning("Abschalten (reason=%s): %s", reason, ", ".join(device_ids) or "-")
+        off, failures, unknown = self._devices_off(device_ids)
+        # PI-81 a: ein hier getrenntes Geraet dieser Sitzung -- Ausgang unbekannt
+        self._report_lost("Abschalten", unknown)
+        if failures or unknown:
+            logger.warning("Abschalten (reason=%s): nicht erreichbar, Ausgang unbekannt: %s", reason,
+                           ", ".join(failures + unknown))
+        self.devices_off_done.emit(int(tag), off, failures + unknown)
+
+    def _devices_off(self, device_ids: list) -> tuple[list[str], list[str], list[str]]:
+        """(abgeschaltet, fehlgeschlagen, hier unbekannt). CAN: ein laufender Restbus wird angehalten."""
+        off: list[str] = []
         failures: list[str] = []
+        unknown: list[str] = []
         kills = (
             (self._loads, self._kill_load), (self._psus, lambda d, p: self._kill_psu(d, p, release=False)),
             (self._hils, self._kill_hil), (self._fgs, self._kill_fg),
             (self._battsims, lambda d, n: self._kill_battsim(d, n) or True),
         )
         for device_id in device_ids:
+            node = self._restbus.get(device_id)
+            if node is not None or device_id in self._can_buses:
+                if node is not None and node.running:
+                    node.set_running(False)
+                    logger.info("Restbus %s gestoppt (Abschaltung)", device_id)
+                    self._emit_restbus(device_id)
+                off.append(device_id)
+                continue
+            found = False
             for devices, kill in kills:
                 device = devices.get(device_id)
                 if device is None:
                     continue
+                found = True
                 try:
-                    if not kill(device_id, device):
+                    if kill(device_id, device):
+                        off.append(device_id)
+                    else:
                         failures.append(device_id)
                 except Exception:  # noqa: BLE001 -- Abschalten darf nie haengenbleiben
                     logger.exception("Abschalten: unerwarteter Fehler bei %s", device_id)
                     failures.append(device_id)
-        self.all_off_finished.emit(";".join(failures))
+                break
+            if not found:
+                unknown.append(device_id)
+        return off, failures, unknown
 
     def _kill_battsim(self, device_id: str, node: BattSim) -> None:
         """Ausgang sperren (OUTPUT=1 -> REMOTE/STOP, alle Zellen gebrueckt).
@@ -2266,12 +2517,14 @@ class DeviceWorker(QObject):
         if node.get_state().remote_requested:
             node.set_output(False)
             logger.info("ALL OFF: Batterie-Simulator %s -> Ausgang gesperrt", device_id)
+            self._note_switch(True, BATTSIM_KIND, device_id, "BS_OUT_OFF", SOURCE_ALL_OFF)
 
     def _kill_load(self, device_id: str, load: KoradKEL102) -> bool:
         for attempt in (1, 2):
             try:
                 load.set_input(False)
                 logger.info("ALL OFF: Last %s -> Ausgang AUS", device_id)
+                self._note_switch(True, "load", device_id, "OUT_OFF", SOURCE_ALL_OFF)
                 return True
             except LoadError as exc:
                 if attempt == 1:
@@ -2291,7 +2544,8 @@ class DeviceWorker(QObject):
             try:
                 fg.set_outputs(False, False)
                 logger.info("ALL OFF: Funktionsgenerator %s -> beide Ausgaenge AUS", device_id)
-                self._emit_fg_state(device_id)
+                self._note_switch(True, "fg", device_id, "FG_OUT_OFF", SOURCE_ALL_OFF)
+                self._read_fg_fields(device_id, FG_POLL_FAST_FIELDS)
                 return True
             except FunctionGeneratorValueError as exc:
                 logger.error("ALL OFF: Funktionsgenerator %s quittierte nicht: %s", device_id, exc)
@@ -2328,6 +2582,7 @@ class DeviceWorker(QObject):
                 psu.set_output(False)
                 logger.info("ALL OFF: Netzteil %s -> Ausgang aus", device_id)
                 self._emit_psu_output(device_id, False)
+                self._note_switch(True, "psu", device_id, "PSU_OUT_OFF", SOURCE_ALL_OFF)
                 return True
             except PowerSupplyValueError as exc:
                 # Schalter wirkte nicht, keine Verbindungsstoerung -- Retry hilft nicht.
@@ -2370,6 +2625,8 @@ class DeviceWorker(QObject):
                 for ch in range(1, HIL_PWM_COUNT + 1):
                     hil.set_pwm(ch, 0)
                 logger.info("ALL OFF: microHIL %s -> alle Ausgaenge AUS", device_id)
+                for action in ("HIL_OUT_OFF", "HIL_RELAY_OFF", "HIL_PWR12_OFF"):
+                    self._note_switch(True, "hil", device_id, action, SOURCE_ALL_OFF)
                 return True
             except HilError as exc:
                 if attempt == 1:
@@ -2461,6 +2718,7 @@ class DeviceWorker(QObject):
                 self._psu_manual.add(device_id)
                 logger.info("Netzteil %s: Handbedienung (1 V / 0 A, Ausgang EIN) per %s", device_id,
                             self._operation_source)
+                self._note_switch(True, "psu", device_id, "PSU_OUT_ON", self._operation_source)
                 self._emit_psu_output(device_id, True)
             self.psu_manual_state.emit(device_id, True)
         else:
@@ -2486,6 +2744,8 @@ class DeviceWorker(QObject):
         """Meldet den Ausgangszustand an die GUI und merkt ihn fuer _poll_devices."""
         self._psu_output_seen[device_id] = on
         self.psu_output_state.emit(device_id, on)
+        if not on:
+            self._set_psu_found_on(device_id, None)   # PI-81 a: Geraet meldet Ausgang AUS
 
     @Slot(str, float)
     def set_psu_ovp(self, device_id: str, volts: float) -> None:
@@ -2511,37 +2771,45 @@ class DeviceWorker(QObject):
     @Slot(str, int, bool)
     def set_fg_output(self, device_id: str, channel: int, on: bool) -> None:
         self._operate("fg", device_id, "FG_OUT_ON" if on else "FG_OUT_OFF", 0.0, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on), ("outputs", 0)))
 
     @Slot(str, int, int)
     def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
+        # PI-75 a: DC setzt zugleich die Amplitude auf 0,01 V (jds66xx.driver.set_waveform_checked)
         self._operate("fg", device_id, "FG_WAVE", float(code), channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
+                                              ("waveform", channel)))
 
     @Slot(str, int, float)
     def set_fg_frequency(self, device_id: str, channel: int, hertz: float) -> None:
         self._operate("fg", device_id, "FG_FREQ", hertz, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz),
+                                              ("frequency", channel)))
 
     @Slot(str, int, float)
     def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
+        # PI-75 a: in DC abgelehnt (die Spannung ist dort der Offset)
         self._operate("fg", device_id, "FG_AMPL", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, volts)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, volts),
+                                              ("amplitude", channel)))
 
     @Slot(str, int, float)
     def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
         self._operate("fg", device_id, "FG_OFFS", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_offset(channel, volts)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, volts),
+                                              ("offset", channel)))
 
     @Slot(str, int, float)
     def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
+        # PI-80 a: nur bei Puls, sonst abgelehnt (am Geraet wirkt der Tastgrad nur dort)
         self._operate("fg", device_id, "FG_DUTY", percent, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_duty(channel, percent)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, percent),
+                                              ("duty", channel)))
 
     @Slot(str, float)
     def set_fg_phase(self, device_id: str, degrees: float) -> None:
         self._operate("fg", device_id, "FG_PHASE", degrees, 0,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees)))
+                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees), ("phase", 0)))
 
     # -- CAN-Bus: Steuerbefehle -----------------------------------------------
     # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
@@ -2655,6 +2923,7 @@ class DeviceWorker(QObject):
         liess sich ein gesendeter Zustand nicht mehr einer Quelle zuordnen (07.11.2026)."""
         ok, message = self._guard_battsim(device_id, action)
         self._log_battsim_write(device_id, action_name, value, channel, self._operation_source, ok, message)
+        self._note_switch(ok, BATTSIM_KIND, device_id, action_name, self._operation_source)
 
     @staticmethod
     def _log_battsim_write(device_id: str, action_name: str, value: float, channel: int, source: str,
@@ -2680,6 +2949,10 @@ class DeviceWorker(QObject):
         self._log_operation(kind, device_id, action, value, channel, self._operation_source, ok, message)
         if ok:
             self._note_setpoint(kind, device_id, action, value)
+            # PI-77 a: die Kachel meldet die Wellenform als Code, der Ablauf kennt je Form eine Aktion
+            switched = next((name for name, code in FG_WAVE_ACTIONS.items() if code == int(value)), action) \
+                if action == "FG_WAVE" else action
+            self._note_switch(ok, kind, device_id, switched, self._operation_source)
         return ok, message
 
     def _note_setpoint(self, kind: str, device_id: str, action: str, value: float) -> None:
@@ -2758,11 +3031,13 @@ class DeviceWorker(QObject):
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
         if kind in OPERATION_LABELS and action not in READ_ACTIONS:   # PI-15: jede Bedienung ins Log
             self._log_operation(kind, device_id, action, value, channel, "Testablauf", ok, message)
+        self._note_switch(ok, kind, device_id, action, SOURCE_RUN)
         self.action_completed.emit(ok, message, read_value)
 
-    @Slot(int, str, str, str, float, int)
+    @Slot(int, str, str, str, float, int, str)
     def execute_remote_action(
-        self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int
+        self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int,
+        source: str = SOURCE_REMOTE,
     ) -> None:
         """Aktion aus der Netzwerk-Fernsteuerung (siehe share_remote.py).
 
@@ -2777,9 +3052,19 @@ class DeviceWorker(QObject):
         diesem Zeitpunkt bereits geprueft; hier wird nur ausgefuehrt.
         """
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
-        logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) -> %s%s", device_id, action, value,
-                    channel, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) per %s -> %s%s", device_id, action, value,
+                    channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
+        self._note_switch(ok, kind, device_id, action, source)
         self.remote_action_completed.emit(request_id, ok, message, read_value)
+
+    def _note_switch(self, ok: bool, kind: str, device_id: str, action: str, source: str) -> None:
+        """PI-77 a: erfolgreiche Schaltung an einem Geraet verbuchen (Lesen zaehlt nicht). Einzige Stelle fuer
+        Kachel/Preset (_operate, _tile_battsim), Ablauf (execute_action), MCP/REST/Verbund (execute_remote_action)
+        und ALLE AUS (_kill_*)."""
+        if ok and kind in OPERATION_LABELS and action not in READ_ACTIONS:
+            self.switch_log.note(kind, device_id, action, source)
+        if ok and kind == "psu" and action in PSU_FOUND_ON_CLEAR_ACTIONS:
+            self._set_psu_found_on(device_id, None)   # PI-81 a: ueber LabControl geschaltet
 
     def _dispatch_action(
         self, device_id: str, kind: str, action: str, value: float, channel: int
@@ -2875,21 +3160,25 @@ class DeviceWorker(QObject):
         if kind == "fg":
             if action in FG_WAVE_ACTIONS:
                 code = FG_WAVE_ACTIONS[action]
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_waveform(channel, code))
+                # PI-75 a: FG_WAVE_DC setzt zugleich die Amplitude auf 0,01 V
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
+                                             ("waveform", channel))
             elif action == "FG_FREQ":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value))
-            elif action == "FG_AMPL":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_amplitude(channel, value))
-            elif action == "FG_OFFS":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_offset(channel, value))
-            elif action == "FG_DUTY":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_duty(channel, value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value), ("frequency", channel))
+            elif action == "FG_AMPL":   # PI-75 a: in DC abgelehnt
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, value),
+                                             ("amplitude", channel))
+            elif action == "FG_OFFS":   # in DC die Ausgangsspannung
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, value),
+                                             ("offset", channel))
+            elif action == "FG_DUTY":   # PI-80 a: nur bei Puls, sonst abgelehnt
+                ok, message = self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, value), ("duty", channel))
             elif action == "FG_PHASE":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value), ("phase", 0))
             elif action == "FG_OUT_ON":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True), ("outputs", 0))
             elif action == "FG_OUT_OFF":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False))
+                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False), ("outputs", 0))
             else:
                 return False, f"Unbekannte Aktion '{action}' fuer Funktionsgenerator", 0.0
             return ok, message, 0.0

@@ -6,6 +6,295 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+## [1.0.1] – 2026-11-15
+
+### Hinzugefügt
+- **Uhr in der Leiste oben.** Ganz links vor dem Sicherheits-Chip steht jetzt die Systemzeit (hh:mm:ss) als
+  neutraler Chip, am PC und in der Touch-Bedienung; das Datum steht im Tooltip. Feste Breite, damit die Leiste
+  nicht mit jeder Sekunde springt. Mock-verifiziert (`check_touch_ui`, Bilder offscreen hell/dunkel); in der .exe
+  und am Pi-Display noch nicht angesehen.
+- **Ablaufzeilen mit der Maus verschieben.** Im Testablauf-Editor lässt sich eine Zeile an ihrer Nummer
+  (Spalte „#“) greifen und an eine neue Stelle ziehen; eine Linie zeigt beim Ziehen die Einfügestelle. Es gelten
+  dieselben Regeln wie bei den Pfeil-Knöpfen: ein Baustein wandert über seine Kopfzeile als Ganzes, eine Zeile
+  landet nie mitten in einem fremden Baustein, Mitgliederzeilen bleiben in ihrem Baustein. Ein Klick auf „#“ der
+  Kopfzeile klappt den Baustein weiter ein und aus. Mock-verifiziert (`check_row_drag`, echte Mausereignisse
+  offscreen); in der laufenden App am PC noch nicht ausprobiert.
+- **Status-Chips auch für Partnergeräte.** Die Chips oben zeigten nur die Geräte des eigenen Rechners. Jetzt hat
+  jedes Gerät des Verbund-Partners, das als Kachel erscheint, einen eigenen Chip mit „⇄“. Im Tooltip und in der
+  Liste „Gerätezustand“ steht der Rechnername davor („Pi · NT 16V-30A“). Bricht die Verbindung ab, zeigen die Chips
+  „✕“; bei „Verbund aus“ verschwinden sie. Kachelfarben vergibt für Partnergeräte weiter nur der Besitzer.
+  Mock-verifiziert (`check_partner_link`); in der laufenden App an PC und Pi noch nicht.
+- **PicoScope, UNI-T und J-Link auch beim Verbund-Partner (PI-67 a).** Pi und PC zeigen jetzt dieselben Kacheln:
+  Oszilloskope und J-Link des Partners erscheinen in Übersicht und Steuerung, mit Status-Chip „⇄“. Das Oszilloskop
+  zeigt Status (frei, belegt, Verbunden (MCP)), Modell und Seriennummer, der J-Link Ziel, Zielspannung und die
+  letzte Bedienung mit Ergebnis. Es sind reine Anzeige-Kacheln: Erfassen, Trennen, Kurve, PicoScope 7, Prüfen,
+  Reset und Flashen gibt es nur an dem Rechner, an dem das Gerät hängt; Umbenennen und Kachelfarbe gehen wie bei
+  den anderen Partnerkacheln an den Besitzer. Im Testablauf-Editor stehen sie nicht zur Auswahl. Claude sieht sie
+  in `list_devices`, steuern kann es sie nicht (`control_available` false, Aktion → `control_not_permitted`). Die
+  Freigabe liefert dafür Modell/Seriennummer und den J-Link-Stand mit; Oszilloskop und J-Link gelten dort nicht
+  mehr nach 2 s als veraltet (sie melden nur Änderungen). Mock-verifiziert (`check_partner_devices`,
+  `check_partner_link`; Gegenprobe ohne Änderung schlägt fehl); an PC und Pi noch nicht.
+- **Testablauf: „Bestätigung“ und „Warten seit Aktion“ (PI-71 a).** Für Evalboard-Abläufe, bei denen jedes Aus/Ein,
+  Flashen und jeder J-Link-Schritt ein ausdrückliches Ja braucht und Zeitregeln gelten. Beide im Einfügen-Menü.
+  - **Bestätigung:** Zeile mit Text; der Lauf hält an und zeigt im Fenster eine Rückfrage mit **Weiter** und
+    **Abbrechen**. Abbrechen (auch Escape/Schließen) wirkt wie Stop: Lauf aus, ALLE AUS. Die Rückfrage ist nicht
+    modal (ALLE AUS bleibt erreichbar), hat keinen Standardknopf (ein verirrtes Enter bestätigt nichts) und folgt im
+    Touch-Profil dem üblichen Dialogmuster. Über REST/MCP sichtbar (`waiting` in `/api/v1/runs/{id}` und
+    `run_waiting` in `/api/v1/status`, Meldung „wartet auf Bestätigung: …“), aber bewusst nicht bestätigbar.
+  - **Warten seit Aktion:** Gerät, Aktion, „≥ … s“ – wartet, bis seit der letzten Ausführung der Aktion an dem Gerät
+    mindestens so lange vergangen ist (z. B. ≥ 65 s seit Netzteil „Ausgang EIN“). Partnergeräte und Rollen gehen wie
+    in Aktionszeilen. Bezug ist die Quittung der Aktion **im laufenden Ablauf**; kam sie noch nicht vor, wartet der
+    Schritt die volle Zeit. Bewusst nicht der Schaltzeitpunkt aus dem Worker: Kachel, Frontplatte oder der Partner
+    selbst können dazwischen geschaltet haben, ohne dass dieser Rechner es weiß – die volle Zeit ist dann die
+    sichere Annahme (seit PI-77 a zählt jede Schaltung über LabControl, siehe „Geändert“). „(automatisch)“ passt auf jedes Gerät der Art (jüngster Treffer zählt), die Frist läuft auf
+    einem genauen Timer und gilt auch nach Anhalten als Mindestzeit.
+  - Bericht und Laufaufzeichnung vermerken „bestätigt“/„abgebrochen“ und die tatsächliche Wartezeit.
+  - Ohne Fenster (`labcontrol run`) startet ein Ablauf mit Bestätigung nicht (Exit 3 mit Meldung), statt mitten im
+    Lauf abzubrechen oder still weiterzulaufen.
+  - Dateiformat 4 (Bausteine: 3) nur für Abläufe mit diesen Schritten: ältere Versionen lehnen sie mit Meldung ab,
+    statt die Bestätigung als unbekannten Schritt still zu überspringen. Andere Abläufe bleiben Format 2/3.
+
+  Mock-verifiziert (`check_confirm_wait`: Format/Laden, Runner mit und ohne vorherige Aktion, Partner, Bestätigen,
+  Abbrechen, Stopp per HTTP, Status über REST, Touch-Profil, Bericht, Kommandozeile; Gegenprobe ohne die Änderung
+  schlägt fehl); am Gerät noch nicht.
+- **Oszilloskop scharf schalten und auf Erfassung warten (PI-72 a, PI-73 a).** Bisher lieferten Oszi-Schritte nur
+  einen Kennwert aus einer sofortigen Blockerfassung, und `acquire` über MCP blockierte bis zu 30 s auf den
+  Trigger – dazwischen ließ sich nichts schalten. Jetzt gibt es einen gemeinsamen Erfassungskern im Scope-Dienst,
+  den Ablauf und REST/MCP nutzen:
+  - **Testablauf, PicoScope und UNI-T MSO1000HD** (das UNI-T hat damit erstmals Ablaufschritte, Gerät „Oszilloskop
+    (LAN)“): **Scharf schalten** (Kanal = Quelle, Bereich, Tastkopf, Kopplung, Flanke, Pegel, Fenster, Vortrigger
+    über „Oszilloskop-Parameter…“) ist fertig, sobald das Gerät auf den Trigger wartet; die folgenden Schritte
+    laufen weiter (z. B. Generator aus, 12 V ein). **Auf Erfassung warten** (Höchstzeit, Kennwert, Kanal) holt das
+    Ergebnis; kein Trigger in der Höchstzeit = Schritt fehlgeschlagen mit Meldung. Der Kennwert (V, s, Hz, %) ist
+    prüfbar und in eine Variable speicherbar wie bei den bisherigen Oszi-Schritten; der Bericht zeigt die Kurve als
+    Bild und nennt die CSV-Datei (Abschnitt „Oszilloskop-Erfassungen“, in `run-result.json` `scope_captures`).
+    Getriggert, aber die Daten werden noch gelesen (UNI-T: 250 kS als ASCII), zählt nicht als „kein Trigger“.
+  - Stop, Fehler und Laufende brechen eine noch scharfe Erfassung ab und geben das Oszilloskop frei; während des
+    Laufs sind Erfassungen über Netzwerk/MCP an diesem Gerät gesperrt (eine scharfe MCP-Erfassung wird beim Start
+    abgebrochen). Nicht im selben Ablauf mit den alten Kennwert-Schritten am selben PicoScope, nicht an
+    Partner-Oszilloskopen und nicht ohne Fenster (der Lauf startet dann nicht).
+  - **MCP/REST:** neue Werkzeuge `arm` (kehrt sofort mit `capture_id` zurück, scharf bis `arm_timeout_s`, höchstens
+    3600 s) und `wait_capture` (Ergebnis wie `acquire`, ohne Trigger nach `timeout_s` `state: "armed"`);
+    `get_capture` mit der Kennung zeigt vorher den Zustand, `release_scope` bricht ab, `list_scopes` meldet
+    `armed`. Endpunkte `POST /api/v1/scopes/{id}/arm` und `POST /api/v1/captures/{cid}/wait`. `acquire` und die
+    Haltezeit von 60 s bleiben wie sie sind.
+  - Jedes Oszilloskop hat jetzt einen eigenen Thread im Scope-Dienst (vorher einer für alle), damit eine wartende
+    Erfassung das andere Gerät und das Trennen nicht blockiert. Das Öffnen des UNI-T wartet bis zu 3 s auf eine
+    laufende Erkennung, statt mit `scope_busy` abzubrechen.
+  - Dateiformat 5 (Bausteine: 4) nur für Abläufe mit diesen Schritten; andere bleiben Format 2/3/4.
+
+  **Nur Mock geprüft** (`check_scope_arm`: Kern mit PicoScope-Mock und UNI-T-Simulator, REST, echter MCP-Server,
+  Format, Editor, Hauptfenster mit Lauf per HTTP inkl. Timeout, Stopp und langsamem Lesen; dazu `check_confirm_wait`,
+  `check_scope_api`, `check_unit_mso`, `check_network_share` scopes/app, `check_translations`). Am echten
+  PicoScope und UNI-T noch nicht – Abbruch (`ps2000_stop` bzw. `:STOP`) und Scharf-Meldung sind dort zu prüfen.
+- **Testablauf: „Warten auf Freigabe“ und MCP-Werkzeug `continue_run` (PI-74 a).** Ein eigener Schritt, den ein
+  Programm freigibt (Skript, CI, Claude über MCP), etwa wenn außerhalb von LabControl geflasht wird. Die
+  „Bestätigung“ bleibt unverändert nur am Bildschirm – am Ablauf ist so sichtbar, ob ein Mensch oder ein Programm
+  weiterschaltet.
+  - Zeile mit optionaler **Kennung** (z. B. `flash_ok`) und **Höchstzeit** „≤ … s“; im Einfügen-Menü. Ohne
+    Freigabe in der Höchstzeit ist der Schritt fehlgeschlagen („keine Freigabe … – Höchstzeit abgelaufen“, ALLE
+    AUS). Anhalten (Debuggen) hält die Höchstzeit an; eine Freigabe während der Pause wirkt nach „Weiter“.
+  - Freigabe über `POST /api/v1/runs/{id}/continue` (`key`, `step`, `by` optional) bzw. MCP
+    `continue_run(run_id, key, step)`. Nur mit Steuerrecht wie beim Schalten (`403 remote_control_inactive`);
+    passen Kennung oder Schritt nicht, `409 release_mismatch` mit dem wartenden Schritt; außerdem `404 unknown_run`,
+    `409 not_running`, `409 not_waiting_release`. Wartet der Lauf auf eine Bestätigung, lehnt `continue` mit
+    `409 confirm_local_only` ab.
+  - `get_run`/`GET /runs/{id}` zeigen `"waiting": {"kind": "release", "key", "step", "timeout_s", "remaining_s"}`
+    (auch `run_waiting` im Status), nach der Freigabe die Meldung `released` mit Aufrufer. Bericht und
+    Laufaufzeichnung vermerken „freigegeben von <Aufrufer> um <Uhrzeit>“ bzw. den Ablauf der Höchstzeit.
+  - Freigeben geht nur über den Server der laufenden Instanz: ohne Fenster (`labcontrol run`) startet ein Ablauf
+    mit diesem Schritt nicht (Exit 3 mit Meldung), im Fenster nicht bei ausgeschalteter Netzwerkfreigabe.
+  - Dateiformat 6 (Bausteine: 5) nur für Abläufe mit diesem Schritt; andere bleiben beim bisherigen Format.
+
+  **Nur Mock geprüft** (`check_release_step`: Format, Runner, Editor, Hauptfenster mit Freigabe per HTTP, falscher
+  Kennung/Schritt, ohne Steuerrecht, Höchstzeit, Bestätigung weiterhin nicht über das Netz, echter MCP-Server mit
+  `continue_run`, Kommandozeile; dazu `check_confirm_wait`, `check_scope_arm`, `check_translations`,
+  `check_network_share` app); am Gerät noch nicht.
+- **Abbruch-Block im Testablauf (PI-76 a).** Ein Ablauf kann einen eigenen Block „Abbruch-Block … Ende“ haben
+  (Einfügen-Menü, landet am Ende des Ablaufs, höchstens einer, nur oberste Ebene). Seine Schritte laufen nur bei
+  einem Abbruch – Stop (Knopf, REST/MCP), Schrittfehler, verletzte Prüfung bzw. Überwachen-Grenze mit Abbruch,
+  „Abbrechen“ bei der Bestätigung, Höchstzeit von „Warten auf Freigabe“, Verbindungsverlust im Verbund –, nie bei
+  normalem Ende. Reihenfolge frei, z. B. Generator aus, 1 s warten, 24 V aus, 12 V aus; Geräte, die im Block nicht
+  vorkommen, bleiben, wie sie sind.
+  - Erlaubt sind Aktionen, die einen Ausgang oder Sollwert setzen (Netzteil, Last, microHIL, Funktionsgenerator,
+    Batterie-Simulator, CAN/Restbus), und Warten. Nicht erlaubt (Zeile markiert, Start gesperrt): Prüfungen und
+    Lese-Aktionen (können gerade im Fehlerfall scheitern), Bestätigung und Warten auf Freigabe (beim Abbruch soll
+    niemand etwas tun müssen), Oszilloskop, J-Link, UDS, XCP und Arbiträrsignal (lange Laufzeit, kein Ausgang),
+    Variablen und verschachtelte Blöcke. Der Block darf höchstens 60 s dauern; die Grenze gilt auch zur Laufzeit.
+  - Scheitert ein Schritt (Gerät weg, Ablehnung), laufen die übrigen trotzdem; danach werden zur Sicherheit die
+    Geräte abgeschaltet, die der Ablauf schaltet (Rückfall auf die Standard-Abschaltung, siehe „Geändert“).
+  - Ist beim Abbruch noch eine Aktion des Laufs unterwegs, wartet der Block bis zu 5 s auf deren Quittung. Während
+    Block und Abschaltung gilt der Lauf noch als laufend (die Belegung beim Verbund-Partner bleibt, ein zweiter
+    Stop ändert nichts); Sicherheitsabschaltung und ALLE AUS führen den Block nicht aus bzw. brechen ihn ab.
+  - Bericht („Abschaltung beim Abbruch“ mit den Schritten des Blocks und Ergebnis), Ergebnis-JSON und `get_run`
+    (`shutdown`) nennen, ob Abbruch-Block oder Standard-Abschaltung lief, welche Geräte abgeschaltet wurden und
+    welche nicht erreichbar waren.
+  - Dateiformat 7 (Bausteine: 6) nur für Abläufe mit Abbruch-Block, damit ältere Versionen ihn nicht still
+    ignorieren; andere Abläufe bleiben beim bisherigen Format.
+- **`POST /api/v1/devices-off`** (Verbund): schaltet nur die genannten Geräte ab (`{"devices": [...], "reason"}`),
+  wie ALLE AUS nur mit Token; nicht erreichbare Geräte als `502 devices_off_incomplete` mit `failures`. Damit
+  schaltet der Leitstand beim Abbruch die Partnergeräte seines Ablaufs ab; kennt der Partner die Route nicht
+  (ältere Version), schaltet er dort zur Sicherheit ALLE AUS.
+
+  **Nur Mock geprüft** (`check_abort_block`: Dateiformat und Regeln, Runner bei Stop/Fehler/Prüfung/Bestätigung/
+  Freigabe-Höchstzeit/Verbindungsverlust, nicht bei normalem Ende, Fehler im Block mit Rückfall, Höchstdauer,
+  Watchdog und ALLE AUS, RunSession mit Attrappe, Partner, Editor, Hauptfenster in der Simulation mit Stopp per
+  HTTP, ALLE AUS-Knopf und `/devices-off`); an PC, Pi und Geräten noch nicht.
+
+### Geändert
+- **Abschaltung beim Abbruch nur für geschaltete Geräte und den Auslöser (PI-79 a).** Bisher schaltete jeder
+  Abbruch eines Testablaufs alle Geräte ab, auch solche, die der Ablauf nie geschaltet hat – am Termin gingen so die
+  24 V einer Endstufe mit aus, deren Netzteil nur in einem Überwachen-Block gelesen wurde. Jetzt schalten Stop,
+  Schrittfehler, verletzte Prüfung und Sicherheitsabschaltung (Grenzwert, Messwerte veraltet, Gerät getrennt)
+  während eines Laufs ohne Abbruch-Block nur die Geräte ab, an denen der Ablauf eine schaltende Aktion ausführt
+  (auch in Bausteinen, über Rollen und im Abbruch-Block), dazu das auslösende Gerät (Quelle der verletzten
+  Prüfung/Überwachung, Gerät des gescheiterten Schritts, das Gerät mit Grenzwertverletzung bzw. das veraltete).
+  Nur gelesene Geräte bleiben, wie sie sind – auch beim Verbund-Partner, der nur noch diese Geräte abschaltet statt
+  ALLE AUS. Die Sicherheitsabschaltung im Lauf führt den Abbruch-Block nicht aus. Unverändert: ALLE AUS/NOTAUS
+  (Knopf, REST, MCP `all_off`) und eine Sicherheitsabschaltung ohne Lauf schalten alles ab; der
+  Verbindungsverlust-Schutz im Verbund (PI-68) bleibt; Läufe von der Kommandozeile enden weiter mit ALLE AUS.
+  „Am Ende ALLE AUS“ greift nur noch bei normalem Ende, nicht nach Fehler/Abbruch. Der Editor zeigt unter der
+  Tabelle „Beim Abbruch aus: <Geräte>“ bzw. „Abbruch-Block: <Geräte>“, Einzelheiten im Tooltip. MCP-Texte zu
+  `stop_run`/`get_run` angepasst. **Nur Mock geprüft** (`check_abort_block`; angepasst `check_confirm_wait`,
+  `check_release_step`, die bisher ALLE AUS nach Abbrechen/Fehler erwarteten); an Hardware noch nicht.
+- **„Warten seit Aktion“ zählt jede Schaltung über LabControl, auch im Verbund (PI-77 a).** Bisher galt nur die
+  Ausführung im laufenden Ablauf; ein Aus/Ein an der Kachel kurz vor dem Lauf blieb unbemerkt, und „Resets ≥ 65 s
+  auseinander“ am Evalboard ließ sich so nicht sicher einhalten. Jetzt merkt sich der Besitzer eines Geräts (der
+  Rechner, an dem es steckt) je Gerät und Aktion Zeitpunkt und Herkunft jeder **erfolgreichen** Schaltung: Kachel,
+  Preset, Ablauf, MCP/REST, gekoppeltes Programm, Befehl des Verbund-Partners, ALLE AUS, J-Link-Bedienung.
+  Abgelehnte oder fehlgeschlagene Befehle und Lesen zählen nicht, die Frontplatte auch nicht (nicht erkennbar).
+  Über die Freigabe meldet jede Kachel das neue Feld `last_switch` mit dem **Alter** in Sekunden statt einer
+  Uhrzeit – so spielt die Uhrabweichung zwischen PC und Pi keine Rolle. Ein Ablauf am Partner nutzt diesen Stand
+  aus dem sekündlichen Abgleich; wäre die Frist laut einem Stand von vor dem Schrittbeginn schon um, wartet er auf
+  den nächsten Abgleich (höchstens etwa 1 s, ohne neuen Stand nach 5 s die volle Zeit). Eine Schaltung während des
+  Wartens verlängert die Frist. Volle Zeit, wenn nichts bekannt ist: nach einem Neustart von LabControl, ohne
+  Verbindung zum Partner, bei einem Partner mit älterer Version. Bericht und Laufaufzeichnung vermerken Alter und
+  Herkunft („Ausgang EIN zuletzt vor 42.0 s (Kachel am Pi) – wartet 23.0 s“) bzw. den Grund für die volle Zeit.
+  Dateiformat unverändert. Nur Mock geprüft (`check_last_switch`: Worker verbucht Kachel/Preset/Ablauf/MCP/
+  Verbund/ALLE AUS, nicht Lesen/Fehlschläge; Runner mit Auskunft, altem Stand, Verbindungsabbruch; zwei
+  Hauptfenster: Kachel und MCP am Besitzer, Partner-Befehl beim Besitzer verbucht und im Ablauf am Partner
+  berücksichtigt; dazu `check_confirm_wait`, `check_release_step`, `check_partner_link`, `check_partner_v2`,
+  `check_network_share`, `check_verbund_sync`, `check_operation_log`, `check_battsim_log`, `check_translations`);
+  an PC und Pi noch nicht.
+- **Touch-Bedienung ohne Vollbild-Knopf.** Am Pi läuft LabControl als Kiosk immer im Vollbild; der Knopf oben
+  rechts verließ nur versehentlich den Kiosk. In der Touch-Bedienung fehlt er jetzt, am PC bleibt er.
+  Mock-verifiziert (`check_touch_ui`); am Pi-Display noch nicht angesehen.
+- **Abschalten bei Verbindungsverlust je Gerät wählbar (PI-68 a).** Bisher schaltete der Besitzer alle vom
+  Partner belegten Geräte ab, wenn dessen Lebenszeichen 3 s ausblieb (Testablauf oder Claude über den PC). Im WLAN
+  kam das bei kurzen Aussetzern vor und schaltete das Netzteil des Evalboards am Pi mitten im Betrieb ab. Jetzt
+  hat die Freigabe-Tabelle (Einstellungen → Netzwerk) die Spalte „Aus bei Verbindungsverlust“. Standard ist
+  weiter „abschalten“. Ohne Haken hebt der Besitzer nur die Belegung auf, und das Gerät bleibt, wie es ist – etwa
+  das Netzteil, das ein Board dauerhaft versorgt. Der Haken gilt am Rechner, an dem das Gerät hängt. Unverändert:
+  Der Leitstand bricht einen Ablauf nach 3 s ohne bestätigtes Lebenszeichen ab. Mock-verifiziert
+  (`check_partner_v2`: ohne Haken bleibt der Ausgang EIN, mit Haken aus nach etwa 3 s; `check_verbund_v4`); an
+  PC und Pi noch nicht.
+
+### Behoben
+- **Fehlermeldung fehlte in `get_run` bei Läufen im Fenster.** Scheiterte ein Schritt, blieb `error` im
+  Laufregister leer – über REST/MCP war nur „error“ als Status zu sehen, nicht warum. Ursache: Der Lauf endete
+  schon im selben Signal, bevor das Fenster die Meldung eintragen konnte. Jetzt übernimmt das Register sie beim
+  Laufende aus der Laufaufzeichnung (mit Meldung `failed` vor `end`). Mock-verifiziert (`check_release_step`
+  window, Start per HTTP und im Fenster; Gegenprobe ohne Korrektur schlägt fehl; `check_scope_arm` liest die
+  Meldung wieder über das Register); am Gerät noch nicht.
+- **Vollbild-Knopf am PC schief und zu hoch.** Das Symbol saß links von der Mitte (der Abstand für einen
+  Menüpfeil aus dem Theme galt auch hier), und der Knopf war höher als „ALLE AUS“ daneben. Jetzt sind beide
+  gleich hoch, das Symbol mittig. Mock-verifiziert (`check_touch_ui`, Bild offscreen); in der .exe am PC noch
+  nicht angesehen.
+- **Übersicht wurde nach einer Oszilloskop-Erfassung höher.** Nach der ersten Erfassung über Netzwerk/MCP bekam
+  die Oszilloskop-Kachel eine Zeile „Letzte Erfassung“ dazu, mit ihr wuchs die ganze Übersicht; dasselbe kurz bei
+  „Trennen“. Jetzt stehen „Trennen“ und „Kurve“ als Symbole in der Zeile von „PicoScope 7 öffnen“, ihr Platz ist
+  immer reserviert, Uhrzeit und Kennwerte der Erfassung stehen im Tooltip von „Kurve“. Die Kachel bleibt so hoch
+  wie vorher. Ausführlich zeigt die Erfassung weiter die Kachel unter Steuerung. Mock-verifiziert (Höhe vor/nach
+  einer Erfassung offscreen gemessen, PC und Touch; `check_network_share`); in der .exe noch nicht angesehen.
+- **Gelöschte Geräte blieben beim Verbund-Partner sichtbar.** „Nicht verbundene Geräte löschen“ entfernte ein
+  Gerät aus Kacheln, Einstellungen und Editor, nicht aber aus der Netzwerk-Freigabe – der Partner bekam es weiter
+  geliefert und zeigte eine getrennte Kachel (am Pi: der gelöschte Funktionsgenerator an COM20 des PCs). Jetzt
+  verschwindet es auch dort. Mock-verifiziert (`check_device_reset`, Gegenprobe ohne Korrektur schlägt fehl);
+  am Pi noch nicht, dafür brauchen PC und Pi den neuen Stand.
+- **Falsche OVP/OCP-Warnung in der Kachel eines Partner-Netzteils.** Am PC zeigte die Kachel eines Netzteils am Pi
+  „Spannung (12V) liegt über der OVP-Schwelle (1V) … Strom (0.5A) liegt über der OCP-Schwelle (0A)“, obwohl das
+  Netzteil mit 12 V lief. OVP/OCP des Partners sind am Leitstand unbekannt (die Felder sind dort ausgeblendet und
+  standen auf ihrem Startwert 1 V / 0 A); die Warnung schaltete sich trotzdem wieder sichtbar. Jetzt entfällt sie
+  in Partnerkacheln – Grenzwerte prüft der Besitzer. Mock-verifiziert (`check_partner_link`, Gegenprobe ohne
+  Korrektur schlägt fehl); am Gerät (HCS16 am Pi, PC-App) noch nicht, dafür braucht die PC-App den neuen Stand.
+- **Testablauf mit Funktionsgenerator brach nach 2–3 s ab (PI-78 a).** Jeder Lauf mit einem Generator-Schritt
+  endete mit „Messwerte veraltet für Gerät 'fg:…'“, auch in einem reinen Warteschritt. Ursache: Der Watchdog
+  bekam vom Generator nie ein Lebenszeichen (nur Netzteil, Last, CAN und microHIL meldeten sich bei ihm), und der
+  Generator wurde ohnehin nur alle 2 s abgefragt. Dasselbe galt für den Batterie-Simulator. Jetzt:
+  - Der gemeldete Zustand von Generator und Batterie-Simulator zählt für den Watchdog.
+  - Die Frist bis „veraltet“ gilt je Geräteart: Funktionsgenerator 5 s (steht im Treiber), alle anderen weiter
+    2 s. Sie gilt gleich für Watchdog, Bedingungen im Ablauf, „stale“ der Netzwerk-Freigabe/MCP und das Display.
+    Partnergeräte (`@<rechner>/<id>`) bekommen sie über ihre Geräteart; der Besitzer setzt „veraltet“ in der
+    Kachel mit derselben Frist, ein Partner-Generator gilt daher nicht mehr nach 2 s als getrennt.
+  - Der Generator wird alle 0,5 s statt alle 2 s abgefragt, je Zyklus aber nur der Ausgang (beide Kanäle) und
+    drei weitere Einstellungen der Reihe nach: 4 statt 12 serielle Abfragen. EIN/AUS am Gerät steht nach
+    spätestens 0,5 s in der Kachel, die übrigen Einstellungen nach etwa 2 s. Nach einem eigenen Schreibbefehl
+    wird nur das betroffene Feld sofort zurückgelesen (bei Form und Frequenz auch die Amplitude, die das Gerät
+    still begrenzen kann) statt aller 12. Ein langsamer Generator-Zyklus wird wie bei den anderen Geräten mit
+    „Poll-Zyklus langsam“ geloggt.
+
+  Nur Mock geprüft (`check_stale_per_device`: Watchdog mit verstellter Uhr, Partnerkachel über LiveState und
+  Freigabe, Abfrage gegen eine Nachbildung der Registerbank; Gegenprobe auf dem alten Stand schlägt fehl;
+  `check_jds66xx`, `check_partner_devices`, `check_partner_link`, `check_network_share`, `check_confirm_wait`,
+  `check_reconnect_async`, `check_last_switch` unverändert grün); am JDS2915 (COM21) noch nicht.
+- **ALLE AUS meldete nicht erreichbare Geräte nicht; Netzteil morgens EIN (PI-81 a).** Befund aus dem Pi-Log: Am
+  Abend war HCS16 per Verbund eingeschaltet, um 19:58:14 antworteten beide Netzteile nicht mehr („getrennt“), 4 s
+  später fuhr der Pi herunter. Das ALLE AUS beim Beenden fand kein Netzteil mehr vor und schaltete nichts – ohne
+  das zu melden. Die HCS-34xx behalten ihren Ausgang selbst, morgens standen sie auf EIN. Entscheidung a:
+  sichtbar machen, nichts automatisch schalten.
+  - **ALLE AUS nennt, was es nicht erreicht hat:** jedes Gerät mit Ausgang (Netzteil, Last, Generator, microHIL),
+    das in dieser Sitzung verbunden war und beim ALLE AUS nicht mehr verbunden ist oder nicht antwortet, steht als
+    WARNING „… nicht verbunden (getrennt vor … s, zuletzt Ausgang EIN) – Ausgang unbekannt“ im Log, dazu eine
+    Sammelzeile. Wird ein Gerät mit Ausgang EIN getrennt, steht das schon beim Trennen im Log. Die Statuszeile
+    zeigt „ALLE AUS: nicht erreichbar, Ausgang unbekannt: …“, `POST /api/v1/all-off` (MCP `all_off`) liefert die
+    Geräte in `unreachable`, ALLE AUS am Verbund-Partner meldet dessen Liste ebenso. Bricht ALLE AUS einen
+    Testablauf ab, wartet die Abschaltung auf diese Rückmeldung und der Bericht (Abschnitt „Abschaltung beim
+    Abbruch“), `run-result.json` und `get_run` nennen die Geräte unter „Nicht erreichbar (Ausgang unbekannt)“
+    bzw. `shutdown.unreachable`. Beim Abschalten einzelner Geräte (Abbruch eines Laufs, `POST /devices-off` vom
+    Partner, abgelaufene Belegung) gilt dasselbe für den Log. Simulierte Geräte, die man abschaltet, zählen nicht.
+  - **Chip „beim Verbinden EIN“ in der Netzteil-Kachel:** findet LabControl beim Verbinden (Start oder
+    Wiederverbinden) ein Netzteil mit Ausgang EIN und Strombegrenzung > 0 vor, zeigt die Kachel einen gelben Chip
+    (Sollwerte im Tooltip) und der Log eine WARNING. Er verschwindet, sobald das Netzteil über LabControl geschaltet
+    wird (Ausgang, Spannung, Strom, Speicherplatz, Handbedienung – von der Kachel, aus einem Ablauf, über MCP oder
+    den Partner), es Ausgang AUS meldet oder getrennt wird. Der Übergabezustand beim Beenden (Mindestspannung, 0 A,
+    Ausgang EIN – das Gerät hat keine Ausgangstaste) löst ihn nicht aus: mit 0 A liefert der Ausgang nichts. Auch
+    beim Verbund-Partner sichtbar (Feld `found_on` im Kachel-Status, auch in `read_device`).
+  - Nebenbei: `PartnerLink` verband das Ergebnis von „Abschalten einzelner Geräte“ doppelt (harmlos, entfernt).
+
+  Nur Mock geprüft (`check_psu_found_on`: ALLE AUS mit per Poll-Timeout getrenntem Netzteil → WARNING,
+  `unreachable`, Bericht; Verbinden mit 12 V / 0,5 A EIN → Chip, Übergabezustand 1 V / 0 A EIN → kein Chip,
+  Schalten → Chip weg, Partnerfeld; `check_abort_block`, `check_partner_link`, `check_partner_devices`,
+  `check_partner_v2`, `check_verbund_v4`, `check_network_share`, `check_runs_api`, `check_psu_manual`,
+  `check_psu_output`, `check_last_switch`, `check_stale_per_device`, `check_reconnect_async`, `check_control_tab`,
+  `check_translations` unverändert grün); am Pi und an den HCS-34xx noch nicht.
+- **Funktionsgenerator: DC lieferte nicht die eingestellte Spannung, Tastgrad bei Rechteck wirkungslos (PI-75 a,
+  PI-80 a).** Gerätebefund **an Hardware gemessen** (JDS2915, 17.11.2026, CH1 ohne Last, PicoScope 10:1): In DC
+  gibt das Gerät etwa Offset + Amplitude/2 aus (Amplitude 0/1/2,5/5 V bei Offset 0 → 0,01/0,47/1,21/2,41 V;
+  2,5 V bei Offset 1/2,5 V → 2,29/3,73 V); bei Amplitude genau 0 kommt der Offset nur zu etwa 1/10 an (2,5 V →
+  0,22 V, mit 0,01/0,1 V Amplitude 2,61/2,57 V). Der Tastgrad wirkt nur bei Puls (99 % → 98,9 %, 10 % → 9,97 %);
+  Rechteck 1 kHz mit 10 % und 99 % ergab jeweils 50 %.
+  - **DC:** Beim Umschalten auf DC (Kachel, `FG_WAVE_DC` aus Ablauf, MCP, REST, Verbund) setzt LabControl die
+    Amplitude auf 0,01 V (kleinster Wert ≠ 0, nicht 0), die Spannung ist der Offset (`FG_OFFS`); am Ausgang liegt
+    sie plus 5 mV (halbe Amplitude). Hat jemand die Amplitude am Gerät verstellt, setzt `FG_OFFS` in DC sie vorher
+    wieder auf 0,01 V. `FG_AMPL` wird in DC **abgelehnt** (Schritt scheitert mit Meldung, MCP/REST
+    `device_error` mit Meldung) – nicht still ignoriert: ein Ablauf, der in DC eine Amplitude setzt, meint eine
+    andere Spannung, als dann anläge. Die Kachel zeigt in DC nur **Spannung** (= Offset), Amplitude ausgeblendet,
+    Frequenz und Tastverhältnis gesperrt; die Übersicht zeigt „DC  3.30 V“.
+  - **Tastgrad nur bei Puls:** Das Tastverhältnis-Feld ist nur bei Puls bedienbar. `FG_DUTY` bei jeder anderen
+    Form wird abgelehnt (Kachel, Ablauf, MCP/REST, Verbund), die Form wird nie still umgeschaltet. Ein Ablauf, der
+    an einer Stelle mit erkennbarer Form (Wellenform-Schritt davor, ohne Blockgrenze dazwischen) `FG_DUTY` bei
+    Nicht-Puls oder `FG_AMPL` in DC ausführt, startet nicht (Meldung mit Schritt, Kanal und Form); sonst scheitert
+    der Schritt zur Laufzeit. Presets schicken in DC keine Amplitude und außerhalb Puls kein Tastverhältnis.
+  - Treiber: `set_waveform_checked`/`set_offset_checked`/`set_amplitude_checked`/`set_duty_checked`,
+    `DC_AMPLITUDE_V`, `DC_RESIDUAL_V`; der Mock bildet die Messung nach (`output_dc_voltage`, `effective_duty`).
+    MCP-Anweisungen und -Beschreibung von `control_device`, `list_devices` (Hinweise je Aktion), Doku.
+
+  Die Umsetzung ist **nur Mock geprüft** (`check_fg_dc_duty`: Messwerte im Mock, Treiber-Helfer, Worker über
+  Ablauf/Kachel/Fernsteuerung, Ablehnung vor dem Start und zur Laufzeit, Kachel, Preset, Übersicht;
+  `check_stale_per_device` angepasst: Tastgrad jetzt bei Puls, vorher Formabfrage; `check_jds66xx`,
+  `check_last_switch`, `check_partner_devices`, `check_network_share`, `check_control_tab`, `check_touch_ui`,
+  `check_abort_block`, `check_headless_run`, `check_translations` unverändert grün); am JDS2915 noch nicht.
+
 ## [1.0.0] – 2026-11-15
 
 Erste Release-Version (PI-65). Sie fasst alle Stände seit 0.6.2 zusammen (die Einträge unten, chronologisch mit

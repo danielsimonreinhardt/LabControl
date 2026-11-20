@@ -23,6 +23,8 @@ Sicherheitsleitplanken, die hier und nirgends sonst durchgesetzt werden:
 Lesen ist GET, Schreiben (Fernsteuerung) ist POST:
   POST /api/v1/tiles/{id}/actions   eine Aktion an einem Geraet
   POST /api/v1/all-off              ALLE AUS
+  POST /api/v1/devices-off          nur die genannten Geraete abschalten ({"devices": [...], "reason"}; Abbruch
+                                    eines Testablaufs beim Verbund-Partner, 1.0.1, PI-79 a)
 
 Schreiben ist strenger als Lesen und wird in dieser Reihenfolge abgewiesen:
   Token (immer, nur als Authorization-Header, nie als ?token= -- URLs landen
@@ -33,6 +35,7 @@ Schreiben ist strenger als Lesen und wird in dieser Reihenfolge abgewiesen:
 ALLE AUS ist die einzige Ausnahme: es verlangt nur den Token und geht auch
 bei ausgeschaltetem Hauptschalter, laufendem Testlauf und nach einer
 Sicherheitsabschaltung -- es ist die Richtung, in der nichts kaputtgehen kann.
+Dasselbe gilt fuer devices-off (Abschalten einzelner Geraete).
 
 Ausgefuehrt wird ueber einen `executor` (im Betrieb share_remote.RemoteBridge),
 den dispatch() als Parameter bekommt. So bleibt dieses Modul Qt-frei und mit
@@ -44,8 +47,10 @@ ausgefuehrt ueber `scopes` (im Betrieb scope_service.ScopeService):
   GET  /api/v1/scopes/{id}                 ein Oszilloskop
   GET  /api/v1/scopes/{id}/capabilities    Faehigkeiten
   POST /api/v1/scopes/{id}/acquire         eine Erfassung (blockiert bis Ergebnis)
-  POST /api/v1/scopes/{id}/release         Verbindung sofort trennen
-  GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung
+  POST /api/v1/scopes/{id}/arm             scharf schalten, sofort zurueck mit capture_id (1.0.1, PI-73 a)
+  POST /api/v1/scopes/{id}/release         Verbindung sofort trennen (bricht scharfe Erfassungen ab)
+  GET  /api/v1/captures/{cid}              Ausschnitt einer Erfassung (scharf: nur Zustand "armed")
+  POST /api/v1/captures/{cid}/wait         auf eine scharfe Erfassung warten ({"timeout_s"}, PI-73 a)
   GET  /api/v1/captures/{cid}/plot         Erfassung als PNG (Phase 3)
   POST /api/v1/captures/{cid}/measure      Kennwerte neu berechnen
 Erfassen braucht Token + Lesen + das eigene Haekchen "Messen" (E1), aber NICHT
@@ -124,15 +129,19 @@ class RemoteResult:
     unterwegs, sein Ausgang unbekannt; der Client prueft per GET nach).
     code bei "error": locked, inactive, rate_limited, busy, device_error,
     all_off_incomplete.
+    unreachable (nur ALLE AUS, PI-81 a): Geraete, die ALLE AUS nicht erreicht hat (fehlgeschlagen oder vorher
+    getrennt) -- Ausgang unbekannt.
     """
 
-    __slots__ = ("status", "code", "message", "value")
+    __slots__ = ("status", "code", "message", "value", "unreachable")
 
-    def __init__(self, status: str, code: str = "", message: str = "", value: float = 0.0) -> None:
+    def __init__(self, status: str, code: str = "", message: str = "", value: float = 0.0,
+                 unreachable: list[str] | None = None) -> None:
         self.status = status
         self.code = code
         self.message = message
         self.value = value
+        self.unreachable = list(unreachable or [])
 
 
 def new_token() -> str:
@@ -218,6 +227,12 @@ def partner_tiles(snapshot: dict) -> dict[str, dict]:
                      "partner": {"host": host, "name": name, "id": remote_id}})
         if stale:
             item["stale"] = True
+        if isinstance(item.get("last_switch"), dict):
+            # PI-77 a: Alter beim Besitzer + Alter des hier gehaltenen Stands
+            age = float(partner.get("age_s", 0.0))
+            item["last_switch"] = {action: {**entry, "age_s": round(float(entry["age_s"]) + age, 3)}
+                                   for action, entry in item["last_switch"].items()
+                                   if isinstance(entry, dict) and isinstance(entry.get("age_s"), (int, float))}
         if item.get("control"):
             blocked = ("partner_unreachable" if stale else own_block
                        or ("" if tile.get("control_available") else tile.get("control_blocked") or "partner_blocked"))
@@ -405,6 +420,10 @@ def _tile_detail(device_id: str, entry: dict, snapshot: dict) -> dict:
         "control_blocked": _control_block_reason(snapshot, device_id) if tile["control"] else "",
         # Belegt durch einen Verbund-Leitstand (PI-25 a): {"holder", "run"}, sonst nicht vorhanden
         **({"leased_by": snapshot["leases"][device_id]} if device_id in snapshot.get("leases", {}) else {}),
+        # Letzte Schaltung je Aktion ueber LabControl (PI-77 a): {Aktion: {"age_s", "source"}} -- ALTER statt
+        # Zeitpunkt, damit die Uhren von Besitzer und Partner keine Rolle spielen. {} = seit dem Start nichts
+        # geschaltet; fehlt das Feld, kennt der Besitzer es nicht (aeltere Version).
+        **({"last_switch": snapshot["last_switch"].get(device_id, {})} if "last_switch" in snapshot else {}),
         "fields": fields,
     })
     return tile
@@ -456,6 +475,9 @@ def _status(snapshot: dict, app_info: dict) -> Response:
         # konfiguriert" von "scharf und in Ordnung" unterscheiden.
         "safety": snapshot.get("safety", "off"),
         "test_running": bool(snapshot.get("test_running")),
+        # PI-71 a: worauf der laufende Ablauf wartet ("confirm": nur im LabControl-Fenster bestaetigbar,
+        # "release": Freigabe ueber POST /runs/{id}/continue, PI-74 a)
+        "run_waiting": snapshot.get("run_waiting"),
         "simulation": bool(app_info.get("simulation")),
         "time": int(time.time()),
         # Uhrzeit mit Millisekunden (seit 0.49.0): der Verbund-Leitstand prueft damit, ob die Uhren
@@ -694,11 +716,39 @@ def _all_off(executor, client: str) -> Response:
     if executor is None:
         return _error(501, "not_implemented")
     result = executor.submit_all_off(client)
+    # PI-81 a: nicht erreichte Geraete (fehlgeschlagen oder vorher getrennt) -- Ausgang unbekannt
+    unreachable = {"unreachable": list(result.unreachable)} if getattr(result, "unreachable", None) else {}
     if result.status == "error" and result.code == "all_off_incomplete":
         failures = [f for f in result.message.split(";") if f]
         return _json(502, {"v": API_VERSION, "ok": False, "error": "all_off_incomplete",
+                           "failures": failures, **unreachable})
+    return _result_response(result, unreachable)
+
+
+DEVICES_OFF_MAX = 50
+
+
+def _devices_off(executor, body: bytes, client: str) -> Response:
+    """POST /api/v1/devices-off {"devices": ["psu:0001", ...], "reason": "..."} -- nur diese Geraete abschalten
+    (1.0.1, PI-79 a: Abbruch eines Testablaufs, der Geraete dieses Rechners geschaltet hat). Wie ALLE AUS nur mit
+    Token. 502 devices_off_incomplete mit "failures", wenn ein Geraet nicht erreichbar war."""
+    if executor is None or not hasattr(executor, "submit_devices_off"):
+        return _error(501, "not_implemented")
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except (UnicodeDecodeError, ValueError):
+        return _error(400, "invalid_json")
+    devices = payload.get("devices") if isinstance(payload, dict) else None
+    if (not isinstance(devices, list) or not devices or len(devices) > DEVICES_OFF_MAX
+            or not all(isinstance(d, str) and d and len(d) <= 200 for d in devices)):
+        return _error(400, "invalid_value", field="devices")
+    reason = str(payload.get("reason") or "")[:200]
+    result = executor.submit_devices_off(list(dict.fromkeys(devices)), reason, client)
+    if result.status == "error" and result.code == "devices_off_incomplete":
+        failures = [f for f in result.message.split(";") if f]
+        return _json(502, {"v": API_VERSION, "ok": False, "error": "devices_off_incomplete",
                            "failures": failures})
-    return _result_response(result, {})
+    return _result_response(result, {"off": list(dict.fromkeys(devices))} if result.status == "ok" else {})
 
 
 # -- Oszilloskope (scope_api) --------------------------------------------------
@@ -709,6 +759,7 @@ SCOPE_ERROR_STATUS = {
     "duration_too_long": 400, "unknown_measurement": 400,
     "unknown_capture": 404,
     "device_offline": 409, "scope_in_test_run": 409, "scope_busy_external": 409,
+    "scope_armed": 409, "capture_pending": 409, "cancelled": 409,
     "scope_busy": 429,
     "device_error": 502,
     "trigger_timeout": 504,
@@ -826,6 +877,15 @@ def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, 
     payload = _parse_body(body)
     if payload is None:
         return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    if what == "arm":
+        try:
+            status = scopes.arm(device_id, payload)
+        except ScopeError as exc:
+            logger.info("Oszilloskop scharf schalten von %s: %s -> Fehler (%s)", client, device_id, exc.code)
+            return _scope_error(exc)
+        logger.info("Oszilloskop scharf schalten von %s: %s -> %s (%s)", client, device_id,
+                    status.get("capture_id"), status.get("state"))
+        return _json(200, {"v": API_VERSION, "ok": True, **status})
     started = time.monotonic()
     try:
         report = scopes.acquire(device_id, payload)
@@ -835,6 +895,24 @@ def _scope_post(snapshot: dict, scopes, device_id: str, what: str, body: bytes, 
     logger.info("Oszilloskop-Erfassung von %s: %s -> %s (%.1f s)", client, device_id,
                 report.get("capture_id"), time.monotonic() - started)
     return _json(200, {"v": API_VERSION, "ok": True, **report})
+
+
+def _capture_wait(snapshot: dict, scopes, capture_id: str, body: bytes) -> Response:
+    """Auf eine scharfe Erfassung warten (PI-73 a): Bericht wie acquire, oder nach timeout_s der Stand."""
+    denied = _capture_permitted(snapshot, scopes, capture_id)
+    if denied is not None:
+        return denied
+    payload = _parse_body(body) if body else {}
+    if payload is None:
+        return _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    timeout = payload.get("timeout_s", 10.0)
+    try:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)                 or timeout < 0:
+            raise ScopeError("invalid_request", "'timeout_s' muss eine Zahl >= 0 sein.")
+        result = scopes.wait_capture(capture_id, float(timeout))
+    except ScopeError as exc:
+        return _scope_error(exc)
+    return _json(200, {"v": API_VERSION, "ok": True, **result})
 
 
 def _capture_measure(snapshot: dict, scopes, capture_id: str, body: bytes) -> Response:
@@ -851,8 +929,8 @@ def _capture_measure(snapshot: dict, scopes, capture_id: str, body: bytes) -> Re
 
 
 def _scope_route(path: str) -> tuple[str, str, str] | None:
-    """("scopes", "", "") | ("scope", id, ""|"capabilities"|"acquire"|"release")
-    | ("capture", cid, ""|"measure") | None fuer alle anderen Pfade."""
+    """("scopes", "", "") | ("scope", id, ""|"capabilities"|"acquire"|"arm"|"release")
+    | ("capture", cid, ""|"measure"|"wait"|"plot") | None fuer alle anderen Pfade."""
     if path == f"{API_PREFIX}/scopes":
         return "scopes", "", ""
     for prefix, kind in ((f"{API_PREFIX}/scopes/", "scope"), (f"{API_PREFIX}/captures/", "capture")):
@@ -867,7 +945,8 @@ def _scope_route(path: str) -> tuple[str, str, str] | None:
 
 
 _SCOPE_GET = {("scopes", ""), ("scope", ""), ("scope", "capabilities"), ("capture", ""), ("capture", "plot")}
-_SCOPE_POST = {("scope", "acquire"), ("scope", "release"), ("capture", "measure")}
+_SCOPE_POST = {("scope", "acquire"), ("scope", "arm"), ("scope", "release"), ("capture", "measure"),
+               ("capture", "wait")}
 
 
 def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict, body: bytes,
@@ -889,6 +968,8 @@ def _dispatch_scope(method: str, route, header_get, snapshot: dict, query: dict,
             return denied
         if kind == "scope":
             return _scope_post(snapshot, scopes, ident, what, body, client)
+        if what == "wait":
+            return _capture_wait(snapshot, scopes, ident, body)
         return _capture_measure(snapshot, scopes, ident, body)
     denied = check_auth(snapshot, header_get, query)
     if denied is not None:
@@ -909,6 +990,8 @@ def _post_route(path: str) -> tuple[str, str] | None:
     ("lease_renew", lease_id) oder ("lease_release", lease_id)."""
     if path == f"{API_PREFIX}/all-off":
         return "all_off", ""
+    if path == f"{API_PREFIX}/devices-off":
+        return "devices_off", ""
     if path == f"{API_PREFIX}/leases":
         return "lease", ""
     lease_prefix = f"{API_PREFIX}/leases/"
@@ -959,6 +1042,8 @@ def _dispatch_post(path: str, header_get, snapshot: dict, body: bytes, executor,
     kind, device_id = route
     if kind == "all_off":
         return _all_off(executor, client)
+    if kind == "devices_off":
+        return _devices_off(executor, body, client)
     if kind.startswith("lease"):
         if leases is None:
             return _error(501, "not_implemented")
@@ -1124,6 +1209,8 @@ def _dispatch_pair(method: str, path: str, snapshot: dict, body: bytes, client: 
 #   POST /api/v1/runs                   {"testcase": "name.json", "vars": {...}} starten
 #                                       ({"path": ...} nur vom selben Rechner, Kommandozeile)
 #   POST /api/v1/runs/{id}/stop         anhalten (wie Stop: ALLE AUS)
+#   POST /api/v1/runs/{id}/continue     {"key"?, "step"?, "by"?} "Warten auf Freigabe" freigeben (PI-74 a); eine
+#                                       Bestaetigung (PI-71 a) geht bewusst NICHT ueber das Netz
 # Starten/Stoppen wie Steuern: Token + Fernsteuerung fuer diesen Aufrufer + Sperrzustand frei. Dateien
 # kommen nur ueber die Pfade, die das Register (run_registry.py) zum Lauf kennt -- kein Pfad aus der Anfrage.
 
@@ -1170,6 +1257,24 @@ def _run_start_payload(snapshot: dict, body: bytes) -> tuple[dict | None, Respon
             "all_off_at_end": bool(payload.get("all_off_at_end"))}, None
 
 
+def _run_continue_payload(body: bytes) -> tuple[dict | None, Response | None]:
+    """Rumpf von POST /runs/{id}/continue: optional "key" (Freigabe-Kennung), "step" (1-basiert) -- beide muessen
+    zum wartenden Schritt passen, damit nicht der falsche Wartepunkt freigegeben wird -- und "by" (Name des
+    Programms fuer den Bericht, der Aufrufer selbst steht ohnehin darin)."""
+    payload = _parse_body(body) if body else {}
+    if payload is None:
+        return None, _error(400, "invalid_body", max_bytes=MAX_BODY_BYTES)
+    key, step, by = payload.get("key"), payload.get("step"), payload.get("by")
+    if key is not None and not (isinstance(key, str) and len(key) <= 100):
+        return None, _error(400, "invalid_key")
+    if step is not None and (isinstance(step, bool) or not isinstance(step, int) or step < 1):
+        return None, _error(400, "invalid_step")
+    if by is not None and not isinstance(by, str):
+        return None, _error(400, "invalid_by")
+    by = "".join(c for c in (by or "") if c.isalnum() or c in " -_.()")[:40].strip()
+    return {"key": key.strip() if isinstance(key, str) else None, "step": step, "by": by}, None
+
+
 def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query: dict, body: bytes,
                    executor, client: str) -> Response:
     kind, run_id, what = route
@@ -1177,7 +1282,7 @@ def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query:
     if registry is None:
         return _error(501, "not_implemented")
     if method == "POST":
-        if not ((kind == "runs") or (kind == "run" and what == "stop")):
+        if not ((kind == "runs") or (kind == "run" and what in ("stop", "continue"))):
             return _json(405, {"v": API_VERSION, "error": "method_not_allowed"}, {"Allow": "GET, HEAD"})
         denied = check_write_auth(snapshot, header_get)
         if denied is not None:
@@ -1195,6 +1300,21 @@ def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query:
             result = executor.submit_run("start", payload, client)
             if result.status == "ok":
                 return _json(202, {"v": API_VERSION, "ok": True, "run": result.message})
+        elif what == "continue":
+            # PI-74 a: Freigabe wie Stoppen nur mit Steuerrecht (oben); kein Sperrzustand-Test -- waehrend eines
+            # Laufs ist "lock" ohnehin gesetzt
+            if registry.get(run_id) is None:
+                return _error(404, "unknown_run")
+            payload, error = _run_continue_payload(body)
+            if error is not None:
+                return error
+            result = executor.submit_run("continue", {"run": run_id, **payload}, client)
+            if result.status == "ok":
+                return _json(200, {"v": API_VERSION, "ok": True, "run": run_id,
+                                   "step": int(result.message) if result.message.isdigit() else None})
+            if result.code in ("release_mismatch", "not_waiting_release", "confirm_local_only"):
+                entry = registry.get(run_id) or {}
+                return _error(409, result.code, waiting=entry.get("waiting"))
         else:
             if registry.get(run_id) is None:
                 return _error(404, "unknown_run")

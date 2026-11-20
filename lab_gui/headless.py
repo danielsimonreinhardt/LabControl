@@ -145,6 +145,8 @@ class _Rig:
         self.worker.psu_measurement.connect(self.safety.on_psu_measurement)
         self.worker.can_stats.connect(self.safety.on_can_stats)
         self.worker.hil_digital_state.connect(self.safety.on_hil_digital_state)
+        self.worker.fg_state.connect(self.safety.on_fg_state)   # Heartbeat (PI-78 a)
+        self.worker.battsim_state.connect(self.safety.on_battsim_state)
         self.worker.device_removed.connect(self.safety.on_device_removed)
         self.safety.all_off_requested.connect(self.worker.all_outputs_off)
         self.interlock = Interlock(settings.interlock_groups, self.directory.is_online)
@@ -249,6 +251,16 @@ def _prepare_steps(path: Path, rig: _Rig):
         return steps, meta, "Geräte eines Verbund-Partners gehen ohne Fenster nicht: " + ", ".join(partner)
     if any(s.enabled and s.step_type == "action" and s.device_kind == "jlink" for s in steps):
         return steps, meta, "J-Link-Schritte gehen ohne Fenster noch nicht"
+    confirms = [i + 1 for i, s in enumerate(steps) if s.enabled and s.step_type == "confirm"]
+    if confirms:
+        # PI-71 a: niemand kann bestaetigen -- vor dem Start ablehnen, nicht still weiterlaufen
+        return steps, meta, (f"Bestätigungsschritt (Schritt {confirms[0]}) braucht das LabControl-Fenster – "
+                             "Ablauf dort starten (oder bei laufender Instanz über sie)")
+    releases = [i + 1 for i, s in enumerate(steps) if s.enabled and s.step_type == "await_release"]
+    if releases:
+        # PI-74 a: ohne Fenster laeuft kein Server, ueber den ein Programm freigeben koennte -- vor dem Start ablehnen
+        return steps, meta, (f"Warten auf Freigabe (Schritt {releases[0]}) braucht das LabControl-Fenster mit "
+                             "Netzwerkfreigabe – Ablauf dort starten (oder bei laufender Instanz über sie)")
     return steps, meta, ""
 
 
@@ -393,16 +405,18 @@ def _cmd_run(args, settings) -> int:
             return
         state["interrupted"] = True
         _say("Unterbrochen – ALLE AUS")
-        rig.session.runner.stop()
+        rig.session.runner.stop(mode="all_off")   # ohne Abbruch-Block, am Ende kommt ALLE AUS (rig.shutdown)
 
     shutdown_signals.install(interrupt, app)
     rig.session.run_ended.connect(lambda _outcome: state.update(ended=True))
+    # Schrittfehler/Sicherheitsabschaltung: Abbruch-Block bzw. Abschaltung der geschalteten Geraete und des
+    # ausloesenden macht RunSession (PI-76 a/PI-79 a); am Ende schaltet rig.shutdown wie immer ALLES ab (FP-4 a)
     rig.session.runner.step_failed.connect(lambda index, message: _say(f"Schritt {index + 1}: {message}"))
-    rig.session.runner.step_failed.connect(lambda _i, message: rig.all_off_async(f"step failed: {message}"))
+    rig.session.runner.abort_step_done.connect(
+        lambda index, ok, message: _say(f"Abbruch-Block, Schritt {index + 1}: {'ok' if ok else message}"))
     rig.session.runner.step_result.connect(
         lambda index, ok, value: _say(f"Schritt {index + 1}: {'bestanden' if ok else 'NICHT bestanden'} ({value:g})"))
-    rig.safety.tripped.connect(lambda device_id, reason: (_say(f"Sicherheitsabschaltung {device_id}: {reason}"),
-                                                         rig.session.runner.stop()))
+    rig.safety.tripped.connect(lambda device_id, reason: _say(f"Sicherheitsabschaltung {device_id}: {reason}"))
 
     name = (meta.get("name") or path.stem)
     _say(f"Start: {name} ({len(steps)} Schritte)")

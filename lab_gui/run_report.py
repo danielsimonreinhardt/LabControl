@@ -27,14 +27,17 @@ from report_chart import fmt_elapsed, render_field_chart
 from run_record import RunRecord
 from testcase_model import (
     COND_FIELD_LABELS,
-    COND_FIELD_UNITS,
     TestStep,
     action_label,
     battsim_step_detail,
     check_summary,
+    check_unit,
+    confirm_text,
     kind_label,
     monitor_source,
     monitor_summary,
+    release_summary,
+    wait_since_summary,
 )
 from version import __version__
 
@@ -98,6 +101,32 @@ def _render_charts(record: RunRecord) -> list[tuple[str, QImage]]:
         charts.append((title, image))
     charts.extend(_render_setpoint_charts(record))
     charts.extend(_render_monitor_charts(record))
+    charts.extend(_render_scope_charts(record))
+    return charts
+
+
+def _scope_value_text(entry: dict) -> str:
+    import scope_steps
+    value = entry.get("value")
+    label = scope_steps.measurement_label(entry.get("measurement", ""))
+    shown = f"{value:g} {entry.get('unit', '')}".rstrip() if value is not None else "–"
+    return f"{label} {entry.get('channel', '')} = {shown}"
+
+
+def _render_scope_charts(record: RunRecord) -> list[tuple[str, QImage]]:
+    """Kurve je Oszilloskop-Warteschritt (1.0.1, PI-72 a), gezeichnet beim Abholen (scope_plot)."""
+    charts = []
+    for entry in getattr(record, "scope_captures", []):
+        png = entry.get("png")
+        if not png:
+            continue
+        image = QImage.fromData(png, "PNG")
+        if image.isNull():
+            continue
+        device = _device_display(record, entry.get("kind", "picoscope"), entry.get("device_id", ""))
+        title = tr("Schritt {n}: Oszilloskop {device} – {detail}", n=entry["index"] + 1, device=device,
+                   detail=_scope_value_text(entry))
+        charts.append((title, image))
     return charts
 
 
@@ -181,6 +210,13 @@ def _step_started_text(record: RunRecord, index: int) -> str:
         return tr("Schritt {n}: {var} {op} {value:g}", n=index + 1, var=step.var_name, op=op, value=step.value)
     if step.step_type == "wait":
         return tr("Schritt {n}: Warten ({duration:g} s)", n=index + 1, duration=step.duration)
+    if step.step_type == "confirm":
+        return tr("Schritt {n}: Bestätigung – {prompt}", n=index + 1, prompt=confirm_text(step) or "–")
+    if step.step_type == "await_release":
+        return tr("Schritt {n}: Warten auf Freigabe {detail}", n=index + 1, detail=release_summary(step))
+    if step.step_type == "wait_since":
+        device = record.device_meta.get(step.device_id, ("", ""))[1] if step.device_id else ""
+        return tr("Schritt {n}: Warten {detail}", n=index + 1, detail=wait_since_summary(step, device))
     device = _device_display(record, step.device_kind, step.device_id)
     action = action_label(step.device_kind, step.action)
     if step.action == "CAN_SEND":
@@ -206,9 +242,74 @@ def _step_started_text(record: RunRecord, index: int) -> str:
     elif step.device_kind == "uds":
         import uds_steps
         detail = uds_steps.summary(step.action, step.params) or "–"
+    elif step.action in ("SCOPE_ARM", "SCOPE_WAIT"):
+        import scope_steps
+        detail = scope_steps.summary(step.action, step.params, step.device_kind)
     else:
         detail = f"{step.value:g}" if step.value else "–"
     return tr("Schritt {n}: {device} – {action} ({detail})", n=index + 1, device=device, action=action, detail=detail)
+
+
+SHUTDOWN_MODE_TEXTS = {
+    "block": "Abbruch-Block",
+    "standard": "Standard-Abschaltung (geschaltete Geräte und Auslöser)",
+    "watchdog": "Sicherheitsabschaltung (geschaltete Geräte und Auslöser)",
+    "all_off": "ALLE AUS (alle Geräte)",
+}
+
+
+def shutdown_mode_text(shutdown: dict) -> str:
+    text = tr(SHUTDOWN_MODE_TEXTS.get(shutdown.get("mode", ""), shutdown.get("mode", "")))
+    if shutdown.get("fallback"):
+        text += " – " + tr("Fehler im Block, danach Standard-Abschaltung")
+    if shutdown.get("escalated") == "watchdog" and shutdown.get("mode") != "watchdog":
+        text += " – " + tr("danach Sicherheitsabschaltung")
+    elif shutdown.get("escalated") == "all_off" and shutdown.get("mode") != "all_off":
+        text += " – " + tr("danach ALLE AUS")
+    return text
+
+
+def _shutdown_html(record: RunRecord, th, td) -> list[str]:
+    """Abschnitt "Abschaltung beim Abbruch" (1.0.1, PI-76 a/PI-79 a): Art, Schritte des Abbruch-Blocks mit
+    Ergebnis, abgeschaltete und nicht erreichbare Geraete."""
+    shutdown = getattr(record, "shutdown", None)
+    if not shutdown:
+        return []
+    labels = shutdown.get("labels") or {}
+
+    def names(ids) -> str:
+        return ", ".join(labels.get(d) or record.device_meta.get(d, ("", d))[1] for d in ids) or "–"
+
+    parts = ['<h2>' + html.escape(tr("Abschaltung beim Abbruch")) + '</h2>',
+             '<table style="width:100%; border-collapse:collapse;">']
+    rows = [(tr("Art"), shutdown_mode_text(shutdown))]
+    if shutdown.get("trigger"):
+        rows.append((tr("Auslösendes Gerät"), names([shutdown["trigger"]])))
+    if shutdown.get("mode") != "all_off":
+        rows.append((tr("Abgeschaltet"), names(shutdown.get("off") or [])))
+        rows.append((tr("Nicht erreichbar (Ausgang unbekannt)"), names(shutdown.get("unreachable") or [])))
+    elif shutdown.get("unreachable"):
+        # PI-81 a: ALLE AUS erreicht ein vorher getrenntes Geraet nicht -- der Bericht nennt es
+        rows.append((tr("Nicht erreichbar (Ausgang unbekannt)"), names(shutdown["unreachable"])))
+    if shutdown.get("timed_out"):
+        rows.append((tr("Abbruch-Block"), tr("Höchstdauer überschritten")))
+    for label, value in rows:
+        parts.append('<tr>' + td(label, bold=True) + td(value) + '</tr>')
+    parts.append('</table>')
+    block = shutdown.get("block")
+    if block:
+        parts.append('<h3>' + html.escape(tr("Abbruch-Block")) + '</h3>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th(tr("Schritt")) + th(tr("Ergebnis")) + th(tr("Meldung")) + '</tr>')
+        for row in block:
+            index = int(row.get("step", 0)) - 1
+            text = _step_started_text(record, index) if 0 <= index < len(record.steps) else str(row.get("step"))
+            bg = _BG_PASS if row.get("ok") else _BG_FAIL
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER}; background:{bg};'
+            cells = (text, tr("ok") if row.get("ok") else tr("Fehler"), row.get("message") or "–")
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
+        parts.append('</table>')
+    return parts
 
 
 def _iteration_suffix(event) -> str:
@@ -236,7 +337,7 @@ def _timeline_rows(record: RunRecord) -> list[tuple[str, str, str | None]]:
                          None if event.passed else _COLOR_FAIL))
         elif event.kind == "result":
             step = record.steps[event.index]
-            unit = COND_FIELD_UNITS.get(step.check_field, "")
+            unit = check_unit(step)
             verdict = tr("bestanden") if event.passed else tr("fehlgeschlagen")
             text = tr(
                 "Prüfung Schritt {n}: {verdict}, gemessen {value:g} {unit}",
@@ -246,6 +347,8 @@ def _timeline_rows(record: RunRecord) -> list[tuple[str, str, str | None]]:
         elif event.kind == "failed":
             text = tr("FEHLER Schritt {n}: {message}", n=event.index + 1, message=event.message)
             rows.append((offset, text, _COLOR_FAIL))
+        elif event.kind == "note":   # PI-71 a: bestaetigt/abgebrochen, tatsaechliche Wartezeit
+            rows.append((offset, tr("Schritt {n}: {message}", n=event.index + 1, message=event.message), None))
     if record.events_dropped:
         rows.append(("", tr("… {n} weitere Ereignisse ausgelassen", n=record.events_dropped), None))
     return rows
@@ -385,7 +488,7 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
             row_bg = _BG_FAIL if sticky_failed else _BG_PASS
             device = _device_display(record, step.device_kind, step.device_id)
             action = action_label(step.device_kind, step.action)
-            unit = COND_FIELD_UNITS.get(step.check_field, "")
+            unit = check_unit(step)
             result_text = (
                 tr("{failed}/{total} fehlgeschlagen", failed=failed, total=total)
                 if sticky_failed else tr("{total}/{total} bestanden", total=total)
@@ -404,6 +507,8 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
                 f'</tr>'
             )
         parts.append('</table>')
+
+    parts.extend(_shutdown_html(record, th, td))
 
     timing = run_results.timing_rows(record)
     if timing:
@@ -436,6 +541,21 @@ def build_html(record: RunRecord, image_srcs: list[tuple[str, str]]) -> str:
             cells = (item["index"] + 1, _device_display(record, step.device_kind, item["device_id"]),
                      action_label(step.device_kind, item["target"]), item["count"],
                      f'{item["first"]:g} → {item["last"]:g}', gap_text)
+            style = f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
+            parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
+        parts.append('</table>')
+
+    scope_rows = run_results.scope_capture_rows(record)
+    if scope_rows:
+        parts.append('<h2>' + html.escape(tr("Oszilloskop-Erfassungen")) + '</h2>')
+        parts.append('<table style="width:100%; border-collapse:collapse;">')
+        parts.append('<tr>' + th("#") + th(tr("Gerät")) + th(tr("Scharf geschaltet")) + th(tr("Kennwert"))
+                     + th(tr("Kurve (CSV)")) + '</tr>')
+        for row, entry in zip(scope_rows, record.scope_captures):
+            device = _device_display(record, entry.get("kind", "picoscope"), row["device_id"] or "")
+            csv_path = row["csv_path"] or "–"
+            cells = (row["step"], device, f'{tr("Schritt {n}", n=row["arm_step"])}: {row["summary"]}',
+                     _scope_value_text(entry), csv_path)
             style = f'padding:4px 8px; border-bottom:1px solid {_BORDER};'
             parts.append('<tr>' + ''.join(f'<td style="{style}">{html.escape(str(c))}</td>' for c in cells) + '</tr>')
         parts.append('</table>')

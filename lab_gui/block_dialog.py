@@ -34,9 +34,12 @@ from testcase_model import (
     action_label,
     arb_shape_label,
     condition_summary,
+    confirm_text,
     is_arb_action,
     kind_label,
+    release_summary,
     validate_structure,
+    wait_since_summary,
 )
 from theme import current as current_palette
 
@@ -55,11 +58,20 @@ def _step_line(step: TestStep) -> str:
             return f"{tr(CONTROL_STEP_LABELS[step.step_type])}: {step.var_name} {op} {step.value:g}"
         if step.step_type == "wait":
             return f"{tr(CONTROL_STEP_LABELS['wait'])} ({step.duration:g} s)"
+        if step.step_type == "confirm":
+            return f"{tr(CONTROL_STEP_LABELS['confirm'])}: {confirm_text(step) or '–'}"
+        if step.step_type == "wait_since":
+            return f"{tr(CONTROL_STEP_LABELS['wait'])} {wait_since_summary(step)}"
+        if step.step_type == "await_release":
+            return f"{tr(CONTROL_STEP_LABELS['await_release'])} {release_summary(step)}"
         return tr(CONTROL_STEP_LABELS.get(step.step_type, step.step_type))
     device = step.device_id or tr("{kind} (automatisch)", kind=kind_label(step.device_kind))
     action = action_label(step.device_kind, step.action)
     if is_arb_action(step.action):
         return f"{device}: {action} ({arb_shape_label(step.arb_shape)})"
+    if step.action in ("SCOPE_ARM", "SCOPE_WAIT"):   # PI-72 a
+        import scope_steps
+        return f"{device}: {action} ({scope_steps.summary(step.action, step.params, step.device_kind)})"
     if step.action in VALUELESS_ACTIONS:
         return f"{device}: {action}"
     return f"{device}: {action} = {step.value:g}"
