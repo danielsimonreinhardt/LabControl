@@ -234,6 +234,8 @@ def check_partner_tiles() -> None:
 
 
 def check_fg_poll() -> None:
+    import no_hardware
+    no_hardware.block()
     import device_worker as dw
     from jds66xx import driver
 

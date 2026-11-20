@@ -367,6 +367,9 @@ def section_verbund(app) -> None:
     tile_a = log_a.last("psu", dw.SIM_PSU_ID, "PSU_OUT_ON")
     check("A: eigene Kachel EIN verbucht", tile_a is not None and tile_a[1] == "Kachel", str(tile_a))
 
+    # Jede Schaltung soll mindestens 1,5 s her sein, sonst ist "nur der Rest" nicht vom vollen
+    # Warten zu unterscheiden (langsamer CI-Runner: Lauf startete 0,7 s nach der Schaltung)
+    spin(app, 3.0, lambda: time.monotonic() - tile_a[0] >= 1.5)
     # Mindestzeiten so, dass jeweils noch ~1,5-2,5 s fehlen: gewartet wird nur der Rest
     now = time.monotonic()
     d_load = round(now - partner_b[0] + 2.5, 1)

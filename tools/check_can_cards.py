@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path[:0] = [str(ROOT / "device-driver"), str(ROOT / "lab_gui")]
+sys.path[:0] = [str(ROOT), str(ROOT / "device-driver"), str(ROOT / "lab_gui")]  # ROOT fuer scope_api
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtTest import QTest  # noqa: E402
