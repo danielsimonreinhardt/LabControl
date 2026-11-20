@@ -51,6 +51,22 @@ jobs:
           make_latest: false
           files: dist/${{ env.EXE_NAME }}.exe
 
+      # Im Release "latest" bleibt nur die gerade gebaute .exe liegen (aeltere Staende loeschen)
+      - name: Remove older files from "latest"
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $keep = "$env:EXE_NAME.exe"
+          $assets = gh release view latest --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          foreach ($asset in $assets) {
+            if ($asset -and $asset -ne $keep) {
+              gh release delete-asset latest $asset --repo $env:GITHUB_REPOSITORY --yes
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+              Write-Host "geloescht: $asset"
+            }
+          }
+
       - name: Publish version release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

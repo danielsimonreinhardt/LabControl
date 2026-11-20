@@ -206,11 +206,21 @@ def section_runner(app) -> None:
     check("unbekannt -> volle Zeit", gap_of(events, 0) >= 0.5, f"{gap_of(events, 0):.3f}")
     check("Vermerk 'noch nicht ausgefuehrt'", any("noch nicht" in n for n in notes_of(events)), str(notes_of(events)))
 
-    QTimer.singleShot(1200, lambda: log.note("psu", "psu:A", "PSU_OUT_OFF", sl.SOURCE_REMOTE))
+    # Qt-Timer duerfen bis ~5 % zu frueh feuern: ab dem tatsaechlichen Verbuchen rechnen, nicht ab 1,2 s
+    noted: list[float] = []
+
+    def note_remote():
+        noted.append(time.monotonic())
+        log.note("psu", "psu:A", "PSU_OUT_OFF", sl.SOURCE_REMOTE)
+
+    QTimer.singleShot(1200, note_remote)
     t0 = time.monotonic()
     events = run_steps(app, runner, [TestStep(step_type="wait_since", **psu, action="PSU_OUT_OFF", duration=1.5)])
-    took = time.monotonic() - t0
-    check("Schaltung waehrend des Wartens verlaengert (MCP/REST)", took >= 2.65, f"{took:.3f}")
+    end = time.monotonic()
+    took = end - t0
+    after = end - noted[0] if noted else 0.0
+    check("Schaltung waehrend des Wartens verlaengert (MCP/REST)", bool(noted) and noted[0] - t0 > 0.9
+          and after >= 1.4, f"gesamt {took:.3f} s, nach der Schaltung {after:.3f} s")
     check("Vermerk 'erneut ausgefuehrt'", any("erneut" in n and "MCP/REST" in n for n in notes_of(events)),
           str(notes_of(events)))
 
