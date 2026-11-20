@@ -7,6 +7,9 @@ name: Linux checks
 on:
   push:
     branches: [master]
+  # Pflicht-Pruefung fuer Pull Requests nach master (Ruleset, PI-86 b, 20.11.2026)
+  pull_request:
+    branches: [master]
   workflow_dispatch: {}
 
 permissions:
