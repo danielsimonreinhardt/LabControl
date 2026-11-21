@@ -372,7 +372,7 @@ range check and for a variable (conditions in "If"/"While").
 ### Oscilloscope: Arm and Wait for capture
 
 The **Oscilloscope** (PicoScope) and the **Oscilloscope (LAN)** (UNI-T
-MSO1000HD) offer two actions to capture an event that a later step causes
+MSO1000HD, R&S RTB2000) offer two actions to capture an event that a later step causes
 (e.g. switching on with 12 V):
 
 - **Arm**: **"Oscilloscope parameters…"** sets channel (also the trigger

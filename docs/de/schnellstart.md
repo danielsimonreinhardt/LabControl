@@ -87,7 +87,7 @@ python lab_gui/main.py
 
 - Geht in der `.exe` genauso wie aus dem Quellcode; bleibt nach einem Neustart erhalten.
 - Simulierte Geräte: „Netzteil 1“, „Last 1“, „CAN-Bus 1“, „HIL 1“, „Funktionsgenerator 1“, „Batterie-Simulator 1“,
-  zwei Oszilloskope, ein J-Link und ein Steuergerät (UDS, XCP).
+  drei Oszilloskope (PicoScope, UNI-T, R&S RTB), ein J-Link und ein Steuergerät (UDS, XCP).
 
 !!! warning "Echte Geräte bleiben aktiv"
     Der Simulationsmodus ergänzt simulierte Geräte; echte werden weiter gefunden und auch von ALLE AUS, Presets

@@ -141,15 +141,16 @@ class RtbScope:
 
     # -- Erfassung --------------------------------------------------------------
 
-    def acquire(self, request: AcquireRequest) -> Capture:
+    def acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture:
+        """cancel/on_armed/on_triggered: scharf schalten (PI-72 a), siehe base.ScopeDriver."""
         try:
-            return self._acquire(request)
+            return self._acquire(request, cancel, on_armed, on_triggered)
         except RTB2000ValueError as exc:
             raise ScopeError("device_error", f"Gerät hat abgelehnt: {exc}") from exc
         except RTB2000Error as exc:
             raise ScopeError("device_error", str(exc)) from exc
 
-    def _acquire(self, request: AcquireRequest) -> Capture:
+    def _acquire(self, request: AcquireRequest, cancel=None, on_armed=None, on_triggered=None) -> Capture:
         warnings: list[str] = []
         numbers: dict[str, int] = {}
         for ch in request.channels:
@@ -227,7 +228,9 @@ class RtbScope:
 
         # -- Erfassen --------------------------------------------------------------
         dev.sync()
-        forced = self._run_single(trig.mode, trig.timeout_s, self._h_divs * actual_scale_s)
+        forced = self._run_single(trig.mode, trig.timeout_s, self._h_divs * actual_scale_s, cancel, on_armed)
+        if on_triggered is not None:
+            on_triggered()   # Erfassung im Gerät fertig, ab hier nur noch Lesen
 
         # -- Daten -----------------------------------------------------------------
         channels: dict[str, ChannelData] = {}
@@ -330,15 +333,24 @@ class RtbScope:
         record = min(record, cap)
         return scale, record, min(needed, record, max(possible, 2))
 
-    def _run_single(self, mode: str, timeout_s: float, window_s: float) -> bool:
+    def _run_single(self, mode: str, timeout_s: float, window_s: float, cancel=None, on_armed=None) -> bool:
         """Startet eine Einzelerfassung und wartet auf COMP (vorher STOP gesendet
         und per *OPC? synchronisiert, ein COMP ist also immer das neue). True =
-        erzwungen (*TRG statt echter Trigger, bei none und auto ohne Flanke)."""
+        erzwungen (*TRG statt echter Trigger, bei none und auto ohne Flanke).
+        Scharf schalten (PI-72 a): on_armed() beim ersten Status ungleich COMP (spaetestens vor der
+        Rueckkehr), cancel bricht mit STOP ab. HARDWARE-PRUEFUNG: nur gegen den Simulator geprueft."""
         dev = self._device
         dev.single()
         started = time.monotonic()
         forced = False
         last_force = 0.0
+
+        def armed() -> None:
+            nonlocal on_armed
+            if on_armed is not None:
+                callback, on_armed = on_armed, None
+                callback()
+
         # none: sofort erzwingen; sonst Wartezeit + ein Fenster (Pre-Trigger füllen).
         trigger_deadline = started if mode == "none" else started + timeout_s + window_s
         hard_deadline = trigger_deadline + window_s + WAIT_MARGIN_S
@@ -347,7 +359,12 @@ class RtbScope:
             now = time.monotonic()
             finished = is_complete(state)
             if finished:
+                armed()
                 return forced
+            armed()
+            if cancel is not None and cancel.is_set():
+                dev.stop()
+                raise ScopeError("cancelled", "Erfassung abgebrochen.")
             if now >= trigger_deadline and not forced:
                 if mode == "single":
                     dev.stop()

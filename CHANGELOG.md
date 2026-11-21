@@ -20,6 +20,11 @@ Semantic Versioning (`lab_gui/version.py`).
   nötig, falsche Daten bei 2,5 GS/s (Adapter bleibt bei 1,25 GS/s), VXI-11 langsam und nach Timeouts ohne freie
   Verbindungen -- Erkennung und Daten laufen darum über den SCPI-Socket (Port 5025, ~1,4 MB/s statt 0,25 MB/s).
   Einzelheiten in `device-driver/rs_rtb2000/README.md`.
+- **Scharf schalten / Auf Erfassung warten auch am RTB2000.** Der Adapter unterstützt `cancel`, `on_armed` und
+  `on_triggered` (1.0.1, PI-72 a); `check_scope_arm` prüft RTB-Simulator: scharf, Ergebnis nach dem Schalten,
+  Abbruch über release. **Nur gegen den Simulator geprüft**, am RTB2002 noch nicht. Im Simulationsmodus gibt es
+  jetzt zwei „Oszilloskop (LAN)“: ein Ablauf mit SCPI-Oszilloskop-Schritten braucht dort das Zielgerät in der Zeile
+  (`check_scope_arm` entsprechend angepasst).
 
 ## [1.0.1] – 2026-11-15
 

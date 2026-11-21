@@ -391,7 +391,7 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
 ### Oszilloskop: Scharf schalten und Auf Erfassung warten
 
 Beim **Oszilloskop** (PicoScope) und beim **Oszilloskop (LAN)** (UNI-T
-MSO1000HD) gibt es zwei Aktionen, um ein Ereignis zu erfassen, das erst ein
+MSO1000HD, R&S RTB2000) gibt es zwei Aktionen, um ein Ereignis zu erfassen, das erst ein
 späterer Schritt auslöst (z. B. Einschalten mit 12 V):
 
 - **Scharf schalten**: **„Oszilloskop-Parameter…“** wählt Kanal (zugleich

@@ -1,6 +1,7 @@
 """Oszilloskop-Ablaufschritte "Scharf schalten" und "Auf Erfassung warten" (1.0.1, PI-72 a).
 
-Beide gibt es fuer das PicoScope (Geraeteart "picoscope") und das UNI-T MSO1000HD ("scpiscope"). Sie laufen
+Beide gibt es fuer das PicoScope (Geraeteart "picoscope") und die LAN-Oszilloskope ("scpiscope": UNI-T MSO1000HD,
+R&S RTB2000). Sie laufen
 nicht ueber den DeviceWorker, sondern ueber den gemeinsamen Erfassungskern im ScopeService (scope_service.arm,
 derselbe wie fuer REST/MCP, PI-73 a):
 

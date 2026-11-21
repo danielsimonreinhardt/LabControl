@@ -84,7 +84,6 @@ from picoscope2000.driver import PicoScope2000, PicoScope2000Error, usb_present 
 from picoscope2000.guard import GUARD as PICOSCOPE_GUARD, OWNER_SERVICE, OWNER_WORKER
 from picoscope2000.mock import MockPicoScope2000
 from rs_rtb2000.driver import SIM_DEVICE_ID as SIM_RTB_ID, SIM_RESOURCE as RTB_SIM_RESOURCE
-from scope_api.scpi import ScpiProbeError, probe as scpi_probe
 from unit_mso1000hd import guard as scpi_guard
 from unit_mso1000hd.driver import (
     KIND as SCPISCOPE_KIND,
@@ -1141,6 +1140,9 @@ class DeviceWorker(QObject):
 
     def _scpi_probe_job(self, device_id: str, resource: str) -> None:
         """Laeuft im Probe-Thread, meldet ueber _scpi_probe_done zurueck."""
+        # Erst hier: scope_api liegt im Projektordner, nicht in lab_gui/device-driver -- Werkzeuge,
+        # die nur diese beiden im Pfad haben, laden den Worker sonst nicht.
+        from scope_api.scpi import ScpiProbeError, probe as scpi_probe
         guard = scpi_guard.guard_for(device_id)
         if not guard.try_acquire(scpi_guard.OWNER_WORKER):
             # ScopeService hat gerade geoeffnet: erreichbar, Info unveraendert.

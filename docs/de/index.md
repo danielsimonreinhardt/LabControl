@@ -100,7 +100,7 @@ flowchart LR
 Im **Simulationsmodus** ersetzen nachgebildete Geräte die Hardware. So probierst du Oberfläche und eigene
 Testabläufe gefahrlos aus; alle Bildschirmfotos dieser Doku stammen daraus.
 
-- Nachgebildet: Netzteil, Last, CAN-Bus, microHIL, Funktionsgenerator, zwei Oszilloskope, Batterie-Simulator,
+- Nachgebildet: Netzteil, Last, CAN-Bus, microHIL, Funktionsgenerator, drei Oszilloskope, Batterie-Simulator,
   J-Link und ein Steuergerät für UDS und XCP.
 - Einschalten: **Einstellungen → Allgemein → Simulationsmodus**, in der `.exe` und aus dem Quellcode, siehe
   [Schnellstart](schnellstart.md#simulationsmodus-einschalten).
