@@ -83,15 +83,15 @@ from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 from picoscope2000.driver import PicoScope2000, PicoScope2000Error, usb_present as picoscope_usb_present
 from picoscope2000.guard import GUARD as PICOSCOPE_GUARD, OWNER_SERVICE, OWNER_WORKER
 from picoscope2000.mock import MockPicoScope2000
+from rs_rtb2000.driver import SIM_DEVICE_ID as SIM_RTB_ID, SIM_RESOURCE as RTB_SIM_RESOURCE
+from scope_api.scpi import ScpiProbeError, probe as scpi_probe
 from unit_mso1000hd import guard as scpi_guard
 from unit_mso1000hd.driver import (
     KIND as SCPISCOPE_KIND,
     SIM_DEVICE_ID as SIM_SCPISCOPE_ID,
     SIM_RESOURCE as SCPI_SIM_RESOURCE,
-    MSO1000HDError,
     device_id_for as scpi_device_id_for,
     normalize_resource as scpi_normalize_resource,
-    probe as scpi_probe,
     register_resource as scpi_register_resource,
 )
 
@@ -190,8 +190,9 @@ HIL_POLL_INTERVAL_MS = 1000
 # dann faelschlich mit "belegt", obwohl gar keine externe App im Weg ist).
 PICOSCOPE_RECONNECT_INTERVAL_MS = 30000
 
-# SCPI-Oszilloskope ueber LAN (UNI-T MSO1000HD, seit 0.21.0): Erkennung =
-# kurz oeffnen, *IDN?, schliessen -- in einem eigenen Thread (siehe
+# SCPI-Oszilloskope ueber LAN (UNI-T MSO1000HD seit 0.21.0, dazu R&S RTB2000):
+# Erkennung = kurz oeffnen, *IDN?, schliessen; welcher Treiber gilt, sagt die
+# Antwort (scope_api/scpi.py) -- in einem eigenen Thread (siehe
 # _scpi_executor), weil eine nicht erreichbare Adresse bis zum Timeout
 # blockiert und sonst den Poll-Zyklus von Netzteil/Last einfrieren wuerde.
 SCPISCOPE_PROBE_INTERVAL_MS = 10000
@@ -1074,21 +1075,27 @@ class DeviceWorker(QObject):
             self._forget_session_device(SIM_LOAD_ID)
 
     def _add_mock_scpiscope(self) -> None:
+        """Beide SCPI-Simulatoren (UNI-T MSO1000HD, R&S RTB2002), je eine Kachel."""
         if self._mock_scpiscope_active:
             return
+        from rs_rtb2000.mock import SIM_MODEL as RTB_SIM_MODEL, SIM_SERIAL as RTB_SIM_SERIAL
         from unit_mso1000hd.mock import SIM_MODEL, SIM_SERIAL
         self._mock_scpiscope_active = True
-        scpi_register_resource(SIM_SCPISCOPE_ID, SCPI_SIM_RESOURCE)
-        self.device_added.emit(SCPISCOPE_KIND, SIM_SCPISCOPE_ID)
-        self.scpiscope_connected.emit(SIM_SCPISCOPE_ID, True)
-        self.scpiscope_state.emit(SIM_SCPISCOPE_ID, "free", SIM_MODEL, SIM_SERIAL)
+        for device_id, resource, model, serial in (
+                (SIM_SCPISCOPE_ID, SCPI_SIM_RESOURCE, SIM_MODEL, SIM_SERIAL),
+                (SIM_RTB_ID, RTB_SIM_RESOURCE, RTB_SIM_MODEL, RTB_SIM_SERIAL)):
+            scpi_register_resource(device_id, resource)
+            self.device_added.emit(SCPISCOPE_KIND, device_id)
+            self.scpiscope_connected.emit(device_id, True)
+            self.scpiscope_state.emit(device_id, "free", model, serial)
 
     def _remove_mock_scpiscope(self) -> None:
         if not self._mock_scpiscope_active:
             return
         self._mock_scpiscope_active = False
-        self.scpiscope_connected.emit(SIM_SCPISCOPE_ID, False)
-        self.device_removed.emit(SCPISCOPE_KIND, SIM_SCPISCOPE_ID)
+        for device_id in (SIM_SCPISCOPE_ID, SIM_RTB_ID):
+            self.scpiscope_connected.emit(device_id, False)
+            self.device_removed.emit(SCPISCOPE_KIND, device_id)
 
     # -- SCPI-Oszilloskope (settings.scpi_scopes) ---------------------------
 
@@ -1143,7 +1150,7 @@ class DeviceWorker(QObject):
         try:
             info = scpi_probe(resource, SCPISCOPE_PROBE_TIMEOUT_S)
             self._scpi_probe_done.emit(device_id, True, info.model, info.serial)
-        except MSO1000HDError as exc:
+        except ScpiProbeError as exc:
             logger.debug("SCPI-Oszilloskop %s (%s) nicht erreichbar: %s", device_id, resource, exc)
             self._scpi_probe_done.emit(device_id, False, "", "")
         except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben

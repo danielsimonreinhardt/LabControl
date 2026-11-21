@@ -29,8 +29,9 @@ Das exklusive Handle teilen sich beide über picoscope2000/guard.py. Erfassungen
 des Laufs selbst (owner=OWNER_RUN) gehen trotz Sperre.
 
 Seit 0.21.0 auch für SCPI-Oszilloskope (Geräteart "scpiscope", UNI-T MSO1000HD
-über LAN, scope_api/unit_mso_adapter.py). Welcher Adapter gilt, steht im
-Präfix der Geräte-ID.
+über LAN, scope_api/unit_mso_adapter.py), dazu R&S RTB2000
+(scope_api/rs_rtb_adapter.py). PicoScope oder SCPI steht im Präfix der
+Geräte-ID, welcher SCPI-Adapter, entscheidet *IDN? (scope_api/scpi.py).
 """
 from __future__ import annotations
 
@@ -49,10 +50,10 @@ from picoscope2000.guard import GUARD, OWNER_SERVICE, OWNER_WORKER
 from scope_api import analysis
 from scope_api.base import MAX_ARM_TIMEOUT_S, AcquireRequest, ScopeError
 from scope_api.pico2000_adapter import PicoScope2000Scope, open_pico2000
+from scope_api.scpi import capabilities_for as scpi_capabilities, is_simulated as scpi_is_simulated, open_scope
 from scope_api.store import CaptureStore
-from scope_api.unit_mso_adapter import capabilities_for as unit_mso_capabilities, open_unit_mso
 from unit_mso1000hd import guard as mso_guard
-from unit_mso1000hd.driver import KIND as SCPI_KIND, SIM_DEVICE_ID as SCPI_SIM_ID, resource_for
+from unit_mso1000hd.driver import KIND as SCPI_KIND, resource_for
 import scope_plot
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ class ScopeService(QObject):
         self._lock = threading.Lock()
         # device_id -> {"present", "variant", "serial"}
         self._devices: dict[str, dict] = {}
-        self._open: dict[str, object] = {}   # PicoScope2000Scope | UnitMsoScope
+        self._open: dict[str, object] = {}   # PicoScope2000Scope | UnitMsoScope | RtbScope
         self._busy: set[str] = set()
         self._test: set[str] = set()
         self._last_use: dict[str, float] = {}
@@ -259,8 +260,12 @@ class ScopeService(QObject):
         if not entry:
             raise ScopeError("device_offline", "Oszilloskop nicht verbunden.")
         if _kind(device_id) == SCPI_KIND:
-            return unit_mso_capabilities(entry.get("variant", ""), entry.get("serial") or "?",
-                                         simulated=device_id == SCPI_SIM_ID).to_dict()
+            # Verbunden: vom Gerät selbst (RTB2000: Bandbreite aus *OPT?).
+            scope = self._open.get(device_id)
+            if scope is not None:
+                return scope.capabilities().to_dict()
+            return scpi_capabilities(entry.get("variant", ""), entry.get("serial") or "?",
+                                     simulated=scpi_is_simulated(device_id)).to_dict()
         scope = PicoScope2000Scope(None, entry.get("variant") or "2204A", entry.get("serial") or "?",
                                    simulated=device_id == SIM_DEVICE_ID)
         return scope.capabilities().to_dict()
@@ -643,7 +648,7 @@ class ScopeService(QObject):
                 raise ScopeError("scope_busy", "LabControl prüft das Oszilloskop gerade (Erkennung). Kurz warten.")
             time.sleep(0.05)
         try:
-            return open_unit_mso(resource)
+            return open_scope(resource)
         except ScopeError:
             guard.release()
             raise

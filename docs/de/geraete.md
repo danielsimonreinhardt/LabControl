@@ -24,6 +24,7 @@ flowchart LR
 | JDS66xx / JDS2915 (Funktionsgenerator) | USB (CH340) | automatisch mit Handshake | `fg:COM6` | ja (ohne Messung am Ausgang) |
 | PicoScope 2204A/2205A | USB | automatisch | `picoscope:…` | ja |
 | UNI-T MSO1000HD | LAN (SCPI) | IP-Adresse eintragen | `scpiscope:<IP>` | nein, nur Simulator |
+| R&S RTB2002/RTB2004 | LAN (SCPI) | IP-Adresse eintragen | `scpiscope:<IP>` | ja (RTB2002) |
 | microHIL | USB (CDC, zwei Ports) | automatisch | `hil:…` | ja |
 | SEGGER J-Link | USB, J-Link Commander | in den Einstellungen einschalten | `jlink:…` | nein, nur nachgebildet |
 | CAN-Interfaces | Vector, PCAN, SLCAN, SocketCAN | in den Einstellungen eintragen | `can:<Interface>:<Kanal>` | ja |
@@ -230,6 +231,26 @@ Testablauf-Aktionen wie beim PicoScope gibt es noch nicht.
 !!! note "Nur gegen den Simulator geprüft"
     Der Treiber folgt dem Programmierhandbuch und ist nur gegen ein nachgebildetes SCPI-Gerät geprüft. Offene
     Annahmen (z. B. Vorzeichen des Offsets) stehen in `device-driver/unit_mso1000hd/README.md`.
+
+## Oszilloskop R&S RTB2000 (SCPI im Netzwerk)
+
+RTB2002 (2 Kanäle) und RTB2004 (4 Kanäle). Eingerichtet wird es genau wie das
+[UNI-T MSO1000HD](#oszilloskop-uni-t-mso1000hd-scpi-im-netzwerk), in derselben Adressliste; welches Gerät hinter
+einer Adresse steckt, erkennt LabControl an der Antwort auf `*IDN?`.
+
+- **Am Gerät:** **Setup → Interface → Ethernet**, unter „Parameter“ eine feste IP vergeben.
+- **Adresse:** die bloße IP. LabControl spricht das Gerät über den SCPI-Socket (Port 5025) an, VXI-11 nur als
+  Rückfall -- VXI-11 ist am RTB2002 sechsmal langsamer und nimmt nach Störungen keine Verbindungen mehr an. USB
+  nur mit installiertem VISA und Modus „USB TMC“.
+- **Daten:** binär in Volt, bis 10 Mio. Samples je Kanal, höchstens 1,25 GS/s (die 2,5 GS/s liefern am Gerät
+  falsche Daten); eine Erfassung mit 250 000 Samples dauert rund 2 s. Die Bandbreite (70 MHz oder per Lizenz
+  mehr) liest LabControl beim Verbinden über `*OPT?`.
+- **Jede Erfassung stellt das Gerät um** (Kanäle, Zeitbasis, Trigger; Triggerfilter werden ausgeschaltet).
+
+!!! note "Am RTB2002 geprüft"
+    Geprüft mit Firmware 01.210 über LAN, auch über die Netzwerk-Schnittstelle (MCP). Eigenheiten des Geräts
+    und die Prüfung (`tools/check_rs_rtb.py --hardware --address <IP>`) stehen in
+    `device-driver/rs_rtb2000/README.md`.
 
 ## microHIL
 

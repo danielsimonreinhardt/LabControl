@@ -169,11 +169,12 @@ The section shows:
 - As for the other devices: **rename** (pencil) and **panel colour** (colour
   wheel); both also apply to the dashboard tile.
 
-### Network oscilloscope (UNI-T MSO1000HD, e.g. MSO1154HD-S)
+### Network oscilloscope (UNI-T MSO1000HD, R&S RTB2002/RTB2004)
 
 The same section as for the PicoScope, just without the launch button – the
 device is operated on its own screen. It is not found via USB but by its IP
-address:
+address; LabControl tells a UNI-T from an R&S by itself (on the RTB2000 select
+Setup → Interface "Ethernet" on the device):
 
 1. Give the oscilloscope a **fixed IP address** (or reserve one in the
    router). The address is also its identifier in LabControl – name, colour
@@ -184,7 +185,8 @@ address:
    section appears.
 
 After an acquisition through the MCP server the oscilloscope stays stopped
-and shows that acquisition. *Tested with the simulator only so far.*
+and shows that acquisition. *The UNI-T is tested with the simulator only so
+far, the R&S RTB2002 on the real device.*
 
 ### Battery simulator (14 cells, over CAN)
 

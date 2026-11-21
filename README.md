@@ -27,7 +27,8 @@ source in [`docs/de/`](docs/de/index.md). The user interface can be switched to 
 ## Supported devices
 
 MANSON HCS-3xxx power supplies · KORAD KEL102 electronic load · Joy-IT JDS2915 (JDS66xx) function generator ·
-PicoScope 2204A/2205A · UNI-T MSO1000HD (SCPI over LAN) · microHIL I/O box · SEGGER J-Link · CAN interfaces
+PicoScope 2204A/2205A · UNI-T MSO1000HD and Rohde & Schwarz RTB2000 (SCPI over LAN) · microHIL I/O box ·
+SEGGER J-Link · CAN interfaces
 (Vector, PCAN, SLCAN, SocketCAN) · self-built 14-cell battery simulator. Details per device in
 [Geräte einrichten](docs/de/geraete.md) and the driver READMEs in [`device-driver/`](device-driver/).
 
