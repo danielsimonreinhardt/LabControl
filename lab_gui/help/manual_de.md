@@ -177,11 +177,12 @@ zeigt:
 - Wie bei den anderen Geräten **umbenennen** (Stift) und **Panel-Farbe**
   (Farbkreis); beides gilt auch für die Dashboard-Kachel.
 
-### Oszilloskop im Netzwerk (UNI-T MSO1000HD, z. B. MSO1154HD-S)
+### Oszilloskop im Netzwerk (UNI-T MSO1000HD, R&S RTB2002/RTB2004)
 
 Dieselbe Sektion wie beim PicoScope, nur ohne Start-Knopf – das Gerät wird am
 eigenen Bildschirm bedient. Es wird nicht per USB gefunden, sondern über seine
-IP-Adresse:
+IP-Adresse; ob ein UNI-T oder ein R&S dahintersteckt, erkennt LabControl
+selbst (beim RTB2000 am Gerät unter Setup → Interface „Ethernet“ wählen):
 
 1. Am Oszilloskop eine **feste IP-Adresse** einstellen (oder im Router
    reservieren). Die Adresse ist zugleich seine Kennung in LabControl – Name,
@@ -192,7 +193,8 @@ IP-Adresse:
    die Sektion.
 
 Nach einer Erfassung über den MCP-Server bleibt das Oszilloskop gestoppt und
-zeigt die Erfassung an. *Bisher nur mit dem Simulator getestet.*
+zeigt die Erfassung an. *Das UNI-T ist bisher nur mit dem Simulator getestet,
+das R&S RTB2002 am echten Gerät.*
 
 ### Batterie-Simulator (14 Zellen, über CAN)
 
@@ -389,7 +391,7 @@ Bereich und für eine Variable (Bedingungen in „Wenn“/„Solange“).
 ### Oszilloskop: Scharf schalten und Auf Erfassung warten
 
 Beim **Oszilloskop** (PicoScope) und beim **Oszilloskop (LAN)** (UNI-T
-MSO1000HD) gibt es zwei Aktionen, um ein Ereignis zu erfassen, das erst ein
+MSO1000HD, R&S RTB2000) gibt es zwei Aktionen, um ein Ereignis zu erfassen, das erst ein
 späterer Schritt auslöst (z. B. Einschalten mit 12 V):
 
 - **Scharf schalten**: **„Oszilloskop-Parameter…“** wählt Kanal (zugleich

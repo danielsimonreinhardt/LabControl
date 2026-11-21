@@ -158,7 +158,8 @@ plot_capture, release_scope):
   Mit plot_capture die Kurve als Bild ansehen, auch gezoomt -- vor allem bei unerwarteten Werten, Stoerungen,
   Schwingen oder Einschwingvorgaengen, die Kennwerte allein nicht zeigen.
 - 'overrange' oder Warnungen ernst nehmen (Bereich erhoehen). Ein Kennwert None hat seinen Grund in 'unavailable'.
-- Kanalnamen stehen in get_scope_capabilities: PicoScope 'A'/'B', UNI-T MSO1000HD (scpiscope) 'CH1'..'CH4'.
+- Kanalnamen stehen in get_scope_capabilities: PicoScope 'A'/'B', UNI-T MSO1000HD (scpiscope) 'CH1'..'CH4',
+  R&S RTB2002 (scpiscope) 'CH1'/'CH2' bzw. RTB2004 'CH1'..'CH4'.
 - Die Verbindung bleibt 60 s nach der letzten Erfassung offen (PicoScope 7 kann das Geraet dann nicht
   oeffnen). Nach einer Messreihe release_scope aufrufen.
 - Einschaltvorgaenge u. ae.: arm schaltet scharf und kehrt sofort mit capture_id zurueck (das Geraet wartet

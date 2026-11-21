@@ -156,6 +156,10 @@ gesendet wird im `CanScheduler`-Thread, nicht im Poll. Der Mock bildet das
 ## 10. Dokumentation & Test
 
 - Root-`README.md`, Abschnitt "Supported Devices", ergänzen.
+- Ein weiteres **SCPI-Oszilloskop** braucht keine neue Geräteart: Treiber +
+  Adapter anlegen (Vorlage `rs_rtb2000` + `scope_api/rs_rtb_adapter.py`) und in
+  `scope_api/scpi.py` (`family_for`, `open_scope`, `capabilities_for`)
+  eintragen -- Adressliste, Kachel und ScopeService gelten dann mit.
 - **`CHANGELOG.md` vor jedem Push aktualisieren** (Projekt-Konvention).
 - Erst gegen `mock.py`/Simulationsmodus testen, dann **zwingend gegen echte
   Hardware verifizieren** — Codereview allein deckt Timing-/Protokoll-

@@ -10,6 +10,12 @@ MSO1154HD-S) über SCPI per LAN, `unit_mso_adapter.py`, Geräteart `scpiscope`.
 Bisher **nur gegen den Simulator geprüft** (Gerät noch nicht da), siehe
 `device-driver/unit_mso1000hd/README.md`.
 
+Dazu der dritte: Rohde & Schwarz RTB2000 (RTB2002/RTB2004), ebenfalls SCPI
+per LAN und Geräteart `scpiscope`, `rs_rtb_adapter.py`. Welcher SCPI-Adapter
+zu einer Adresse gehört, entscheidet `scpi.py` an der Antwort auf `*IDN?`.
+**Am echten RTB2002 geprüft** (auch über die Netzwerk-Schnittstelle), Eigenheiten
+siehe `device-driver/rs_rtb2000/README.md`.
+
 Stand: **Phase 3** (seit 0.18.0): Erfassungen als Bild -- `lab_gui/scope_plot.py`
 (QPainter, keine neue Abhängigkeit), Endpunkt `GET /api/v1/captures/{cid}/plot`,
 MCP-Werkzeug `plot_capture` und die letzte Erfassung samt Knopf „Kurve“ auf der
@@ -32,6 +38,8 @@ Plan und Entscheidungen vom 2026-09-28:
 | `store.py` | Erfassungen mit `capture_id` im Speicher (Standard: die letzten 50) plus CSV-Datei |
 | `pico2000_adapter.py` | PicoScope 2204A/2205A über `picoscope2000` (echtes Gerät oder Mock) |
 | `unit_mso_adapter.py` | UNI-T MSO1000HD über `unit_mso1000hd` (SCPI, LAN oder Simulator `"SIM"`), Kanäle `CH1`…`CH4` |
+| `rs_rtb_adapter.py` | R&S RTB2000 über `rs_rtb2000` (SCPI, LAN oder Simulator `"SIM-RTB"`), Kanäle `CH1`/`CH2` bzw. `CH1`…`CH4` |
+| `scpi.py` | Weiche für SCPI-Oszilloskope: `probe()` (`*IDN?`), `open_scope()`, `capabilities_for()` je Hersteller |
 
 ## Verwendung
 
@@ -179,11 +187,33 @@ Erfassung aus dem Speicher verdrängt wird.
 - Annahmen, die am Gerät zu prüfen sind: siehe README des Treibers
   (Abschnitt „Eigenheiten und Annahmen“).
 
+## RTB2000-Adapter: Eigenheiten
+
+- Kanäle `CH1`/`CH2` (RTB2002) bzw. `CH1`…`CH4` (RTB2004).
+- Bereiche: ±5 Teilungen (10 hoch), 1 mV/div … 10 V/div; gemeldet wird der
+  zurückgelesene Vollausschlag `CHANnel:RANGe? / 2`. Übersteuert ab 99,5 % (das
+  Gerät begrenzt bei 99,9 %). **Analoger Offset**, anders als beim UNI-T mit
+  Vorzeichen + (R&S zieht den Offset ab, Bildschirmmitte = +Offset).
+- 10 Bit, 70 MHz bzw. per Option bis 300 MHz (aus `*OPT?`). Höchstens
+  1,25 GS/s: die 2,5 GS/s interleaved liefern am Gerät falsche Daten.
+- Zeitbasis im 1-2-5-Raster über 12 Teilungen; Aufzeichnungslänge 10k … 10M,
+  standardmäßig mindestens 250 000 Samples (rund 2 s je Erfassung).
+- Trigger: Einzelerfassung (`*OPC?`, `SINGle`, Trigger-Modus NORMal,
+  Triggerfilter aus), `ACQuire:STATe?` wird bis `COMP` gepollt, Auto-Trigger
+  per `*TRG`.
+- Daten binär (REAL,32) in Volt über den SCPI-Socket (Port 5025), ein Block je
+  Kanal. Zeitachse und Trigger-Index aus `CHANnel:DATA:HEADer?` (XStart) --
+  stimmt der Pre-Trigger nicht, steht eine Warnung im Ergebnis.
+- Was am Gerät gefunden wurde und was noch offen ist: README des Treibers
+  (`device-driver/rs_rtb2000/README.md`).
+
 ## Prüfen
 
 ```
 .venv\Scripts\python.exe tools\check_unit_mso.py               # MSO1000HD: Simulator + ScopeService
 .venv\Scripts\python.exe tools\check_unit_mso.py --hardware --address 192.168.1.50
+.venv\Scripts\python.exe tools\check_rs_rtb.py                 # RTB2000: Simulator + Weiche + ScopeService
+.venv\Scripts\python.exe tools\check_rs_rtb.py --hardware --address 192.168.1.60
 .venv\Scripts\python.exe tools\check_scope_api.py              # nur Mock + bekannte Signale
 .venv\Scripts\python.exe tools\check_scope_api.py --hardware   # zusätzlich echtes 2204A
 .venv\Scripts\python.exe tools\check_scope_api.py --hardware --signal-a rechteck:1000:3.3

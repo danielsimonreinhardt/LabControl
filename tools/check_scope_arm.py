@@ -45,6 +45,7 @@ FAILURES: list[str] = []
 TOKEN = "scope-arm-check-token"
 PICO = "picoscope:SIM"
 UNIT = "scpiscope:SIM"
+RTB = "scpiscope:SIM-RTB"
 GOOD = {"channels": [{"name": "A", "range_v": 5}], "timing": {"duration_s": 0.002, "pre_trigger_pct": 20},
         "trigger": {"source": "A", "level_v": 1.65, "edge": "rising", "timeout_s": 30},
         "measurements": ["vmax", "frequency"]}
@@ -87,6 +88,16 @@ def unit_quiet():
 def unit_switch_on():
     from unit_mso1000hd import mock
     mock.SimulatedInstrument.signals = mock.default_signals()
+
+
+def rtb_quiet():
+    from rs_rtb2000 import mock
+    mock.SimulatedRTB2000.signals = {**mock.default_signals(), "CH1": mock.Constant(0.0)}
+
+
+def rtb_switch_on():
+    from rs_rtb2000 import mock
+    mock.SimulatedRTB2000.signals = mock.default_signals()
 
 
 class SlowScope:
@@ -136,6 +147,10 @@ def make_service():
     register_resource(UNIT, SIM_RESOURCE)
     service.on_scope_connected(UNIT, True)
     service.on_scope_state(UNIT, "free", "MSO1154HD-S", "SIM-MSO-0001")
+    from rs_rtb2000.driver import SIM_RESOURCE as RTB_SIM_RESOURCE
+    register_resource(RTB, RTB_SIM_RESOURCE)
+    service.on_scope_connected(RTB, True)
+    service.on_scope_state(RTB, "free", "RTB2002", "1333.1005k02/SIM001")
     return service
 
 
@@ -301,6 +316,25 @@ def section_core(app) -> None:
     check("UNI-T: release bricht ab", spin(app, 3.0, lambda: service.capture_status(status["capture_id"])["state"]
                                                == "cancelled"), str(service.capture_status(status["capture_id"])))
     unit_switch_on()
+
+    # R&S RTB2000: scharf, dann Signal; release bricht ab
+    rtb_quiet()
+    status = service.arm(RTB, {"channels": [{"name": "CH1", "range_v": 5}], "timing": {"duration_s": 0.001},
+                               "trigger": {"source": "CH1", "level_v": 1.0, "timeout_s": 30},
+                               "measurements": ["vmax", "frequency"]})
+    check("RTB: arm -> armed", status.get("state") == "armed", str(status))
+    early = service.wait_capture(status["capture_id"], 0.3)
+    rtb_switch_on()
+    result = service.wait_capture(status["capture_id"], 10)
+    check("RTB: vorher armed, nach dem Schalten Ergebnis", early.get("state") == "armed"
+          and result.get("state") == "done" and result["channels"]["CH1"]["vmax"] > 1.0, str(result)[:200])
+    rtb_quiet()
+    status = service.arm(RTB, {"channels": [{"name": "CH1", "range_v": 5}], "timing": {"duration_s": 0.001},
+                               "trigger": {"source": "CH1", "level_v": 1.0, "timeout_s": 30}})
+    service.release(RTB)
+    check("RTB: release bricht ab", spin(app, 3.0, lambda: service.capture_status(status["capture_id"])["state"]
+                                             == "cancelled"), str(service.capture_status(status["capture_id"])))
+    rtb_switch_on()
     try:
         service.arm(PICO, {**GOOD, "trigger": {"mode": "none"}})
         code = ""
@@ -761,7 +795,7 @@ def section_window(app) -> None:
     tm.save_steps([tm.TestStep(device_kind="scpiscope", device_id=UNIT, action=SCOPE_ARM,
                                params={"channel": "CH1", "range_v": 5.0, "level_v": 1.0, "duration_s": 0.005}),
                    tm.TestStep(**psu, action="PSU_OUT_ON"),
-                   tm.TestStep(device_kind="scpiscope", device_id="", action=SCOPE_WAIT,
+                   tm.TestStep(device_kind="scpiscope", device_id=UNIT, action=SCOPE_WAIT,
                                params={"timeout_s": 5.0, "measurement": "frequency"}, check_enabled=True,
                                check_field="scope_value", check_min=900, check_max=1100),
                    tm.TestStep(**psu, action="PSU_OUT_OFF")], folder / "unit.json")

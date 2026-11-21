@@ -47,6 +47,7 @@ Was LabControl von einzelnen Herstellerprogrammen unterscheidet:
 | Joy-IT JDS2915 (Protokoll JDS66xx) | Funktionsgenerator, 2 Kanäle | USB (CH340-Wandler) | am Gerät geprüft |
 | PicoScope 2204A/2205A | USB-Oszilloskop | USB (PicoSDK) | am Gerät geprüft (2204A) |
 | UNI-T MSO1000HD, z. B. MSO1154HD-S | Oszilloskop | LAN (SCPI, ohne NI-VISA) | **bisher nur gegen den Simulator geprüft** |
+| Rohde & Schwarz RTB2002/RTB2004 | Oszilloskop | LAN (SCPI, ohne NI-VISA) | am Gerät geprüft (RTB2002) |
 | microHIL (STM32F446) | I/O-Box: 4 Relais, 8 Digitalaus- und 8 -eingänge, 4 Analogeingänge, 2 Analogausgänge, 2 schaltbare 12-V-Ausgänge, 4 PWM | USB (virtueller COM-Port) | am Gerät geprüft |
 | Batterie-Simulator (Eigenbau, 14 Zellen) | Zellspannungen für Batteriemanagement-Tests | über ein CAN-Interface (500 kbit/s) | am Gerät geprüft |
 | SEGGER J-Link | Flashen, Reset, Anhalten, Starten | USB über den J-Link Commander | **bisher nur in der Simulation geprüft** |
@@ -99,7 +100,7 @@ flowchart LR
 Im **Simulationsmodus** ersetzen nachgebildete Geräte die Hardware. So probierst du Oberfläche und eigene
 Testabläufe gefahrlos aus; alle Bildschirmfotos dieser Doku stammen daraus.
 
-- Nachgebildet: Netzteil, Last, CAN-Bus, microHIL, Funktionsgenerator, zwei Oszilloskope, Batterie-Simulator,
+- Nachgebildet: Netzteil, Last, CAN-Bus, microHIL, Funktionsgenerator, drei Oszilloskope, Batterie-Simulator,
   J-Link und ein Steuergerät für UDS und XCP.
 - Einschalten: **Einstellungen → Allgemein → Simulationsmodus**, in der `.exe` und aus dem Quellcode, siehe
   [Schnellstart](schnellstart.md#simulationsmodus-einschalten).

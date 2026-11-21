@@ -6,6 +6,26 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Oszilloskop Rohde & Schwarz RTB2000 (RTB2002/RTB2004) über SCPI per LAN.** Neuer Treiber
+  `device-driver/rs_rtb2000` (VXI-11 oder SCPI-Socket über `pyvisa-py`, kein NI-VISA nötig) mit SCPI-Simulator,
+  `scope_api`-Adapter `rs_rtb_adapter.py` (Daten binär als REAL,32 in Volt, Zeitachse aus dem Kopf der Daten,
+  bis 10 Mio. Samples je Kanal, Bandbreite aus `*OPT?`). Das Gerät hängt unter der Geräteart `scpiscope` wie das
+  UNI-T MSO1000HD: dieselbe Adressliste, dieselbe Kachel, Erfassungen über Netzwerk/MCP. Neue Weiche
+  `scope_api/scpi.py` wählt Treiber und Adapter an der Antwort auf `*IDN?`; der Simulationsmodus zeigt zusätzlich
+  `scpiscope:SIM-RTB`. **Am RTB2002 (Firmware 01.210) über LAN geprüft**, auch über die Netzwerk-Schnittstelle:
+  `tools/check_rs_rtb.py --hardware` grün, `tools/check_unit_mso.py` weiter grün. Am Gerät gefunden und
+  berücksichtigt: 12 × 10 Teilungen, Begrenzung bei 99,9 % des Bereichs (Übersteuerung ab 99,5 %), vom Bedienen
+  eingeschaltete Triggerfilter (verschoben den Trigger um 2 µs, werden jetzt abgeschaltet), `*OPC?` vor `SINGle`
+  nötig, falsche Daten bei 2,5 GS/s (Adapter bleibt bei 1,25 GS/s), VXI-11 langsam und nach Timeouts ohne freie
+  Verbindungen -- Erkennung und Daten laufen darum über den SCPI-Socket (Port 5025, ~1,4 MB/s statt 0,25 MB/s).
+  Einzelheiten in `device-driver/rs_rtb2000/README.md`.
+- **Scharf schalten / Auf Erfassung warten auch am RTB2000.** Der Adapter unterstützt `cancel`, `on_armed` und
+  `on_triggered` (1.0.1, PI-72 a); `check_scope_arm` prüft RTB-Simulator: scharf, Ergebnis nach dem Schalten,
+  Abbruch über release. **Nur gegen den Simulator geprüft**, am RTB2002 noch nicht. Im Simulationsmodus gibt es
+  jetzt zwei „Oszilloskop (LAN)“: ein Ablauf mit SCPI-Oszilloskop-Schritten braucht dort das Zielgerät in der Zeile
+  (`check_scope_arm` entsprechend angepasst).
+
 ## [1.0.1] – 2026-11-15
 
 ### Hinzugefügt
