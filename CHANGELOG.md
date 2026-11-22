@@ -39,7 +39,18 @@ Semantic Versioning (`lab_gui/version.py`).
   AC-Kopplung, Offset, vier Kanäle, Abtastintervall, Trigger-Timeout, Scharf schalten mit Abbruch;
   `check_unit_mso --hardware` grün; Mock: `check_unit_mso`, `check_scope_arm`, `check_rs_rtb`,
   `check_partner_devices`, `check_partner_link`, `check_battsim` grün. Über die laufende App/MCP noch nicht
-  geprüft (braucht den Neustart mit dieser Version). Einzelheiten in `device-driver/unit_mso1000hd/README.md`.
+  geprüft, danach über MCP in der App (erste 1.0.2-.exe): acquire, measure, get_capture, plot_capture, arm,
+  wait_capture, release_scope, Fehlerfälle. Einzelheiten in `device-driver/unit_mso1000hd/README.md`.
+- **UNI-T: Fenster und Vorlauf wie angefragt.** Am Gerät verlängert eine größere Speichertiefe oft nur das
+  Fenster (die Abtastrate je Zeitbasis ist begrenzt): 2 ms mit 10 % Vorlauf kamen als 8 ms mit 30 % Vorlauf. Der
+  Adapter schneidet die Aufzeichnung jetzt auf das angefragte Fenster um den Trigger zu. Am Gerät geprüft
+  (Adapter direkt): 20 µs … 100 ms, Vorlauf 0/10/20/25/50 %, Flanke bei t = 0 auf < 0,3 µs.
+- **SCPI-Oszilloskope: „scope_busy (Erkennung)“ bei fast jeder Erfassung am UNI-T.** Die Erkennung versuchte
+  zuerst den SCPI-Socket (Port 5025, für das RTB2000); das UNI-T lässt ihn unbeantwortet, der Versuch hing 10 s
+  -- bei einer Erkennung alle 10 s war das Gerät fast dauernd belegt, und jede neue Verbindung für eine Erfassung
+  kostete weitere 10 s. Jetzt begrenzt das Zeitlimit auch den Verbindungsaufbau, und die Erkennung merkt sich je
+  Adresse den Weg, der zuletzt geantwortet hat: 0,02 s statt 10 s. Am UNI-T geprüft; RTB nur gegen den
+  Simulator (`check_rs_rtb`).
 
 ## [1.0.1] – 2026-11-15
 

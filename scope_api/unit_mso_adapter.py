@@ -238,9 +238,6 @@ class UnitMsoScope:
         samples = min(sizes)
         if interval is None or interval <= 0:
             raise ScopeError("device_error", "Gerät meldet kein Abtastintervall (XINCrement).")
-        if wanted_samples and samples < wanted_samples * 0.9:
-            warnings.append(f"Nur {samples} Samples erfasst (angefragt {wanted_samples}); die Abtastrate ist "
-                            f"begrenzt auf {1 / interval:.4g} S/s.")
         if request.timing.sample_interval_s and interval > request.timing.sample_interval_s * (1 + 1e-6):
             warnings.append(f"Abtastintervall {interval:g} s, gröber als angefragt "
                             f"({request.timing.sample_interval_s:g} s).")
@@ -251,6 +248,25 @@ class UnitMsoScope:
         first_t = xorigin if xorigin is not None else actual_offset_s - samples * interval / 2.0
         trigger_index = int(round(-first_t / interval))
         trigger_index = min(max(trigger_index, 0), samples - 1)
+
+        # Auf das angefragte Fenster zuschneiden. Am Gerät verlängert eine größere Speichertiefe
+        # oft nur das Fenster (die Abtastrate je Zeitbasis ist begrenzt, z. B. 62,5 MS/s bei
+        # 0,5 ms/div): 500K ergaben 16 statt 8 Teilungen, der Vorlauf stimmte dann nicht mehr.
+        # Die Aufzeichnung liegt um dieselbe Mitte wie das angefragte Fenster -- es ist enthalten.
+        span_s = request.timing.duration_s or (request.timing.sample_interval_s * (request.timing.samples or wanted_samples))
+        keep = int(round(span_s / interval)) if span_s else samples
+        if 0 < keep < samples * 0.99:
+            first = trigger_index - int(round(pre / 100.0 * keep))
+            first = min(max(first, 0), samples - keep)
+            for name, data in channels.items():
+                data.volts = data.volts[first:first + keep]
+                scale_v, center = actual[name]
+                data.overrange = bool(np.any(np.abs(data.volts - center) >= data.range_v * (1 - 1e-6)))
+            trigger_index -= first
+            samples = keep
+        if request.timing.samples and samples < request.timing.samples * 0.9:
+            warnings.append(f"Nur {samples} Samples erfasst (angefragt {request.timing.samples}); die Abtastrate ist "
+                            f"begrenzt auf {1 / interval:.4g} S/s.")
 
         if trig.mode == "none":
             triggered = None

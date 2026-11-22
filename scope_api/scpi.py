@@ -26,6 +26,11 @@ FAMILY_RS_RTB = "rs_rtb"
 
 SIM_DEVICE_IDS = (mso_driver.SIM_DEVICE_ID, rtb_driver.SIM_DEVICE_ID)
 
+# Je eingetragener Adresse der Weg (Socket oder VXI-11), der zuletzt geantwortet hat: probe()
+# versucht ihn zuerst. Am UNI-T lief sonst jede Erkennung erst 2-10 s gegen den Socket-Port,
+# den das Gerät unbeantwortet lässt -- und hielt dabei das Gerät für Erfassungen besetzt (1.0.2).
+_LAST_GOOD: dict[str, str] = {}
+
 
 class ScpiProbeError(RuntimeError):
     """Adresse nicht erreichbar oder kein bekanntes Oszilloskop."""
@@ -78,7 +83,8 @@ def probe(resource: str, timeout_s: float = 2.0) -> ScpiIdn:
     # (UNI-T?) weist die Verbindung sofort ab, das kostet kaum Zeit.
     # Transport des UNI-T-Treibers: reines pyvisa, herstellerneutral.
     last: Exception | None = None
-    for candidate in dict.fromkeys(filter(None, (rtb_driver.socket_resource(resource), resource))):
+    order = [_LAST_GOOD.get(resource), rtb_driver.socket_resource(resource), resource]
+    for candidate in dict.fromkeys(filter(None, order)):
         try:
             transport = mso_driver.VisaTransport(candidate, timeout_s)
         except mso_driver.MSO1000HDError as exc:
@@ -92,7 +98,9 @@ def probe(resource: str, timeout_s: float = 2.0) -> ScpiIdn:
             continue
         finally:
             transport.close()
-        return parse_idn(text)
+        info = parse_idn(text)
+        _LAST_GOOD[resource] = candidate
+        return info
     raise ScpiProbeError(str(last))
 
 

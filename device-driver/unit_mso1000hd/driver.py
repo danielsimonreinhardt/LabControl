@@ -178,7 +178,9 @@ class VisaTransport:
         backend = "@py" if resource.upper().startswith("TCPIP") else "@ivi"
         try:
             self._rm = pyvisa.ResourceManager(backend)
-            self._res = self._rm.open_resource(resource)
+            # open_timeout: ohne begrenzt pyvisa-py den Verbindungsaufbau nicht (am UNI-T hing ein
+            # Versuch auf Port 5025, den das Gerät unbeantwortet lässt, 10 s -- Erkennung, 1.0.2).
+            self._res = self._rm.open_resource(resource, open_timeout=int(timeout_s * 1000))
             self._res.timeout = int(timeout_s * 1000)
             self._res.read_termination = "\n"
             self._res.write_termination = "\n"
