@@ -98,6 +98,11 @@ Semantic Versioning (`lab_gui/version.py`).
 - **UNI-T: Warnung bei begrenztem Offset.** Das Gerät begrenzt `CHANnel:OFFSet` ohne Fehlermeldung auf ±8 Teilungen
   (0,1 V/div → ±0,8 V); der Adapter liest die Mitte zurück und warnt jetzt. Am Gerät geprüft (±0,4 V um 3 V → Warnung,
   ±2 V um 3 V → keine).
+- **Einstellungen → Netzwerk-Freigabe: Haken nach dem Start leer.** Die Freigabe galt, aber die Haken „Lesen“,
+  „Steuern“ und „Messen“ standen leer, bis man einmal klickte: der gespeicherte Stand wurde nur auf Zeilen
+  angewendet, die es beim Laden schon gab, die Geräte werden aber erst danach erkannt. Die Tabelle merkt sich den
+  Stand jetzt und wendet ihn auf jede neue Zeile an. Nur Oberfläche geprüft (`check_share_table_order`, schlägt mit
+  dem alten Stand fehl; `check_network_share`, `check_partner_link` grün), in der .exe noch nicht angesehen.
 
 ## [1.0.1] – 2026-11-15
 

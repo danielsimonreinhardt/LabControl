@@ -587,6 +587,10 @@ class _ShareTable(QTableWidget):
         self.horizontalHeader().setStretchLastSection(False)
         self._rows: dict[str, int] = {}
         self._kinds: dict[str, str] = {}
+        # Zuletzt gesetzter Freigabe-Stand (set_share). Geraete werden meist erst NACH dem Laden der
+        # Einstellungen erkannt -- add_device muss den Stand dann selbst anwenden, sonst standen die
+        # Haken nach dem Start leer, obwohl die Freigabe galt (bis zum ersten Klick, 1.0.2).
+        self._share: dict = {}
 
     def retranslate(self) -> None:
         self.setHorizontalHeaderLabels(
@@ -706,6 +710,7 @@ class _ShareTable(QTableWidget):
         box.setChecked(kind in CONTROL_KINDS)   # Standard: abschalten; set_off_on_loss zieht den Stand nach
         box.blockSignals(False)
         self.setCellWidget(row, self.COL_OFF_ON_LOSS, off_cell)
+        self._apply_share(device_id)
         self.resizeColumnsToContents()
 
     def set_label(self, device_id: str, label: str) -> None:
@@ -735,16 +740,20 @@ class _ShareTable(QTableWidget):
             box.blockSignals(False)
 
     def set_share(self, devices: dict) -> None:
+        self._share = dict(devices)
         for device_id in self._rows:
-            entry = devices.get(device_id, {})
-            for column, key in ((self.COL_READ, "read"), (self.COL_CONTROL, "control"),
-                                (self.COL_MEASURE, "measure")):
-                box = self._box(device_id, column)
-                if box is None:
-                    continue
-                box.blockSignals(True)
-                box.setChecked(bool(entry.get(key)))
-                box.blockSignals(False)
+            self._apply_share(device_id)
+
+    def _apply_share(self, device_id: str) -> None:
+        entry = self._share.get(device_id, {})
+        for column, key in ((self.COL_READ, "read"), (self.COL_CONTROL, "control"),
+                            (self.COL_MEASURE, "measure")):
+            box = self._box(device_id, column)
+            if box is None:
+                continue
+            box.blockSignals(True)
+            box.setChecked(bool(entry.get(key)))
+            box.blockSignals(False)
 
 
 class SettingsTab(QWidget):
