@@ -95,6 +95,9 @@ Semantic Versioning (`lab_gui/version.py`).
   Stückgröße, die Gesamtlänge kommt aus `:WAVeform:STOP?` -- vorher wurden bei Speichertiefe 5M nur die ersten
   1 Mio. Punkte gelesen. Am Gerät geprüft (5 Mio. Punkte in 3,3 s, alle Fälle von oben erneut grün,
   `check_unit_mso --hardware` grün); Simulator liefert WORD wie das Gerät.
+- **UNI-T: Warnung bei begrenztem Offset.** Das Gerät begrenzt `CHANnel:OFFSet` ohne Fehlermeldung auf ±8 Teilungen
+  (0,1 V/div → ±0,8 V); der Adapter liest die Mitte zurück und warnt jetzt. Am Gerät geprüft (±0,4 V um 3 V → Warnung,
+  ±2 V um 3 V → keine).
 
 ## [1.0.1] – 2026-11-15
 

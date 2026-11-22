@@ -180,6 +180,10 @@ class UnitMsoScope:
             if actual[name][0] < want * (1 - 1e-6):
                 warnings.append(f"{name}: Gerät stellte {actual[name][0]:g} V/div ein, kleiner als angefragt "
                                 f"({want:g} V/div).")
+            # Am Gerät begrenzt: CHANnel:OFFSet höchstens ±8 Teilungen (0,1 V/div -> ±0,8 V), ohne Fehlermeldung.
+            if abs(actual[name][1] - setting.offset_v) > max(1e-3, 0.01 * actual[name][0]):
+                warnings.append(f"{name}: Gerät stellte die Mitte auf {actual[name][1]:g} V statt {setting.offset_v:g} V "
+                                f"(Offset begrenzt, größeren Bereich wählen).")
         if abs(actual_scale_s - scale_s) > scale_s * 1e-6:
             warnings.append(f"Zeitbasis: Gerät stellte {actual_scale_s:g} s/div ein (angefragt {scale_s:g}).")
 
