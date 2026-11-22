@@ -30,11 +30,26 @@ from scope_api.base import Capture, ScopeError
 
 # Kanalfarben wie in PicoScope 7 (A blau, B rot, C gruen, D gelb).
 CHANNEL_COLORS = {"A": "#1f5fbf", "B": "#c0392b", "C": "#2e8b57", "D": "#c9a100"}
+_COLOR_ORDER = tuple(CHANNEL_COLORS.values())
 BACKGROUND = "#ffffff"
 GRID = "#d9dee3"
 GRID_CENTER = "#b7c0c9"
 TEXT = "#18212a"
 MUTED = "#5a6672"
+
+
+def channel_color(name: str | None, fallback: str = TEXT) -> str:
+    """Farbe je Kanal: PicoScope A..D, SCPI-Oszilloskope CH1..CH4 (UNI-T, R&S) in derselben Reihenfolge.
+    Vorher kannte die Tabelle nur A..D -- CH1..CH4 wurden alle schwarz gezeichnet (1.0.2)."""
+    if not name:
+        return fallback
+    if name in CHANNEL_COLORS:
+        return CHANNEL_COLORS[name]
+    digits = "".join(c for c in name if c.isdigit())
+    if digits and int(digits) >= 1:
+        return _COLOR_ORDER[(int(digits) - 1) % len(_COLOR_ORDER)]
+    return fallback
+
 
 DEFAULT_WIDTH, DEFAULT_HEIGHT = 1000, 560
 MIN_WIDTH, MAX_WIDTH = 400, 2000
@@ -170,7 +185,7 @@ def plot_png(capture: Capture, channels: list[str] | None = None, t_start: float
                 + f"   Vss {format_si(values['vpp'], 'V')}   eff {format_si(values['vrms'], 'V')}"
                 + f"   f {format_si(values['frequency'], 'Hz')}"
                 + ("   ÜBERSTEUERT" if ch.overrange else ""))
-        painter.setPen(QColor(CHANNEL_COLORS.get(name, TEXT)))
+        painter.setPen(QColor(channel_color(name)))
         painter.drawText(QPointF(left, 20 + fm.height() * (i + 1)), line)
 
     # -- Raster und Beschriftung --------------------------------------------------
@@ -208,7 +223,7 @@ def plot_png(capture: Capture, channels: list[str] | None = None, t_start: float
         painter.setPen(dash)
         painter.drawLine(QPointF(x_of(0.0), plot.top()), QPointF(x_of(0.0), plot.bottom()))
     if show_level:
-        painter.setPen(QPen(QColor(CHANNEL_COLORS.get(trig.source, MUTED)), 1, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(QColor(channel_color(trig.source, MUTED)), 1, Qt.PenStyle.DashLine))
         y = y_of(trig.level_v)
         painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
 
@@ -217,7 +232,7 @@ def plot_png(capture: Capture, channels: list[str] | None = None, t_start: float
     columns = int(plot.width())
     for name in names:
         v = series[name]
-        painter.setPen(QPen(QColor(CHANNEL_COLORS.get(name, TEXT)), 1.4))
+        painter.setPen(QPen(QColor(channel_color(name)), 1.4))
         if v.size <= columns:
             points = [QPointF(x_of(tv), y_of(vv)) for tv, vv in zip(t, v)]
             painter.drawPolyline(points)

@@ -103,6 +103,10 @@ Semantic Versioning (`lab_gui/version.py`).
   angewendet, die es beim Laden schon gab, die Geräte werden aber erst danach erkannt. Die Tabelle merkt sich den
   Stand jetzt und wendet ihn auf jede neue Zeile an. Nur Oberfläche geprüft (`check_share_table_order`, schlägt mit
   dem alten Stand fehl; `check_network_share`, `check_partner_link` grün), in der .exe noch nicht angesehen.
+- **Kurvenbild: Kanäle CH1…CH4 farbig.** Die Farbtabelle kannte nur die PicoScope-Kanäle A…D; bei UNI-T und R&S
+  (CH1…CH4) waren alle Kurven, Legenden und die Triggerlinie schwarz und nicht zu unterscheiden. Jetzt CH1 blau,
+  CH2 rot, CH3 grün, CH4 gelb wie A…D -- gilt für MCP `plot_capture` und das Fenster „Kurve“. Mit dem Simulator
+  geprüft (Bild mit vier Kanälen, `check_scope_api`, `check_unit_mso`, `check_rs_rtb`).
 
 ## [1.0.1] – 2026-11-15
 
