@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -161,16 +162,51 @@ def resource_for(device_id: str) -> str | None:
 
 # -- Transport --------------------------------------------------------------------
 
+# Am Gerät (1.0.2, Funktionsgenerator): das MSO1154HD-S hat EINE Ausgabe für alle VXI-11-
+# Verbindungen -- die Antwort auf eine Abfrage über Verbindung B kam beim Lesen auf Verbindung A
+# an. Mehrere Verbindungen zum selben Gerät (Erfassung, Erkennung, Generator) dürfen deshalb nur
+# ganze Abfragen (Senden + Lesen) abwechselnd stellen: eine Sperre je Gerät (Host), gehalten von
+# einer Abfrage bis ihre Antwort gelesen ist; reine Befehle halten sie nur für das Senden.
+# Innerhalb eines Prozesses -- ein zweites Programm am selben Gerät kann die Antworten weiter
+# vertauschen.
+IO_LOCK_TIMEOUT_S = 10.0
+_IO_LOCKS: dict[str, threading.RLock] = {}
+_IO_LOCKS_GUARD = threading.Lock()
+
+
+class MSO1000HDBusyError(MSO1000HDError):
+    """Eine andere Verbindung zum selben Gerät hielt die Sperre länger als IO_LOCK_TIMEOUT_S."""
+
+
+def io_key(resource: str) -> str:
+    """Gerät hinter einer VISA-Ressource: bei LAN der Host (VXI-11 und Socket teilen ihn)."""
+    parts = resource.split("::")
+    if parts[0].upper().startswith("TCPIP") and len(parts) >= 2:
+        return parts[1].lower()
+    return resource.upper()
+
+
+def io_lock(resource: str) -> threading.RLock:
+    key = io_key(resource)
+    with _IO_LOCKS_GUARD:
+        lock = _IO_LOCKS.get(key)
+        if lock is None:
+            lock = _IO_LOCKS[key] = threading.RLock()
+        return lock
+
 
 class VisaTransport:
     """Dünne Hülle um eine pyvisa-Ressource: Zeilen schreiben/lesen, Bytes
-    genau lesen. Jeden pyvisa-/OS-Fehler in MSO1000HDError übersetzen."""
+    genau lesen. Jeden pyvisa-/OS-Fehler in MSO1000HDError übersetzen.
+    Abfragen halten die Gerätesperre (io_lock) bis zum Lesen der Antwort."""
 
     def __init__(self, resource: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
         try:
             import pyvisa
         except ImportError as exc:  # pragma: no cover -- requirements.txt
             raise MSO1000HDError("pyvisa ist nicht installiert (requirements.txt).") from exc
+        self._lock = io_lock(resource)
+        self._pending = 0   # gesendete Abfragen, deren Antwort noch nicht gelesen ist (halten die Sperre)
         self._errors: tuple = (pyvisa.Error, OSError, ValueError)
         # LAN immer über pyvisa-py (kein NI-VISA nötig). USB braucht ein
         # installiertes VISA ("@ivi").
@@ -195,16 +231,34 @@ class VisaTransport:
         self._res.timeout = int(seconds * 1000)
 
     def write(self, command: str) -> None:
+        if not self._lock.acquire(timeout=IO_LOCK_TIMEOUT_S):
+            raise MSO1000HDBusyError(f"Gerät {IO_LOCK_TIMEOUT_S:g} s lang belegt, {command!r} nicht gesendet")
+        query = "?" in command
         try:
             self._res.write(command)
         except Exception as exc:  # noqa: BLE001
+            self._lock.release()
             raise MSO1000HDError(f"Senden von {command!r} gescheitert: {exc}") from exc
+        if query:
+            self._pending += 1   # Sperre bleibt bis _done_reading
+        else:
+            self._lock.release()
+
+    def _done_reading(self) -> None:
+        if self._pending:
+            self._pending -= 1
+            try:
+                self._lock.release()
+            except RuntimeError:   # anderer Thread als der sendende (nur beim Aufräumen denkbar)
+                pass
 
     def read_line(self) -> str:
         try:
             return self._res.read().strip()
         except Exception as exc:  # noqa: BLE001
             raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
+        finally:
+            self._done_reading()
 
     def read_raw(self) -> bytes:
         """Eine ganze Antwort (bis END), ohne Abschlusszeichen-Suche. Das Gerät
@@ -213,15 +267,23 @@ class VisaTransport:
             return bytes(self._res.read_raw())
         except Exception as exc:  # noqa: BLE001
             raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
+        finally:
+            self._done_reading()
 
     def close(self) -> None:
-        for obj in (getattr(self, "_res", None), getattr(self, "_rm", None)):
-            if obj is None:
-                continue
-            try:
-                obj.close()
-            except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
-                pass
+        """Nur die eigene Verbindung schließen. NICHT den ResourceManager: pyvisa führt je
+        Backend einen einzigen im Prozess, sein close() schließt ALLE Verbindungen darüber --
+        am Gerät beendete so jede Erkennung (*IDN? alle 10 s) auch die Verbindung des
+        eingebauten Funktionsgenerators (1.0.2)."""
+        while getattr(self, "_pending", 0):   # nie eine Sperre mit ins Grab nehmen
+            self._done_reading()
+        res = getattr(self, "_res", None)
+        if res is None:
+            return
+        try:
+            res.close()
+        except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
+            pass
 
 
 # -- Gerät ------------------------------------------------------------------------

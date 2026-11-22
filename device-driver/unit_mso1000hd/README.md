@@ -115,6 +115,8 @@ Gemessen am MSO1154HD-S mit dem Kalibrierausgang (1-kHz-Rechteck 0…3 V) an CH1
 | `WAV:MODE NORMal` | Bildschirmdaten mit falschem XINCrement (Flanken im halben Abstand) | nicht benutzt |
 | `WAV:FORM WORD` | 2 Byte je Punkt (little endian, 12 bit, YREF 2048, YINC = Skala/500); 30× schneller als ASCII, Punkt für Punkt gleich. **Handbuchformel falsch:** YORigin ist in Zählwerten (= Offset/YINC), also V = (Zählwert − YREF − YORigin) · YINC | benutzt |
 | `WAV:FORM DWORD` | liefert für Analogkanäle nichts | nicht benutzt |
+| Mehrere VXI-11-Verbindungen | **eine Ausgabe für alle:** die Antwort auf eine Abfrage über Verbindung B kam beim Lesen auf Verbindung A an (Erfassung scheiterte) | Gerätesperre je Host (`io_lock`): eine Abfrage hält sie bis zum Lesen ihrer Antwort; Erfassung, Erkennung und Funktionsgenerator (`unit_mso_awg`) wechseln sich ab |
+| `ResourceManager.close()` | schließt in pyvisa alle Verbindungen des Prozesses (ein Manager je Backend) | `VisaTransport.close()` schließt nur die eigene Verbindung |
 
 Weiter angenommen (nicht geprüft): Kopplung AC wirkt (Mittelwert ≈ 0 gemessen), Bandbreitenbegrenzung,
 2-Kanal-Modelle (MSO1xx2).

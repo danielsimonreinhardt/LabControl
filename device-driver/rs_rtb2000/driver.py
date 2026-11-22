@@ -172,13 +172,15 @@ class VisaTransport:
             raise RTB2000Error(f"Lesen von {count} Bytes gescheitert: {exc}") from exc
 
     def close(self) -> None:
-        for obj in (getattr(self, "_res", None), getattr(self, "_rm", None)):
-            if obj is None:
-                continue
-            try:
-                obj.close()
-            except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
-                pass
+        """Nur die eigene Verbindung schließen, nicht den ResourceManager (pyvisa führt einen je
+        Backend im Prozess; sein close() schließt alle Verbindungen, auch die anderer Geräte)."""
+        res = getattr(self, "_res", None)
+        if res is None:
+            return
+        try:
+            res.close()
+        except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
+            pass
 
 
 # -- Gerät ------------------------------------------------------------------------
