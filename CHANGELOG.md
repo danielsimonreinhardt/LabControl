@@ -4,6 +4,16 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [1.0.3] – 2026-11-22
+
+### Behoben
+- **Getrenntes Oszilloskop stand als „Belegt (andere App?)“ in der Kachel.** Beim Trennen (PicoScope abgesteckt,
+  UNI-T nicht mehr erreichbar) setzte die Übersichtskachel den Status auf „belegt“; intern (MCP, `list_scopes`) stand
+  es richtig auf „offline“. Jetzt eigener Status „Nicht verbunden“ (auch vor dem ersten gemeldeten Zustand, in der
+  Steuerungs-Kachel ebenso); die Statustexte der Oszilloskop-Kachel haben jetzt auch eine englische Fassung. Nur
+  Oberfläche geprüft (`check_scope_tile_offline`; `check_control_tab`, `check_partner_link`, `check_translations`,
+  `check_partner_devices`, `check_dashboard_relayout` grün), am Gerät und in der .exe noch nicht angesehen.
+
 ## [1.0.2] – 2026-11-22
 
 ### Hinzugefügt

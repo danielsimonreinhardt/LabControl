@@ -1317,5 +1317,10 @@
   "Wobbel-Startfrequenz setzen": "Set sweep start frequency",
   "Wobbel-Stoppfrequenz setzen": "Set sweep stop frequency",
   "Wobbelzeit setzen": "Set sweep time",
-  "Lastwiderstand setzen": "Set load resistance"
+  "Lastwiderstand setzen": "Set load resistance",
+  "Frei": "Free",
+  "Belegt (andere App?)": "In use (other app?)",
+  "Belegt (Testlauf läuft)": "In use (test run)",
+  "Nicht verbunden": "Not connected",
+  "Unbekannt": "Unknown"
 }

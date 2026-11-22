@@ -2298,7 +2298,7 @@ class PicoscopeControlGroup(QGroupBox):
         # "PicoScope 7 oeffnen", sonst gleich.
         self._kind = kind
         self._color_key: str | None = None
-        self._status = "busy"
+        self._status = "offline"   # bis der erste Zustand kommt (1.0.2; vorher "Belegt")
         self._variant = ""
         self._serial = ""
         self._capture_text = ""
