@@ -51,6 +51,13 @@ Semantic Versioning (`lab_gui/version.py`).
   kostete weitere 10 s. Jetzt begrenzt das Zeitlimit auch den Verbindungsaufbau, und die Erkennung merkt sich je
   Adresse den Weg, der zuletzt geantwortet hat: 0,02 s statt 10 s. Am UNI-T geprüft; RTB nur gegen den
   Simulator (`check_rs_rtb`).
+- **UNI-T: Daten binär (WORD) statt als Text, ganze 5M lesbar.** Die Umrechnung aus dem Handbuch ist falsch
+  (YORigin ist in Zählwerten, nicht in Volt); richtig ist V = (Zählwert − YREF − YORigin) · YINC -- am Gerät Punkt
+  für Punkt gleich den ASCII-Werten (0,2/0,5/1 V/div, Offset 0/−1,5/−3 V). 250 000 Punkte in 0,05 s statt 1,6 s;
+  eine Erfassung dauert mit einem Kanal ~2 s statt 3–8 s, mit vier ~5 s statt 18 s. `:WAVeform:POINts` ist die
+  Stückgröße, die Gesamtlänge kommt aus `:WAVeform:STOP?` -- vorher wurden bei Speichertiefe 5M nur die ersten
+  1 Mio. Punkte gelesen. Am Gerät geprüft (5 Mio. Punkte in 3,3 s, alle Fälle von oben erneut grün,
+  `check_unit_mso --hardware` grün); Simulator liefert WORD wie das Gerät.
 
 ## [1.0.1] – 2026-11-15
 

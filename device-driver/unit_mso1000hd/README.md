@@ -85,14 +85,15 @@ Jede Erfassung stellt alles neu ein (zustandslos, wie beim PicoScope):
    `auto`: nach `timeout_s` `TRIGger:FORCe`; `none`: sofort; `single`: nach
    `timeout_s` Fehler `trigger_timeout`.
 6. 0,6 s warten (direkt nach `STOP` liefert das Gerät noch unfertige Daten).
-7. Daten je Kanal als **ASCII in Volt** (`WAV:MODE RAW`, `WAV:FORM ASCII`,
-   `WAV:POIN 1000000`), in Stücken zu 250 000 Punkten (`WAV:STAR`/`WAV:STOP`).
-   t = 0 aus `XORigin` der Präambel.
+7. Daten je Kanal **binär als WORD** (`WAV:MODE RAW`, `WAV:FORM WORD`): Länge aus
+   `WAV:STOP?`, Stücke zu 1 000 000 Punkten (`WAV:POIN`, `WAV:STAR`/`WAV:STOP`),
+   Volt = (Zählwert − YREF − YORigin) · YINC. t = 0 aus `XORigin` der Präambel.
+8. Auf das angefragte Fenster um den Trigger zuschneiden.
 
-Das Gerät bleibt danach gestoppt und zeigt die Erfassung. ASCII statt WORD,
-weil die WORD-Umrechnung (YINC/YREF) am Gerät nicht bei jeder Skala stimmte;
-kostet Zeit (≈ 16 Byte je Punkt): 250 000 Punkte ≈ 1,6 s je Kanal, eine
-Erfassung mit einem Kanal dauert 3–8 s, mit vier Kanälen ≈ 18 s.
+Das Gerät bleibt danach gestoppt und zeigt die Erfassung. Lesezeit: 250 000
+Punkte 0,05 s, 5 Mio. 1,2 s (ASCII: 1,6 s je 250 000, bleibt als Rückfall
+`read_waveform_volts(..., fmt="ASCII")`). Eine Erfassung dauert rund 2 s mit
+einem Kanal, 5–6 s mit vier.
 
 ## Am Gerät geprüft (1.0.2)
 
@@ -104,7 +105,7 @@ Gemessen am MSO1154HD-S mit dem Kalibrierausgang (1-kHz-Rechteck 0…3 V) an CH1
 | Unbekannter Befehl | I/O-Fehler auf VXI-11-Ebene, danach `-113` in `SYST:ERR?` (z. B. `ACQ:SRAT?`, `WAV:MODE MAX`, `WAV:FORM BYTE`) | nur geprüfte Befehle |
 | `WAV:PRE?` | Textzeile, kein `#9…`-Block | beides wird angenommen |
 | `WAV:DATA?` | `#9<Länge><Werte>` und dahinter `,\r\n` | Rest wird verworfen |
-| `WAV:MODE RAW` | liefert nur so viele Punkte wie mit `WAV:POIN` eingestellt (sonst 1); höchstens 1 000 000, auch bei Tiefe 5M | vor dem Lesen `WAV:POIN 1000000` |
+| `WAV:MODE RAW` | ein `DATA?` liefert höchstens `WAV:POIN` Punkte (ohne Setzen 1, höchstens 1 000 000); die Gesamtlänge steht nach `WAV:SOUR` in `WAV:STOP?` (5M-Speicher: 5 000 000) | Länge aus `STOP?`, Stücke zu 1 000 000 |
 | `WAV:STAR`/`WAV:STOP` | STARt ab 0, STOP exklusiv; STARt rückt nach jedem `DATA?` weiter | beide vor jedem Stück neu |
 | Daten direkt nach `STOP` | zuerst Füllwerte (Rohwert 0x0404), nach 0,5 s vollständig | 0,6 s Wartezeit |
 | Speicherfenster | 8 Teilungen um die Bildschirmmitte (1 ms/div: −4…+4 ms), bei schnellen Zeitbasen länger | Zeitbasis, Punkte und Vorlauf mit 8 Teilungen; t = 0 aus `XORigin` (geprüft bei 0/10/20/25/50 % Vorlauf) |
@@ -112,7 +113,8 @@ Gemessen am MSO1154HD-S mit dem Kalibrierausgang (1-kHz-Rechteck 0…3 V) an CH1
 | `CHAN:OFFS` | Bildschirmmitte = −Offset | wie angenommen |
 | `TRIG:EDGE:LEV` mit Tastkopf 10X | geschriebener Wert wird durch den Tastkopffaktor geteilt zurückgemeldet | nicht weiter geprüft (kein 10:1-Tastkopf am Messpunkt) |
 | `WAV:MODE NORMal` | Bildschirmdaten mit falschem XINCrement (Flanken im halben Abstand) | nicht benutzt |
-| `WAV:FORM WORD` | 8× schneller, Umrechnung passte bei 10 V/div, nicht bei 1 V/div | nicht benutzt |
+| `WAV:FORM WORD` | 2 Byte je Punkt (little endian, 12 bit, YREF 2048, YINC = Skala/500); 30× schneller als ASCII, Punkt für Punkt gleich. **Handbuchformel falsch:** YORigin ist in Zählwerten (= Offset/YINC), also V = (Zählwert − YREF − YORigin) · YINC | benutzt |
+| `WAV:FORM DWORD` | liefert für Analogkanäle nichts | nicht benutzt |
 
 Weiter angenommen (nicht geprüft): Kopplung AC wirkt (Mittelwert ≈ 0 gemessen), Bandbreitenbegrenzung,
 2-Kanal-Modelle (MSO1xx2).

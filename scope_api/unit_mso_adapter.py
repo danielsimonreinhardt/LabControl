@@ -18,7 +18,7 @@
 - Trigger: immer Einzelerfassung (TRIGger:SWEep SINGle + RUN), dann Status
   pollen. auto: nach timeout_s TRIGger:FORCe; none: sofort FORCe; single:
   nach timeout_s STOP und Fehler trigger_timeout.
-- Daten: ASCII (Volt direkt vom Gerät), siehe driver.read_waveform_volts.
+- Daten: WORD (binär, 2 Byte je Punkt), siehe driver.read_waveform_volts.
 
 Das Gerät bleibt nach einer Erfassung gestoppt und zeigt sie an.
 
@@ -95,8 +95,8 @@ def capabilities_for(model: str, serial: str, simulated: bool = False) -> Capabi
             "Kanäle heißen CH1..CH4. Bereiche gelten am Scope-Eingang (Tastkopf 1:1); der Tastkopf wird am "
             "Gerät eingestellt, damit dessen Anzeige stimmt.",
             "Analoger Offset: offset_v ist die Mitte des Bereichs.",
-            "Ohne timing.samples werden 250 000 Samples erfasst; höchstens 5 Mio. Rohdaten kommen als ASCII "
-            "über LAN, große Erfassungen dauern daher einige Sekunden.",
+            "Ohne timing.samples werden 250 000 Samples erfasst (höchstens 5 Mio.). Eine Erfassung dauert "
+            "rund 2 s mit einem Kanal, 5 s mit vier (Einstellen, Erfassen, binär über LAN lesen).",
             "2,5 GS/s gelten für einen aktiven Kanal; mit mehr Kanälen teilt das Gerät die Rate. Die "
             "tatsächliche Rate steht im Ergebnis.",
             "Nur Flanken-Trigger. Die Bildschirmeinstellungen am Gerät werden durch jede Erfassung "
@@ -206,7 +206,7 @@ class UnitMsoScope:
         # -- Erfassen --------------------------------------------------------------
         forced = self._run_single(trig.mode, trig.timeout_s, H_DIVS * actual_scale_s, cancel, on_armed)
         if on_triggered is not None:
-            on_triggered()   # Erfassung im Gerät fertig, ab hier nur noch Lesen (dauert bei 250 kS als ASCII)
+            on_triggered()   # Erfassung im Gerät fertig, ab hier nur noch Lesen
         dev.wait_data_ready()   # am Gerät: direkt nach STOP noch unfertige Rohdaten
 
         # -- Daten -----------------------------------------------------------------

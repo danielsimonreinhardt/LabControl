@@ -30,14 +30,13 @@ KIND = "scpiscope"
 # Werkseitig: 4 Kanäle; Typen mit 2 Kanälen (MSO1xx2) gibt es laut Namensschema
 # ebenfalls, siehe parse_model().
 MAX_CHANNELS = 4
-# Am Gerät: ein Lesevorgang liefert auch 250 000 Punkte (ASCII ~4 MB, ~1,6 s); das
-# Handbuch (S. 192) nennt 25 000. Mehr als MAX_READ_POINTS gibt das Gerät nicht frei
-# (:WAVeform:POINts wird darauf begrenzt, auch bei Speichertiefe 5M).
-READ_CHUNK = 250_000
-MAX_READ_POINTS = 1_000_000
+# :WAVeform:POINts ist die Stückgröße je Lesevorgang (Handbuch S. 192: 25 000). Am Gerät
+# gehen bis 1 000 000 je Stück (darüber begrenzt es); die Gesamtlänge meldet
+# :WAVeform:STOP? nach dem Setzen der Quelle (5M-Speicher: 5 000 000, als WORD in 1,2 s).
+READ_CHUNK = 1_000_000
 DEFAULT_TIMEOUT_S = 5.0
-# 250 000 Punkte als ASCII ~4 MB -- großzügig.
-READ_TIMEOUT_S = 30.0
+# 1 Mio. Punkte als ASCII ~16 MB -- großzügig.
+READ_TIMEOUT_S = 60.0
 # Am Gerät: direkt nach STOP liefert :WAVeform:DATA? (RAW) noch unfertige Daten
 # (Füllwert, Rohwert 0x0404). Nach 0,5 s waren sie bei 25K und 250K vollständig.
 DATA_SETTLE_S = 0.6
@@ -398,25 +397,32 @@ class MSO1000HD:
         if self._data_settle_s > 0:
             time.sleep(self._data_settle_s)
 
-    def read_waveform_volts(self, n: int, progress=None) -> tuple[np.ndarray, Preamble]:
+    def read_waveform_volts(self, n: int, progress=None, fmt: str = "WORD") -> tuple[np.ndarray, Preamble]:
         """Rohdaten eines Kanals aus dem internen Speicher in Volt.
 
-        Format ASCII (Handbuch S. 189: "actual voltage value of each waveform
-        point"). WORD ist am Gerät 8x schneller, die Umrechnung über YINCrement/
-        YREFerence passte aber nicht bei jeder Skala -- ASCII bleibt. Das Gerät
-        muss gestoppt sein (und wait_data_ready() gelaufen).
+        Format WORD (2 Byte je Punkt, little endian): am Gerät 250 000 Punkte in
+        0,05 s statt 1,6 s als ASCII, und Punkt für Punkt gleich den ASCII-Werten
+        (geprüft bei 0,2/0,5/1 V/div, Offset 0/-1,5/-3 V). Umrechnung -- NICHT wie im
+        Handbuch (S. 193, "+ yorigin" in Volt), YORigin ist in Zählwerten:
+            V = (Zählwert - YREFerence - YORigin) * YINCrement
+        fmt="ASCII" bleibt als Rückfall (Volt direkt vom Gerät). Das Gerät muss
+        gestoppt sein (und wait_data_ready() gelaufen).
 
-        Am Gerät geprüft: im Modus RAW liefert es nur so viele Punkte, wie vorher
-        mit :WAVeform:POINts eingestellt sind (sonst 1); STARt zählt ab 0, STOP ist
-        exklusiv; nach jedem DATA? rückt das Gerät STARt weiter -- deshalb STARt/STOP
-        vor jedem Stück neu.
+        Am Gerät geprüft: im Modus RAW liefert ein DATA? höchstens :WAVeform:POINts
+        Punkte (ohne Setzen nur 1), die Gesamtlänge steht in :WAVeform:STOP?; STARt
+        zählt ab 0, STOP ist exklusiv; nach jedem DATA? rückt das Gerät STARt weiter --
+        deshalb STARt/STOP vor jedem Stück neu.
         """
+        fmt = fmt.upper()
+        if fmt not in ("WORD", "ASCII"):
+            raise ValueError(f"Format {fmt!r}: WORD oder ASCII")
         self.write(":WAVeform:MODE RAW")
-        self.write(":WAVeform:FORMat ASCII")
+        self.write(f":WAVeform:FORMat {fmt}")
         self.write(f":WAVeform:SOURce CHANnel{n}")
-        self.write(f":WAVeform:POINts {MAX_READ_POINTS}")
+        total = int(self.query_float(":WAVeform:STOP?"))   # SOURce setzt STOP auf die Speicherlänge
+        self.write(f":WAVeform:POINts {READ_CHUNK}")
         pre = self.preamble()
-        total = int(self.query_float(":WAVeform:POINts?")) or pre.points
+        total = total or pre.points
         if total <= 1:
             raise MSO1000HDValueError(f"Kanal {n}: Gerät meldet keine Punkte im Speicher.")
         chunks: list[np.ndarray] = []
@@ -428,7 +434,7 @@ class MSO1000HD:
                 self.write(f":WAVeform:STARt {start}")
                 self.write(f":WAVeform:STOP {stop}")
                 data = self.query_block(":WAVeform:DATA?")
-                values = _parse_ascii_values(data)
+                values = _parse_word_values(data, pre) if fmt == "WORD" else _parse_ascii_values(data)
                 if values.size == 0:
                     raise MSO1000HDValueError(f"Kanal {n}: leerer Datenblock bei {start}..{stop}.")
                 chunks.append(values)
@@ -477,6 +483,14 @@ def _widen_vxi11_reads(resource) -> None:
             session.max_recv_size = VXI11_READ_SIZE
     except Exception:  # noqa: BLE001 -- anderes Backend: nichts zu tun
         pass
+
+
+def _parse_word_values(data: bytes, pre: Preamble) -> np.ndarray:
+    """WORD-Block (int16, little endian) in Volt, siehe read_waveform_volts."""
+    if len(data) % 2:
+        raise MSO1000HDValueError(f"WORD-Block mit ungerader Länge ({len(data)} Bytes).")
+    counts = np.frombuffer(data, dtype="<i2").astype(float)
+    return (counts - pre.yref - pre.yorigin) * pre.yinc
 
 
 def _parse_ascii_values(data: bytes) -> np.ndarray:

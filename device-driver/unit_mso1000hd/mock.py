@@ -90,6 +90,10 @@ def _snap_up(value: float, steps: tuple[float, ...]) -> float:
     return steps[-1]
 
 
+# WORD-Daten: Nullpunkt des 12-bit-Wandlers (am Gerät YREFerence = 2048).
+YREF = 2048
+
+
 class _Channel:
     def __init__(self) -> None:
         self.display = False
@@ -103,8 +107,9 @@ class SimulatedInstrument:
     """Transport-Ersatz für driver.MSO1000HD: write / read_line / read_raw.
 
     Bildet das am MSO1154HD-S gemessene Verhalten nach (1.0.2): Präambel als
-    Textzeile, Datenblock mit ``,\\r\\n`` dahinter, im Modus RAW nur so viele
-    Punkte wie mit :WAVeform:POINts eingestellt, STARt ab 0 und STOP exklusiv."""
+    Textzeile, Datenblock mit ``,\\r\\n`` dahinter, ein DATA? im Modus RAW liefert
+    höchstens :WAVeform:POINts Punkte, STOP? nach SOURce = Speicherlänge, STARt ab 0
+    und STOP exklusiv, WORD mit YORigin in Zählwerten."""
 
     # Testskripte setzen das, wie MockPicoScope2000.signals.
     signals: dict = default_signals()
@@ -132,7 +137,7 @@ class SimulatedInstrument:
         self.captured: dict[int, np.ndarray] = {}
         self.captured_xinc = 1e-6
         self.captured_xorigin = 0.0
-        self._out = bytearray()
+        self._out: list[bytes] = []   # eine Antwort je Eintrag (WORD-Daten dürfen \n enthalten)
         self._arm_polls = 0
         self._pending_trigger = False
         self._rng = np.random.default_rng(1)
@@ -152,32 +157,22 @@ class SimulatedInstrument:
         self._handle(command.strip())
 
     def read_line(self) -> str:
-        idx = self._out.find(b"\n")
-        if idx < 0:
-            from unit_mso1000hd.driver import MSO1000HDError
-            raise MSO1000HDError("Timeout: keine Antwort (Simulation)")
-        line = bytes(self._out[:idx])
-        del self._out[: idx + 1]
-        return line.decode("ascii")
+        return self.read_raw().decode("ascii").strip()
 
     def read_raw(self) -> bytes:
-        """Eine ganze Antwort (bis einschließlich \\n)."""
-        idx = self._out.find(b"\n")
-        if idx < 0:
+        """Eine ganze Antwort."""
+        if not self._out:
             from unit_mso1000hd.driver import MSO1000HDError
             raise MSO1000HDError("Timeout: keine Antwort (Simulation)")
-        data = bytes(self._out[: idx + 1])
-        del self._out[: idx + 1]
-        return data
+        return self._out.pop(0)
 
     # -- Befehle ------------------------------------------------------------------
 
     def _reply(self, text: str) -> None:
-        self._out += text.encode("ascii") + b"\r\n"
+        self._out.append(text.encode("ascii") + b"\r\n")
 
     def _reply_block(self, payload: bytes, tail: bytes = b"\r\n") -> None:
-        # Nutzdaten enthalten kein \n (ASCII-Werte); read_raw liest bis \n.
-        self._out += f"#9{len(payload):09d}".encode("ascii") + payload + tail
+        self._out.append(f"#9{len(payload):09d}".encode("ascii") + payload + tail)
 
     def _error(self, code: int, text: str) -> None:
         self.errors.append((code, text))
@@ -354,20 +349,20 @@ class SimulatedInstrument:
             return True
         if _matches(key, "STOP"):
             if query:
-                self._reply(str(self.wav_stop))
+                self._reply(str(self.wav_stop or self._points_available()))
             else:
                 self.wav_stop = int(arg)
             return True
         if _matches(key, "POINts"):
             if query:
-                self._reply(str(self._points_readable()))
+                self._reply(str(self.wav_points))
             else:
-                self.wav_points = max(1, int(arg))
+                self.wav_points = max(1, min(int(arg), 1_000_000))
             return True
         if _matches(key, "PREamble") and query:
             n = self._points_readable()
             pre = (f"{self.wav_format},NORMal,{n},1,{self.captured_xinc:e},{self.captured_xorigin:e},0,"
-                   f"{self.channels[self.wav_source].scale / 25:e},0,2048")
+                   f"{self._yinc():e},{self._yorigin()},{YREF}")
             self._reply(pre)   # am Gerät eine Textzeile, kein Datenblock
             return True
         if _matches(key, "DATA") and query:
@@ -376,10 +371,15 @@ class SimulatedInstrument:
                 self._error(-221, "Settings conflict: no stopped acquisition")
                 self._reply_block(b"")
                 return True
-            limit = self._points_readable()
-            stop = min(self.wav_stop if self.wav_stop > 0 else limit, limit)
+            stop = self.wav_stop if self.wav_stop > 0 else data.size
+            stop = min(stop, data.size, self.wav_start + self.wav_points)   # höchstens POINts je DATA?
             part = data[self.wav_start: stop]
-            self._reply_block(",".join(f"{v:.6e}" for v in part).encode("ascii"), tail=b",\r\n")
+            if self.wav_format == "WORD":
+                # wie am Gerät: 12 bit, V = (Zählwert - YREF - YORigin) * YINC
+                counts = np.clip(np.round(part / self._yinc() + YREF + self._yorigin()), 0, 4095)
+                self._reply_block(counts.astype("<i2").tobytes())
+            else:
+                self._reply_block(",".join(f"{v:.6e}" for v in part).encode("ascii"), tail=b",\r\n")
             self.wav_start = stop   # wie am Gerät: STARt rückt nach jedem DATA? weiter
             return True
         return False
@@ -390,8 +390,16 @@ class SimulatedInstrument:
         data = self.captured.get(self.wav_source)
         return 0 if data is None else int(data.size)
 
+    def _yinc(self) -> float:
+        """Am Gerät YINCrement = Skala/500 (12 bit über ~8 Teilungen)."""
+        return self.channels[self.wav_source].scale / 500.0
+
+    def _yorigin(self) -> int:
+        """Am Gerät YORigin = CHANnel:OFFSet / YINCrement, in Zählwerten."""
+        return int(round(self.channels[self.wav_source].offset / self._yinc()))
+
     def _points_readable(self) -> int:
-        """Am Gerät: RAW liefert höchstens :WAVeform:POINts Punkte."""
+        """Präambel-Feld Points: am Gerät die Punkte je Lesevorgang."""
         return min(self._points_available(), self.wav_points)
 
     def _active(self) -> list[int]:
