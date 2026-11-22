@@ -69,6 +69,7 @@ class Settings(QObject):
     safety_limits_changed = Signal(dict)
     notifications_enabled_changed = Signal(bool)
     panel_colors_enabled_changed = Signal(bool)
+    hide_offline_tiles_changed = Signal(bool)
     panel_color_changed = Signal(str, object)  # device_id, color_key (str | None)
     can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/label/dbc_path
     restbus_configs_changed = Signal(dict)  # FT-6: {can_id: {"dbc", "messages"}}
@@ -203,6 +204,18 @@ class Settings(QObject):
         self._data["panel_colors_enabled"] = enabled
         self._save()
         self.panel_colors_enabled_changed.emit(enabled)
+
+    @property
+    def hide_offline_tiles(self) -> bool:
+        """Nicht verbundene Geraete in der Uebersicht ausblenden statt ausgegraut zeigen (1.0.3, Standard aus)."""
+        return bool(self._data.get("hide_offline_tiles", False))
+
+    def set_hide_offline_tiles(self, enabled: bool) -> None:
+        if enabled == self.hide_offline_tiles:
+            return
+        self._data["hide_offline_tiles"] = enabled
+        self._save()
+        self.hide_offline_tiles_changed.emit(enabled)
 
     def panel_color(self, device_id: str) -> str | None:
         """Gespeicherte Panel-Farbe EINES Geraets (device_id), unabhaengig

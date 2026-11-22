@@ -1322,5 +1322,6 @@
   "Belegt (andere App?)": "In use (other app?)",
   "Belegt (Testlauf läuft)": "In use (test run)",
   "Nicht verbunden": "Not connected",
-  "Unbekannt": "Unknown"
+  "Unbekannt": "Unknown",
+  "Nicht verbundene Geräte ausblenden": "Hide disconnected devices"
 }

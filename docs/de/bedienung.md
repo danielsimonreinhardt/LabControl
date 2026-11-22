@@ -122,7 +122,7 @@ Strom und Modus (CV/CC) beim Netzteil oder Session und letzte Bedienung beim Pr�
 
 | Funktion | Bedienung |
 |---|---|
-| Getrennte Geräte | bleiben als graue Kachel mit „getrennt“-Symbol stehen, damit der Aufbau sichtbar bleibt |
+| Getrennte Geräte | bleiben als graue Kachel mit „getrennt“-Symbol stehen, damit der Aufbau sichtbar bleibt; mit Häkchen **Nicht verbundene Geräte ausblenden** (Einstellungen → Allgemein) verschwinden sie und kommen beim Verbinden an ihrer Stelle zurück |
 | Reihenfolge | Kachel an der Titelzeile greifen und verschieben; bleibt gespeichert |
 | Kompakte Ansicht | Knopf unten rechts im Dashboard-Rahmen (Tooltip „Normale Ansicht“ / „Kompakte Ansicht“); ohne gespeicherte Wahl startet LabControl kompakt |
 | Abdocken | Knopf links daneben (Tooltip „Dashboard in eigenem Fenster öffnen“), z. B. für einen zweiten Bildschirm; derselbe Knopf oder Schließen des Fensters holt es zurück; Position, Größe und Zustand bleiben gespeichert |
@@ -275,7 +275,7 @@ Fünf Reiter; alles wird sofort übernommen und in `settings.json` gespeichert.
 
 | Reiter | Inhalt | Details |
 |---|---|---|
-| **Allgemein** | Simulationsmodus, Dark Mode, Touch-Bedienung, Desktop-Benachrichtigungen, Kachelfarben, Sprache, Netzlaufwerk, Anforderungsregister, Hilfe (Fragezeichen) | unten, [Schnellstart](schnellstart.md#gemeinsamer-ordner-netzlaufwerk), [Testabläufe](testablaeufe.md) |
+| **Allgemein** | Simulationsmodus, Dark Mode, Touch-Bedienung, Desktop-Benachrichtigungen, Kachelfarben, nicht verbundene Geräte ausblenden, Sprache, Netzlaufwerk, Anforderungsregister, Hilfe (Fragezeichen) | unten, [Schnellstart](schnellstart.md#gemeinsamer-ordner-netzlaufwerk), [Testabläufe](testablaeufe.md) |
 | **Geräte** | Nicht verbundene Geräte löschen, Alle Geräte löschen, Oszilloskope im Netzwerk (SCPI), J-Link, Firmware des microHIL, Messmittel, Prüfling (UDS/XCP, Flashen) | [Geräte einrichten](geraete.md), [Prüfling](pruefling.md) |
 | **CAN-Bus** | CAN-Interfaces mit Kanal, Bitrate, Bezeichnung, DBC-Datei und „Gerät am Bus“ | [Geräte einrichten](geraete.md) |
 | **Sicherheit** | Grenzwerte je Netzteil und Last, Verriegelung Netzteil/Last | [Sicherheit](#sicherheit) |
@@ -301,6 +301,7 @@ Fünf Reiter; alles wird sofort übernommen und in `settings.json` gespeichert.
 | **Touch-Bedienung** | Touch-Modus ein/aus, siehe [Touch-Modus](#touch-modus); „(automatisch)“ = LabControl hat ihn selbst eingeschaltet |
 | **Desktop-Benachrichtigungen** | Meldung des Systems bei Lauf-Ende oder Fehler, auch bei Fenster im Hintergrund |
 | **Kachelfarben** | Farbwahl in den Kacheln ein/aus, siehe [Umbenennen und Farben](#umbenennen-und-farben) |
+| **Nicht verbundene Geräte ausblenden** | getrennte Geräte nicht als graue Kachel in der Übersicht zeigen; ihr Platz in der Anordnung bleibt erhalten |
 | **Sprache:** | Deutsch oder English, sofort, ohne Neustart; das eingebaute Handbuch gibt es in beiden Sprachen |
 
 ## Sicherheit

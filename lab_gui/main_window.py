@@ -2266,6 +2266,11 @@ class MainWindow(QMainWindow):
         self._settings.panel_colors_enabled_changed.connect(self.control_tab.set_panel_colors_enabled)
         self.dashboard.set_panel_colors_enabled(self._settings.panel_colors_enabled)
         self.control_tab.set_panel_colors_enabled(self._settings.panel_colors_enabled)
+        # Nicht verbundene Kacheln ausblenden (1.0.3)
+        self.settings_tab.set_hide_offline_enabled(self._settings.hide_offline_tiles)
+        self.settings_tab.hide_offline_toggled.connect(self._settings.set_hide_offline_tiles)
+        self._settings.hide_offline_tiles_changed.connect(self.dashboard.set_hide_offline)
+        self.dashboard.set_hide_offline(self._settings.hide_offline_tiles)
 
         # Farbauswahl selbst nur noch im Control-Tab (siehe BUGS.md #10b) --
         # Dashboard zeigt die Farbe weiterhin an (set_panel_color unten bleibt

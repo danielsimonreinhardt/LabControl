@@ -6,6 +6,15 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [1.0.3] – 2026-11-22
 
+### Hinzugefügt
+- **Einstellungen → Allgemein: „Nicht verbundene Geräte ausblenden“.** Bisher blieben bekannte, aber getrennte Geräte
+  als graue Kachel in der Übersicht stehen; mit dem Häkchen verschwinden sie, die verbundenen rücken auf. Kommt ein
+  Gerät zurück, erscheint seine Kachel an ihrer alten Stelle; Verschieben der sichtbaren Kacheln behält den Platz der
+  ausgeblendeten. Standard aus (Verhalten wie bisher), gespeichert in `settings.json` (`hide_offline_tiles`). Die
+  Steuerungs-Ansicht blendete getrennte Geräte schon vorher aus. Nur Oberfläche geprüft (`check_hide_offline_tiles`
+  mit Übersicht und Hauptfenster im Simulationsmodus; `check_dashboard_relayout`, `check_dashboard_detach`,
+  `check_arrange_overlay`, `check_touch_ui`, `check_translations` grün), in der .exe noch nicht angesehen.
+
 ### Behoben
 - **Getrenntes Oszilloskop stand als „Belegt (andere App?)“ in der Kachel.** Beim Trennen (PicoScope abgesteckt,
   UNI-T nicht mehr erreichbar) setzte die Übersichtskachel den Status auf „belegt“; intern (MCP, `list_scopes`) stand
