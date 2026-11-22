@@ -47,16 +47,9 @@ from PySide6.QtWidgets import (
 
 from i18n import Translator, tr
 from icons import IconButton
-from jds66xx.driver import (
-    MAX_AMPLITUDE_V,
-    MAX_FREQUENCY_HZ,
-    MAX_OFFSET_V,
-    MIN_FREQUENCY_HZ,
-    WAVE_DC,
-    WAVE_PULSE,
-    WAVEFORMS,
-    waveform_name,
-)
+from jds66xx import driver as jds_driver
+from jds66xx.driver import WAVE_DC, WAVE_PULSE
+from fg_profiles import FG_PARAM_ACTIONS, module_of_state as fg_module_of_state
 from microhil.driver import (
     AOUT_COUNT,
     AOUT_MAX_MV,
@@ -1023,13 +1016,16 @@ class _FgChannelBox(QGroupBox):
     def __init__(self, channel: int) -> None:
         super().__init__()
         self.channel = channel
+        # Treibermodul des Generators (fg_profiles): Formen, Grenzen, Tastgrad-Regel (1.0.2); bis zur ersten
+        # Meldung der JDS2915
+        self.module = jds_driver
         self.setTitle(tr("Kanal {n}", n=channel))
         outer = QVBoxLayout(self)
         self.form = QFormLayout()
         outer.addLayout(self.form)
 
         self.wave_combo = QComboBox()
-        for code, name in WAVEFORMS.items():
+        for code, name in self.module.WAVEFORMS.items():
             self.wave_combo.addItem(tr(name), code)
         self.wave_button = IconButton("mdi.check", "")
         self.wave_row = _row(self.wave_combo, self.wave_button)
@@ -1042,9 +1038,9 @@ class _FgChannelBox(QGroupBox):
             box.setMaximumWidth(150)
             return box
 
-        self.freq_spin = spin(2, MIN_FREQUENCY_HZ, MAX_FREQUENCY_HZ, "Hz", 1.0, 1000.0)
-        self.ampl_spin = spin(3, 0.0, MAX_AMPLITUDE_V, "V", 0.1, 1.0)
-        self.offs_spin = spin(2, -MAX_OFFSET_V, MAX_OFFSET_V, "V", 0.1, 1.0)
+        self.freq_spin = spin(2, jds_driver.MIN_FREQUENCY_HZ, jds_driver.MAX_FREQUENCY_HZ, "Hz", 1.0, 1000.0)
+        self.ampl_spin = spin(3, 0.0, jds_driver.MAX_AMPLITUDE_V, "V", 0.1, 1.0)
+        self.offs_spin = spin(2, -jds_driver.MAX_OFFSET_V, jds_driver.MAX_OFFSET_V, "V", 0.1, 1.0)
         self.duty_spin = spin(1, 0.0, 100.0, "%", 1.0, 10.0)
         self.freq_button = IconButton("mdi.check", "")
         self.ampl_button = IconButton("mdi.check", "")
@@ -1086,7 +1082,8 @@ class _FgChannelBox(QGroupBox):
         labels = (tr("Form:"), tr("Frequenz:"), tr("Amplitude:"), tr("Offset:"), tr("Tastverhältnis:"))
         for row, text in zip(self.rows, labels):
             self.form.labelForField(row).setText(text)
-        self.ampl_spin.setToolTip(tr("Spitze-Spitze, Leerlauf"))
+        self.ampl_spin.setToolTip(tr("Spitze-Spitze an der eingestellten Last") if self.module.HAS_LOAD
+                                  else tr("Spitze-Spitze, Leerlauf"))
         self._apply_waveform_rows()
         for button in (self.wave_button, self.freq_button, self.ampl_button, self.offs_button, self.duty_button):
             button.setToolTip(tr("Setzen"))
@@ -1097,9 +1094,24 @@ class _FgChannelBox(QGroupBox):
         self.wave_combo.blockSignals(True)
         for index in range(self.wave_combo.count()):
             code = self.wave_combo.itemData(index)
-            self.wave_combo.setItemText(index, tr(waveform_name(code)))
+            self.wave_combo.setItemText(index, tr(self.module.waveform_name(code)))
         self.wave_combo.setCurrentIndex(max(self.wave_combo.findData(current), 0))
         self.wave_combo.blockSignals(False)
+
+    def apply_module(self, module) -> None:
+        """Anderer Generator (1.0.2): Formen und Grenzen aus seinem Treibermodul."""
+        self.module = module
+        self.wave_combo.blockSignals(True)
+        self.wave_combo.clear()
+        for code, name in module.WAVEFORMS.items():
+            self.wave_combo.addItem(tr(name), code)
+        self.wave_combo.blockSignals(False)
+        self.freq_spin.setRange(max(module.MIN_FREQUENCY_HZ, 0.01), module.MAX_FREQUENCY_HZ)
+        self.ampl_spin.setRange(0.0, module.MAX_AMPLITUDE_V)
+        self.offs_spin.setRange(-module.MAX_OFFSET_V, module.MAX_OFFSET_V)
+        self.last = None   # naechste Meldung fuellt alle Felder
+        self.device_waveform = None
+        self.retranslate()
 
     def set_values(self, values: dict) -> None:
         """Uebernimmt zurueckgelesene Werte in die Felder -- aber nur die, die
@@ -1119,7 +1131,7 @@ class _FgChannelBox(QGroupBox):
         if self.last is None or previous.get("waveform") != values["waveform"]:
             code = values["waveform"]
             if self.wave_combo.findData(code) < 0:
-                self.wave_combo.addItem(tr(waveform_name(code)), code)
+                self.wave_combo.addItem(tr(self.module.waveform_name(code)), code)
             self.wave_combo.blockSignals(True)
             self.wave_combo.setCurrentIndex(self.wave_combo.findData(code))
             self.wave_combo.blockSignals(False)
@@ -1138,10 +1150,12 @@ class _FgChannelBox(QGroupBox):
         self.offs_spin.setToolTip(tr("Gleichspannung am Ausgang (Leerlauf)") if dc else "")
         self.freq_spin.setEnabled(not dc)
         self.freq_button.setEnabled(not dc)
-        duty_ok = self.device_waveform is None or self.device_waveform == WAVE_PULSE
+        # PI-80 a: JDS2915 nur Puls; Generator im UNI-T-Oszilloskop Rechteck und Puls (1.0.2)
+        duty_ok = self.device_waveform is None or self.device_waveform in self.module.DUTY_WAVEFORMS
         self.duty_spin.setEnabled(duty_ok)
         self.duty_button.setEnabled(duty_ok)
-        self.duty_spin.setToolTip("" if duty_ok else tr("nur bei Puls"))
+        self.duty_spin.setToolTip("" if duty_ok else tr("nur bei Puls") if self.module.DUTY_WAVEFORMS == (WAVE_PULSE,)
+                                  else tr("nur bei Rechteck und Puls"))
 
     def set_output_state(self, on: bool) -> None:
         self.output_on = on
@@ -1156,9 +1170,139 @@ class _FgChannelBox(QGroupBox):
         self.update_buttons()
 
 
+class _FgModulationBox(QGroupBox):
+    """Modulation (Art, Modulationsform, je Art ihre Parameter) und Lastwiderstand des Generators im
+    UNI-T-Oszilloskop (1.0.2, PI-88 b). Sendet Aktionscodes wie Ablauf und MCP (fg_profiles.FG_PARAM_ACTIONS);
+    welche Zeilen sichtbar sind, bestimmt die vom Geraet gemeldete Art (MODE_PARAMS)."""
+
+    action = Signal(str, float)   # Aktionscode, Wert (0 bei Aktionen ohne Wert)
+
+    # Zahlen-Parameter: Feld -> (Aktionscode, Nachkommastellen, kleiner/grosser Schritt)
+    NUMERIC = {
+        "mod_freq": ("FG_MOD_FREQ", 2, 1.0, 100.0),
+        "am_depth": ("FG_AM_DEPTH", 1, 1.0, 10.0),
+        "fm_dev": ("FG_FM_DEV", 2, 1.0, 100.0),
+        "fsk_rate": ("FG_FSK_RATE", 2, 1.0, 100.0),
+        "fsk_freq": ("FG_FSK_FREQ", 2, 1.0, 1000.0),
+        "sweep_start": ("FG_SWEEP_START", 2, 1.0, 1000.0),
+        "sweep_stop": ("FG_SWEEP_STOP", 2, 1.0, 1000.0),
+        "sweep_time": ("FG_SWEEP_TIME", 3, 0.01, 1.0),
+    }
+    LABELS = {"mode": "Modulation:", "mod_wave": "Modulationsform:", "mod_freq": "Modulationsfrequenz:",
+              "am_depth": "AM-Tiefe:", "fm_dev": "FM-Hub:", "fsk_rate": "Umtastrate:", "fsk_freq": "Sprungfrequenz:",
+              "sweep_type": "Wobbelart:", "sweep_start": "Startfrequenz:", "sweep_stop": "Stoppfrequenz:",
+              "sweep_time": "Wobbelzeit:", "load": "Last:"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        from unit_mso_awg import driver as awg
+        self._awg = awg
+        self.form = QFormLayout(self)
+        self.rows: dict[str, QWidget] = {}
+        self.widgets: dict[str, QWidget] = {}
+        self.last: dict = {}
+        self.device_mode: str | None = None
+
+        def combo_row(field: str, items, names: dict, prefix: str) -> None:
+            combo = QComboBox()
+            for item in items:
+                combo.addItem(tr(names[item]), item)
+            button = IconButton("mdi.check", "")
+            button.clicked.connect(lambda _=False, c=combo: self.action.emit(f"{prefix}{c.currentData()}", 0.0))
+            self.widgets[field] = combo
+            self._add_row(field, _row(combo, button), button)
+
+        combo_row("mode", awg.MODES, awg.MODE_NAMES, "FG_MODE_")
+        combo_row("mod_wave", awg.MOD_WAVES, awg.MOD_WAVE_NAMES, "FG_MOD_WAVE_")
+        for field in ("mod_freq", "am_depth", "fm_dev", "fsk_rate", "fsk_freq"):
+            self._numeric_row(field)
+        combo_row("sweep_type", awg.SWEEP_TYPES, awg.SWEEP_TYPE_NAMES, "FG_SWEEP_")
+        for field in ("sweep_start", "sweep_stop", "sweep_time"):
+            self._numeric_row(field)
+        load = self._spin(0, awg.MIN_LOAD_OHM, awg.MAX_LOAD_OHM, "Ω", 1.0, 50.0)
+        load_button = IconButton("mdi.check", "")
+        load_button.clicked.connect(lambda: self.action.emit("FG_LOAD", load.value()))
+        self._high_z_button = IconButton("mdi.infinity", "")
+        self._high_z_button.clicked.connect(lambda: self.action.emit("FG_LOAD", awg.HIGH_Z_OHM))
+        self.widgets["load"] = load
+        self._add_row("load", _row(load, load_button, self._high_z_button), load_button)
+        self._apply_mode_rows()
+
+    @staticmethod
+    def _spin(decimals: int, low: float, high: float, suffix: str, step: float, big: float) -> SteppedDoubleSpinBox:
+        box = SteppedDoubleSpinBox(small_step=step, large_step=big)
+        box.setDecimals(decimals)
+        box.setRange(low, high)
+        box.setSuffix(f" {suffix}")
+        box.setMaximumWidth(150)
+        return box
+
+    def _numeric_row(self, field: str) -> None:
+        code, decimals, step, big = self.NUMERIC[field]
+        _cmd, unit, low, high, _name = self._awg.NUMERIC_PARAMS[field]
+        spin = self._spin(decimals, max(low, 10.0 ** -decimals) if low > 0 else low, high, unit, step, big)
+        button = IconButton("mdi.check", "")
+        button.clicked.connect(lambda _=False, s=spin, c=code: self.action.emit(c, s.value()))
+        self.widgets[field] = spin
+        self._add_row(field, _row(spin, button), button)
+
+    def _add_row(self, field: str, row: QWidget, button: QAbstractButton) -> None:
+        button.setToolTip(tr("Setzen"))
+        self.rows[field] = row
+        self.form.addRow(" ", row)
+        _detint_label(self.form, row)
+
+    def retranslate(self) -> None:
+        self.setTitle(tr("Modulation und Last"))
+        for field, row in self.rows.items():
+            self.form.labelForField(row).setText(tr(self.LABELS[field]))
+        names = {"mode": self._awg.MODE_NAMES, "mod_wave": self._awg.MOD_WAVE_NAMES,
+                 "sweep_type": self._awg.SWEEP_TYPE_NAMES}
+        for field, table in names.items():
+            combo = self.widgets[field]
+            for index in range(combo.count()):
+                combo.setItemText(index, tr(table.get(combo.itemData(index), combo.itemData(index))))
+        self.widgets["load"].setToolTip(tr("Last, an der Amplitude und Offset gelten; 1 000 000 Ω = hochohmig"))
+        self._high_z_button.setToolTip(tr("Hochohmig"))
+
+    def set_values(self, state: dict) -> None:
+        """Wie _FgChannelBox.set_values: nur Felder, deren Geraetewert sich geaendert hat."""
+        for field, widget in self.widgets.items():
+            if field not in state or self.last.get(field) == state[field]:
+                continue
+            value = state[field]
+            widget.blockSignals(True)
+            if isinstance(widget, QComboBox):
+                index = widget.findData(value)
+                if index < 0:
+                    names = {**self._awg.MOD_WAVE_NAMES, **self._awg.MODE_NAMES}
+                    widget.addItem(tr(names.get(value, str(value))), value)
+                    index = widget.findData(value)
+                widget.setCurrentIndex(index)
+            else:
+                widget.setValue(float(value))
+            widget.blockSignals(False)
+            self.last[field] = value
+        if state.get("mode") != self.device_mode:
+            self.device_mode = state.get("mode")
+            self._apply_mode_rows()
+
+    def _apply_mode_rows(self) -> None:
+        """Sichtbar: Art, Last und die Parameter der vom Geraet gemeldeten Art."""
+        shown = set(self._awg.MODE_PARAMS.get(self.device_mode or "BASE", ()))
+        for field, row in self.rows.items():
+            self.form.setRowVisible(row, field in ("mode", "load") or field in shown)
+
+    def apply_theme(self, palette: Palette) -> None:
+        for row in self.rows.values():
+            row.setStyleSheet(_row_stylesheet(palette))
+
+
 class FgControlGroup(QGroupBox):
     """Steuersektion eines Funktionsgenerators (jds66xx): zwei gleichartige
     Kanalkaesten nebeneinander plus die Phase (Kanal 2 relativ zu Kanal 1).
+    Seit 1.0.2 auch der Generator im UNI-T-Oszilloskop (unit_mso_awg): ein Kanal, keine Phase, dazu
+    Modulation und Lastwiderstand (_FgModulationBox) -- die Kachel richtet sich nach dem gemeldeten Profil.
 
     Anders als Last/Netzteil kennt der Generator eine echte Rueckfrage aller
     Einstellungen, auch des Ausgangszustands -- die Schalter zeigen deshalb
@@ -1171,6 +1315,8 @@ class FgControlGroup(QGroupBox):
     set_offset = Signal(str, int, float)      # device_id, channel, V
     set_duty = Signal(str, int, float)        # device_id, channel, %
     set_phase = Signal(str, float)            # device_id, Grad
+    # Modulation und Last (1.0.2): device_id, Aktionscode (fg_profiles.FG_PARAM_ACTIONS), Wert, Kanal
+    fg_action = Signal(str, str, float, int)
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
 
@@ -1178,6 +1324,7 @@ class FgControlGroup(QGroupBox):
         super().__init__()
         self._device_id = device_id
         self._color_key: str | None = None
+        self._module = jds_driver   # Treibermodul laut letzter Meldung (fg_profiles), bis dahin JDS2915
         self.setTitle(label)
 
         outer = QVBoxLayout(self)
@@ -1228,18 +1375,40 @@ class FgControlGroup(QGroupBox):
         outer.addLayout(self._phase_form)
         self._last_phase: float | None = None
 
+        # Modulation und Last (nur Generator im UNI-T-Oszilloskop, 1.0.2): neben dem Kanal, erst sichtbar,
+        # wenn das Geraet sich mit diesem Profil meldet
+        self._modulation = _FgModulationBox()
+        self._modulation.action.connect(lambda code, value: self.fg_action.emit(self._device_id, code, value, 1))
+        self._modulation.hide()
+        channels_row.addWidget(self._modulation)
+
         Translator.instance().language_changed.connect(self._retranslate)
         self._retranslate()
         self._on_theme_changed(current_palette())
 
     def _retranslate(self) -> None:
-        self._subtitle.setText(tr("Funktionsgenerator (JDS66xx)"))
+        if self._module is jds_driver:
+            self._subtitle.setText(tr("Funktionsgenerator (JDS66xx)"))
+        else:
+            self._subtitle.setText(tr("Funktionsgenerator ({model})", model=self._module.TITLE))
         self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         self._phase_form.labelForField(self._phase_row).setText(tr("Phase (Kanal 2 zu 1):"))
         self._phase_button.setToolTip(tr("Setzen"))
         for box in self._boxes.values():
             box.retranslate()
+        self._modulation.retranslate()
+
+    def _apply_module(self, module) -> None:
+        """Anderes Geraeteprofil gemeldet (1.0.2): Kanaele, Phase, Modulation/Last danach ein-/ausblenden."""
+        self._module = module
+        for n, box in self._boxes.items():
+            box.apply_module(module)
+            box.setVisible(n in module.CHANNELS)
+        self._phase_form.setRowVisible(self._phase_row, module.HAS_PHASE)
+        self._modulation.setVisible(module.HAS_MODULATION or module.HAS_LOAD)
+        self._last_phase = None
+        self._retranslate()
 
     def _emit_waveform(self, channel: int) -> None:
         code = self._boxes[channel].wave_combo.currentData()
@@ -1261,19 +1430,35 @@ class FgControlGroup(QGroupBox):
     def set_state(self, state: dict) -> None:
         """Ausgaenge immer, Feldwerte nur bei Aenderung am Geraet (siehe
         _FgChannelBox.set_values)."""
+        module = fg_module_of_state(state)
+        if module is not self._module:
+            self._apply_module(module)
         for n, (on, values) in enumerate(zip(state["outputs"], state["channels"]), start=1):
             box = self._boxes[n]
             box.set_output_state(bool(on))
             box.set_values(values)
-        if self._last_phase is None or self._last_phase != state["phase"]:
+        phase = state.get("phase")
+        if phase is not None and (self._last_phase is None or self._last_phase != phase):
             self._phase_spin.blockSignals(True)
-            self._phase_spin.setValue(state["phase"])
+            self._phase_spin.setValue(phase)
             self._phase_spin.blockSignals(False)
-        self._last_phase = state["phase"]
+        self._last_phase = phase
+        if module.HAS_MODULATION or module.HAS_LOAD:
+            self._modulation.set_values(state)
+
+    def modulation_rows(self) -> dict:
+        """Fuer Pruefungen: sichtbare Zeilen der Modulation/Last und ob die Kachel sie zeigt."""
+        box = self._modulation
+        return {"visible": not box.isHidden(), "channel2": not self._boxes[2].isHidden(),
+                "phase": self._phase_form.isRowVisible(self._phase_row),
+                "rows": [f for f, row in box.rows.items() if box.form.isRowVisible(row)],
+                "values": {f: (w.currentData() if isinstance(w, QComboBox) else w.value())
+                           for f, w in box.widgets.items()}}
 
     def _on_theme_changed(self, palette: Palette) -> None:
         self._subtitle.setStyleSheet(f"color: {palette.text_muted}; background: transparent;")
         self._phase_row.setStyleSheet(_row_stylesheet(palette))
+        self._modulation.apply_theme(palette)
         for box in self._boxes.values():
             box.apply_theme(palette)
         apply_panel_tint(self, self._color_key)
@@ -1306,7 +1491,13 @@ class FgControlGroup(QGroupBox):
         """Zustand fuer die globale Preset-Leiste (siehe PresetBar). Ausgaenge
         nur, wenn das Geraet sie schon gemeldet hat."""
         state: dict = {"phase": self._phase_spin.value(), "channels": []}
-        for box in self._boxes.values():
+        if self._module is not jds_driver:   # 1.0.2: Generator im UNI-T-Oszilloskop
+            state["profile"] = self._module.PROFILE
+            for field, widget in self._modulation.widgets.items():
+                state[field] = widget.currentData() if isinstance(widget, QComboBox) else widget.value()
+        for n, box in self._boxes.items():
+            if n not in self._module.CHANNELS:
+                continue
             state["channels"].append({
                 "waveform": box.wave_combo.currentData(), "frequency": box.freq_spin.value(),
                 "amplitude": box.ampl_spin.value(), "offset": box.offs_spin.value(),
@@ -1317,9 +1508,21 @@ class FgControlGroup(QGroupBox):
     def apply_state(self, state: dict) -> None:
         """Uebernimmt ein Preset: fuellt die Felder UND schreibt alles sofort
         aufs Geraet. Reihenfolge je Kanal: erst Form und Werte, der Ausgang
-        zuletzt -- ein Preset soll kein halb eingestelltes Signal anlegen."""
-        channels = state.get("channels", [])
-        for n, saved in enumerate(channels[:2], start=1):
+        zuletzt -- ein Preset soll kein halb eingestelltes Signal anlegen.
+        Generator im UNI-T-Oszilloskop (1.0.2): zuerst Last (Amplitude/Offset gelten an ihr), danach die
+        Modulationsparameter, die Art zuletzt vor dem Ausgang. Ein Preset des anderen Generatortyps setzt nur
+        Kanal 1 bzw. die Werte, die dieser Generator kennt."""
+        channels = state.get("channels", [])[:len(self._module.CHANNELS)]
+        params = [f for f in ("load",) + tuple(self._modulation.widgets) if f in state and f != "mode"] \
+            if self._module.HAS_MODULATION or self._module.HAS_LOAD else []
+        for field in dict.fromkeys(params):
+            value = state[field]
+            code = next((c for c, (f, fixed) in FG_PARAM_ACTIONS.items()
+                         if f == field and (fixed is None or fixed == value)), None)
+            if code is not None:
+                self.fg_action.emit(self._device_id, code, float(value) if FG_PARAM_ACTIONS[code][1] is None
+                                    else 0.0, 1)
+        for n, saved in enumerate(channels, start=1):
             box = self._boxes[n]
             try:
                 index = box.wave_combo.findData(int(saved.get("waveform")))
@@ -1337,14 +1540,18 @@ class FgControlGroup(QGroupBox):
                 self.set_frequency.emit(self._device_id, n, box.freq_spin.value())
                 self.set_amplitude.emit(self._device_id, n, box.ampl_spin.value())
             self.set_offset.emit(self._device_id, n, box.offs_spin.value())
-            if code == WAVE_PULSE:   # PI-80 a: Tastverhaeltnis nur bei Puls
+            if code in self._module.DUTY_WAVEFORMS:   # PI-80 a: Tastverhaeltnis nur bei Puls (JDS)
                 self.set_duty.emit(self._device_id, n, box.duty_spin.value())
-        try:
-            self._phase_spin.setValue(float(state.get("phase", self._phase_spin.value())))
-        except (TypeError, ValueError):
-            pass
-        self.set_phase.emit(self._device_id, self._phase_spin.value())
-        for n, saved in enumerate(channels[:2], start=1):
+        if self._module.HAS_PHASE:
+            try:
+                self._phase_spin.setValue(float(state.get("phase", self._phase_spin.value())))
+            except (TypeError, ValueError):
+                pass
+            self.set_phase.emit(self._device_id, self._phase_spin.value())
+        mode = state.get("mode") if self._module.HAS_MODULATION else None
+        if f"FG_MODE_{mode}" in FG_PARAM_ACTIONS:
+            self.fg_action.emit(self._device_id, f"FG_MODE_{mode}", 0.0, 1)
+        for n, saved in enumerate(channels, start=1):
             if saved.get("output_on") is not None:
                 self.set_output.emit(self._device_id, n, bool(saved["output_on"]))
 

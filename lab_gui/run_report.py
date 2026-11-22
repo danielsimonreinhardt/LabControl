@@ -232,9 +232,11 @@ def _step_started_text(record: RunRecord, index: int) -> str:
             else tr("Kanal {ch}", ch=step.hil_channel)
         )
     elif step.device_kind == "fg":
+        from testcase_model import ACTION_VALUE_RANGE, VALUELESS_ACTIONS
         detail = tr("Kanal {ch}", ch=step.hil_channel)
-        if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
-            detail += f": {step.value:g}"
+        if step.action not in VALUELESS_ACTIONS:   # Wert mit Einheit (auch Modulation/Last, 1.0.2)
+            unit = ACTION_VALUE_RANGE.get(step.action, ("",))[0]
+            detail += f": {step.value:g}" + (f" {unit}" if unit else "")
     elif step.device_kind == "battsim":
         detail = battsim_step_detail(step)
     elif step.device_kind == "jlink":

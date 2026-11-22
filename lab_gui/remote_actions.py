@@ -27,11 +27,12 @@ Strom > 0 A = wieder "ein", siehe BUGS.md #1b).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from battsim.driver import CELL_COUNT as BATTSIM_CELL_COUNT
 from battsim.driver import MAX_CELL_VOLTAGE_V as BATTSIM_MAX_CELL_VOLTAGE_V
-from jds66xx.driver import MAX_AMPLITUDE_V, MAX_FREQUENCY_HZ, MAX_OFFSET_V, MIN_FREQUENCY_HZ
+from fg_profiles import (FG_PARAM_ACTION_LABELS, FG_PARAM_ACTIONS, FG_PARAM_VALUE_RANGE, MAX_AMPLITUDE_V,
+                         MAX_FREQUENCY_HZ, MAX_OFFSET_V, MIN_FREQUENCY_HZ)
 from microhil.driver import AOUT_COUNT, AOUT_MAX_MV, OUT_COUNT, RELAY_COUNT
 
 # Geraetearten, die ueberhaupt fernsteuerbar sind. CAN und Oszilloskop bleiben
@@ -60,6 +61,13 @@ class RemoteAction:
 
 def _a(*args, **kwargs) -> RemoteAction:
     return RemoteAction(*args, **kwargs)
+
+
+_FG_PARAM_NOTES = {
+    "FG_LOAD": "nur Generator im UNI-T-Oszilloskop; 1000000 = hochohmig, am Gerät ab 50 Ohm. Amplitude und Offset "
+               "gelten an dieser Last (die Spannung am Ausgang ändert sich nicht)",
+    "FG_FSK_RATE": "nur Generator im UNI-T-Oszilloskop; gilt für ASK und FSK",
+}
 
 
 REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
@@ -94,11 +102,12 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
         _a("FG_AMPL", "Amplitude setzen (Spitze-Spitze)", "V", 0, MAX_AMPLITUDE_V, True, channels=2,
            note="in DC abgelehnt -- dort ist die Spannung der Offset (PI-75 a)"),
         _a("FG_OFFS", "Offset setzen", "V", -MAX_OFFSET_V, MAX_OFFSET_V, True, channels=2,
-           note="in DC die Ausgangsspannung (Amplitude steht dort auf 0,01 V, am Ausgang Offset + 5 mV)"),
+           note="in DC die Ausgangsspannung (JDS2915: Amplitude steht dort auf 0,01 V, am Ausgang Offset + 5 mV)"),
         _a("FG_DUTY", "Tastverhältnis setzen", "%", 0, 100, True, channels=2,
-           note="nur bei Wellenform Puls, sonst abgelehnt (bei Rechteck wirkt es am Gerät nicht, PI-80 a)"),
+           note="JDS2915 nur bei Wellenform Puls (bei Rechteck wirkt es am Gerät nicht, PI-80 a), Generator im "
+                "UNI-T-Oszilloskop bei Rechteck und Puls; sonst abgelehnt"),
         _a("FG_PHASE", "Phase setzen", "°", 0, 360, True, channels=2,
-           note="gilt für Kanal 2 relativ zu Kanal 1, der Kanal wird ignoriert"),
+           note="nur JDS2915: gilt für Kanal 2 relativ zu Kanal 1, der Kanal wird ignoriert"),
         _a("FG_WAVE_SINE", "Wellenform Sinus", channels=2),
         _a("FG_WAVE_SQUARE", "Wellenform Rechteck", channels=2),
         _a("FG_WAVE_PULSE", "Wellenform Puls", channels=2),
@@ -106,6 +115,13 @@ REMOTE_ACTIONS: dict[str, dict[str, RemoteAction]] = {
         _a("FG_WAVE_DC", "Wellenform DC", channels=2),
         _a("FG_OUT_ON", "Ausgang EIN", channels=2),
         _a("FG_OUT_OFF", "Ausgang AUS", channels=2),
+        # 1.0.2 (PI-88 b): Modulation und Lastwiderstand -- nur der Generator im UNI-T-Oszilloskop (ein Kanal),
+        # der JDS2915 lehnt sie mit Meldung ab
+        *(_a(code, FG_PARAM_ACTION_LABELS[code], *FG_PARAM_VALUE_RANGE[code], True, channels=1,
+             note=_FG_PARAM_NOTES.get(code, "nur Generator im UNI-T-Oszilloskop"))
+          if code in FG_PARAM_VALUE_RANGE else
+          _a(code, FG_PARAM_ACTION_LABELS[code], channels=1, note="nur Generator im UNI-T-Oszilloskop")
+          for code in FG_PARAM_ACTIONS),
     )},
     # Batterie-Simulator (seit 0.22.0). Bewusst eine eigene Geraeteart, nicht
     # "CAN senden": es gehen nur diese Befehle raus, keine beliebigen Frames.
@@ -145,10 +161,31 @@ def effective_range(definition: RemoteAction, ratings: dict | None) -> tuple[flo
     return definition.minimum, maximum
 
 
-def describe(kind: str, ratings: dict | None = None) -> list[dict]:
-    """Aktionsliste einer Geraeteart fuer die JSON-Antwort (Feld "actions")."""
+def for_profile(kind: str, definition: RemoteAction | None, profile: str | None) -> RemoteAction | None:
+    """Aktion fuer DIESES Geraet (1.0.2): beim Funktionsgenerator nach seinem Treiberprofil (Feld "profile",
+    fg_profiles) -- ohne Phase kein FG_PHASE, Modulation/Last nur wo vorhanden, Kanalzahl des Geraets.
+    None = gibt es an diesem Geraet nicht."""
+    if definition is None or kind != "fg":
+        return definition
+    from fg_profiles import module_for
+    module = module_for(profile)
+    if definition.code == "FG_PHASE" and not module.HAS_PHASE:
+        return None
+    if definition.code in FG_PARAM_ACTIONS:
+        field = FG_PARAM_ACTIONS[definition.code][0]
+        if not (module.HAS_LOAD if field == "load" else module.HAS_MODULATION):
+            return None
+    channels = min(definition.channels, len(module.CHANNELS)) if definition.channels else 0
+    return replace(definition, channels=channels) if channels != definition.channels else definition
+
+
+def describe(kind: str, ratings: dict | None = None, profile: str | None = None) -> list[dict]:
+    """Aktionsliste einer Geraeteart fuer die JSON-Antwort (Feld "actions"); `profile` siehe for_profile."""
     result = []
     for action in REMOTE_ACTIONS.get(kind, {}).values():
+        action = for_profile(kind, action, profile)
+        if action is None:
+            continue
         item: dict = {"action": action.code, "label": action.label}
         if action.needs_value:
             low, high = effective_range(action, ratings)
@@ -162,7 +199,7 @@ def describe(kind: str, ratings: dict | None = None) -> list[dict]:
 
 
 def validate(kind: str, action: str, value, channel,
-             ratings: dict | None = None) -> tuple[RemoteAction | None, str, dict]:
+             ratings: dict | None = None, profile: str | None = None) -> tuple[RemoteAction | None, str, dict]:
     """Prueft eine angeforderte Aktion. Liefert (Aktion, Fehlercode, Details);
     bei Erfolg (Aktion, "", {}).
 
@@ -171,9 +208,9 @@ def validate(kind: str, action: str, value, channel,
     channel_out_of_range. `value`/`channel` sind die rohen JSON-Werte
     (None = nicht angegeben). `ratings`: Nennwerte des Geraets (GMAX), falls bekannt.
     """
-    definition = REMOTE_ACTIONS.get(kind, {}).get(action)
+    definition = for_profile(kind, REMOTE_ACTIONS.get(kind, {}).get(action), profile)
     if definition is None:
-        return None, "unknown_action", {"allowed": list(REMOTE_ACTIONS.get(kind, {}))}
+        return None, "unknown_action", {"allowed": [a["action"] for a in describe(kind, ratings, profile)]}
     if definition.needs_value:
         if value is None:
             return None, "value_required", {"unit": definition.unit}

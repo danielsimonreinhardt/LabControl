@@ -313,15 +313,25 @@ class LiveState(QObject):
 
     @Slot(str, object)
     def on_fg_state(self, device_id: str, state: dict) -> None:
-        """Zustand des Funktionsgenerators (siehe device_worker.fg_state)."""
-        from jds66xx.driver import waveform_name  # Qt-frei, aber selten gebraucht
-        fields: dict = {"phase": state["phase"]}
+        """Zustand des Funktionsgenerators (siehe device_worker.fg_state). Felder je nach Generator
+        (fg_profiles): Phase nur mit zwei Kanaelen, Modulation/Last nur beim Generator im UNI-T-Oszilloskop
+        (Codes wie bei den Aktionen: mode "AM", mod_wave "SINE", sweep_type "LIN")."""
+        from fg_profiles import module_of_state  # Qt-frei, aber selten gebraucht
+        module = module_of_state(state)
+        fields: dict = {}
+        if state.get("phase") is not None:
+            fields["phase"] = state["phase"]
+        if state.get("profile"):
+            fields["profile"] = state["profile"]
         for n, (on, ch) in enumerate(zip(state["outputs"], state["channels"]), start=1):
             fields.update({
-                f"out{n}": int(bool(on)), f"wave{n}": waveform_name(ch["waveform"]),
+                f"out{n}": int(bool(on)), f"wave{n}": module.waveform_name(ch["waveform"]),
                 f"freq{n}": ch["frequency"], f"ampl{n}": ch["amplitude"],
                 f"offs{n}": ch["offset"], f"duty{n}": ch["duty"],
             })
+        for field in getattr(module, "PARAM_FIELDS", ()):
+            if field in state:
+                fields[field] = state[field]
         self._write(device_id, **fields)
 
     @Slot(str, object)

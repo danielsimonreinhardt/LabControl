@@ -10,10 +10,11 @@ from pathlib import Path
 from i18n import tr
 from battsim.driver import CELL_COUNT as BATTSIM_CELL_COUNT
 from battsim.driver import MAX_CELL_VOLTAGE_V as BATTSIM_MAX_CELL_VOLTAGE_V
-from jds66xx.driver import MAX_AMPLITUDE_V as FG_MAX_AMPLITUDE_V
-from jds66xx.driver import MAX_FREQUENCY_HZ as FG_MAX_FREQUENCY_HZ
-from jds66xx.driver import MAX_OFFSET_V as FG_MAX_OFFSET_V
-from jds66xx.driver import MIN_FREQUENCY_HZ as FG_MIN_FREQUENCY_HZ
+from fg_profiles import FG_PARAM_ACTION_LABELS, FG_PARAM_VALUE_RANGE, FG_WAVE_ACTIONS, module_for_device_id
+from fg_profiles import MAX_AMPLITUDE_V as FG_MAX_AMPLITUDE_V
+from fg_profiles import MAX_FREQUENCY_HZ as FG_MAX_FREQUENCY_HZ
+from fg_profiles import MAX_OFFSET_V as FG_MAX_OFFSET_V
+from fg_profiles import MIN_FREQUENCY_HZ as FG_MIN_FREQUENCY_HZ
 from microhil.driver import AOUT_MAX_MV
 from picoscope2000.common import VOLTAGE_RANGE_CODES as PICO_VOLTAGE_RANGE_CODES
 from scope_steps import CHECK_FIELD as SCOPE_CHECK_FIELD
@@ -98,6 +99,8 @@ HIL_CHANNEL_COUNTS = {
     **{code: 2 for code in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE", "FG_WAVE_SINE",
                              "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
                              "FG_OUT_ON", "FG_OUT_OFF")},
+    # Modulation und Last (1.0.2, PI-88 b): nur der Generator im UNI-T-Oszilloskop, ein Kanal
+    **{code: 1 for code in FG_PARAM_ACTION_LABELS},
     # Batterie-Simulator: Kanal = Zelle (1..14) bei den Zell-Aktionen, 0 = ohne
     # Kanal (testcase_tab blendet die Kanalwahl dann aus).
     **{code: BATTSIM_CELL_COUNT for code in ("BS_CELL_VOLT", "BS_CELL_ON", "BS_CELL_OFF", "BS_CELL_READ")},
@@ -155,6 +158,8 @@ FG_ACTIONS = {
     "FG_WAVE_DC": "Wellenform DC",
     "FG_OUT_ON": "Ausgang EIN",
     "FG_OUT_OFF": "Ausgang AUS",
+    # 1.0.2 (PI-88 b): Modulation und Lastwiderstand, nur Generator im UNI-T-Oszilloskop (der JDS2915 lehnt ab)
+    **FG_PARAM_ACTION_LABELS,
 }
 FG_CHANNELS = 2
 
@@ -354,6 +359,7 @@ VALUELESS_ACTIONS = {
     "PICO_VMAX", "PICO_VMIN", "PICO_VPP", "PICO_VRMS",
     "FG_WAVE_SINE", "FG_WAVE_SQUARE", "FG_WAVE_PULSE", "FG_WAVE_TRIANGLE", "FG_WAVE_DC",
     "FG_OUT_ON", "FG_OUT_OFF",
+    *(code for code in FG_PARAM_ACTION_LABELS if code not in FG_PARAM_VALUE_RANGE),
     "BS_REMOTE_ON", "BS_REMOTE_OFF", "BS_OUT_ON", "BS_OUT_OFF", "BS_CELL_ON", "BS_CELL_OFF",
     "BS_ALL_ON", "BS_ALL_OFF", "BS_RESET_FAIL", "BS_CELL_READ", "BS_STACK_READ",
     *JLINK_ACTIONS,
@@ -415,6 +421,7 @@ ACTION_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     "FG_WAVE_DC": ("", 0, 0),
     "FG_OUT_ON": ("", 0, 0),
     "FG_OUT_OFF": ("", 0, 0),
+    **{code: FG_PARAM_VALUE_RANGE.get(code, ("", 0, 0)) for code in FG_PARAM_ACTION_LABELS},
     # Geraetegrenze 5 V; der eingestellte Grenzwert je Zelle (Voreinstellung
     # 4,30 V) wird im Treiber geprueft und lehnt hoehere Werte mit Meldung ab.
     "BS_CELL_VOLT": ("V", 0, BATTSIM_MAX_CELL_VOLTAGE_V),
@@ -924,8 +931,8 @@ FG_WAVE_ACTION_NAMES = {"FG_WAVE_SINE": "Sinus", "FG_WAVE_SQUARE": "Rechteck", "
 
 def fg_waveform_refusal(steps: list[TestStep]) -> tuple[int, str] | None:
     """PI-75 a/PI-80 a: (Index, Grund) des ersten Funktionsgenerator-Schritts, der an seiner Stelle nicht zur
-    Kurvenform passt -- "Tastverhältnis setzen" bei einer anderen Form als Puls, "Amplitude setzen" in DC. None =
-    nichts statisch erkennbar.
+    Kurvenform passt -- "Tastverhältnis setzen" bei einer anderen Form als Puls (JDS2915) bzw. Rechteck/Puls
+    (Generator im UNI-T-Oszilloskop, 1.0.2), "Amplitude setzen" in DC. None = nichts statisch erkennbar.
 
     Bewusst vorsichtig: bekannt ist die Form nur nach einem "Wellenform …"-Schritt desselben Geraets und Kanals
     davor auf derselben Ebene; jede Blockzeile (Schleife, Wenn, Sonst, Ende, Ueberwachen, Abbruch-Block) loescht
@@ -947,12 +954,18 @@ def fg_waveform_refusal(steps: list[TestStep]) -> tuple[int, str] | None:
         if not step.enabled or step.step_type != STEP_TYPE_ACTION or step.device_kind != "fg":
             continue
         key = (step.device_id, int(step.hil_channel))
+        # 1.0.2: Generator im UNI-T-Oszilloskop (an der Geraete-ID erkennbar) -- Tastgrad bei Rechteck und Puls
+        module = module_for_device_id(step.device_id)
         if step.action in FG_WAVE_ACTION_NAMES:
             known[key] = step.action
-        elif step.action == "FG_DUTY" and key in known and known[key] != "FG_WAVE_PULSE":
-            return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal {channel} "
-                             "steht hier auf {wave}", n=index + 1, channel=key[1],
-                             wave=tr(FG_WAVE_ACTION_NAMES[known[key]]))
+        elif (step.action == "FG_DUTY" and key in known
+              and FG_WAVE_ACTIONS[known[key]] not in module.DUTY_WAVEFORMS):
+            wave = tr(module.waveform_name(FG_WAVE_ACTIONS[known[key]]))
+            if module.DUTY_WAVEFORMS == (FG_WAVE_ACTIONS["FG_WAVE_PULSE"],):
+                return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal "
+                                 "{channel} steht hier auf {wave}", n=index + 1, channel=key[1], wave=wave)
+            return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Rechteck und Puls – Kanal "
+                             "{channel} steht hier auf {wave}", n=index + 1, channel=key[1], wave=wave)
         elif step.action == "FG_AMPL" and known.get(key) == "FG_WAVE_DC":
             return index, tr("Schritt {n}: in DC gibt es keine Amplitude – die Spannung gibt „Offset setzen“ vor "
                              "(Kanal {channel})", n=index + 1, channel=key[1])

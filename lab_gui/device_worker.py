@@ -31,25 +31,11 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
-from jds66xx.driver import (
-    POLL_FAST_FIELDS as FG_POLL_FAST_FIELDS,
-    POLL_SLOW_FIELDS as FG_POLL_SLOW_FIELDS,
-    FunctionGeneratorError,
-    FunctionGeneratorValueError,
-    JDS66xx,
-    read_field as fg_read_field,
-    readback_fields as fg_readback_fields,
-    set_amplitude_checked as fg_set_amplitude,
-    set_duty_checked as fg_set_duty,
-    set_offset_checked as fg_set_offset,
-    set_waveform_checked as fg_set_waveform,
-    WAVE_DC,
-    WAVE_PULSE,
-    WAVE_SINE,
-    WAVE_SQUARE,
-    WAVE_TRIANGLE,
-)
+from jds66xx.driver import FunctionGeneratorError, FunctionGeneratorValueError, JDS66xx
 from jds66xx.mock import MockJDS66xx
+from unit_mso_awg import driver as awg_driver
+from unit_mso_awg.driver import UnitMsoAwg
+from fg_profiles import FG_PARAM_ACTIONS, FG_WAVE_ACTIONS, module_of_device as fg_module
 from hcs34xx.driver import MIN_VOLTAGE as PSU_MIN_VOLTAGE, HCS34xx, PowerSupplyError, PowerSupplyValueError
 from hcs34xx.mock import MockHCS34xx
 from can_bus.driver import CanBus, CanError, CanConnectionError, DEFAULT_BITRATE as CAN_DEFAULT_BITRATE
@@ -201,14 +187,21 @@ SCPISCOPE_PROBE_TIMEOUT_S = 2.0
 # 12 Registerabfragen (Ausgaenge, je Kanal Form/Frequenz/Amplitude/Offset/
 # Tastverhaeltnis, Phase); er wird nur beim Verbinden ganz gelesen. Je
 # Zyklus (PI-78 a) nur die Ausgaenge (jds66xx.driver.POLL_FAST_FIELDS)
-# und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen Felder: 4 statt 12
+# und rollierend SLOW_FIELDS_PER_POLL (Treibermodul) der uebrigen Felder: 4 statt 12
 # Abfragen, dafuer alle 0,5 s statt alle 2 s -- EIN/AUS ist nach spaetestens
 # 0,5 s aktuell, ein Handeingriff an den Signalparametern nach etwa 2 s
 # (11 Felder, 3 je Zyklus), und der Zustand kommt oft genug fuer den Watchdog
 # (Grenze siehe jds66xx.driver.STALE_TIMEOUT_S). Nach jedem eigenen
 # Schreibbefehl wird das betroffene Feld sofort zurueckgelesen (_guard_fg).
 FG_POLL_INTERVAL_MS = 500
-FG_SLOW_FIELDS_PER_POLL = 3
+# Je Zyklus gelesene langsame Felder: SLOW_FIELDS_PER_POLL im Treibermodul (JDS 3, UNI-T 4).
+
+# Generator im UNI-T-Oszilloskop (1.0.2, PI-88 b): erscheint, sobald ein UNI-T-SCPI-Oszilloskop erreichbar
+# ist und AWG1:OUTPut? beantwortet -- ohne eigene Einstellung (er haengt an der eingetragenen Adresse). Abfragen
+# und Befehle laufen in einem eigenen Thread (_fg_io, Treiber mit ASYNC_IO), nicht im Worker: richtet der
+# ScopeService gerade eine Erfassung ein, nimmt das Geraet bis ~1,5 s keine Befehle an (gemessen) -- im
+# Worker-Thread haetten Netzteil und Last so lange gestanden. Nur ALLE AUS/Abschalten schreibt direkt.
+AWG_PROBE_TIMEOUT_S = 5.0
 
 # Ein CH340-Port (siehe jds66xx.driver.USB_VID) kann ein FREMDES Geraet tragen.
 # Ein Port, der den Handshake nicht besteht, wird deshalb nicht alle
@@ -326,6 +319,8 @@ SIM_CAN_ID = "can:mock:SIM"
 SIM_HIL_ID = "hil:SIM"
 SIM_PICOSCOPE_ID = "picoscope:SIM"
 SIM_FG_ID = "fg:SIM"
+# Generator im simulierten UNI-T-Oszilloskop (1.0.2, PI-88 b): "fg:SIM:AWG1"
+SIM_AWG_ID = awg_driver.device_id_for(SIM_SCPISCOPE_ID)
 
 # Geraete, die UEBER ein CAN-Interface sprechen (Spalte "Geraet am Bus" in der
 # CAN-Tabelle der Einstellungen, settings.py::can_configs Schluessel "device").
@@ -342,14 +337,7 @@ def battsim_device_id(can_id: str) -> str:
 
 SIM_BATTSIM_ID = battsim_device_id(SIM_CAN_ID)
 
-# FG_*-Aktionscode (testcase_model.FG_ACTIONS) -> Wellenformcode.
-FG_WAVE_ACTIONS = {
-    "FG_WAVE_SINE": WAVE_SINE,
-    "FG_WAVE_SQUARE": WAVE_SQUARE,
-    "FG_WAVE_PULSE": WAVE_PULSE,
-    "FG_WAVE_TRIANGLE": WAVE_TRIANGLE,
-    "FG_WAVE_DC": WAVE_DC,
-}
+# FG_WAVE_*-Aktionscode -> Wellenformcode: fg_profiles.FG_WAVE_ACTIONS (gilt fuer beide Generatoren).
 
 # Die ps2000-API kennt (anders als bei Last/Netzteil/microHIL) keine
 # Geraete-Enumeration/Seriennummer-basierte Unterscheidung mehrerer
@@ -555,6 +543,10 @@ class DeviceWorker(QObject):
     # veraenderlicher Messwert ist, sondern ein Satz Einstellungen, der nur
     # als Ganzes gemeldet wird (gelesen teils rollierend, siehe FG_POLL_INTERVAL_MS).
     fg_state = Signal(str, object)
+    # Intern (1.0.2): Ergebnis eines Generator-Auftrags aus dem Thread _fg_io (Treiber mit ASYNC_IO):
+    # Auftragsnummer, device_id, Treiberobjekt, ok, Meldung, gelesene Felder [(Feld, Kanal, Wert)],
+    # Verbindung tot
+    _fg_job_done = Signal(int, str, object, bool, str, object, bool)
 
     # Batterie-Simulator (Geraeteart "battsim", CAN-Knoten an einem
     # konfigurierten Interface, seit 0.22.0): device_id, online -- online heisst,
@@ -599,6 +591,17 @@ class DeviceWorker(QObject):
         self._fg_cache: dict[str, dict] = {}
         self._fg_slow_index: dict[str, int] = {}
         self._last_slow_fg_log = 0.0
+        # Generatoren mit ASYNC_IO (UNI-T AWG1, 1.0.2): ein Thread fuer alle Zugriffe ausser ALLE AUS, die
+        # Fortsetzung je Auftrag (Auftragsnummer -> Callable(ok, Meldung)) und Geraete mit laufender Abfrage
+        self._fg_io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fg-io")
+        self._fg_jobs: dict[int, Callable[[bool, str], None] | None] = {}
+        self._fg_job_seq = 0
+        self._fg_poll_busy: dict[str, int] = {}
+        # Oszilloskope (scpiscope-ID), deren Generator-Abfrage scheiterte (kein "-S") -- erst wieder versucht,
+        # wenn das Oszilloskop neu erscheint; und laufende Versuche
+        self._awg_rejected: set[str] = set()
+        self._awg_pending: set[str] = set()
+        self._fg_job_done.connect(self._on_fg_job_done)
         self._loads: dict[str, KoradKEL102] = {}
         self._psus: dict[str, HCS34xx] = {}
         # Zuletzt bekannte Sollwerte je Netzteil [V, A] (_note_setpoint, PI-43 b)
@@ -1087,11 +1090,21 @@ class DeviceWorker(QObject):
             self.device_added.emit(SCPISCOPE_KIND, device_id)
             self.scpiscope_connected.emit(device_id, True)
             self.scpiscope_state.emit(device_id, "free", model, serial)
+        # Das simulierte MSO1154HD-S hat (wie das echte) einen Generator AWG1 (1.0.2)
+        if SIM_AWG_ID not in self._fgs:
+            gen = UnitMsoAwg.open(awg_driver.SIM_RESOURCE)
+            gen.identify()
+            gen.initial_state = awg_driver.state_dict(gen)
+            self._fgs[SIM_AWG_ID] = gen
+            self._fg_connected_now(SIM_AWG_ID, gen)
 
     def _remove_mock_scpiscope(self) -> None:
         if not self._mock_scpiscope_active:
             return
         self._mock_scpiscope_active = False
+        if SIM_AWG_ID in self._fgs:
+            self._drop_fg(SIM_AWG_ID, "Simulation beendet", quiet=True)
+            self._forget_session_device(SIM_AWG_ID)
         for device_id in (SIM_SCPISCOPE_ID, SIM_RTB_ID):
             self.scpiscope_connected.emit(device_id, False)
             self.device_removed.emit(SCPISCOPE_KIND, device_id)
@@ -1124,6 +1137,7 @@ class DeviceWorker(QObject):
                 self.scpiscope_connected.emit(device_id, False)
                 self.device_removed.emit(SCPISCOPE_KIND, device_id)
             self._scpi_info.pop(device_id, None)
+            self._forget_awg(device_id, "Oszilloskop aus den Einstellungen entfernt")
         self._probe_scpiscopes()
 
     @Slot()
@@ -1178,11 +1192,60 @@ class DeviceWorker(QObject):
             if model and (not was_present or self._scpi_info.get(device_id) != (model, serial)):
                 self._scpi_info[device_id] = (model, serial)
                 self.scpiscope_state.emit(device_id, "free", model, serial)
+            self._probe_awg(device_id)
         elif was_present:
             self._scpi_present[device_id] = False
             logger.info("SCPI-Oszilloskop %s nicht mehr erreichbar", device_id)
             self.scpiscope_connected.emit(device_id, False)
             self.device_removed.emit(SCPISCOPE_KIND, device_id)
+            self._forget_awg(device_id, "Oszilloskop nicht mehr erreichbar")
+
+    # -- Generator im UNI-T-Oszilloskop (1.0.2, PI-88 b) -------------------------------------
+
+    def _probe_awg(self, scope_id: str) -> None:
+        """Nach jeder erfolgreichen Erkennung eines UNI-T-Oszilloskops: Generator verbinden, falls noch
+        nicht da. Ein Oszilloskop ohne Generator wird nur einmal gefragt (bis es neu erscheint)."""
+        awg_id = awg_driver.device_id_for(scope_id)
+        if awg_id in self._fgs or scope_id in self._awg_rejected or scope_id in self._awg_pending:
+            return
+        model, _serial = self._scpi_info.get(scope_id, ("", ""))
+        from scope_api.scpi import FAMILY_UNIT_MSO, family_for_model
+        if not model or family_for_model(model) != FAMILY_UNIT_MSO:
+            return
+        self._awg_pending.add(scope_id)
+        self._reconnect_executor.submit(self._awg_connect_job, awg_id, self._scpi_resources[scope_id], scope_id)
+
+    def _awg_connect_job(self, awg_id: str, resource: str, scope_id: str) -> None:
+        """Laeuft im Probe-Thread: eigene Verbindung oeffnen, AWG1:OUTPut? fragen, vollen Zustand lesen.
+        Am Ausgang aendert sich nichts (wie beim JDS2915)."""
+        gen = None
+        try:
+            gen = UnitMsoAwg.open(resource, AWG_PROBE_TIMEOUT_S)
+            if not gen.probe():
+                gen.close()
+                self._reconnect_done.emit("awg_rejected", awg_id, None, scope_id)
+                return
+            gen.identify()
+            gen.initial_state = awg_driver.state_dict(gen)
+        except FunctionGeneratorError as exc:
+            logger.info("Generator %s nicht verbunden: %s", awg_id, exc)
+            if gen is not None:
+                gen.close()
+            gen = None
+        except Exception:  # noqa: BLE001 -- der Probe-Thread darf nie still sterben
+            logger.exception("Generator %s: Verbindungsversuch gescheitert", awg_id)
+            if gen is not None:
+                gen.close()
+            gen = None
+        self._reconnect_done.emit("awg", awg_id, gen, scope_id)
+
+    def _forget_awg(self, scope_id: str, reason: str) -> None:
+        """Oszilloskop weg (oder aus den Einstellungen entfernt): Generator trennen, beim Wiedererscheinen
+        neu fragen."""
+        self._awg_rejected.discard(scope_id)
+        awg_id = awg_driver.device_id_for(scope_id)
+        if awg_id in self._fgs:
+            self._drop_fg(awg_id, reason)
 
     def _add_mock_fg(self) -> None:
         if SIM_FG_ID in self._fgs:
@@ -1561,39 +1624,70 @@ class DeviceWorker(QObject):
             candidate = None
         self._reconnect_done.emit("fg", device_id, candidate, "")
 
-    def _emit_fg_state(self, device_id: str) -> None:
+    def _fg_connected_now(self, device_id: str, gen) -> None:
+        """Generator steht in self._fgs: melden und den Zustand zeigen."""
+        identity = self._emit_identity("fg", device_id, gen)
+        logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, identity)
+        self.device_added.emit("fg", device_id)
+        self.fg_connected.emit(device_id, True)
+        self._emit_fg_state(device_id)
+
+    @staticmethod
+    def _fg_async(fg) -> bool:
+        return bool(getattr(fg, "ASYNC_IO", False))
+
+    def _emit_fg_state(self, device_id: str) -> int:
         """Liest den vollen Zustand und meldet ihn per fg_state (beim Verbinden, Simulation).
-        Ein Fehler wird wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen)."""
+        Ein Fehler wird wie bei jedem anderen Zugriff behandelt (Verbindung tot -> entfernen).
+        Generator mit ASYNC_IO: den beim Verbinden im Probe-Thread gelesenen Zustand nehmen, sonst im
+        Thread _fg_io lesen (liefert dann die Auftragsnummer)."""
         fg = self._fgs.get(device_id)
         if fg is None:
-            return
+            return 0
+        module = fg_module(fg)
+        if self._fg_async(fg):
+            initial = getattr(fg, "initial_state", None)
+            if initial is not None:
+                fg.initial_state = None
+                self._fg_cache[device_id] = initial
+                self._publish_fg_state(device_id)
+                return 0
+
+            def read_all(gen) -> None:
+                gen.initial_state = module.state_dict(gen)
+            return self._fg_submit(device_id, read_all, (),
+                                   lambda ok, _message: ok and self._fgs.get(device_id) is fg
+                                   and self._emit_fg_state(device_id))
         try:
-            state = fg.get_state()
+            state = module.state_dict(fg)
         except FunctionGeneratorError as exc:
             self._drop_fg(device_id, str(exc))
-            return
-        self._fg_cache[device_id] = {
-            "outputs": list(state.outputs),
-            "channels": [
-                {"waveform": c.waveform, "frequency": c.frequency, "amplitude": c.amplitude,
-                 "offset": c.offset, "duty": c.duty}
-                for c in state.channels
-            ],
-            "phase": state.phase,
-        }
+            return 0
+        self._fg_cache[device_id] = state
         self._publish_fg_state(device_id)
+        return 0
 
     def _publish_fg_state(self, device_id: str) -> None:
         """Zwischenstand als Kopie melden (das dict geht ueber die Thread-Grenze)."""
         state = self._fg_cache[device_id]
-        self.fg_state.emit(device_id, {"outputs": list(state["outputs"]),
-                                       "channels": [dict(c) for c in state["channels"]],
-                                       "phase": state["phase"]})
+        copy = dict(state)
+        copy["outputs"] = list(state["outputs"])
+        copy["channels"] = [dict(c) for c in state["channels"]]
+        self.fg_state.emit(device_id, copy)
+
+    @staticmethod
+    def _store_fg_field(state: dict, field: str, channel: int, value) -> None:
+        if field == "outputs":
+            state["outputs"] = [bool(v) for v in value]
+        elif channel > 0 and field in ("waveform", "frequency", "amplitude", "offset", "duty"):
+            state["channels"][channel - 1][field] = value
+        else:   # Phase, Modulation, Last
+            state[field] = value
 
     def _read_fg_fields(self, device_id: str, fields) -> bool:
         """Liest einzelne Felder (je eine Registerabfrage, siehe jds66xx.driver.read_field) in den
         Zwischenstand und meldet ihn. Ohne Zwischenstand den vollen Zustand. False = Verbindung tot
-        (Geraet entfernt)."""
+        (Geraet entfernt). Generator mit ASYNC_IO: Auftrag an _fg_io, Ergebnis spaeter (True)."""
         fg = self._fgs.get(device_id)
         if fg is None:
             return False
@@ -1601,44 +1695,119 @@ class DeviceWorker(QObject):
         if state is None:
             self._emit_fg_state(device_id)
             return device_id in self._fgs
+        if self._fg_async(fg):
+            self._fg_submit(device_id, None, list(fields), None)
+            return True
+        module = fg_module(fg)
         try:
             for field, channel in fields:
-                value = fg_read_field(fg, field, channel)
-                if field == "outputs":
-                    state["outputs"] = [bool(value[0]), bool(value[1])]
-                elif field == "phase":
-                    state["phase"] = value
-                else:
-                    state["channels"][channel - 1][field] = value
+                self._store_fg_field(state, field, channel, module.read_field(fg, field, channel))
         except FunctionGeneratorError as exc:
             self._drop_fg(device_id, str(exc))
             return False
         self._publish_fg_state(device_id)
         return True
 
-    def _drop_fg(self, device_id: str, reason: str) -> None:
+    def _drop_fg(self, device_id: str, reason: str, quiet: bool = False) -> None:
         fg = self._fgs.pop(device_id, None)
         self._fg_cache.pop(device_id, None)
         self._fg_slow_index.pop(device_id, None)
+        self._fg_poll_busy.pop(device_id, None)
         if fg is None:
             return
-        logger.warning("Funktionsgenerator %s getrennt: %s", device_id, reason)
-        fg.close()
+        (logger.info if quiet else logger.warning)("Funktionsgenerator %s getrennt: %s", device_id, reason)
+        if self._fg_async(fg):
+            self._fg_io.submit(fg.close)   # nach einem laufenden Auftrag schliessen, nicht mittendrin
+        else:
+            fg.close()
         self.fg_connected.emit(device_id, False)
         self.device_removed.emit("fg", device_id)
 
+    # -- Generatoren mit ASYNC_IO: Auftraege im Thread _fg_io (1.0.2) ---------------------------------
+
+    def _fg_submit(self, device_id: str, action: Callable | None, readback, done) -> int:
+        """Auftrag an _fg_io: `action(gen)` (oder nichts), danach die Felder `readback` lesen. Ergebnis ueber
+        _fg_job_done im Worker-Thread (_on_fg_job_done), dort `done(ok, Meldung)`. Reihenfolge bleibt."""
+        fg = self._fgs.get(device_id)
+        self._fg_job_seq += 1
+        token = self._fg_job_seq
+        if fg is None:
+            if done is not None:
+                done(False, "Funktionsgenerator nicht verbunden")
+            return 0
+        self._fg_jobs[token] = done
+        self._fg_io.submit(self._fg_job, token, device_id, fg, fg_module(fg), action, list(readback or ()))
+        return token
+
+    def _fg_job(self, token: int, device_id: str, fg, module, action, readback) -> None:
+        """Laeuft im Thread _fg_io. Ein abgelehnter Wert laesst die Verbindung stehen, alles andere trennt."""
+        ok, message, values, dead = True, "", [], False
+        try:
+            if action is not None:
+                action(fg)
+        except FunctionGeneratorValueError as exc:
+            ok, message = False, str(exc)
+        except FunctionGeneratorError as exc:
+            ok, message, dead = False, str(exc), True
+        except Exception as exc:  # noqa: BLE001 -- der Thread darf nie still sterben
+            logger.exception("Funktionsgenerator %s: Auftrag gescheitert", device_id)
+            ok, message, dead = False, str(exc), True
+        if not dead:
+            for field, channel in readback:
+                try:
+                    values.append((field, channel, module.read_field(fg, field, channel)))
+                except FunctionGeneratorValueError as exc:   # z. B. Oszilloskop belegt: Feld bleibt
+                    logger.debug("Funktionsgenerator %s: %s nicht gelesen: %s", device_id, field, exc)
+                except Exception as exc:  # noqa: BLE001
+                    dead, message = True, message or str(exc)
+                    if action is None:
+                        ok = False
+                    break
+        self._fg_job_done.emit(token, device_id, fg, ok, message, values, dead)
+
+    @Slot(int, str, object, bool, str, object, bool)
+    def _on_fg_job_done(self, token: int, device_id: str, fg, ok: bool, message: str, values, dead: bool) -> None:
+        done = self._fg_jobs.pop(token, None)
+        if self._fg_poll_busy.get(device_id) == token:
+            del self._fg_poll_busy[device_id]
+        if self._fgs.get(device_id) is fg:   # nicht inzwischen getrennt oder neu verbunden
+            if dead:
+                self._drop_fg(device_id, message)
+            elif values:
+                state = self._fg_cache.get(device_id)
+                if state is not None:
+                    for field, channel, value in values:
+                        self._store_fg_field(state, field, channel, value)
+                    self._publish_fg_state(device_id)
+        if done is not None:
+            done(ok, message)
+
     def _poll_fgs(self) -> None:
-        """Je Generator die schnellen Felder und rollierend FG_SLOW_FIELDS_PER_POLL der uebrigen
-        (PI-78 a, siehe FG_POLL_INTERVAL_MS)."""
+        """Je Generator die schnellen Felder und rollierend SLOW_FIELDS_PER_POLL (Treibermodul) der uebrigen
+        (PI-78 a, siehe FG_POLL_INTERVAL_MS). Generator mit ASYNC_IO: als Auftrag, hoechstens einer zugleich."""
         timings: dict[str, float] = {}
         t_start = time.monotonic()
-        for device_id in list(self._fgs):
+        for device_id, fg in list(self._fgs.items()):
             t_dev = time.monotonic()
+            module = fg_module(fg)
+            slow_fields, per_poll = module.POLL_SLOW_FIELDS, module.SLOW_FIELDS_PER_POLL
+            if self._fg_async(fg) and device_id in self._fg_poll_busy:
+                continue
+            if self._fg_async(fg) and device_id not in self._fg_cache:   # voller Zustand fehlt noch
+                token = self._emit_fg_state(device_id)
+                if token:
+                    self._fg_poll_busy[device_id] = token
+                continue
             index = self._fg_slow_index.get(device_id, 0)
-            slow = [FG_POLL_SLOW_FIELDS[(index + n) % len(FG_POLL_SLOW_FIELDS)]
-                    for n in range(FG_SLOW_FIELDS_PER_POLL)]
-            self._fg_slow_index[device_id] = (index + FG_SLOW_FIELDS_PER_POLL) % len(FG_POLL_SLOW_FIELDS)
-            self._read_fg_fields(device_id, list(FG_POLL_FAST_FIELDS) + slow)
+            slow = [slow_fields[(index + n) % len(slow_fields)] for n in range(per_poll)]
+            self._fg_slow_index[device_id] = (index + per_poll) % len(slow_fields)
+            fields = list(module.POLL_FAST_FIELDS) + slow
+            if self._fg_async(fg):
+                token = self._fg_submit(device_id, None, fields, None)
+                if token:
+                    self._fg_poll_busy[device_id] = token
+                continue
+            self._read_fg_fields(device_id, fields)
             timings[device_id] = time.monotonic() - t_dev
         total = time.monotonic() - t_start
         # Wie in _poll: der Generator teilt sich den Worker-Thread mit allen anderen Geraeten
@@ -1689,6 +1858,9 @@ class DeviceWorker(QObject):
     def _on_reconnect_done(self, kind: str, device_id: str, candidate: object, port: str) -> None:
         """Uebernimmt das Ergebnis eines Verbindungsversuchs im Worker-Thread --
         ab hier gehoert das Geraeteobjekt wieder allein diesem Thread."""
+        if kind in ("awg", "awg_rejected"):   # Generator im UNI-T-Oszilloskop, port = Oszilloskop-ID
+            self._on_awg_connect_done(kind, device_id, candidate, port)
+            return
         pending_kind = "fg" if kind == "fg_rejected" else kind
         self._reconnect_pending.discard(f"{pending_kind}/{device_id}")
         if kind == "fg_rejected":
@@ -1724,11 +1896,21 @@ class DeviceWorker(QObject):
             self.psu_manual_state.emit(device_id, False)
             self._adopt_psu_state(device_id, on_connect=True)
         else:
-            identity = self._emit_identity("fg", device_id, candidate)
-            logger.info("Funktionsgenerator verbunden: %s (%s)", device_id, identity)
-            self.device_added.emit("fg", device_id)
-            self.fg_connected.emit(device_id, True)
-            self._emit_fg_state(device_id)
+            self._fg_connected_now(device_id, candidate)
+
+    def _on_awg_connect_done(self, kind: str, awg_id: str, gen, scope_id: str) -> None:
+        self._awg_pending.discard(scope_id)
+        if kind == "awg_rejected":
+            self._awg_rejected.add(scope_id)
+            logger.info("Oszilloskop %s: kein Generator AWG1 (AWG1:OUTPut? abgelehnt)", scope_id)
+            return
+        if gen is None:
+            return
+        if awg_id in self._fgs or not self._scpi_present.get(scope_id, False):
+            gen.close()   # inzwischen verbunden bzw. Oszilloskop weg/aus den Einstellungen entfernt
+            return
+        self._fgs[awg_id] = gen
+        self._fg_connected_now(awg_id, gen)
 
     def _reconnect_can(self) -> None:
         """Verbindet noch nicht verbundene, konfigurierte CAN-Interfaces.
@@ -2338,8 +2520,55 @@ class DeviceWorker(QObject):
         if readback is None:
             self._emit_fg_state(device_id)
         else:
-            self._read_fg_fields(device_id, fg_readback_fields(*readback))
+            self._read_fg_fields(device_id, fg_module(fg).readback_fields(*readback))
         return True, ""
+
+    def _fg_operation(self, device_id: str, action: str, value: float,
+                      channel: int) -> tuple[Callable | None, tuple[str, int] | None, str]:
+        """FG_*-Aktion -> (Aufruf am Treiber, zurueckzulesendes Feld, Fehler). Eine Stelle fuer Kachel, Ablauf und
+        Fernsteuerung, beide Generatoren (Treibermodul aus fg_profiles). "FG_WAVE" = Kachel, Wert = Formcode."""
+        fg = self._fgs.get(device_id)
+        if fg is None:
+            return None, None, "Funktionsgenerator nicht verbunden"
+        module = fg_module(fg)
+        if action in FG_WAVE_ACTIONS or action == "FG_WAVE":
+            # PI-75 a: beim JDS2915 setzt DC zugleich die Amplitude auf 0,01 V (set_waveform_checked)
+            code = FG_WAVE_ACTIONS[action] if action in FG_WAVE_ACTIONS else int(value)
+            return (lambda g: module.set_waveform_checked(g, channel, code)), ("waveform", channel), ""
+        if action == "FG_FREQ":
+            return (lambda g: g.set_frequency(channel, value)), ("frequency", channel), ""
+        if action == "FG_AMPL":   # PI-75 a: in DC abgelehnt
+            return (lambda g: module.set_amplitude_checked(g, channel, value)), ("amplitude", channel), ""
+        if action == "FG_OFFS":   # in DC die Ausgangsspannung
+            return (lambda g: module.set_offset_checked(g, channel, value)), ("offset", channel), ""
+        if action == "FG_DUTY":   # PI-80 a: nur bei Puls (JDS) bzw. Rechteck/Puls (UNI-T), sonst abgelehnt
+            return (lambda g: module.set_duty_checked(g, channel, value)), ("duty", channel), ""
+        if action == "FG_PHASE":
+            if not module.HAS_PHASE:
+                return None, None, f"Der Funktionsgenerator ({module.TITLE}) hat keine Phase zwischen Kanälen"
+            return (lambda g: g.set_phase(value)), ("phase", 0), ""
+        if action in ("FG_OUT_ON", "FG_OUT_OFF"):
+            on = action == "FG_OUT_ON"
+            return (lambda g: g.set_output(channel, on)), ("outputs", 0), ""
+        if action in FG_PARAM_ACTIONS:   # Modulation und Last (PI-88 b)
+            field, fixed = FG_PARAM_ACTIONS[action]
+            param = fixed if fixed is not None else value
+            return (lambda g: module.set_param_checked(g, channel, field, param)), (field, 0), ""
+        return None, None, f"Unbekannte Aktion '{action}' fuer Funktionsgenerator"
+
+    def _run_fg(self, device_id: str, action: str, value: float, channel: int,
+                done: Callable[[bool, str], None]) -> None:
+        """Fuehrt eine FG_*-Aktion aus und ruft `done(ok, Meldung)`: sofort (JDS2915, Simulator) bzw. nach dem
+        Auftrag im Thread _fg_io (Generator mit ASYNC_IO)."""
+        operation, readback, error = self._fg_operation(device_id, action, value, channel)
+        if operation is None:
+            done(False, error)
+            return
+        fg = self._fgs[device_id]
+        if self._fg_async(fg):
+            self._fg_submit(device_id, operation, fg_module(fg).readback_fields(*readback), done)
+            return
+        done(*self._guard_fg(device_id, operation, readback))
 
     def _guard_can(self, device_id: str, action: Callable[[CanBus], None]) -> tuple[bool, str]:
         bus = self._can_buses.get(device_id)
@@ -2547,14 +2776,18 @@ class DeviceWorker(QObject):
         return False
 
     def _kill_fg(self, device_id: str, fg: JDS66xx) -> bool:
-        """Beide Ausgaenge AUS. Die eingestellten Signalparameter bleiben
-        erhalten -- nur der Ausgang wird getrennt, wie bei der Last."""
+        """Alle Ausgaenge AUS. Die eingestellten Signalparameter bleiben
+        erhalten -- nur der Ausgang wird getrennt, wie bei der Last.
+        Auch beim Generator mit ASYNC_IO direkt aus diesem Thread (nicht hinter wartenden Auftraegen); die
+        Geraetesperre (unit_mso1000hd.driver.io_lock) haelt eine laufende Abfrage auseinander."""
+        module = fg_module(fg)
         for attempt in (1, 2):
             try:
-                fg.set_outputs(False, False)
-                logger.info("ALL OFF: Funktionsgenerator %s -> beide Ausgaenge AUS", device_id)
+                module.outputs_off(fg)
+                logger.info("ALL OFF: Funktionsgenerator %s -> %s", device_id,
+                            "Ausgang AUS" if len(module.CHANNELS) == 1 else "alle Ausgaenge AUS")
                 self._note_switch(True, "fg", device_id, "FG_OUT_OFF", SOURCE_ALL_OFF)
-                self._read_fg_fields(device_id, FG_POLL_FAST_FIELDS)
+                self._read_fg_fields(device_id, module.POLL_FAST_FIELDS)
                 return True
             except FunctionGeneratorValueError as exc:
                 logger.error("ALL OFF: Funktionsgenerator %s quittierte nicht: %s", device_id, exc)
@@ -2777,48 +3010,49 @@ class DeviceWorker(QObject):
 
     # -- Funktionsgenerator: Steuerbefehle (siehe control_tab.FgControlGroup) ------
 
+    def _tile_fg(self, device_id: str, action: str, value: float, channel: int) -> None:
+        """Bedienung aus der Kachel (auch Preset): ausfuehren, danach wie _operate ins Log und ins
+        Schaltprotokoll -- beim Generator mit ASYNC_IO erst, wenn der Auftrag fertig ist (Herkunft von jetzt)."""
+        source = self._operation_source
+        self._run_fg(device_id, action, value, channel,
+                     lambda ok, message: self._finish_operate("fg", device_id, action, value, channel, ok, message,
+                                                              source))
+
     @Slot(str, int, bool)
     def set_fg_output(self, device_id: str, channel: int, on: bool) -> None:
-        self._operate("fg", device_id, "FG_OUT_ON" if on else "FG_OUT_OFF", 0.0, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_output(channel, on), ("outputs", 0)))
+        self._tile_fg(device_id, "FG_OUT_ON" if on else "FG_OUT_OFF", 0.0, channel)
 
     @Slot(str, int, int)
     def set_fg_waveform(self, device_id: str, channel: int, code: int) -> None:
-        # PI-75 a: DC setzt zugleich die Amplitude auf 0,01 V (jds66xx.driver.set_waveform_checked)
-        self._operate("fg", device_id, "FG_WAVE", float(code), channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
-                                              ("waveform", channel)))
+        # PI-75 a: DC setzt beim JDS2915 zugleich die Amplitude auf 0,01 V (jds66xx.driver.set_waveform_checked)
+        self._tile_fg(device_id, "FG_WAVE", float(code), channel)
 
     @Slot(str, int, float)
     def set_fg_frequency(self, device_id: str, channel: int, hertz: float) -> None:
-        self._operate("fg", device_id, "FG_FREQ", hertz, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, hertz),
-                                              ("frequency", channel)))
+        self._tile_fg(device_id, "FG_FREQ", hertz, channel)
 
     @Slot(str, int, float)
     def set_fg_amplitude(self, device_id: str, channel: int, volts: float) -> None:
         # PI-75 a: in DC abgelehnt (die Spannung ist dort der Offset)
-        self._operate("fg", device_id, "FG_AMPL", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, volts),
-                                              ("amplitude", channel)))
+        self._tile_fg(device_id, "FG_AMPL", volts, channel)
 
     @Slot(str, int, float)
     def set_fg_offset(self, device_id: str, channel: int, volts: float) -> None:
-        self._operate("fg", device_id, "FG_OFFS", volts, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, volts),
-                                              ("offset", channel)))
+        self._tile_fg(device_id, "FG_OFFS", volts, channel)
 
     @Slot(str, int, float)
     def set_fg_duty(self, device_id: str, channel: int, percent: float) -> None:
-        # PI-80 a: nur bei Puls, sonst abgelehnt (am Geraet wirkt der Tastgrad nur dort)
-        self._operate("fg", device_id, "FG_DUTY", percent, channel,
-                      lambda: self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, percent),
-                                              ("duty", channel)))
+        # PI-80 a: nur bei Puls (JDS) bzw. Rechteck/Puls (UNI-T), sonst abgelehnt
+        self._tile_fg(device_id, "FG_DUTY", percent, channel)
 
     @Slot(str, float)
     def set_fg_phase(self, device_id: str, degrees: float) -> None:
-        self._operate("fg", device_id, "FG_PHASE", degrees, 0,
-                      lambda: self._guard_fg(device_id, lambda fg: fg.set_phase(degrees), ("phase", 0)))
+        self._tile_fg(device_id, "FG_PHASE", degrees, 0)
+
+    @Slot(str, str, float, int)
+    def fg_tile_action(self, device_id: str, action: str, value: float, channel: int) -> None:
+        """Modulation und Last aus der Kachel (PI-88 b): dieselben Aktionscodes wie Ablauf und MCP."""
+        self._tile_fg(device_id, action, value, channel)
 
     # -- CAN-Bus: Steuerbefehle -----------------------------------------------
     # Nutzdaten bewusst als Hex-String statt bytes uebergeben, da PySide6-
@@ -2955,14 +3189,18 @@ class DeviceWorker(QObject):
     def _operate(self, kind: str, device_id: str, action: str, value: float, channel: int,
                  run: Callable[[], tuple[bool, str]]) -> tuple[bool, str]:
         ok, message = run()
-        self._log_operation(kind, device_id, action, value, channel, self._operation_source, ok, message)
+        self._finish_operate(kind, device_id, action, value, channel, ok, message, self._operation_source)
+        return ok, message
+
+    def _finish_operate(self, kind: str, device_id: str, action: str, value: float, channel: int, ok: bool,
+                        message: str, source: str) -> None:
+        self._log_operation(kind, device_id, action, value, channel, source, ok, message)
         if ok:
             self._note_setpoint(kind, device_id, action, value)
             # PI-77 a: die Kachel meldet die Wellenform als Code, der Ablauf kennt je Form eine Aktion
             switched = next((name for name, code in FG_WAVE_ACTIONS.items() if code == int(value)), action) \
                 if action == "FG_WAVE" else action
-            self._note_switch(ok, kind, device_id, switched, self._operation_source)
-        return ok, message
+            self._note_switch(ok, kind, device_id, switched, source)
 
     def _note_setpoint(self, kind: str, device_id: str, action: str, value: float) -> None:
         """Neuer Sollwert erfolgreich gesetzt -> melden, egal woher die Bedienung kam (Kachel, Verbund-Partner,
@@ -3037,7 +3275,16 @@ class DeviceWorker(QObject):
 
     @Slot(str, str, str, float, int)
     def execute_action(self, device_id: str, kind: str, action: str, value: float, channel: int) -> None:
+        if kind == "fg":   # Generator mit ASYNC_IO meldet erst nach seinem Auftrag (1.0.2)
+            self._run_fg(device_id, action, value, channel,
+                         lambda ok, message: self._finish_execute(device_id, kind, action, value, channel, ok,
+                                                                  message, 0.0))
+            return
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        self._finish_execute(device_id, kind, action, value, channel, ok, message, read_value)
+
+    def _finish_execute(self, device_id: str, kind: str, action: str, value: float, channel: int, ok: bool,
+                        message: str, read_value: float) -> None:
         if kind in OPERATION_LABELS and action not in READ_ACTIONS:   # PI-15: jede Bedienung ins Log
             self._log_operation(kind, device_id, action, value, channel, "Testablauf", ok, message)
         self._note_switch(ok, kind, device_id, action, SOURCE_RUN)
@@ -3060,7 +3307,16 @@ class DeviceWorker(QObject):
         Die Erlaubnis (Token, Freigabe, Hauptschalter, Wertebereich) ist zu
         diesem Zeitpunkt bereits geprueft; hier wird nur ausgefuehrt.
         """
+        if kind == "fg":   # Generator mit ASYNC_IO meldet erst nach seinem Auftrag (1.0.2)
+            self._run_fg(device_id, action, value, channel,
+                         lambda ok, message: self._finish_remote(request_id, device_id, kind, action, value,
+                                                                 channel, source, ok, message, 0.0))
+            return
         ok, message, read_value = self._dispatch_action(device_id, kind, action, value, channel)
+        self._finish_remote(request_id, device_id, kind, action, value, channel, source, ok, message, read_value)
+
+    def _finish_remote(self, request_id: int, device_id: str, kind: str, action: str, value: float, channel: int,
+                       source: str, ok: bool, message: str, read_value: float) -> None:
         logger.info("Fernsteuerung: %s %s (wert=%s, kanal=%s) per %s -> %s%s", device_id, action, value,
                     channel, source, "ok" if ok else "FEHLER", f" [{message}]" if message else "")
         self._note_switch(ok, kind, device_id, action, source)
@@ -3167,29 +3423,12 @@ class DeviceWorker(QObject):
             return False, f"Unbekannte Aktion '{action}' fuer microHIL", 0.0
 
         if kind == "fg":
-            if action in FG_WAVE_ACTIONS:
-                code = FG_WAVE_ACTIONS[action]
-                # PI-75 a: FG_WAVE_DC setzt zugleich die Amplitude auf 0,01 V
-                ok, message = self._guard_fg(device_id, lambda fg: fg_set_waveform(fg, channel, code),
-                                             ("waveform", channel))
-            elif action == "FG_FREQ":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_frequency(channel, value), ("frequency", channel))
-            elif action == "FG_AMPL":   # PI-75 a: in DC abgelehnt
-                ok, message = self._guard_fg(device_id, lambda fg: fg_set_amplitude(fg, channel, value),
-                                             ("amplitude", channel))
-            elif action == "FG_OFFS":   # in DC die Ausgangsspannung
-                ok, message = self._guard_fg(device_id, lambda fg: fg_set_offset(fg, channel, value),
-                                             ("offset", channel))
-            elif action == "FG_DUTY":   # PI-80 a: nur bei Puls, sonst abgelehnt
-                ok, message = self._guard_fg(device_id, lambda fg: fg_set_duty(fg, channel, value), ("duty", channel))
-            elif action == "FG_PHASE":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_phase(value), ("phase", 0))
-            elif action == "FG_OUT_ON":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, True), ("outputs", 0))
-            elif action == "FG_OUT_OFF":
-                ok, message = self._guard_fg(device_id, lambda fg: fg.set_output(channel, False), ("outputs", 0))
-            else:
-                return False, f"Unbekannte Aktion '{action}' fuer Funktionsgenerator", 0.0
+            # execute_action/execute_remote_action gehen direkt ueber _run_fg: der Generator im UNI-T-Oszilloskop
+            # meldet sein Ergebnis erst aus dem Thread _fg_io. Hier nur der sofortige Fall (JDS2915, Pruefungen);
+            # ein Auftrag im Thread gilt als angenommen.
+            result: list[tuple[bool, str]] = []
+            self._run_fg(device_id, action, value, channel, lambda ok, message: result.append((ok, message)))
+            ok, message = result[0] if result else (True, "")
             return ok, message, 0.0
 
         if kind == "picoscope":
