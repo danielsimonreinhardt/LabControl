@@ -1,10 +1,9 @@
 # UNI-T MSO1000HD (MSO1154HD-S) – Oszilloskop über SCPI
 
-> **Stand 0.21.0: nur gegen den Simulator geprüft.** Das Gerät war beim
-> Schreiben noch nicht da. Alles, was unten als **HARDWARE-PRÜFUNG** markiert
-> ist, beruht auf dem Programmierhandbuch (UNI-T MSO1000HD Programming Manual
-> V1.0) und ist am echten Gerät zu bestätigen -- `tools/check_unit_mso.py
-> --hardware --address <IP>` prüft die wichtigsten Punkte.
+> **Stand 1.0.2: am MSO1154HD-S (Firmware V1.01.0081) über LAN geprüft.** Das
+> Gerät weicht an mehreren Stellen vom Programmierhandbuch ab, siehe
+> „Am Gerät geprüft“ unten. `tools/check_unit_mso.py --hardware --address <IP>`
+> prüft Erreichbarkeit und eine freie Erfassung.
 
 Treiber für die UNI-T-Reihe MSO1000HD (MSO1102HD … MSO1254HD, 2 oder 4 Kanäle,
 12 bit, bis 2,5 GS/s) über SCPI. Eingebunden wie das PicoScope 2204A:
@@ -76,7 +75,8 @@ Jede Erfassung stellt alles neu ein (zustandslos, wie beim PicoScope):
 1. `STOP`, Fehlerwarteschlange leeren.
 2. Kanäle: angefragte an, übrige aus. Volt/Teilung = kleinste 1-2-5-Stufe, die
    `range_v` mit ±4 Teilungen abdeckt; Tastkopf am Gerät setzen; Offset.
-3. Zeitbasis: s/Teilung = kleinste 1-2-5-Stufe ≥ Dauer/10; Speichertiefe
+3. Zeitbasis: s/Teilung = kleinste 1-2-5-Stufe ≥ Dauer/8 (der Speicher deckt
+   8 Teilungen ab, siehe unten); Speichertiefe
    25K/250K/500K/5M nach gewünschter Auflösung; Fenster per `TIMebase:OFFSet`
    so verschoben, dass der Pre-Trigger-Anteil stimmt.
 4. **Zurücklesen**, was das Gerät eingestellt hat (Bereich, Zeitbasis) -- gemeldet
@@ -84,31 +84,38 @@ Jede Erfassung stellt alles neu ein (zustandslos, wie beim PicoScope):
 5. Flankentrigger, `TRIGger:SWEep SINGle`, `RUN`, Status pollen bis `STOP`.
    `auto`: nach `timeout_s` `TRIGger:FORCe`; `none`: sofort; `single`: nach
    `timeout_s` Fehler `trigger_timeout`.
-6. Daten je Kanal als **ASCII in Volt** (`WAV:MODE RAW`, `WAV:FORM ASCII`), in
-   Stücken zu 25 000 Punkten (`WAV:STAR`/`WAV:STOP`).
+6. 0,6 s warten (direkt nach `STOP` liefert das Gerät noch unfertige Daten).
+7. Daten je Kanal als **ASCII in Volt** (`WAV:MODE RAW`, `WAV:FORM ASCII`,
+   `WAV:POIN 1000000`), in Stücken zu 250 000 Punkten (`WAV:STAR`/`WAV:STOP`).
+   t = 0 aus `XORigin` der Präambel.
 
 Das Gerät bleibt danach gestoppt und zeigt die Erfassung. ASCII statt WORD,
-weil die Skalierung der Binärdaten (YINC/YOR/YREF) im Handbuch nicht eindeutig
-ist; kostet Zeit (≈ 15 Byte je Punkt), bei 250 000 Punkten über 100-Mbit-LAN
-grob 1–2 s je Kanal (**HARDWARE-PRÜFUNG**).
+weil die WORD-Umrechnung (YINC/YREF) am Gerät nicht bei jeder Skala stimmte;
+kostet Zeit (≈ 16 Byte je Punkt): 250 000 Punkte ≈ 1,6 s je Kanal, eine
+Erfassung mit einem Kanal dauert 3–8 s, mit vier Kanälen ≈ 18 s.
 
-## Eigenheiten und Annahmen
+## Am Gerät geprüft (1.0.2)
 
-**HARDWARE-PRÜFUNG** -- am echten Gerät zu bestätigen:
+Gemessen am MSO1154HD-S mit dem Kalibrierausgang (1-kHz-Rechteck 0…3 V) an CH1:
 
-- Vorzeichen von `CHANnel<n>:OFFSet`: angenommen Bildschirmmitte = −Offset
-  (positiver Offset schiebt die Kurve nach oben). Der Adapter setzt
-  `OFFSet = −offset_v`.
-- `TIMebase:OFFSet`: angenommen ist das Fenster um den Offset zentriert und
-  t = 0 der Trigger. Pre-Trigger 20 % → Offset = Dauer · 0,3.
-- `CHANnel<n>:SCALe` bezieht sich auf die Tastkopfspitze (nach `PROBe`).
-- Im RAW-Modus enthält der Speicher genau das Bildschirmfenster (10 Teilungen).
-- Statusfolge nach `RUN` bei `SWEep SINGle`: `WAIT`/`ARMED`/`READY` → `STOP`.
-  Direkt nach `RUN` kann noch das `STOP` der vorigen Erfassung kommen
-  (Wartezeit 0,3 s im Adapter).
-- `SYSTem:ERRor?` liefert `<code>,"<text>"`, `0,"No error"` wenn leer.
-- Vertikal 8 Teilungen, 1 mV/div bis 10 V/div am Eingang (1:1).
-- `*IDN?`: `UNI-T Technologies,MSO1154HD-S,<Seriennummer>,<Firmware>`.
+| Punkt | Verhalten am Gerät | Folge im Treiber |
+|---|---|---|
+| VXI-11-Lesen | meldet `maxRecvSize` 1024; ist eine Antwort größer als die Leseanfrage, kommt ein I/O-Fehler statt eines Teilstücks | Leseanfrage 64 MB (`VXI11_READ_SIZE`), jede Antwort am Stück |
+| Unbekannter Befehl | I/O-Fehler auf VXI-11-Ebene, danach `-113` in `SYST:ERR?` (z. B. `ACQ:SRAT?`, `WAV:MODE MAX`, `WAV:FORM BYTE`) | nur geprüfte Befehle |
+| `WAV:PRE?` | Textzeile, kein `#9…`-Block | beides wird angenommen |
+| `WAV:DATA?` | `#9<Länge><Werte>` und dahinter `,\r\n` | Rest wird verworfen |
+| `WAV:MODE RAW` | liefert nur so viele Punkte wie mit `WAV:POIN` eingestellt (sonst 1); höchstens 1 000 000, auch bei Tiefe 5M | vor dem Lesen `WAV:POIN 1000000` |
+| `WAV:STAR`/`WAV:STOP` | STARt ab 0, STOP exklusiv; STARt rückt nach jedem `DATA?` weiter | beide vor jedem Stück neu |
+| Daten direkt nach `STOP` | zuerst Füllwerte (Rohwert 0x0404), nach 0,5 s vollständig | 0,6 s Wartezeit |
+| Speicherfenster | 8 Teilungen um die Bildschirmmitte (1 ms/div: −4…+4 ms), bei schnellen Zeitbasen länger | Zeitbasis, Punkte und Vorlauf mit 8 Teilungen; t = 0 aus `XORigin` (geprüft bei 0/10/20/25/50 % Vorlauf) |
+| Statusfolge nach `RUN` | (`RESET` nach geänderten Einstellungen, bis 0,7 s) → `ARMED` → `READY` → `TRIGED` → `STOP` | „scharf“ erst ab `READY` |
+| `CHAN:OFFS` | Bildschirmmitte = −Offset | wie angenommen |
+| `TRIG:EDGE:LEV` mit Tastkopf 10X | geschriebener Wert wird durch den Tastkopffaktor geteilt zurückgemeldet | nicht weiter geprüft (kein 10:1-Tastkopf am Messpunkt) |
+| `WAV:MODE NORMal` | Bildschirmdaten mit falschem XINCrement (Flanken im halben Abstand) | nicht benutzt |
+| `WAV:FORM WORD` | 8× schneller, Umrechnung passte bei 10 V/div, nicht bei 1 V/div | nicht benutzt |
+
+Weiter angenommen (nicht geprüft): Kopplung AC wirkt (Mittelwert ≈ 0 gemessen), Bandbreitenbegrenzung,
+2-Kanal-Modelle (MSO1xx2).
 
 Erkennung: Modell `MSO1<BB><K>` → Bandbreite BB·10 MHz, K Kanäle.
 

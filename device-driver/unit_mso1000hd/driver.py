@@ -14,9 +14,8 @@ Der Treiber bleibt "dumm" (synchron, blockierend, ein Aufrufer-Thread) und
 kennt nur Gerätebefehle. Die Übersetzung aus der herstellerneutralen
 Erfassungsanfrage macht scope_api/unit_mso_adapter.py.
 
-STAND: nur gegen den Mock (mock.py) geprüft, das Gerät war beim Schreiben noch
-nicht da. Jede Stelle, an der das Handbuch mehrdeutig ist, ist mit
-``HARDWARE-PRÜFUNG`` markiert und in README.md gesammelt.
+STAND 1.0.2: am MSO1154HD-S (Firmware V1.01.0081) über LAN geprüft. Abweichungen
+vom Handbuch, die das Gerät zeigte, stehen in README.md ("Am Gerät geprüft").
 """
 from __future__ import annotations
 
@@ -31,11 +30,21 @@ KIND = "scpiscope"
 # Werkseitig: 4 Kanäle; Typen mit 2 Kanälen (MSO1xx2) gibt es laut Namensschema
 # ebenfalls, siehe parse_model().
 MAX_CHANNELS = 4
-# Handbuch S. 192: aus dem internen Speicher höchstens 25 000 Punkte je Lesevorgang.
-READ_CHUNK = 25_000
+# Am Gerät: ein Lesevorgang liefert auch 250 000 Punkte (ASCII ~4 MB, ~1,6 s); das
+# Handbuch (S. 192) nennt 25 000. Mehr als MAX_READ_POINTS gibt das Gerät nicht frei
+# (:WAVeform:POINts wird darauf begrenzt, auch bei Speichertiefe 5M).
+READ_CHUNK = 250_000
+MAX_READ_POINTS = 1_000_000
 DEFAULT_TIMEOUT_S = 5.0
-# Ein Lesevorgang mit 25 000 Punkten als ASCII sind ~350 kB -- großzügig.
-READ_TIMEOUT_S = 20.0
+# 250 000 Punkte als ASCII ~4 MB -- großzügig.
+READ_TIMEOUT_S = 30.0
+# Am Gerät: direkt nach STOP liefert :WAVeform:DATA? (RAW) noch unfertige Daten
+# (Füllwert, Rohwert 0x0404). Nach 0,5 s waren sie bei 25K und 250K vollständig.
+DATA_SETTLE_S = 0.6
+# VXI-11: das Gerät meldet maxRecvSize 1024 und beantwortet ein device_read, dessen
+# requestSize kleiner als die ganze Antwort ist, mit einem Fehler (statt Teilstücken).
+# pyvisa-py fragt mit min(Anzahl, maxRecvSize) an -- deshalb hier groß.
+VXI11_READ_SIZE = 64 * 1024 * 1024
 SIM_RESOURCE = "SIM"
 SIM_DEVICE_ID = f"{KIND}:SIM"
 
@@ -173,6 +182,9 @@ class VisaTransport:
             self._res.timeout = int(timeout_s * 1000)
             self._res.read_termination = "\n"
             self._res.write_termination = "\n"
+            self._res.chunk_size = VXI11_READ_SIZE
+            if backend == "@py":
+                _widen_vxi11_reads(self._res)
         except self._errors as exc:
             raise MSO1000HDError(f"{resource} lässt sich nicht öffnen: {exc}") from exc
         except Exception as exc:  # noqa: BLE001 -- z.B. VisaIOError-Unterklassen aus dem Backend
@@ -193,11 +205,13 @@ class VisaTransport:
         except Exception as exc:  # noqa: BLE001
             raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
 
-    def read_exact(self, count: int) -> bytes:
+    def read_raw(self) -> bytes:
+        """Eine ganze Antwort (bis END), ohne Abschlusszeichen-Suche. Das Gerät
+        liefert eine Antwort nur am Stück (siehe VXI11_READ_SIZE)."""
         try:
-            return bytes(self._res.read_bytes(count))
+            return bytes(self._res.read_raw())
         except Exception as exc:  # noqa: BLE001
-            raise MSO1000HDError(f"Lesen von {count} Bytes gescheitert: {exc}") from exc
+            raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
 
     def close(self) -> None:
         for obj in (getattr(self, "_res", None), getattr(self, "_rm", None)):
@@ -214,17 +228,18 @@ class VisaTransport:
 
 class MSO1000HD:
     """Ein Oszilloskop der Reihe MSO1000HD. ``transport`` liefert write/read_line/
-    read_exact/set_timeout/close -- echt (VisaTransport) oder simuliert
+    read_raw/set_timeout/close -- echt (VisaTransport) oder simuliert
     (mock.SimulatedInstrument)."""
 
-    def __init__(self, transport) -> None:
+    def __init__(self, transport, data_settle_s: float = DATA_SETTLE_S) -> None:
         self._t = transport
+        self._data_settle_s = data_settle_s
 
     @classmethod
     def open(cls, resource: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> "MSO1000HD":
         if resource == SIM_RESOURCE:
             from unit_mso1000hd.mock import SimulatedInstrument
-            return cls(SimulatedInstrument())
+            return cls(SimulatedInstrument(), data_settle_s=0.0)
         return cls(VisaTransport(resource, timeout_s))
 
     def close(self) -> None:
@@ -253,25 +268,15 @@ class MSO1000HD:
             raise MSO1000HDValueError(f"{command}: unerwartete Antwort {text!r}") from exc
 
     def query_block(self, command: str) -> bytes:
-        """Datenblock ``#9XXXXXXXXX<Daten>\\n`` (Handbuch S. 5). Die Ziffer nach
-        ``#`` nennt die Länge der Längenangabe -- nicht fest 9 angenommen."""
+        """Datenblock ``#9XXXXXXXXX<Daten>`` (Handbuch S. 5). Die Ziffer nach ``#``
+        nennt die Länge der Längenangabe -- nicht fest 9 angenommen. Am Gerät folgt
+        hinter dem Block noch ``,\\r\\n`` (ASCII) bzw. ``\\r\\n``; das wird verworfen."""
         self._t.write(command)
-        head = self._t.read_exact(2)
-        if head[:1] != b"#" or not head[1:2].isdigit():
-            rest = head + self._read_rest_of_line()
-            raise MSO1000HDValueError(f"{command}: kein Datenblock, Antwort {rest[:80]!r}")
-        digits = int(head[1:2])
-        length = int(self._t.read_exact(digits)) if digits else 0
-        data = self._t.read_exact(length) if length else b""
-        # Abschließendes \n (falls vorhanden) verwerfen.
-        self._t.read_exact(1)
+        raw = self._t.read_raw()
+        data = _block_payload(raw)
+        if data is None:
+            raise MSO1000HDValueError(f"{command}: kein Datenblock, Antwort {raw[:80]!r}")
         return data
-
-    def _read_rest_of_line(self) -> bytes:
-        try:
-            return self._t.read_line().encode()
-        except MSO1000HDError:
-            return b""
 
     # -- Identität / Fehler --------------------------------------------------------
 
@@ -368,7 +373,11 @@ class MSO1000HD:
     # -- Daten --------------------------------------------------------------------
 
     def preamble(self) -> Preamble:
-        raw = self.query_block(":WAVeform:PREamble?").decode("ascii", "replace")
+        # Am Gerät eine Textzeile, laut Handbuch ein Datenblock -- beides annehmen.
+        self._t.write(":WAVeform:PREamble?")
+        answer = self._t.read_raw()
+        block = _block_payload(answer)
+        raw = (block if block is not None else answer).decode("ascii", "replace").strip()
         fields = [f.strip() for f in raw.replace("\n", ",").split(",") if f.strip()]
         if len(fields) < 10:
             raise MSO1000HDValueError(f"Preamble unvollständig: {raw[:120]!r}")
@@ -381,28 +390,39 @@ class MSO1000HD:
         except ValueError as exc:
             raise MSO1000HDValueError(f"Preamble nicht lesbar: {raw[:120]!r}") from exc
 
+    def wait_data_ready(self) -> None:
+        """Nach STOP warten, bis :WAVeform:DATA? vollständige Rohdaten liefert
+        (am Gerät sonst Füllwerte, siehe DATA_SETTLE_S)."""
+        if self._data_settle_s > 0:
+            time.sleep(self._data_settle_s)
+
     def read_waveform_volts(self, n: int, progress=None) -> tuple[np.ndarray, Preamble]:
         """Rohdaten eines Kanals aus dem internen Speicher in Volt.
 
         Format ASCII (Handbuch S. 189: "actual voltage value of each waveform
-        point"): langsamer als WORD, aber ohne die im Handbuch widersprüchliche
-        Umrechnung aus AD-Werten (YORigin mal in Counts, mal in V; YREF 128 in
-        einem Beispiel für einen 12-Bit-Wandler). Das Gerät muss gestoppt sein.
-        Gelesen wird in Stücken von READ_CHUNK Punkten über STARt/STOP.
+        point"). WORD ist am Gerät 8x schneller, die Umrechnung über YINCrement/
+        YREFerence passte aber nicht bei jeder Skala -- ASCII bleibt. Das Gerät
+        muss gestoppt sein (und wait_data_ready() gelaufen).
+
+        Am Gerät geprüft: im Modus RAW liefert es nur so viele Punkte, wie vorher
+        mit :WAVeform:POINts eingestellt sind (sonst 1); STARt zählt ab 0, STOP ist
+        exklusiv; nach jedem DATA? rückt das Gerät STARt weiter -- deshalb STARt/STOP
+        vor jedem Stück neu.
         """
         self.write(":WAVeform:MODE RAW")
         self.write(":WAVeform:FORMat ASCII")
         self.write(f":WAVeform:SOURce CHANnel{n}")
+        self.write(f":WAVeform:POINts {MAX_READ_POINTS}")
         pre = self.preamble()
         total = int(self.query_float(":WAVeform:POINts?")) or pre.points
-        if total <= 0:
+        if total <= 1:
             raise MSO1000HDValueError(f"Kanal {n}: Gerät meldet keine Punkte im Speicher.")
         chunks: list[np.ndarray] = []
         self._t.set_timeout(READ_TIMEOUT_S)
         try:
-            start = 1
-            while start <= total:
-                stop = min(total, start + READ_CHUNK - 1)
+            start = 0
+            while start < total:
+                stop = min(total, start + READ_CHUNK)
                 self.write(f":WAVeform:STARt {start}")
                 self.write(f":WAVeform:STOP {stop}")
                 data = self.query_block(":WAVeform:DATA?")
@@ -412,7 +432,7 @@ class MSO1000HD:
                 chunks.append(values)
                 start += values.size
                 if progress is not None:
-                    progress(start - 1, total)
+                    progress(start, total)
         finally:
             self._t.set_timeout(DEFAULT_TIMEOUT_S)
         return np.concatenate(chunks)[:total], pre
@@ -428,6 +448,33 @@ class MSO1000HD:
             if time.monotonic() >= deadline:
                 return None
             time.sleep(poll_s)
+
+
+def _block_payload(raw: bytes) -> bytes | None:
+    """Nutzdaten eines ``#<n><Länge><Daten>``-Blocks, None wenn keiner."""
+    if raw[:1] != b"#" or not raw[1:2].isdigit():
+        return None
+    digits = int(raw[1:2])
+    try:
+        length = int(raw[2:2 + digits]) if digits else 0
+    except ValueError:
+        return None
+    data = raw[2 + digits:2 + digits + length]
+    if len(data) < length:
+        raise MSO1000HDError(f"Datenblock unvollständig: {len(data)} von {length} Bytes.")
+    return data
+
+
+def _widen_vxi11_reads(resource) -> None:
+    """pyvisa-py: Anfragegröße je device_read über die vom Gerät gemeldete
+    maxRecvSize (1024) hinaus anheben (siehe VXI11_READ_SIZE). Schreibzugriffe
+    bleiben klein (einzelne Befehle), das Gerät nimmt sie an."""
+    try:
+        session = resource.visalib.sessions[resource.session]
+        if hasattr(session, "max_recv_size"):
+            session.max_recv_size = VXI11_READ_SIZE
+    except Exception:  # noqa: BLE001 -- anderes Backend: nichts zu tun
+        pass
 
 
 def _parse_ascii_values(data: bytes) -> np.ndarray:

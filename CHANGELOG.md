@@ -4,7 +4,7 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
-## [Unreleased]
+## [1.0.2] – 2026-11-22
 
 ### Hinzugefügt
 - **Oszilloskop Rohde & Schwarz RTB2000 (RTB2002/RTB2004) über SCPI per LAN.** Neuer Treiber
@@ -25,6 +25,21 @@ Semantic Versioning (`lab_gui/version.py`).
   Abbruch über release. **Nur gegen den Simulator geprüft**, am RTB2002 noch nicht. Im Simulationsmodus gibt es
   jetzt zwei „Oszilloskop (LAN)“: ein Ablauf mit SCPI-Oszilloskop-Schritten braucht dort das Zielgerät in der Zeile
   (`check_scope_arm` entsprechend angepasst).
+
+### Behoben
+- **UNI-T MSO1154HD-S: Erfassungen am echten Gerät.** Bisher brach jede Erfassung über Netzwerk/MCP mit
+  „Lesen von 2 Bytes gescheitert: VI_ERROR_IO“ ab -- der Treiber war nur gegen den Simulator geschrieben. Am Gerät
+  (Firmware V1.01.0081) gefunden und behoben: VXI-11-Antworten müssen am Stück gelesen werden (das Gerät meldet
+  1024 Byte Empfangsgröße und bricht kleinere Leseanfragen mit Fehler ab), die Präambel kommt als Textzeile, im
+  Rohmodus liefert es nur nach `:WAVeform:POINts` mehr als einen Punkt, STARt zählt ab 0 und rückt nach jedem
+  Lesen weiter, direkt nach STOP sind die Daten noch unfertig (0,6 s Wartezeit), der Speicher deckt 8 statt 10
+  Teilungen ab (Zeitbasis und Vorlauf rechnen damit, t = 0 aus `XORigin`), „scharf“ erst ab Status READY. Stücke
+  zu 250 000 statt 25 000 Punkten. Simulator an das Geräteverhalten angepasst. **Am Gerät geprüft** (Adapter
+  direkt, Kalibrierausgang 1 kHz an CH1): frei, Auto, Einzeltrigger steigend/fallend, Vorlauf 0/10/20/25/50 %,
+  AC-Kopplung, Offset, vier Kanäle, Abtastintervall, Trigger-Timeout, Scharf schalten mit Abbruch;
+  `check_unit_mso --hardware` grün; Mock: `check_unit_mso`, `check_scope_arm`, `check_rs_rtb`,
+  `check_partner_devices`, `check_partner_link`, `check_battsim` grün. Über die laufende App/MCP noch nicht
+  geprüft (braucht den Neustart mit dieser Version). Einzelheiten in `device-driver/unit_mso1000hd/README.md`.
 
 ## [1.0.1] – 2026-11-15
 
