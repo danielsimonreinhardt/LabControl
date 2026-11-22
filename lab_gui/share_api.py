@@ -415,7 +415,8 @@ def _tile_detail(device_id: str, entry: dict, snapshot: dict) -> dict:
         # Steuern freigegeben ist. "control_available" sagt, ob es JETZT geht,
         # "control_blocked" nennt sonst den Grund (dieselben Codes wie die
         # Fehlerantworten von POST .../actions).
-        "actions": remote_actions.describe(tile["kind"], entry.get("ratings")) if tile["control"] else [],
+        "actions": remote_actions.describe(tile["kind"], entry.get("ratings"), values.get("profile"))
+        if tile["control"] else [],
         "control_available": _control_block_reason(snapshot, device_id) == "",
         "control_blocked": _control_block_reason(snapshot, device_id) if tile["control"] else "",
         # Belegt durch einen Verbund-Leitstand (PI-25 a): {"holder", "run"}, sonst nicht vorhanden
@@ -651,7 +652,8 @@ def _tile_action(snapshot: dict, device_id: str, body: bytes, executor, client: 
     if not isinstance(action, str):
         return _error(400, "unknown_action", allowed=list(remote_actions.REMOTE_ACTIONS.get(kind, {})))
     definition, code, detail = remote_actions.validate(
-        kind, action, payload.get("value"), payload.get("channel"), entry.get("ratings"))
+        kind, action, payload.get("value"), payload.get("channel"), entry.get("ratings"),
+        entry.get("fields", {}).get("profile"))   # Funktionsgenerator: Aktionen je Geraet (1.0.2)
     if definition is None:
         return _error(400, code, **detail)
 
@@ -698,8 +700,9 @@ def _partner_tile_action(snapshot: dict, tile: dict, body: bytes, executor, clie
     action = payload.get("action")
     if not isinstance(action, str):
         return _error(400, "unknown_action", allowed=list(remote_actions.REMOTE_ACTIONS.get(kind, {})))
+    profile = next((f.get("text") for f in tile.get("fields") or [] if f.get("key") == "profile"), None)
     definition, code, detail = remote_actions.validate(
-        kind, action, payload.get("value"), payload.get("channel"), tile.get("ratings"))
+        kind, action, payload.get("value"), payload.get("channel"), tile.get("ratings"), profile)
     if definition is None:
         return _error(400, code, **detail)
     value = float(payload["value"]) if definition.needs_value else 0.0

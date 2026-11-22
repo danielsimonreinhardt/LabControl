@@ -131,6 +131,13 @@ Vorgehen:
   FG_OFFS value=Spannung; am Ausgang liegt Offset + 5 mV (in DC gibt das Geraet Offset + Amplitude/2 aus, bei
   Amplitude genau 0 nur ~1/10 des Offsets). FG_AMPL ist in DC abgelehnt. FG_DUTY wirkt nur bei FG_WAVE_PULSE
   und ist sonst abgelehnt (Rechteck bleibt am Geraet 50 %) -- erst die Form setzen, nie umgehen.
+- Generator im UNI-T-Oszilloskop (fg, ID '...:AWG1', Feld profile='unit_mso_awg'): EIN Kanal (channel=1), keine
+  Phase. Dieselben FG_*-Aktionen; DC: FG_WAVE_DC, dann FG_OFFS = Spannung (keine Amplitude). FG_DUTY nur bei
+  Rechteck und Puls. FG_WAVE_TRIANGLE = Rampe (Dreieck). Dazu Modulation: FG_MODE_BASE/AM/FM/ASK/FSK/SWEEP,
+  FG_MOD_WAVE_SINE/SQUARE/UPRAMP/DNRAMP/NOISE, FG_MOD_FREQ, FG_AM_DEPTH, FG_FM_DEV, FG_FSK_RATE (ASK und FSK),
+  FG_FSK_FREQ, FG_SWEEP_LIN/LOG, FG_SWEEP_START/STOP, FG_SWEEP_TIME; Lastwiderstand FG_LOAD (Ohm, 50..1000000,
+  1000000 = hochohmig) -- Amplitude/Offset gelten an dieser Last, die Spannung am Ausgang aendert sich nicht.
+  Sein Ausgang haengt oft am Eingang desselben Oszilloskops; nach dem Einstellen dort messen.
 - Batterie-Simulator (battsim, 14 Zellen, Kanal = Zelle): erst BS_REMOTE_ON, dann Sollwerte
   (BS_CELL_VOLT/BS_ALL_VOLT) und Freigaben (BS_CELL_ON/BS_ALL_ON), zuletzt BS_OUT_ON. Ueber dem
   Grenzwert je Zelle (Feld voltage_limit) wird abgelehnt. Istwerte in cellN_voltage, Zustand in
@@ -298,6 +305,8 @@ def control_device(device_id: str, action: str, value: float | None = None,
                 DC-Spannung: FG_WAVE_DC (setzt die Amplitude selbst auf 0,01 V), dann FG_OFFS value=Spannung;
                 am Ausgang liegt Offset + 5 mV. FG_AMPL ist in DC abgelehnt. FG_DUTY nur bei FG_WAVE_PULSE
                 (bei Rechteck bleibt das Geraet bei 50 %), sonst abgelehnt -- die Form wird nie still umgeschaltet.
+                Generator im UNI-T-Oszilloskop ('...:AWG1'): nur channel=1, dazu FG_MODE_*, FG_MOD_*, FG_AM_DEPTH,
+                FG_FM_DEV, FG_FSK_*, FG_SWEEP_*, FG_LOAD (Ohm) -- siehe list_devices 'actions'.
     'value' nur bei Aktionen mit Wert, 'channel' nur beim microHIL und Funktionsgenerator. Bei Erfolg kommt 'ok': true zurueck
     (das Geraet hat bestaetigt); mit 'status': 'pending' ist der Befehl unterwegs, sein Ausgang aber
     unbekannt -- dann mit read_device nachsehen. Fehler kommen als Werkzeugfehler mit Hinweis."""

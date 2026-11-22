@@ -4,7 +4,7 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
-## [Unreleased]
+## [1.0.2] – 2026-11-22
 
 ### Hinzugefügt
 - **Oszilloskop Rohde & Schwarz RTB2000 (RTB2002/RTB2004) über SCPI per LAN.** Neuer Treiber
@@ -25,6 +25,88 @@ Semantic Versioning (`lab_gui/version.py`).
   Abbruch über release. **Nur gegen den Simulator geprüft**, am RTB2002 noch nicht. Im Simulationsmodus gibt es
   jetzt zwei „Oszilloskop (LAN)“: ein Ablauf mit SCPI-Oszilloskop-Schritten braucht dort das Zielgerät in der Zeile
   (`check_scope_arm` entsprechend angepasst).
+- **Funktionsgenerator im UNI-T-Oszilloskop (AWG1 der MSO1000HD-S) als eigener Funktionsgenerator (PI-88 b).**
+  Neuer Treiber `device-driver/unit_mso_awg` (eigene VXI-11-Verbindung, SCPI-Simulator `mock.py`). Der Generator
+  erscheint ohne eigene Einstellung als `fg:<Adresse>:AWG1`, sobald ein eingetragenes UNI-T-Oszilloskop erreichbar
+  ist und `AWG1:OUTPut?` beantwortet (ein Modell ohne Generator wird nur einmal gefragt); im Simulationsmodus als
+  `fg:SIM:AWG1`. Beim Verbinden wird nichts geschaltet. Dieselben Aktionen wie der JDS2915 (Kurvenform, Frequenz,
+  Amplitude, Offset, Tastgrad, Ausgang EIN/AUS) in Kachel, Übersicht, Ablauf, Fernsteuerung/MCP und beim
+  Verbund-Partner, mit einem Kanal und ohne Phase; dazu **Modulation** (`FG_MODE_BASE/AM/FM/ASK/FSK/SWEEP`,
+  Modulationsform, -frequenz, AM-Tiefe, FM-Hub, Umtastrate, Sprungfrequenz, Wobbelart/-bereich/-zeit) und
+  **Lastwiderstand** (`FG_LOAD`, 50 … 1 000 000 Ω). ALLE AUS, Watchdog und Abbruch schalten seinen Ausgang aus
+  (direkt, nicht hinter wartenden Aufträgen). Die Kachel zeigt beim UNI-T einen Kanal und einen Kasten „Modulation
+  und Last“ mit den Feldern der gemeldeten Art. Beide Generatoren teilen sich Geräteart, Signale und Kachel; was sie
+  unterscheidet, steht im Treibermodul (`lab_gui/fg_profiles.py`). Fernsteuerung/MCP listen je Generator nur seine
+  Aktionen. Am Gerät gefunden und berücksichtigt: das Oszilloskop hat **eine** Ausgabe für alle Verbindungen
+  (Antworten landeten bei der Erfassung -- jetzt Gerätesperre, siehe unten), während eine Erfassung eingerichtet
+  wird nimmt es bis ~1,5 s nichts an (Generator darum in eigenem Thread, der DeviceWorker bleibt frei), Last erst
+  ab 50 Ω (Handbuch: 1 Ω) und Amplitude/Offset gelten an der eingestellten Last, Tastgrad in RAMP schaltet die
+  Ausgabe still auf Rechteck (Tastgrad darum nur bei Rechteck/Puls), ASK-Umtastrate ist `AWG1:FSK:RATio`
+  (im Handbuch fehlt sie). Einzelheiten in `device-driver/unit_mso_awg/README.md`.
+  **Gegen den Simulator geprüft:** `tools/check_unit_mso_awg.py` (Treiber, Gerätesperre, DeviceWorker mit
+  Erkennung/Ablauf/Fernsteuerung/Kachel/ALLE AUS/Abbruch, Ablauf-Modell, Kachel, Übersicht, Verbund) sowie
+  `check_fg_dc_duty`, `check_stale_per_device`, `check_partner_devices`, `check_partner_link`,
+  `check_operation_log`, `check_abort_block`, `check_unit_mso`, `check_scope_arm`, `check_hardware_isolation`,
+  `check_last_switch`, `check_jds66xx`, `check_network_share`, `check_translations` und weitere grün.
+  **Am MSO1154HD-S (Firmware V1.01.0081) geprüft**, Ausgang an CH2 gemessen, nur kleine Pegel (≤ 2 Vss,
+  ≤ 1 V Offset, ≤ 1 MHz): `check_unit_mso_awg --hardware` grün -- Rechteck mit Tastgrad, Sinus 1 MHz, DC, Ausgang
+  AUS, Last 50 Ω, AM/FSK, unbekannter Befehl; über den DeviceWorker: Erkennung, Abfrage während drei Erfassungen
+  (Kurven unverfälscht), Ablauf-Aktion, ALLE AUS (16 ms). **Nicht** am Gerät: Kachel und MCP in der laufenden App
+  (nur offscreen/Simulator), Frequenzen über 1 MHz, Amplituden über 2 Vss.
+
+### Behoben
+- **SCPI-Oszilloskope: eine Erkennung schloss alle Verbindungen des Programms.** `VisaTransport.close()` schloss
+  auch den ResourceManager von pyvisa -- den gibt es je Backend nur einmal im Prozess, sein `close()` beendet
+  alle Verbindungen darüber (am Gerät gefunden: jede Erkennung alle 10 s trennte den Generator; mit UNI-T und RTB
+  zugleich hätte die Erkennung des einen die Erfassung des anderen abgebrochen). Jetzt schließt jede Verbindung nur
+  sich selbst (UNI-T- und RTB-Treiber). Dazu am UNI-T: **eine Ausgabe für alle VXI-11-Verbindungen** -- eine
+  Gerätesperre je Host lässt nur ganze Abfragen abwechseln (Erfassung, Erkennung, Generator). Am MSO1154HD-S
+  geprüft: ohne Sperre brachen Erfassungen bei gleichzeitigen Generator-Abfragen ab, mit Sperre drei Erfassungen
+  unverfälscht und keine Fehler; `check_unit_mso --hardware` dabei nicht erneut gelaufen, `check_unit_mso`,
+  `check_rs_rtb`, `check_scope_api` (Simulator) grün.
+- **UNI-T MSO1154HD-S: Erfassungen am echten Gerät.** Bisher brach jede Erfassung über Netzwerk/MCP mit
+  „Lesen von 2 Bytes gescheitert: VI_ERROR_IO“ ab -- der Treiber war nur gegen den Simulator geschrieben. Am Gerät
+  (Firmware V1.01.0081) gefunden und behoben: VXI-11-Antworten müssen am Stück gelesen werden (das Gerät meldet
+  1024 Byte Empfangsgröße und bricht kleinere Leseanfragen mit Fehler ab), die Präambel kommt als Textzeile, im
+  Rohmodus liefert es nur nach `:WAVeform:POINts` mehr als einen Punkt, STARt zählt ab 0 und rückt nach jedem
+  Lesen weiter, direkt nach STOP sind die Daten noch unfertig (0,6 s Wartezeit), der Speicher deckt 8 statt 10
+  Teilungen ab (Zeitbasis und Vorlauf rechnen damit, t = 0 aus `XORigin`), „scharf“ erst ab Status READY. Stücke
+  zu 250 000 statt 25 000 Punkten. Simulator an das Geräteverhalten angepasst. **Am Gerät geprüft** (Adapter
+  direkt, Kalibrierausgang 1 kHz an CH1): frei, Auto, Einzeltrigger steigend/fallend, Vorlauf 0/10/20/25/50 %,
+  AC-Kopplung, Offset, vier Kanäle, Abtastintervall, Trigger-Timeout, Scharf schalten mit Abbruch;
+  `check_unit_mso --hardware` grün; Mock: `check_unit_mso`, `check_scope_arm`, `check_rs_rtb`,
+  `check_partner_devices`, `check_partner_link`, `check_battsim` grün. Über die laufende App/MCP noch nicht
+  geprüft, danach über MCP in der App (erste 1.0.2-.exe): acquire, measure, get_capture, plot_capture, arm,
+  wait_capture, release_scope, Fehlerfälle. Einzelheiten in `device-driver/unit_mso1000hd/README.md`.
+- **UNI-T: Fenster und Vorlauf wie angefragt.** Am Gerät verlängert eine größere Speichertiefe oft nur das
+  Fenster (die Abtastrate je Zeitbasis ist begrenzt): 2 ms mit 10 % Vorlauf kamen als 8 ms mit 30 % Vorlauf. Der
+  Adapter schneidet die Aufzeichnung jetzt auf das angefragte Fenster um den Trigger zu. Am Gerät geprüft
+  (Adapter direkt): 20 µs … 100 ms, Vorlauf 0/10/20/25/50 %, Flanke bei t = 0 auf < 0,3 µs.
+- **SCPI-Oszilloskope: „scope_busy (Erkennung)“ bei fast jeder Erfassung am UNI-T.** Die Erkennung versuchte
+  zuerst den SCPI-Socket (Port 5025, für das RTB2000); das UNI-T lässt ihn unbeantwortet, der Versuch hing 10 s
+  -- bei einer Erkennung alle 10 s war das Gerät fast dauernd belegt, und jede neue Verbindung für eine Erfassung
+  kostete weitere 10 s. Jetzt begrenzt das Zeitlimit auch den Verbindungsaufbau, und die Erkennung merkt sich je
+  Adresse den Weg, der zuletzt geantwortet hat: 0,02 s statt 10 s. Am UNI-T geprüft; RTB nur gegen den
+  Simulator (`check_rs_rtb`).
+- **UNI-T: Daten binär (WORD) statt als Text, ganze 5M lesbar.** Die Umrechnung aus dem Handbuch ist falsch
+  (YORigin ist in Zählwerten, nicht in Volt); richtig ist V = (Zählwert − YREF − YORigin) · YINC -- am Gerät Punkt
+  für Punkt gleich den ASCII-Werten (0,2/0,5/1 V/div, Offset 0/−1,5/−3 V). 250 000 Punkte in 0,05 s statt 1,6 s;
+  eine Erfassung dauert mit einem Kanal ~2 s statt 3–8 s, mit vier ~5 s statt 18 s. `:WAVeform:POINts` ist die
+  Stückgröße, die Gesamtlänge kommt aus `:WAVeform:STOP?` -- vorher wurden bei Speichertiefe 5M nur die ersten
+  1 Mio. Punkte gelesen. Am Gerät geprüft (5 Mio. Punkte in 3,3 s, alle Fälle von oben erneut grün,
+  `check_unit_mso --hardware` grün); Simulator liefert WORD wie das Gerät.
+- **UNI-T: Warnung bei begrenztem Offset.** Das Gerät begrenzt `CHANnel:OFFSet` ohne Fehlermeldung auf ±8 Teilungen
+  (0,1 V/div → ±0,8 V); der Adapter liest die Mitte zurück und warnt jetzt. Am Gerät geprüft (±0,4 V um 3 V → Warnung,
+  ±2 V um 3 V → keine).
+- **Einstellungen → Netzwerk-Freigabe: Haken nach dem Start leer.** Die Freigabe galt, aber die Haken „Lesen“,
+  „Steuern“ und „Messen“ standen leer, bis man einmal klickte: der gespeicherte Stand wurde nur auf Zeilen
+  angewendet, die es beim Laden schon gab, die Geräte werden aber erst danach erkannt. Die Tabelle merkt sich den
+  Stand jetzt und wendet ihn auf jede neue Zeile an. Nur Oberfläche geprüft (`check_share_table_order`, schlägt mit
+  dem alten Stand fehl; `check_network_share`, `check_partner_link` grün), in der .exe noch nicht angesehen.
+- **Kurvenbild: Kanäle CH1…CH4 farbig.** Die Farbtabelle kannte nur die PicoScope-Kanäle A…D; bei UNI-T und R&S
+  (CH1…CH4) waren alle Kurven, Legenden und die Triggerlinie schwarz und nicht zu unterscheiden. Jetzt CH1 blau,
+  CH2 rot, CH3 grün, CH4 gelb wie A…D -- gilt für MCP `plot_capture` und das Fenster „Kurve“. Mit dem Simulator
+  geprüft (Bild mit vier Kanälen, `check_scope_api`, `check_unit_mso`, `check_rs_rtb`).
 
 ## [1.0.1] – 2026-11-15
 

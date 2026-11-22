@@ -86,16 +86,27 @@ def battsim_state_from(fields: dict, cell_count: int = 14) -> dict:
 
 
 def fg_state_from(fields: dict) -> dict:
-    """Umkehrung von LiveState.on_fg_state."""
+    """Umkehrung von LiveState.on_fg_state. Welcher Generator es ist, sagt "profile" (fehlt bei JDS2915 und
+    aelteren Besitzern): Kanalzahl, Formnamen, Phase, Modulation/Last (1.0.2, PI-88 b)."""
+    from fg_profiles import module_for
+    module = module_for(fields.get("profile"))
+    names = {**FG_WAVE_CODES, **{name: code for code, name in module.WAVEFORMS.items()}}
     channels, outputs = [], []
-    for n in (1, 2):
+    for n in module.CHANNELS:
         outputs.append(bool(_flag(fields.get(f"out{n}"))))
         channels.append({
-            "waveform": FG_WAVE_CODES.get(str(fields.get(f"wave{n}") or ""), 0),
+            "waveform": names.get(str(fields.get(f"wave{n}") or ""), 0),
             "frequency": _num(fields.get(f"freq{n}")), "amplitude": _num(fields.get(f"ampl{n}")),
             "offset": _num(fields.get(f"offs{n}")), "duty": _num(fields.get(f"duty{n}")),
         })
-    return {"outputs": outputs, "channels": channels, "phase": _num(fields.get("phase"))}
+    state = {"outputs": outputs, "channels": channels,
+             "phase": _num(fields.get("phase")) if module.HAS_PHASE else None}
+    if fields.get("profile"):
+        state["profile"] = fields["profile"]
+    for field in getattr(module, "PARAM_FIELDS", ()):
+        if field in fields:
+            state[field] = fields[field]
+    return state
 
 
 def jlink_state_from(fields: dict) -> dict:
@@ -329,6 +340,11 @@ class PartnerDevices(QObject):
             section.set_offset.connect(lambda d, ch, v: send(d, "FG_OFFS", v, ch))
             section.set_duty.connect(lambda d, ch, v: send(d, "FG_DUTY", v, ch))
             section.set_phase.connect(lambda d, v: send(d, "FG_PHASE", v, 2))
+            # Modulation und Last (1.0.2, PI-88 b): die Kachel sendet schon Aktionscodes
+            from fg_profiles import FG_PARAM_ACTIONS
+            section.fg_action.connect(
+                lambda d, code, v, ch: send(d, code, v if FG_PARAM_ACTIONS.get(code, ("", None))[1] is None else None,
+                                            ch))
         elif kind == "hil":
             section.set_output.connect(lambda d, ch, on: send(d, "HIL_OUT_ON" if on else "HIL_OUT_OFF", None, ch))
             section.set_relay.connect(lambda d, ch, on: send(d, "HIL_RELAY_ON" if on else "HIL_RELAY_OFF", None, ch))

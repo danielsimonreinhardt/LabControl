@@ -14,14 +14,14 @@ Der Treiber bleibt "dumm" (synchron, blockierend, ein Aufrufer-Thread) und
 kennt nur Gerätebefehle. Die Übersetzung aus der herstellerneutralen
 Erfassungsanfrage macht scope_api/unit_mso_adapter.py.
 
-STAND: nur gegen den Mock (mock.py) geprüft, das Gerät war beim Schreiben noch
-nicht da. Jede Stelle, an der das Handbuch mehrdeutig ist, ist mit
-``HARDWARE-PRÜFUNG`` markiert und in README.md gesammelt.
+STAND 1.0.2: am MSO1154HD-S (Firmware V1.01.0081) über LAN geprüft. Abweichungen
+vom Handbuch, die das Gerät zeigte, stehen in README.md ("Am Gerät geprüft").
 """
 from __future__ import annotations
 
 import ipaddress
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -31,11 +31,20 @@ KIND = "scpiscope"
 # Werkseitig: 4 Kanäle; Typen mit 2 Kanälen (MSO1xx2) gibt es laut Namensschema
 # ebenfalls, siehe parse_model().
 MAX_CHANNELS = 4
-# Handbuch S. 192: aus dem internen Speicher höchstens 25 000 Punkte je Lesevorgang.
-READ_CHUNK = 25_000
+# :WAVeform:POINts ist die Stückgröße je Lesevorgang (Handbuch S. 192: 25 000). Am Gerät
+# gehen bis 1 000 000 je Stück (darüber begrenzt es); die Gesamtlänge meldet
+# :WAVeform:STOP? nach dem Setzen der Quelle (5M-Speicher: 5 000 000, als WORD in 1,2 s).
+READ_CHUNK = 1_000_000
 DEFAULT_TIMEOUT_S = 5.0
-# Ein Lesevorgang mit 25 000 Punkten als ASCII sind ~350 kB -- großzügig.
-READ_TIMEOUT_S = 20.0
+# 1 Mio. Punkte als ASCII ~16 MB -- großzügig.
+READ_TIMEOUT_S = 60.0
+# Am Gerät: direkt nach STOP liefert :WAVeform:DATA? (RAW) noch unfertige Daten
+# (Füllwert, Rohwert 0x0404). Nach 0,5 s waren sie bei 25K und 250K vollständig.
+DATA_SETTLE_S = 0.6
+# VXI-11: das Gerät meldet maxRecvSize 1024 und beantwortet ein device_read, dessen
+# requestSize kleiner als die ganze Antwort ist, mit einem Fehler (statt Teilstücken).
+# pyvisa-py fragt mit min(Anzahl, maxRecvSize) an -- deshalb hier groß.
+VXI11_READ_SIZE = 64 * 1024 * 1024
 SIM_RESOURCE = "SIM"
 SIM_DEVICE_ID = f"{KIND}:SIM"
 
@@ -153,26 +162,66 @@ def resource_for(device_id: str) -> str | None:
 
 # -- Transport --------------------------------------------------------------------
 
+# Am Gerät (1.0.2, Funktionsgenerator): das MSO1154HD-S hat EINE Ausgabe für alle VXI-11-
+# Verbindungen -- die Antwort auf eine Abfrage über Verbindung B kam beim Lesen auf Verbindung A
+# an. Mehrere Verbindungen zum selben Gerät (Erfassung, Erkennung, Generator) dürfen deshalb nur
+# ganze Abfragen (Senden + Lesen) abwechselnd stellen: eine Sperre je Gerät (Host), gehalten von
+# einer Abfrage bis ihre Antwort gelesen ist; reine Befehle halten sie nur für das Senden.
+# Innerhalb eines Prozesses -- ein zweites Programm am selben Gerät kann die Antworten weiter
+# vertauschen.
+IO_LOCK_TIMEOUT_S = 10.0
+_IO_LOCKS: dict[str, threading.RLock] = {}
+_IO_LOCKS_GUARD = threading.Lock()
+
+
+class MSO1000HDBusyError(MSO1000HDError):
+    """Eine andere Verbindung zum selben Gerät hielt die Sperre länger als IO_LOCK_TIMEOUT_S."""
+
+
+def io_key(resource: str) -> str:
+    """Gerät hinter einer VISA-Ressource: bei LAN der Host (VXI-11 und Socket teilen ihn)."""
+    parts = resource.split("::")
+    if parts[0].upper().startswith("TCPIP") and len(parts) >= 2:
+        return parts[1].lower()
+    return resource.upper()
+
+
+def io_lock(resource: str) -> threading.RLock:
+    key = io_key(resource)
+    with _IO_LOCKS_GUARD:
+        lock = _IO_LOCKS.get(key)
+        if lock is None:
+            lock = _IO_LOCKS[key] = threading.RLock()
+        return lock
+
 
 class VisaTransport:
     """Dünne Hülle um eine pyvisa-Ressource: Zeilen schreiben/lesen, Bytes
-    genau lesen. Jeden pyvisa-/OS-Fehler in MSO1000HDError übersetzen."""
+    genau lesen. Jeden pyvisa-/OS-Fehler in MSO1000HDError übersetzen.
+    Abfragen halten die Gerätesperre (io_lock) bis zum Lesen der Antwort."""
 
     def __init__(self, resource: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> None:
         try:
             import pyvisa
         except ImportError as exc:  # pragma: no cover -- requirements.txt
             raise MSO1000HDError("pyvisa ist nicht installiert (requirements.txt).") from exc
+        self._lock = io_lock(resource)
+        self._pending = 0   # gesendete Abfragen, deren Antwort noch nicht gelesen ist (halten die Sperre)
         self._errors: tuple = (pyvisa.Error, OSError, ValueError)
         # LAN immer über pyvisa-py (kein NI-VISA nötig). USB braucht ein
         # installiertes VISA ("@ivi").
         backend = "@py" if resource.upper().startswith("TCPIP") else "@ivi"
         try:
             self._rm = pyvisa.ResourceManager(backend)
-            self._res = self._rm.open_resource(resource)
+            # open_timeout: ohne begrenzt pyvisa-py den Verbindungsaufbau nicht (am UNI-T hing ein
+            # Versuch auf Port 5025, den das Gerät unbeantwortet lässt, 10 s -- Erkennung, 1.0.2).
+            self._res = self._rm.open_resource(resource, open_timeout=int(timeout_s * 1000))
             self._res.timeout = int(timeout_s * 1000)
             self._res.read_termination = "\n"
             self._res.write_termination = "\n"
+            self._res.chunk_size = VXI11_READ_SIZE
+            if backend == "@py":
+                _widen_vxi11_reads(self._res)
         except self._errors as exc:
             raise MSO1000HDError(f"{resource} lässt sich nicht öffnen: {exc}") from exc
         except Exception as exc:  # noqa: BLE001 -- z.B. VisaIOError-Unterklassen aus dem Backend
@@ -182,31 +231,59 @@ class VisaTransport:
         self._res.timeout = int(seconds * 1000)
 
     def write(self, command: str) -> None:
+        if not self._lock.acquire(timeout=IO_LOCK_TIMEOUT_S):
+            raise MSO1000HDBusyError(f"Gerät {IO_LOCK_TIMEOUT_S:g} s lang belegt, {command!r} nicht gesendet")
+        query = "?" in command
         try:
             self._res.write(command)
         except Exception as exc:  # noqa: BLE001
+            self._lock.release()
             raise MSO1000HDError(f"Senden von {command!r} gescheitert: {exc}") from exc
+        if query:
+            self._pending += 1   # Sperre bleibt bis _done_reading
+        else:
+            self._lock.release()
+
+    def _done_reading(self) -> None:
+        if self._pending:
+            self._pending -= 1
+            try:
+                self._lock.release()
+            except RuntimeError:   # anderer Thread als der sendende (nur beim Aufräumen denkbar)
+                pass
 
     def read_line(self) -> str:
         try:
             return self._res.read().strip()
         except Exception as exc:  # noqa: BLE001
             raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
+        finally:
+            self._done_reading()
 
-    def read_exact(self, count: int) -> bytes:
+    def read_raw(self) -> bytes:
+        """Eine ganze Antwort (bis END), ohne Abschlusszeichen-Suche. Das Gerät
+        liefert eine Antwort nur am Stück (siehe VXI11_READ_SIZE)."""
         try:
-            return bytes(self._res.read_bytes(count))
+            return bytes(self._res.read_raw())
         except Exception as exc:  # noqa: BLE001
-            raise MSO1000HDError(f"Lesen von {count} Bytes gescheitert: {exc}") from exc
+            raise MSO1000HDError(f"Lesen gescheitert: {exc}") from exc
+        finally:
+            self._done_reading()
 
     def close(self) -> None:
-        for obj in (getattr(self, "_res", None), getattr(self, "_rm", None)):
-            if obj is None:
-                continue
-            try:
-                obj.close()
-            except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
-                pass
+        """Nur die eigene Verbindung schließen. NICHT den ResourceManager: pyvisa führt je
+        Backend einen einzigen im Prozess, sein close() schließt ALLE Verbindungen darüber --
+        am Gerät beendete so jede Erkennung (*IDN? alle 10 s) auch die Verbindung des
+        eingebauten Funktionsgenerators (1.0.2)."""
+        while getattr(self, "_pending", 0):   # nie eine Sperre mit ins Grab nehmen
+            self._done_reading()
+        res = getattr(self, "_res", None)
+        if res is None:
+            return
+        try:
+            res.close()
+        except Exception:  # noqa: BLE001 -- Aufräumen darf nie scheitern
+            pass
 
 
 # -- Gerät ------------------------------------------------------------------------
@@ -214,17 +291,18 @@ class VisaTransport:
 
 class MSO1000HD:
     """Ein Oszilloskop der Reihe MSO1000HD. ``transport`` liefert write/read_line/
-    read_exact/set_timeout/close -- echt (VisaTransport) oder simuliert
+    read_raw/set_timeout/close -- echt (VisaTransport) oder simuliert
     (mock.SimulatedInstrument)."""
 
-    def __init__(self, transport) -> None:
+    def __init__(self, transport, data_settle_s: float = DATA_SETTLE_S) -> None:
         self._t = transport
+        self._data_settle_s = data_settle_s
 
     @classmethod
     def open(cls, resource: str, timeout_s: float = DEFAULT_TIMEOUT_S) -> "MSO1000HD":
         if resource == SIM_RESOURCE:
             from unit_mso1000hd.mock import SimulatedInstrument
-            return cls(SimulatedInstrument())
+            return cls(SimulatedInstrument(), data_settle_s=0.0)
         return cls(VisaTransport(resource, timeout_s))
 
     def close(self) -> None:
@@ -253,25 +331,15 @@ class MSO1000HD:
             raise MSO1000HDValueError(f"{command}: unerwartete Antwort {text!r}") from exc
 
     def query_block(self, command: str) -> bytes:
-        """Datenblock ``#9XXXXXXXXX<Daten>\\n`` (Handbuch S. 5). Die Ziffer nach
-        ``#`` nennt die Länge der Längenangabe -- nicht fest 9 angenommen."""
+        """Datenblock ``#9XXXXXXXXX<Daten>`` (Handbuch S. 5). Die Ziffer nach ``#``
+        nennt die Länge der Längenangabe -- nicht fest 9 angenommen. Am Gerät folgt
+        hinter dem Block noch ``,\\r\\n`` (ASCII) bzw. ``\\r\\n``; das wird verworfen."""
         self._t.write(command)
-        head = self._t.read_exact(2)
-        if head[:1] != b"#" or not head[1:2].isdigit():
-            rest = head + self._read_rest_of_line()
-            raise MSO1000HDValueError(f"{command}: kein Datenblock, Antwort {rest[:80]!r}")
-        digits = int(head[1:2])
-        length = int(self._t.read_exact(digits)) if digits else 0
-        data = self._t.read_exact(length) if length else b""
-        # Abschließendes \n (falls vorhanden) verwerfen.
-        self._t.read_exact(1)
+        raw = self._t.read_raw()
+        data = _block_payload(raw)
+        if data is None:
+            raise MSO1000HDValueError(f"{command}: kein Datenblock, Antwort {raw[:80]!r}")
         return data
-
-    def _read_rest_of_line(self) -> bytes:
-        try:
-            return self._t.read_line().encode()
-        except MSO1000HDError:
-            return b""
 
     # -- Identität / Fehler --------------------------------------------------------
 
@@ -368,7 +436,11 @@ class MSO1000HD:
     # -- Daten --------------------------------------------------------------------
 
     def preamble(self) -> Preamble:
-        raw = self.query_block(":WAVeform:PREamble?").decode("ascii", "replace")
+        # Am Gerät eine Textzeile, laut Handbuch ein Datenblock -- beides annehmen.
+        self._t.write(":WAVeform:PREamble?")
+        answer = self._t.read_raw()
+        block = _block_payload(answer)
+        raw = (block if block is not None else answer).decode("ascii", "replace").strip()
         fields = [f.strip() for f in raw.replace("\n", ",").split(",") if f.strip()]
         if len(fields) < 10:
             raise MSO1000HDValueError(f"Preamble unvollständig: {raw[:120]!r}")
@@ -381,38 +453,56 @@ class MSO1000HD:
         except ValueError as exc:
             raise MSO1000HDValueError(f"Preamble nicht lesbar: {raw[:120]!r}") from exc
 
-    def read_waveform_volts(self, n: int, progress=None) -> tuple[np.ndarray, Preamble]:
+    def wait_data_ready(self) -> None:
+        """Nach STOP warten, bis :WAVeform:DATA? vollständige Rohdaten liefert
+        (am Gerät sonst Füllwerte, siehe DATA_SETTLE_S)."""
+        if self._data_settle_s > 0:
+            time.sleep(self._data_settle_s)
+
+    def read_waveform_volts(self, n: int, progress=None, fmt: str = "WORD") -> tuple[np.ndarray, Preamble]:
         """Rohdaten eines Kanals aus dem internen Speicher in Volt.
 
-        Format ASCII (Handbuch S. 189: "actual voltage value of each waveform
-        point"): langsamer als WORD, aber ohne die im Handbuch widersprüchliche
-        Umrechnung aus AD-Werten (YORigin mal in Counts, mal in V; YREF 128 in
-        einem Beispiel für einen 12-Bit-Wandler). Das Gerät muss gestoppt sein.
-        Gelesen wird in Stücken von READ_CHUNK Punkten über STARt/STOP.
+        Format WORD (2 Byte je Punkt, little endian): am Gerät 250 000 Punkte in
+        0,05 s statt 1,6 s als ASCII, und Punkt für Punkt gleich den ASCII-Werten
+        (geprüft bei 0,2/0,5/1 V/div, Offset 0/-1,5/-3 V). Umrechnung -- NICHT wie im
+        Handbuch (S. 193, "+ yorigin" in Volt), YORigin ist in Zählwerten:
+            V = (Zählwert - YREFerence - YORigin) * YINCrement
+        fmt="ASCII" bleibt als Rückfall (Volt direkt vom Gerät). Das Gerät muss
+        gestoppt sein (und wait_data_ready() gelaufen).
+
+        Am Gerät geprüft: im Modus RAW liefert ein DATA? höchstens :WAVeform:POINts
+        Punkte (ohne Setzen nur 1), die Gesamtlänge steht in :WAVeform:STOP?; STARt
+        zählt ab 0, STOP ist exklusiv; nach jedem DATA? rückt das Gerät STARt weiter --
+        deshalb STARt/STOP vor jedem Stück neu.
         """
+        fmt = fmt.upper()
+        if fmt not in ("WORD", "ASCII"):
+            raise ValueError(f"Format {fmt!r}: WORD oder ASCII")
         self.write(":WAVeform:MODE RAW")
-        self.write(":WAVeform:FORMat ASCII")
+        self.write(f":WAVeform:FORMat {fmt}")
         self.write(f":WAVeform:SOURce CHANnel{n}")
+        total = int(self.query_float(":WAVeform:STOP?"))   # SOURce setzt STOP auf die Speicherlänge
+        self.write(f":WAVeform:POINts {READ_CHUNK}")
         pre = self.preamble()
-        total = int(self.query_float(":WAVeform:POINts?")) or pre.points
-        if total <= 0:
+        total = total or pre.points
+        if total <= 1:
             raise MSO1000HDValueError(f"Kanal {n}: Gerät meldet keine Punkte im Speicher.")
         chunks: list[np.ndarray] = []
         self._t.set_timeout(READ_TIMEOUT_S)
         try:
-            start = 1
-            while start <= total:
-                stop = min(total, start + READ_CHUNK - 1)
+            start = 0
+            while start < total:
+                stop = min(total, start + READ_CHUNK)
                 self.write(f":WAVeform:STARt {start}")
                 self.write(f":WAVeform:STOP {stop}")
                 data = self.query_block(":WAVeform:DATA?")
-                values = _parse_ascii_values(data)
+                values = _parse_word_values(data, pre) if fmt == "WORD" else _parse_ascii_values(data)
                 if values.size == 0:
                     raise MSO1000HDValueError(f"Kanal {n}: leerer Datenblock bei {start}..{stop}.")
                 chunks.append(values)
                 start += values.size
                 if progress is not None:
-                    progress(start - 1, total)
+                    progress(start, total)
         finally:
             self._t.set_timeout(DEFAULT_TIMEOUT_S)
         return np.concatenate(chunks)[:total], pre
@@ -428,6 +518,41 @@ class MSO1000HD:
             if time.monotonic() >= deadline:
                 return None
             time.sleep(poll_s)
+
+
+def _block_payload(raw: bytes) -> bytes | None:
+    """Nutzdaten eines ``#<n><Länge><Daten>``-Blocks, None wenn keiner."""
+    if raw[:1] != b"#" or not raw[1:2].isdigit():
+        return None
+    digits = int(raw[1:2])
+    try:
+        length = int(raw[2:2 + digits]) if digits else 0
+    except ValueError:
+        return None
+    data = raw[2 + digits:2 + digits + length]
+    if len(data) < length:
+        raise MSO1000HDError(f"Datenblock unvollständig: {len(data)} von {length} Bytes.")
+    return data
+
+
+def _widen_vxi11_reads(resource) -> None:
+    """pyvisa-py: Anfragegröße je device_read über die vom Gerät gemeldete
+    maxRecvSize (1024) hinaus anheben (siehe VXI11_READ_SIZE). Schreibzugriffe
+    bleiben klein (einzelne Befehle), das Gerät nimmt sie an."""
+    try:
+        session = resource.visalib.sessions[resource.session]
+        if hasattr(session, "max_recv_size"):
+            session.max_recv_size = VXI11_READ_SIZE
+    except Exception:  # noqa: BLE001 -- anderes Backend: nichts zu tun
+        pass
+
+
+def _parse_word_values(data: bytes, pre: Preamble) -> np.ndarray:
+    """WORD-Block (int16, little endian) in Volt, siehe read_waveform_volts."""
+    if len(data) % 2:
+        raise MSO1000HDValueError(f"WORD-Block mit ungerader Länge ({len(data)} Bytes).")
+    counts = np.frombuffer(data, dtype="<i2").astype(float)
+    return (counts - pre.yref - pre.yorigin) * pre.yinc
 
 
 def _parse_ascii_values(data: bytes) -> np.ndarray:

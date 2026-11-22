@@ -90,6 +90,10 @@ def _snap_up(value: float, steps: tuple[float, ...]) -> float:
     return steps[-1]
 
 
+# WORD-Daten: Nullpunkt des 12-bit-Wandlers (am Gerät YREFerence = 2048).
+YREF = 2048
+
+
 class _Channel:
     def __init__(self) -> None:
         self.display = False
@@ -100,7 +104,12 @@ class _Channel:
 
 
 class SimulatedInstrument:
-    """Transport-Ersatz für driver.MSO1000HD: write / read_line / read_exact."""
+    """Transport-Ersatz für driver.MSO1000HD: write / read_line / read_raw.
+
+    Bildet das am MSO1154HD-S gemessene Verhalten nach (1.0.2): Präambel als
+    Textzeile, Datenblock mit ``,\\r\\n`` dahinter, ein DATA? im Modus RAW liefert
+    höchstens :WAVeform:POINts Punkte, STOP? nach SOURce = Speicherlänge, STARt ab 0
+    und STOP exklusiv, WORD mit YORigin in Zählwerten."""
 
     # Testskripte setzen das, wie MockPicoScope2000.signals.
     signals: dict = default_signals()
@@ -121,13 +130,14 @@ class SimulatedInstrument:
         self.wav_mode = "NORMal"
         self.wav_format = "WORD"
         self.wav_source = 1
-        self.wav_start = 1
+        self.wav_start = 0
         self.wav_stop = 0
+        self.wav_points = 1
         self.errors: list[tuple[int, str]] = []
         self.captured: dict[int, np.ndarray] = {}
         self.captured_xinc = 1e-6
         self.captured_xorigin = 0.0
-        self._out = bytearray()
+        self._out: list[bytes] = []   # eine Antwort je Eintrag (WORD-Daten dürfen \n enthalten)
         self._arm_polls = 0
         self._pending_trigger = False
         self._rng = np.random.default_rng(1)
@@ -147,29 +157,22 @@ class SimulatedInstrument:
         self._handle(command.strip())
 
     def read_line(self) -> str:
-        idx = self._out.find(b"\n")
-        if idx < 0:
+        return self.read_raw().decode("ascii").strip()
+
+    def read_raw(self) -> bytes:
+        """Eine ganze Antwort."""
+        if not self._out:
             from unit_mso1000hd.driver import MSO1000HDError
             raise MSO1000HDError("Timeout: keine Antwort (Simulation)")
-        line = bytes(self._out[:idx])
-        del self._out[: idx + 1]
-        return line.decode("ascii")
-
-    def read_exact(self, count: int) -> bytes:
-        if len(self._out) < count:
-            from unit_mso1000hd.driver import MSO1000HDError
-            raise MSO1000HDError("Timeout: zu wenige Bytes (Simulation)")
-        data = bytes(self._out[:count])
-        del self._out[:count]
-        return data
+        return self._out.pop(0)
 
     # -- Befehle ------------------------------------------------------------------
 
     def _reply(self, text: str) -> None:
-        self._out += text.encode("ascii") + b"\n"
+        self._out.append(text.encode("ascii") + b"\r\n")
 
-    def _reply_block(self, payload: bytes) -> None:
-        self._out += f"#9{len(payload):09d}".encode("ascii") + payload + b"\n"
+    def _reply_block(self, payload: bytes, tail: bytes = b"\r\n") -> None:
+        self._out.append(f"#9{len(payload):09d}".encode("ascii") + payload + tail)
 
     def _error(self, code: int, text: str) -> None:
         self.errors.append((code, text))
@@ -336,7 +339,7 @@ class SimulatedInstrument:
             if not m:
                 raise ValueError(arg)
             self.wav_source = int(m.group(2))
-            self.wav_start, self.wav_stop = 1, 0
+            self.wav_start, self.wav_stop = 0, 0
             return True
         if _matches(key, "STARt"):
             if query:
@@ -346,18 +349,21 @@ class SimulatedInstrument:
             return True
         if _matches(key, "STOP"):
             if query:
-                self._reply(str(self.wav_stop))
+                self._reply(str(self.wav_stop or self._points_available()))
             else:
                 self.wav_stop = int(arg)
             return True
-        if _matches(key, "POINts") and query:
-            self._reply(str(self._points_available()))
+        if _matches(key, "POINts"):
+            if query:
+                self._reply(str(self.wav_points))
+            else:
+                self.wav_points = max(1, min(int(arg), 1_000_000))
             return True
         if _matches(key, "PREamble") and query:
-            n = self._points_available()
+            n = self._points_readable()
             pre = (f"{self.wav_format},NORMal,{n},1,{self.captured_xinc:e},{self.captured_xorigin:e},0,"
-                   f"{self.channels[self.wav_source].scale / 25:e},0,128")
-            self._reply_block(pre.encode("ascii"))
+                   f"{self._yinc():e},{self._yorigin()},{YREF}")
+            self._reply(pre)   # am Gerät eine Textzeile, kein Datenblock
             return True
         if _matches(key, "DATA") and query:
             data = self.captured.get(self.wav_source)
@@ -366,8 +372,15 @@ class SimulatedInstrument:
                 self._reply_block(b"")
                 return True
             stop = self.wav_stop if self.wav_stop > 0 else data.size
-            part = data[self.wav_start - 1: stop]
-            self._reply_block(",".join(f"{v:.6e}" for v in part).encode("ascii"))
+            stop = min(stop, data.size, self.wav_start + self.wav_points)   # höchstens POINts je DATA?
+            part = data[self.wav_start: stop]
+            if self.wav_format == "WORD":
+                # wie am Gerät: 12 bit, V = (Zählwert - YREF - YORigin) * YINC
+                counts = np.clip(np.round(part / self._yinc() + YREF + self._yorigin()), 0, 4095)
+                self._reply_block(counts.astype("<i2").tobytes())
+            else:
+                self._reply_block(",".join(f"{v:.6e}" for v in part).encode("ascii"), tail=b",\r\n")
+            self.wav_start = stop   # wie am Gerät: STARt rückt nach jedem DATA? weiter
             return True
         return False
 
@@ -376,6 +389,18 @@ class SimulatedInstrument:
     def _points_available(self) -> int:
         data = self.captured.get(self.wav_source)
         return 0 if data is None else int(data.size)
+
+    def _yinc(self) -> float:
+        """Am Gerät YINCrement = Skala/500 (12 bit über ~8 Teilungen)."""
+        return self.channels[self.wav_source].scale / 500.0
+
+    def _yorigin(self) -> int:
+        """Am Gerät YORigin = CHANnel:OFFSet / YINCrement, in Zählwerten."""
+        return int(round(self.channels[self.wav_source].offset / self._yinc()))
+
+    def _points_readable(self) -> int:
+        """Präambel-Feld Points: am Gerät die Punkte je Lesevorgang."""
+        return min(self._points_available(), self.wav_points)
 
     def _active(self) -> list[int]:
         return [n for n, ch in self.channels.items() if ch.display]
@@ -402,7 +427,7 @@ class SimulatedInstrument:
     def _window(self) -> tuple[int, float]:
         active = max(1, len(self._active()))
         rate_max = MAX_RATE / (1 if active == 1 else 2 if active == 2 else 4)
-        duration = 10.0 * self.tb_scale
+        duration = 8.0 * self.tb_scale   # am Gerät: 8 Teilungen im Speicher
         points = int(min(DEPTHS[self.depth], max(1000, math.floor(rate_max * duration))))
         return points, duration / points
 
@@ -423,7 +448,7 @@ class SimulatedInstrument:
 
     def _capture(self, trigger_time: float | None) -> None:
         points, xinc = self._window()
-        first = self.tb_offset - 5.0 * self.tb_scale
+        first = self.tb_offset - 4.0 * self.tb_scale
         t = first + np.arange(points) * xinc
         shift = trigger_time if trigger_time is not None else 0.0
         self.captured = {}

@@ -40,7 +40,8 @@ from PySide6.QtWidgets import (
 from field_catalog import LOAD_MODE_SHORT
 from i18n import Translator, tr
 from icons import IconButton
-from jds66xx.driver import WAVE_DC, waveform_name
+from jds66xx.driver import WAVE_DC
+from fg_profiles import module_of_state as fg_module_of_state
 from microhil_panel import MicroHilPanel
 from no_device_tile import NoDeviceTile, OfflineBadge, offline_group_qss
 from picoscope2000.driver import launch_app as launch_picoscope_app
@@ -478,6 +479,21 @@ class _DevicePanel(QGroupBox):
         self._value_labels[field_key].setText(text)
         unit = FIELD_DEFS[field_key][1]
         self._compact_values[field_key].setText(f"{text} {unit}" if unit else text)
+
+    def set_field_visible(self, field_key: str, visible: bool) -> None:
+        """Zeile ein-/ausblenden (Generator mit nur einem Kanal, 1.0.2). Das Geraeteart-Symbol wandert in die
+        letzte sichtbare Zeile."""
+        row = self._value_rows[field_key]
+        if self._form.isRowVisible(row) == visible and self._compact_icons[field_key].isHidden() != visible:
+            return
+        self._form.setRowVisible(row, visible)
+        self._compact_icons[field_key].setVisible(visible)
+        self._compact_values[field_key].setVisible(visible)
+        shown = [k for k in self._field_keys if self._form.isRowVisible(self._value_rows[k])]
+        if shown:
+            layout = self._value_rows[shown[-1]].layout()
+            if layout.indexOf(self._kind_icon) < 0:
+                layout.addWidget(self._kind_icon)
 
     def clear_values(self) -> None:
         for value_label in self._value_labels.values():
@@ -1669,17 +1685,23 @@ class DashboardWidget(QGroupBox):
         panel = self._panels.get(device_id)
         if panel is None:
             return
+        module = fg_module_of_state(state)   # 1.0.2: JDS2915 oder Generator im UNI-T-Oszilloskop (ein Kanal)
+        if hasattr(panel, "set_field_visible"):
+            panel.set_field_visible("fg_ch2", len(state["channels"]) > 1)
+        mode = state.get("mode") or "BASE"
+        prefix = "" if mode == "BASE" else f"{tr(getattr(module, 'MODE_NAMES', {}).get(mode, mode))} · "
         for n, (on, ch) in enumerate(zip(state["outputs"], state["channels"]), start=1):
             if not on:
                 panel.set_value(f"fg_ch{n}", tr("aus"))
                 continue
+            name = tr(module.waveform_name(ch["waveform"]))
             if ch["waveform"] == WAVE_DC:
                 # PI-75 a: in DC ist die Spannung der Offset (Amplitude 0,01 V), Frequenz/Amplitude sagen nichts
-                panel.set_value(f"fg_ch{n}", f"{tr(waveform_name(ch['waveform']))}  {ch['offset']:.2f} V")
+                panel.set_value(f"fg_ch{n}", f"{name}  {ch['offset']:.2f} V")
                 continue
             panel.set_value(
                 f"fg_ch{n}",
-                f"{tr(waveform_name(ch['waveform']))}  {_format_frequency(ch['frequency'])}  {ch['amplitude']:.2f} V",
+                f"{prefix}{name}  {_format_frequency(ch['frequency'])}  {ch['amplitude']:.2f} V",
             )
 
     @Slot(str, object)

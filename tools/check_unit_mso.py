@@ -241,7 +241,7 @@ def check_hardware(address: str, signal: str | None) -> None:
         print(f"          frei erfasst: {cap.samples} Samples a {cap.sample_interval_s:g} s in {took:.1f} s,"
               f" Warnungen {cap.warnings}")
         check("Freie Erfassung CH1 liefert Daten", cap.samples > 1000 and cap.triggered is None)
-        check("Laufzeit unter 30 s (ASCII ueber LAN)", took < 30.0, f"({took:.1f} s)")
+        check("Laufzeit unter 30 s (WORD ueber LAN)", took < 30.0, f"({took:.1f} s)")
         if signal:
             kind, f_text, high_text = signal.split(":")
             if kind != "rechteck":

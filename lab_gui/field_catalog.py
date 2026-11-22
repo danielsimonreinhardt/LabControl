@@ -89,7 +89,24 @@ FG_STATE_FIELDS = {
     **{f"offs{n}": (f"Offset {n}", "V") for n in (1, 2)},
     **{f"duty{n}": (f"Tastverhältnis {n}", "%") for n in (1, 2)},
     "phase": ("Phase", "°"),
+    # 1.0.2 (PI-88 b): welcher Generator (Treibermodul, fg_profiles) -- leer/fehlt = JDS2915; nur beim
+    # Generator im UNI-T-Oszilloskop Modulation und Lastwiderstand (Namen wie unit_mso_awg.driver.PARAM_FIELDS)
+    "profile": ("Gerätetyp", ""),
+    "mode": ("Modulation", ""),
+    "load": ("Lastwiderstand", "Ω"),
+    "mod_wave": ("Modulationsform", ""),
+    "mod_freq": ("Modulationsfrequenz", "Hz"),
+    "am_depth": ("AM-Tiefe", "%"),
+    "fm_dev": ("FM-Hub", "Hz"),
+    "fsk_rate": ("Umtastrate", "Hz"),
+    "fsk_freq": ("Sprungfrequenz", "Hz"),
+    "sweep_type": ("Wobbelart", ""),
+    "sweep_start": ("Startfrequenz", "Hz"),
+    "sweep_stop": ("Stoppfrequenz", "Hz"),
+    "sweep_time": ("Wobbelzeit", "s"),
 }
+FG_PARAM_FIELD_ORDER = ["profile", "mode", "load", "mod_wave", "mod_freq", "am_depth", "fm_dev", "fsk_rate",
+                        "fsk_freq", "sweep_type", "sweep_start", "sweep_stop", "sweep_time"]
 # Batterie-Simulator (seit 0.22.0): Zustand und je Zelle Istwert, Sollwert und
 # gemeldete Freigabe. 14 bestueckte Zellen (battsim.driver.CELL_COUNT), hier
 # als Zahl statt Import -- dieses Modul soll ausser microhil nichts ziehen.
@@ -143,7 +160,8 @@ KIND_FIELD_ORDER: dict[str, list[str]] = {
     "picoscope": list(PICOSCOPE_STATE_FIELDS),
     "scpiscope": list(PICOSCOPE_STATE_FIELDS),
     "jlink": list(JLINK_STATE_FIELDS),
-    "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"],
+    "fg": [f"{k}{n}" for n in (1, 2) for k in ("out", "wave", "freq", "ampl", "offs", "duty")] + ["phase"]
+          + FG_PARAM_FIELD_ORDER,
     "battsim": list(BATTSIM_STATE_FIELDS),
 }
 

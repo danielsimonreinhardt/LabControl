@@ -1568,6 +1568,7 @@ class MainWindow(QMainWindow):
             section.set_offset.connect(self._worker.set_fg_offset)
             section.set_duty.connect(self._worker.set_fg_duty)
             section.set_phase.connect(self._worker.set_fg_phase)
+            section.fg_action.connect(self._worker.fg_tile_action)   # Modulation/Last (1.0.2)
         elif kind == "picoscope":
             section.launch_requested.connect(self.dashboard.launch_picoscope)
             section.release_requested.connect(self._scope_service.release_async)

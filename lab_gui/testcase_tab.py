@@ -3538,7 +3538,7 @@ class TestcaseTab(QWidget):
                 detail = tr("Kanal {ch}", ch=step.hil_channel)
         elif step.device_kind == "fg":
             detail = tr("Kanal {ch}", ch=step.hil_channel)
-            if step.action in ("FG_FREQ", "FG_AMPL", "FG_OFFS", "FG_DUTY", "FG_PHASE"):
+            if step.action not in VALUELESS_ACTIONS:   # auch Modulation/Last (1.0.2)
                 detail += f": {step.value:g}"
         elif step.device_kind == "battsim":
             detail = battsim_step_detail(step)

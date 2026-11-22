@@ -22,6 +22,7 @@ flowchart LR
 | MANSON HCS-3xxx (Netzteil) | USB (CP210x, virtueller COM-Port) | automatisch | `psu:<USB-Seriennummer>` | ja |
 | KORAD KEL102 (elektronische Last) | USB (CDC) | automatisch, VID/PID `0416:5011` | `load:<USB-Seriennummer>` | ja |
 | JDS66xx / JDS2915 (Funktionsgenerator) | USB (CH340) | automatisch mit Handshake | `fg:COM6` | ja (ohne Messung am Ausgang) |
+| Funktionsgenerator im UNI-T MSO1000HD-S | LAN (über das Oszilloskop) | automatisch mit dem Oszilloskop | `fg:<IP>:AWG1` | ja (MSO1154HD-S) |
 | PicoScope 2204A/2205A | USB | automatisch | `picoscope:…` | ja |
 | UNI-T MSO1000HD | LAN (SCPI) | IP-Adresse eintragen | `scpiscope:<IP>` | nein, nur Simulator |
 | R&S RTB2002/RTB2004 | LAN (SCPI) | IP-Adresse eintragen | `scpiscope:<IP>` | ja (RTB2002) |
@@ -183,6 +184,36 @@ in DC die Amplitude, startet gar nicht erst; sonst scheitert der Schritt im Lauf
   tatsächlich eingestellten Wert.
 - Am Ausgang gemessen (Oszilloskop) sind nur DC und Tastverhältnis (17.11.2026); die Umsetzung in LabControl ist
   nur gegen die Nachbildung geprüft.
+
+## Funktionsgenerator im UNI-T-Oszilloskop (MSO1000HD-S)
+
+```mermaid
+flowchart LR
+  O["UNI-T-Oszilloskop<br/>in der Adressliste"] --> Q{"antwortet auf<br/>AWG1:OUTPut?"}
+  Q -- ja --> FG["Kachel Funktionsgenerator<br/>fg:&lt;IP&gt;:AWG1"]
+  Q -- nein --> N["kein Generator<br/>(erst wieder, wenn das Oszilloskop neu erscheint)"]
+```
+
+| Feld in der Kachel | Bedeutung |
+|---|---|
+| Kanal 1: Form | Sinus, Rechteck, Puls, Rampe (Dreieck), Rauschen, DC |
+| Frequenz, Amplitude, Offset | wie beim JDS2915; Amplitude und Offset gelten an der eingestellten **Last** |
+| Tastverhältnis | nur bei **Rechteck und Puls** bedienbar |
+| Ausgang EIN / AUS | schaltet den Ausgang, alle Signalwerte bleiben |
+| Modulation | Grundsignal, AM, FM, ASK, FSK, Wobbeln – darunter nur die Felder der gewählten Art |
+| Last | 50 … 1 000 000 Ω, ∞-Knopf = hochohmig |
+
+- **Einrichten:** nichts – der Generator erscheint mit dem Oszilloskop (Modelle mit „-S“). Beim Verbinden schaltet
+  LabControl nichts.
+- **Testablauf, MCP, Verbund:** dieselben Aktionen wie beim JDS2915 (Kanal 1, keine Phase), dazu
+  „Modulation …“, „Modulationsform …“, Modulationsfrequenz, AM-Tiefe, FM-Hub, Umtastrate (ASK und FSK),
+  FSK-Sprungfrequenz, Wobbeln und „Lastwiderstand setzen“.
+- **ALLE AUS und Sicherheitsabschaltung** schalten seinen Ausgang aus, auch während das Oszilloskop gerade misst.
+- **Last:** Die Spannung am Ausgang ändert sich nicht; die Last sagt nur, an welchem Widerstand Amplitude und
+  Offset gelten (0,5 Vss hochohmig = 0,25 Vss an 50 Ω).
+- Erfassungen am selben Oszilloskop laufen nebenher; LabControl wechselt die Abfragen ab. Ein **zweites Programm**
+  am selben Oszilloskop (z. B. ein eigenes Skript) kann Antworten vertauschen – das Gerät hat nur eine Ausgabe für
+  alle Verbindungen.
 
 ## Oszilloskop PicoScope 2204A/2205A
 
@@ -513,7 +544,7 @@ Unter **Verriegelung Netzteil/Last im Testablauf** legst du mit **+** Paare aus 
 |---|---|
 | Netzteil | Ausgang aus (mit Rückkontrolle); in Handbedienung: nichts |
 | Last | Eingang aus |
-| Funktionsgenerator | beide Ausgänge aus, Signalwerte bleiben |
+| Funktionsgenerator | alle Ausgänge aus (JDS2915 beide, UNI-T AWG1), Signalwerte bleiben |
 | microHIL | Digitalausgänge, Relais, 12-V-Ausgänge aus; Analogausgänge 0 mV, PWM 0 |
 | Batterie-Simulator | Ausgang gesperrt, Senden läuft weiter |
 | CAN | ein laufender Restbus stoppt |
