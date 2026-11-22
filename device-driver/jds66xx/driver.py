@@ -42,6 +42,13 @@ USB_PID = 0x7523
 DEFAULT_BAUDRATE = 115200
 
 CHANNELS = (1, 2)
+# Geraeteprofil (lab_gui/fg_profiles.py, 1.0.2): seit es mit dem Generator im UNI-T-Oszilloskop
+# (unit_mso_awg) einen zweiten Funktionsgenerator gibt, nennt jedes Treibermodul, was es kann.
+PROFILE = "jds66xx"
+TITLE = "JDS66xx"
+HAS_PHASE = True
+HAS_MODULATION = False
+HAS_LOAD = False
 
 # Obergrenzen des JDS2915. Das Geraet klemmt selbst waveformabhaengig (Rechteck/
 # Puls liegen niedriger als Sinus); hier steht nur die absolute Obergrenze, damit
@@ -93,6 +100,7 @@ POLL_SLOW_FIELDS: tuple[tuple[str, int], ...] = tuple(
     (field, channel) for channel in CHANNELS
     for field in ("waveform", "frequency", "amplitude", "offset", "duty")
 ) + (("phase", 0),)
+SLOW_FIELDS_PER_POLL = 3
 
 
 class FunctionGeneratorError(RuntimeError):
@@ -507,6 +515,31 @@ def set_duty_checked(gen, channel: int, percent: float) -> None:
     if refusal:
         raise FunctionGeneratorValueError(refusal)
     gen.set_duty(channel, percent)
+
+
+def set_param_checked(gen, channel: int, field: str, value) -> None:
+    """Modulation/Last (nur Generator im UNI-T-Oszilloskop): hier nicht vorhanden."""
+    raise FunctionGeneratorValueError(f"Der JDS66xx kennt {field} nicht (Modulation und Lastwiderstand nur am "
+                                      f"Generator im UNI-T-Oszilloskop)")
+
+
+def outputs_off(gen) -> None:
+    """Beide Ausgaenge AUS in einem Telegramm (ALLE AUS)."""
+    gen.set_outputs(False, False)
+
+
+def state_dict(gen) -> dict:
+    """Voller Zustand im Format von device_worker.fg_state (beim Verbinden, Simulation)."""
+    state = gen.get_state()
+    return {
+        "outputs": list(state.outputs),
+        "channels": [
+            {"waveform": c.waveform, "frequency": c.frequency, "amplitude": c.amplitude,
+             "offset": c.offset, "duty": c.duty}
+            for c in state.channels
+        ],
+        "phase": state.phase,
+    }
 
 
 if __name__ == "__main__":
