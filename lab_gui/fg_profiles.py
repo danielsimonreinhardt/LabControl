@@ -1,24 +1,26 @@
 """Funktionsgeneratoren (Geraeteart "fg"): welcher Treiber gehoert zu einem Geraet (1.0.2).
 
 Bis 1.0.1 gab es nur den JDS2915 (jds66xx). Seit 1.0.2 kommt der eingebaute Generator der UNI-T-
-Oszilloskope mit "-S" dazu (unit_mso_awg). Beide sind dieselbe Geraeteart mit denselben Aktionen
-(FG_*), denselben Signalen (device_worker.fg_state) und derselben Kachel; was sie unterscheidet
-(Kanalzahl, Kurvenformen, Grenzen, Phase, Modulation, Lastwiderstand), sagt das Treibermodul. Dieses
-Modul ordnet Geraet, Zustand und Geraete-ID dem Treibermodul zu.
+Oszilloskope mit "-S" dazu (unit_mso_awg), seit 1.0.3 der MHS-5200A (mhs5200a). Alle sind dieselbe
+Geraeteart mit denselben Aktionen (FG_*), denselben Signalen (device_worker.fg_state) und derselben
+Kachel; was sie unterscheidet (Kanalzahl, Kurvenformen, Grenzen, Phase, Modulation, Lastwiderstand),
+sagt das Treibermodul. Dieses Modul ordnet Geraet, Zustand und Geraete-ID dem Treibermodul zu.
 
 Qt-frei (wie field_catalog.py): LiveState und die Netzwerk-Freigabe benutzen es ebenfalls.
 """
 from __future__ import annotations
 
 from jds66xx import driver as jds_driver
+from mhs5200a import driver as mhs_driver
 from unit_mso_awg import driver as awg_driver
 from verbund_ids import split as split_device_id
 
-MODULES = {jds_driver.PROFILE: jds_driver, awg_driver.PROFILE: awg_driver}
+MODULES = {jds_driver.PROFILE: jds_driver, awg_driver.PROFILE: awg_driver, mhs_driver.PROFILE: mhs_driver}
 DEFAULT_MODULE = jds_driver
 
-# FG_WAVE_*-Aktionscode (testcase_model.FG_ACTIONS) -> Kurvenform-Code. Die Codes gelten fuer beide
-# Treiber (unit_mso_awg uebernimmt die des JDS2915; Dreieck = RAMP mit Symmetrie 50 %).
+# FG_WAVE_*-Aktionscode (testcase_model.FG_ACTIONS) -> Kurvenform-Code. Die Codes gelten fuer alle
+# Treiber (unit_mso_awg und mhs5200a uebernehmen die des JDS2915; Dreieck = RAMP mit Symmetrie 50 %;
+# Puls und DC lehnt der MHS-5200A ab).
 FG_WAVE_ACTIONS = {
     "FG_WAVE_SINE": jds_driver.WAVE_SINE,
     "FG_WAVE_SQUARE": jds_driver.WAVE_SQUARE,
@@ -47,11 +49,11 @@ FG_PARAM_ACTIONS: dict[str, tuple[str, object]] = {
 
 
 # Rahmen fuer Wertfelder in Ablauf-Editor und Fernsteuerung (remote_actions, testcase_model): der weiteste
-# beider Generatoren -- die genaue Grenze prueft der Treiber des jeweiligen Geraets.
-MIN_FREQUENCY_HZ = min(jds_driver.MIN_FREQUENCY_HZ, awg_driver.MIN_FREQUENCY_HZ)
-MAX_FREQUENCY_HZ = max(jds_driver.MAX_FREQUENCY_HZ, awg_driver.MAX_FREQUENCY_HZ)
-MAX_AMPLITUDE_V = max(jds_driver.MAX_AMPLITUDE_V, awg_driver.MAX_AMPLITUDE_V)
-MAX_OFFSET_V = max(jds_driver.MAX_OFFSET_V, awg_driver.MAX_OFFSET_V)
+# aller Generatoren -- die genaue Grenze prueft der Treiber des jeweiligen Geraets.
+MIN_FREQUENCY_HZ = min(m.MIN_FREQUENCY_HZ for m in MODULES.values())
+MAX_FREQUENCY_HZ = max(m.MAX_FREQUENCY_HZ for m in MODULES.values())
+MAX_AMPLITUDE_V = max(m.MAX_AMPLITUDE_V for m in MODULES.values())
+MAX_OFFSET_V = max(m.MAX_OFFSET_V for m in MODULES.values())
 # Wertebereich je Modulations-/Lastaktion mit Wert: Code -> (Einheit, Minimum, Maximum)
 FG_PARAM_VALUE_RANGE: dict[str, tuple[str, float, float]] = {
     code: (awg_driver.NUMERIC_PARAMS[field][1], awg_driver.NUMERIC_PARAMS[field][2],
@@ -94,7 +96,10 @@ def module_of_device(gen):
 def module_for_device_id(device_id: str):
     """Treibermodul aus der Geraete-ID (auch "@rechner/..."), fuer Pruefungen ohne Geraet (Ablauf-Editor)."""
     _host, local_id = split_device_id(device_id or "")
-    return awg_driver if awg_driver.is_device_id(local_id) else DEFAULT_MODULE
+    for module in (awg_driver, mhs_driver):
+        if module.is_device_id(local_id):
+            return module
+    return DEFAULT_MODULE
 
 
 def wave_action_for(code: int) -> str | None:
