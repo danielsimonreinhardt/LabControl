@@ -195,14 +195,17 @@ Erfassung aus dem Speicher verdrängt wird.
   Gerät begrenzt bei 99,9 %). **Analoger Offset**, anders als beim UNI-T mit
   Vorzeichen + (R&S zieht den Offset ab, Bildschirmmitte = +Offset).
 - 10 Bit, 70 MHz bzw. per Option bis 300 MHz (aus `*OPT?`). Höchstens
-  1,25 GS/s: die 2,5 GS/s interleaved liefern am Gerät falsche Daten.
+  1,25 GS/s: die 2,5 GS/s interleaved liefern mit Firmware 01.210 falsche
+  Daten (mit 02.202 richtig, die Grenze bleibt).
 - Zeitbasis im 1-2-5-Raster über 12 Teilungen; Aufzeichnungslänge 10k … 10M,
   standardmäßig mindestens 250 000 Samples (rund 2 s je Erfassung).
 - Trigger: Einzelerfassung (`*OPC?`, `SINGle`, Trigger-Modus NORMal,
   Triggerfilter aus), `ACQuire:STATe?` wird bis `COMP` gepollt, Auto-Trigger
   per `*TRG`.
 - Daten binär (REAL,32) in Volt über den SCPI-Socket (Port 5025), ein Block je
-  Kanal. Zeitachse und Trigger-Index aus `CHANnel:DATA:HEADer?` (XStart) --
+  Kanal. Zeitachse und Trigger-Index aus `CHANnel:DATA:HEADer?` (XStart),
+  ab 200k Punkten um den gemessenen Nachlauf der Daten verschoben
+  (`driver.TRIGGER_DELAY_POINTS`, rund 50 bzw. mit zwei Kanälen 28 Punkte) --
   stimmt der Pre-Trigger nicht, steht eine Warnung im Ergebnis.
 - Was am Gerät gefunden wurde und was noch offen ist: README des Treibers
   (`device-driver/rs_rtb2000/README.md`).

@@ -1,9 +1,10 @@
 # Rohde & Schwarz RTB2000 (RTB2002, RTB2004) – Oszilloskop über SCPI
 
-> **Stand: am echten RTB2002 (Firmware 01.210, ohne Bandbreiten-Option) über
-> LAN geprüft**, auch über die Netzwerk-Schnittstelle (Weg des MCP-Servers).
-> `tools/check_rs_rtb.py --hardware --address <IP> --signal-ch1 rechteck:10000:2.5`
-> ist dort grün. Grundlage ist das Benutzerhandbuch (R&S RTB2000 User Manual
+> **Stand: am echten RTB2002 (Firmware 01.210, seit 23.11.2026 02.202, ohne
+> Bandbreiten-Option) über LAN geprüft**, auch über die Netzwerk-Schnittstelle
+> (Weg des MCP-Servers). `tools/check_rs_rtb.py --hardware --address <IP>
+> --signal-ch1 rechteck:<f>:2.5` ist mit 02.202 bei 1 kHz und 10 kHz grün
+> (Signal vom MHS-5225A). Grundlage ist das Benutzerhandbuch (R&S RTB2000 User Manual
 > 1333.1611.02 ─ 04, Kapitel 15 „Remote Control Commands“; Seiten unten =
 > gedruckte Seitenzahlen). Was am Gerät anders war als im Handbuch, steht unter
 > „Am Gerät gefunden“; noch offen ist nur, was als **HARDWARE-PRÜFUNG** markiert ist.
@@ -132,7 +133,13 @@ Aus dem Handbuch, im Code an der jeweiligen Stelle kommentiert:
   Zeitbasis, Trigger, Aufzeichnungslänge, Erfassungsart „Refresh“ mit
   Dezimierung „Sample“). Wer am Gerät weiterarbeitet, stellt danach neu ein.
 
-### Am Gerät gefunden (RTB2002, Firmware 01.210)
+### Am Gerät gefunden (RTB2002, Firmware 01.210, mit 02.202 nachgeprüft)
+
+Mit 02.202 unverändert: Teilungen, Vorzeichen, Begrenzung bei 99,9 %
+(Offset 2,5 V, ±1 V: Minimum wieder 1,50098 V), `*OPT?` = `0`,
+`ACQuire:STATe?` = `COMP`, VXI-11 und Socket erreichbar. Was sich geändert
+hat oder neu gefunden wurde, steht beim jeweiligen Punkt.
+
 
 - **10 vertikale Teilungen** (`RANGe` = 10 · `SCALe`), nicht 8, wie die Grenzen
   auf S. 253 nahelegen. Der Adapter rechnet mit ±5 Teilungen.
@@ -147,7 +154,35 @@ Aus dem Handbuch, im Code an der jeweiligen Stelle kommentiert:
 - **Triggerfilter bleiben vom Bedienen an:** `TRIGger:A:EDGE:FILTer:HFReject` war
   eingeschaltet, der Trigger kam dadurch 2,0 µs nach der Flanke. Der Treiber
   schaltet HFReject, NREJect und Holdoff jetzt bei jeder Erfassung aus; danach
-  liegt die Flanke auf ±2 ns am Trigger-Index.
+  liegt die Flanke auf ±2 ns am Trigger-Index -- bis 100k Punkte, siehe
+  nächster Punkt.
+- **Ab 200k Punkten laufen die Daten dem Kopf nach** (gemessen mit 02.202, am
+  23.11.2026; unter 01.210 nur bei kurzen Aufzeichnungen geprüft): Die
+  Triggerflanke liegt nicht bei t = 0 laut `XStart`, sondern rund 50 Punkte
+  später, mit zwei aktiven Kanälen rund 28. Gemessen in Punkten (Rechteck vom
+  MHS-5225A, unterabtastgenau):
+
+  | `ACQuire:POINts` | 1 Kanal | 2 Kanäle |
+  |---|---|---|
+  | 10k … 100k | 0 | 0 |
+  | 200k | 61,5 | 29,5 |
+  | 500k | 49 … 55 | 25 … 28 |
+  | 1M | 53 … 58 | 29 |
+  | 2M | 52 | 27 … 28 |
+  | 5M | 48 … 62 | 29 |
+  | 10M | 51 | – |
+
+  Unabhängig von Abtastrate, Flanke, Triggerquelle und Pre-Trigger; beide
+  Kanäle gleich (der Abstand CH1 → CH2 stimmt). Bei gleicher Einstellung auf
+  ±1 Punkt wiederholbar (außer 5M). Ohne Ausgleich wäre t = 0 bei 5 ms Fenster
+  0,8 µs zu früh. Der Adapter verschiebt den Trigger-Index um
+  `driver.TRIGGER_DELAY_POINTS`; danach liegt die Flanke auf ±5 Punkte (5M: ±7)
+  am Trigger-Index (`check_rs_rtb --signal-ch1` prüft ±10, der Simulator bildet
+  den Nachlauf nach und prüft ±2). Nicht gemessen: 10M mit zwei Kanälen und
+  RTB2004 mit drei oder vier Kanälen (**HARDWARE-PRÜFUNG**, angenommen wie
+  zwei Kanäle).
+- **Zwei Kanäle, Trigger an CH2** (02.202, Rechteck 1 kHz an CH1 und CH2):
+  Trigger steigend wie fallend an CH2, Frequenz und Pegel beider Kanäle richtig.
 - **`*OPC?` vor `SINGle` ist Pflicht:** Die Einstellungen brauchen 0,2…0,5 s.
   Ohne Synchronisation ging `SINGle` gelegentlich verloren (Zustand blieb `STOP`),
   und `CHANnel:DATA?` antwortete danach gar nicht mehr.
@@ -157,8 +192,10 @@ Aus dem Handbuch, im Code an der jeweiligen Stelle kommentiert:
   0…2,5-V-Rechteck kam als −1,8…−1,4 V an, in REAL wie in ASCII. Das Gerät wählt
   die Rate aus Aufzeichnungslänge / Fenster (10k bei 6 µs → 1,25 GS/s, 100k bei
   6 µs → 2,5 GS/s); der Adapter begrenzt die Länge so, dass es bei 1,25 GS/s
-  bleibt. Möglicherweise behebt das ein Firmware-Update (02.202 liegt vor) --
-  nicht geprüft.
+  bleibt. **Mit 02.202 behoben:** bei 2,5 GS/s (100k Punkte, 6 µs) kommt das
+  Rechteck richtig an (0 … 2,42 V). Die Begrenzung auf 1,25 GS/s bleibt
+  trotzdem, solange Geräte mit 01.210 im Umlauf sind; der Nachlauf bei 2,5 GS/s
+  ist nicht gemessen.
 - **VXI-11 ist langsam und anfällig:** Mit pyvisa-py nur ~0,25 MB/s; mit mehr als
   20 kB je Lesevorgang lief es in den Timeout, und nach einigen Timeouts nahm das
   Gerät keine VXI-11-Verbindungen mehr an („error creating link: 3“, im Lauf
@@ -166,16 +203,15 @@ Aus dem Handbuch, im Code an der jeweiligen Stelle kommentiert:
   darum laufen Erkennung (`scope_api/scpi.py`) und Daten über Port 5025.
 - Nach einem Datenblock folgt ein LF; `SYSTem:ERRor?` liefert `0,"No error"`.
 - `*OPT?` liefert ohne Lizenzen nur `0`. `*IDN?`:
-  `Rohde&Schwarz,RTB2002,1333.1005k02/000000,01.210` -- das Gerät meldet als
+  `Rohde&Schwarz,RTB2002,1333.1005k02/000000,02.202` (vorher `01.210`) -- das Gerät meldet als
   Seriennummer `000000`; die Kennung in LabControl ist ohnehin die IP.
-- `CHANnel<n>:ZOFFset?` antwortet nicht (Timeout); der Treiber benutzt es nicht.
+- `CHANnel<n>:ZOFFset?` antwortete mit 01.210 nicht (Timeout), mit 02.202 mit
+  `0.00E+00`; der Treiber benutzt es nicht.
 
 **HARDWARE-PRÜFUNG** -- noch nicht am Gerät nachgemessen:
 
 - `CHANnel<n>:SCALe` bezieht sich nach `PROBe<n>:…:MANual` auf die Tastkopfspitze
   (bisher nur 1:1 geprüft).
-- Erfassungen mit beiden Kanälen und mit Trigger an CH2 (bisher nur CH1 mit
-  Signal geprüft).
 - Format der `*OPT?`-Antwort mit installierter Bandbreiten-Option (gesucht wird
   nach `B22x`/`B24x`).
 
@@ -183,7 +219,9 @@ Aus dem Handbuch, im Code an der jeweiligen Stelle kommentiert:
 
 `mock.SimulatedRTB2000` versteht die Teilmenge der SCPI-Befehle, die `driver.py`
 benutzt, und verhält sich wie das gemessene RTB2002 (12 × 10 Teilungen,
-Begrenzung bei 99,9 %, 2,5 GS/s nur bei langer Aufzeichnung mit einem Kanal). Signale (`SimulatedRTB2000.signals`, für Prüfskripte austauschbar):
+Begrenzung bei 99,9 %, 2,5 GS/s nur bei langer Aufzeichnung mit einem Kanal,
+Nachlauf der Daten ab 200k Punkten wie `driver.TRIGGER_DELAY_POINTS`; meldet
+Firmware 02.202). Signale (`SimulatedRTB2000.signals`, für Prüfskripte austauschbar):
 
 | Kanal | Signal |
 |---|---|
@@ -201,7 +239,8 @@ python tools/check_rs_rtb.py --hardware --address 192.168.1.60 --signal-ch1 rech
 ```
 
 Mit `--signal-ch1` (z. B. Tastkopf-Abgleichausgang an CH1 -- am geprüften Gerät
-ein 10-kHz-Rechteck 0…2,5 V, also `rechteck:10000:2.5`) prüft das Skript
+ein 10-kHz-Rechteck 0…2,5 V, also `rechteck:10000:2.5`; oder ein Generator mit
+Rechteck 0…2,5 V) prüft das Skript
 Frequenz, Pegel, Lage des Triggers (Vorzeichen `TIMebase:POSition`, Flanke am
 Trigger-Index) und den Offset (Vorzeichen `CHANnel:OFFSet`). Dazu gibt es
 Optionen, Teilungen, `ACQuire:STATe?`-Antwort und RANGe/SCALe aus.

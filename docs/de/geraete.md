@@ -311,13 +311,16 @@ einer Adresse steckt, erkennt LabControl an der Antwort auf `*IDN?`.
 - **Adresse:** die bloße IP. LabControl spricht das Gerät über den SCPI-Socket (Port 5025) an, VXI-11 nur als
   Rückfall -- VXI-11 ist am RTB2002 sechsmal langsamer und nimmt nach Störungen keine Verbindungen mehr an. USB
   nur mit installiertem VISA und Modus „USB TMC“.
-- **Daten:** binär in Volt, bis 10 Mio. Samples je Kanal, höchstens 1,25 GS/s (die 2,5 GS/s liefern am Gerät
-  falsche Daten); eine Erfassung mit 250 000 Samples dauert rund 2 s. Die Bandbreite (70 MHz oder per Lizenz
+- **Daten:** binär in Volt, bis 10 Mio. Samples je Kanal, höchstens 1,25 GS/s (die 2,5 GS/s liefern mit Firmware
+  01.210 falsche Daten); eine Erfassung mit 250 000 Samples dauert rund 2 s.
+- **Zeitpunkt 0 = Trigger:** Ab 200 000 Punkten liefert das Gerät die Daten um rund 50 Punkte (mit zwei Kanälen
+  rund 28) gegen die Zeitachse verschoben; LabControl gleicht das aus. Die Flanke liegt danach auf ±5 Punkte am
+  Zeitpunkt 0. Die Bandbreite (70 MHz oder per Lizenz
   mehr) liest LabControl beim Verbinden über `*OPT?`.
 - **Jede Erfassung stellt das Gerät um** (Kanäle, Zeitbasis, Trigger; Triggerfilter werden ausgeschaltet).
 
 !!! note "Am RTB2002 geprüft"
-    Geprüft mit Firmware 01.210 über LAN, auch über die Netzwerk-Schnittstelle (MCP). Eigenheiten des Geräts
+    Geprüft mit Firmware 01.210 und 02.202 über LAN, auch über die Netzwerk-Schnittstelle (MCP). Eigenheiten des Geräts
     und die Prüfung (`tools/check_rs_rtb.py --hardware --address <IP>`) stehen in
     `device-driver/rs_rtb2000/README.md`.
 

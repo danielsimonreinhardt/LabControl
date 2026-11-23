@@ -20,13 +20,16 @@
   ACQuire:STATe? pollen. auto: nach timeout_s *TRG; none: sofort *TRG;
   single: nach timeout_s STOP und Fehler trigger_timeout.
 - Daten: REAL,32 in Volt, Zeitachse aus CHANnel:DATA:HEADer? -- der Index
-  des Triggers (t = 0) ergibt sich aus XStart, ohne Annahme über das Fenster.
+  des Triggers (t = 0) ergibt sich aus XStart, ohne Annahme über das Fenster,
+  ab 200k Punkten verschoben um den Nachlauf der Daten
+  (driver.trigger_delay_points, Firmware 02.202 gemessen).
 
 Das Gerät bleibt nach einer Erfassung gestoppt und zeigt sie an.
 
-Am RTB2002 (Firmware 01.210) bestätigt: Teilungen 12 x 10, Vorzeichen von
-TIMebase:POSition und CHANnel:OFFSet, Ablauf *OPC? -> SINGle -> ACQuire:STATe?
-"COMP", Trigger auf ±2 ns an der Flanke (mit abgeschalteten Triggerfiltern).
+Am RTB2002 (Firmware 01.210 und 02.202) bestätigt: Teilungen 12 x 10, Vorzeichen
+von TIMebase:POSition und CHANnel:OFFSet, Ablauf *OPC? -> SINGle -> ACQuire:STATe?
+"COMP", Trigger auf ±2 ns an der Flanke (mit abgeschalteten Triggerfiltern) bis
+100k Punkte, darüber nach Ausgleich des Nachlaufs auf ±5 Punkte.
 Offen (HARDWARE-PRÜFUNG, siehe README des Treibers): Bezug von CHANnel:SCALe
 auf den Tastkopf (nur 1:1 geprüft).
 """
@@ -55,6 +58,7 @@ from rs_rtb2000.driver import (
     SIM_RESOURCE,
     is_complete,
     parse_model,
+    trigger_delay_points,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +85,8 @@ DEFAULT_SAMPLES = 250_000
 # 01.210) lieferte CHANnel:DATA? bei 2,5 GS/s aber unbrauchbare Werte (ein
 # 0..2,5-V-Rechteck kam als -1,8..-1,4 V, in REAL wie ASCII). Der Adapter
 # begrenzt die Aufzeichnungslänge darum so, dass das Gerät höchstens 1,25 GS/s
-# wählt (siehe _choose_timing).
+# wählt (siehe _choose_timing). Mit Firmware 02.202 sind die Daten bei 2,5 GS/s
+# richtig; die Grenze bleibt für Geräte mit älterer Firmware.
 MAX_RATE_HZ = 1.25e9
 RESOLUTION_BITS = 10
 POLL_S = 0.02
@@ -114,8 +119,8 @@ def capabilities_for(model: str, serial: str, simulated: bool = False, options: 
             "als angefragt (er steht im Ergebnis).",
             "Ohne timing.samples werden mindestens 250 000 Samples erfasst (rund 2 s je Erfassung); höchstens "
             "10 Mio. je Kanal, binär über LAN mit ~1,4 MB/s (rund 30 s für 10 Mio.).",
-            "Höchstens 1,25 GS/s je Kanal (die 2,5 GS/s interleaved liefern am Gerät falsche Daten und werden "
-            "nicht genutzt). Die tatsächliche Rate steht im Ergebnis.",
+            "Höchstens 1,25 GS/s je Kanal (die 2,5 GS/s interleaved liefern mit älterer Firmware falsche Daten "
+            "und werden nicht genutzt). Die tatsächliche Rate steht im Ergebnis.",
             "Bandbreite: 70 MHz, mit Option RTB-B22x/B24x mehr -- erkannt über *OPT?, sobald das Gerät "
             "verbunden ist.",
             "Nur Flanken-Trigger. Die Bildschirmeinstellungen am Gerät werden durch jede Erfassung "
@@ -268,8 +273,11 @@ class RtbScope:
             warnings.append(f"Abtastintervall {interval:g} s, gröber als angefragt "
                             f"({request.timing.sample_interval_s:g} s).")
 
-        # t = 0 ist der Trigger (S. 259), der erste Punkt liegt bei XStart.
-        trigger_index = int(round(-head.xstart / interval))
+        # t = 0 ist der Trigger (S. 259), der erste Punkt liegt bei XStart --
+        # bei langen Aufzeichnungen laufen die Daten dem Kopf aber nach
+        # (driver.TRIGGER_DELAY_POINTS): die Flanke kommt so viele Punkte später.
+        delay = trigger_delay_points(dev.acquisition_points(), len(numbers))
+        trigger_index = int(round(-head.xstart / interval + delay))
         trigger_index = min(max(trigger_index, 0), samples - 1)
         if trig.mode != "none":
             got = trigger_index / max(1, samples - 1)
