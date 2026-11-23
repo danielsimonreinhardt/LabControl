@@ -4,6 +4,21 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [Unreleased]
+
+### Behoben
+- **RTB2000: Zeitpunkt 0 an der Triggerflanke auch bei langen Aufzeichnungen.** Ab 200 000 Punkten
+  (`ACQuire:POINts`) liefert das RTB2002 die Daten gegen den Kopf verschoben: die Flanke lag rund 50 Punkte
+  (zwei Kanäle: rund 28) nach t = 0, bei 5 ms Fenster also 0,8 µs. Der Adapter verschiebt den Trigger-Index um
+  die gemessene Tabelle `rs_rtb2000.driver.TRIGGER_DELAY_POINTS`; danach ±5 Punkte. Der Simulator bildet den
+  Nachlauf nach, `check_rs_rtb` prüft die Lage der Flanke jetzt auf ±2 (Simulator) bzw. ±10 Punkte (Gerät).
+
+### Geändert
+- **RTB2002 mit Firmware 02.202 nachgeprüft** (`check_rs_rtb --hardware --signal-ch1` bei 1 und 10 kHz, Signal vom
+  MHS-5225A): alle Eigenheiten wie unter 01.210; neu richtig sind die Daten bei 2,5 GS/s (die Grenze 1,25 GS/s
+  bleibt für ältere Firmware) und `CHANnel:ZOFFset?`. Zwei Kanäle mit Trigger an CH2 jetzt am Gerät geprüft.
+  Der Simulator meldet 02.202.
+
 ## [1.0.2] – 2026-11-22
 
 ### Hinzugefügt

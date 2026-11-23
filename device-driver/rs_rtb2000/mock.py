@@ -16,6 +16,9 @@ Zeitmodell (wie am RTB2002 gemessen, siehe README.md):
 - Vertikal 10 Teilungen (RANGe = 10 * SCALe). CHANnel:OFFSet wird vom Signal
   abgezogen: die Bildschirmmitte liegt bei +OFFSet. Werte begrenzt bei
   99,9 % des Vollausschlags (±4,995 Teilungen), wie am Gerät.
+- Ab 200k Punkten laufen die Daten dem Kopf um driver.trigger_delay_points
+  nach (Firmware 02.202 gemessen): die Flanke liegt so viele Punkte nach
+  t = 0 laut XStart.
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ import numpy as np
 
 SIM_MODEL = "RTB2002"
 SIM_SERIAL = "1333.1005k02/SIM001"
-SIM_FIRMWARE = "01.210"
+SIM_FIRMWARE = "02.202"
 SIM_IDN = f"Rohde&Schwarz,{SIM_MODEL},{SIM_SERIAL},{SIM_FIRMWARE}"
 SIM_OPTIONS = "0"   # wie das RTB2002 ohne Lizenzen
 
@@ -476,7 +479,17 @@ class SimulatedRTB2000:
                  else np.nonzero(above[:-1] & ~above[1:])[0])
         if edges.size == 0:
             return None
-        return float(t[edges[0] + 1])
+        # Das Raster ist gröber als ein Abtastpunkt bei kurzen Fenstern (und als
+        # die Flanke des Rechtecks): zwischen den beiden Rasterpunkten fein
+        # nachsuchen, dann linear.
+        k = edges[0]
+        t = np.linspace(t[k], t[k + 1], 1001)
+        v = signal(t)
+        above = v > self.trig_level
+        edges = (np.nonzero(~above[:-1] & above[1:])[0] if self.trig_rising
+                 else np.nonzero(above[:-1] & ~above[1:])[0])
+        k = edges[0] if edges.size else 0
+        return float(t[k] + (self.trig_level - v[k]) / (v[k + 1] - v[k]) * (t[k + 1] - t[k]))
 
     def _capture(self, trigger_time: float | None) -> None:
         points, xinc = self._window()
@@ -485,6 +498,9 @@ class SimulatedRTB2000:
         first = self.tb_position - duration * self.tb_reference / 100.0
         t = first + np.arange(points) * xinc
         shift = trigger_time if trigger_time is not None else 0.0
+        # Wie am Gerät: Punkt j zeigt das Signal von delay Punkten früher.
+        from rs_rtb2000.driver import trigger_delay_points
+        shift -= trigger_delay_points(self.record_length, len(self._active())) * xinc
         self.captured = {}
         for n in self._active():
             ch = self.channels[n]

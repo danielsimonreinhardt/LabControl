@@ -23,6 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "device-driver"))  # Geraete-Treiber
@@ -67,6 +69,17 @@ def request(**overrides) -> AcquireRequest:
     return AcquireRequest.from_dict(data)
 
 
+def edge_offset(capture, name: str, level: float, rising: bool) -> float:
+    """Punkte von trigger_index bis zur naechsten Kreuzung von level in der Richtung (unterabtastgenau)."""
+    v = capture.channels[name].volts
+    below = v < level
+    idx = np.nonzero(below[:-1] & ~below[1:])[0] if rising else np.nonzero(~below[:-1] & below[1:])[0]
+    if idx.size == 0:
+        return float("inf")
+    k = idx[np.argmin(np.abs(idx - capture.trigger_index))]
+    return float(k + (level - v[k]) / (v[k + 1] - v[k]) - capture.trigger_index)
+
+
 def measure(capture, name: str, items: list[str]) -> dict:
     values, _reasons = analysis.measure(capture.time_s, capture.channels[name].volts, items)
     return values
@@ -90,6 +103,10 @@ def check_pure() -> None:
           and driver.socket_resource("USB0::0x0AAD::0x01D6::123::INSTR") is None)
     head = driver.Header(xstart=-4.998e-7, xstop=5.0e-7, points=5000, values_per_sample=1)
     check("Kopf: XINC wie Handbuch S. 244 (2e-10 s)", near(head.xinc, 2e-10, 1e-3), str(head.xinc))
+
+    check("Nachlauf der Daten: bis 100k keiner, ab 200k nach Kanalzahl",
+          driver.trigger_delay_points(100_000, 1) == 0 and driver.trigger_delay_points(200_000, 1) == 61.5
+          and driver.trigger_delay_points(500_000, 2) == 27.0 and driver.trigger_delay_points(20_000_000, 1) == 50.5)
 
     print("Weiche scope_api.scpi")
     idn = scpi.parse_idn("Rohde&Schwarz,RTB2002,1333.1005k02/101234,02.202")
@@ -136,9 +153,9 @@ def check_sim() -> None:
               near(cap.trigger_index, 0.2 * cap.samples, 0.02), f"{cap.trigger_index} von {cap.samples}")
         check("Keine Warnung zum Pre-Trigger", not any("TIMebase:POSition" in w for w in cap.warnings),
               str(cap.warnings))
-        v = cap.channels["CH1"].volts
-        i = cap.trigger_index
-        check("Steigende Flanke am Trigger-Index", v[max(0, i - 5)] < 1.65 < v[min(v.size - 1, i + 50)])
+        off = edge_offset(cap, "CH1", 1.65, True)
+        check("Steigende Flanke am Trigger-Index (+-2 Punkte, Nachlauf der Daten ausgeglichen)", abs(off) <= 2,
+              f"({off:+.1f} Punkte)")
         check("Bereich zurueckgelesen: 5 V -> 1 V/div = +-5 V (10 Teilungen)", near(cap.channels["CH1"].range_v, 5.0))
         check("Nicht uebersteuert", cap.channels["CH1"].overrange is False)
         check("Mindestens 250 000 Samples", cap.samples >= 250_000, str(cap.samples))
@@ -153,6 +170,17 @@ def check_sim() -> None:
         v = cap.channels["CH2"].volts
         i = cap.trigger_index
         check("Fallende Flanke am Trigger-Index", v[max(0, i - 200)] > 0.0 > v[min(v.size - 1, i + 200)])
+        mock.SimulatedRTB2000.signals = {**mock.default_signals(), "CH2": mock.SquareWave(2000.0, 0.0, 1.0)}
+        cap = scope.acquire(request(
+            channels=[{"name": "CH1", "range_v": 5}, {"name": "CH2", "range_v": 2}],
+            trigger={"mode": "single", "source": "CH2", "level_v": 0.5, "edge": "falling", "timeout_s": 1}))
+        mock.SimulatedRTB2000.signals = mock.default_signals()
+        off = edge_offset(cap, "CH2", 0.5, False)
+        check("Zwei Kanaele, Rechteck an CH2: fallende Flanke am Trigger-Index (+-2 Punkte, Nachlauf ausgeglichen)",
+              abs(off) <= 2, f"({off:+.1f} Punkte)")
+        cap = scope.acquire(request(timing={"duration_s": 5e-5, "pre_trigger_pct": 20}))
+        off = edge_offset(cap, "CH1", 1.65, True)
+        check("Kurze Aufzeichnung (ohne Nachlauf): Flanke am Trigger-Index", abs(off) <= 2, f"({off:+.1f} Punkte)")
 
         # Offset: Gleichspannung mit kleiner Welligkeit an CH2.
         mock.SimulatedRTB2000.signals = {**mock.default_signals(),
@@ -309,9 +337,9 @@ def check_hardware(address: str, signal: str | None) -> None:
             check(f"Pegel {high:g} V", near(values["vtop"], high, 0.05), str(values["vtop"]))
             check("Trigger-Index bei 20 % (Vorzeichen TIMebase:POSition)",
                   near(cap.trigger_index, 0.2 * cap.samples, 0.03), f"{cap.trigger_index} von {cap.samples}")
-            v = cap.channels["CH1"].volts
-            i = cap.trigger_index
-            check("Steigende Flanke am Trigger-Index", v[max(0, i - 20)] < high / 2 < v[min(v.size - 1, i + 20)])
+            off = edge_offset(cap, "CH1", high / 2, True)
+            print(f"          Flanke {off:+.1f} Punkte vom Trigger-Index ({dev.acquisition_points()} Punkte)")
+            check("Steigende Flanke am Trigger-Index (+-10 Punkte)", abs(off) <= 10, f"({off:+.1f} Punkte)")
             cap = scope.acquire(request(
                 channels=[{"name": "CH1", "range_v": high / 4, "offset_v": high}],
                 timing={"duration_s": 5.0 / f_hz}, trigger={"mode": "none"}))
