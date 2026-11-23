@@ -1268,6 +1268,8 @@
   "Ausgang war beim Verbinden EIN (Sollwerte {setpoints}). LabControl hat nichts geschaltet. Der Hinweis verschwindet, sobald das Netzteil über LabControl geschaltet wird oder Ausgang AUS meldet.": "Output was ON when connected (setpoints {setpoints}). LabControl did not switch anything. The marker disappears as soon as the power supply is switched via LabControl or reports output OFF.",
   "Spitze-Spitze an der eingestellten Last": "Peak-to-peak at the set load",
   "nur bei Rechteck und Puls": "square and pulse only",
+  "nur bei Rechteck": "square only",
+  "Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Rechteck – Kanal {channel} steht hier auf {wave}": "Step {n}: \"Set duty cycle\" only works with waveform square – channel {channel} is set to {wave} here",
   "Modulation und Last": "Modulation and load",
   "Last, an der Amplitude und Offset gelten; 1 000 000 Ω = hochohmig": "Load at which amplitude and offset apply; 1 000 000 Ω = high impedance",
   "Hochohmig": "High impedance",

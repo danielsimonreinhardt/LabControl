@@ -98,6 +98,14 @@ class FakeFg:
         pass
 
 
+class FakeMhs(FakeFg):
+    """Zweiter Handshake am selben CH340-Port (MHS-5200A, 1.0.3): lehnt ebenfalls ab, ohne als eigener Probe
+    zu zaehlen -- die Sperrfrist gilt fuer den Port."""
+
+    def probe(self):
+        return False
+
+
 class NoPorts:
     @classmethod
     def discover_ports(cls):
@@ -106,6 +114,7 @@ class NoPorts:
 
 dw.HCS34xx = FakePsu
 dw.JDS66xx = FakeFg
+dw.mhs_driver.MHS5200A = FakeMhs
 dw.KoradKEL102.discover_ports = classmethod(lambda cls: [])
 dw.MicroHIL.discover = classmethod(lambda cls: None)
 

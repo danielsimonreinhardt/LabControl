@@ -153,6 +153,21 @@ Two identical channel boxes (channel 1 and 2) side by side:
   generator really answers. A powered-on device is therefore detected up
   to 30 seconds after switching it on.
 
+### Function generator (MHS-5200A)
+
+Operated like the JDS2915, with these differences:
+
+- **Waveforms** sine, square, triangle, ramp up and down and arbitrary
+  1–16; there is no pulse and no DC.
+- **Duty cycle** with **square** only.
+- **Offset** in volts, at most ±120 % of half the amplitude. The device
+  works in percent of the amplitude; LabControl keeps the offset in volts
+  when the amplitude changes. If it no longer fits, the new amplitude is
+  refused – lower the offset first.
+- **Amplitude** up to 2 V with the −20 dB attenuator (1 mV steps), above
+  that without it (10 mV steps); LabControl switches it itself.
+- **No phase**: the device only sets it correctly between 0 and 180°.
+
 ### Oscilloscope (PicoScope 2204A/2205A)
 
 LabControl deliberately does not set channels, trigger or waveforms – that
