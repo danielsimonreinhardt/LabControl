@@ -161,6 +161,21 @@ Zwei gleichartige Kanalkästen (Kanal 1 und 2) nebeneinander:
   tatsächlich ein Funktionsgenerator antwortet. Ein eingeschaltetes Gerät
   wird daher bis zu 30 Sekunden nach dem Einschalten erkannt.
 
+### Funktionsgenerator (MHS-5200A)
+
+Bedienung wie beim JDS2915, mit diesen Unterschieden:
+
+- **Formen** Sinus, Rechteck, Dreieck, Rampe steigend und fallend sowie
+  Arbiträr 1–16; Puls und DC gibt es nicht.
+- **Tastverhältnis** nur bei **Rechteck**.
+- **Offset** in Volt, höchstens ±120 % der halben Amplitude. Das Gerät
+  rechnet in Prozent der Amplitude; LabControl hält den Offset in Volt fest,
+  wenn sich die Amplitude ändert. Passt er nicht mehr, wird die neue
+  Amplitude abgelehnt – erst den Offset senken.
+- **Amplitude** bis 2 V mit der −20-dB-Dämpfung (Stufen 1 mV), darüber ohne
+  (Stufen 10 mV); LabControl schaltet selbst um.
+- **Keine Phase**: Das Gerät stellt sie nur zwischen 0 und 180° richtig ein.
+
 ### Oszilloskop (PicoScope 2204A/2205A)
 
 Kanäle, Trigger und Kurven stellt LabControl bewusst nicht ein – dafür gibt

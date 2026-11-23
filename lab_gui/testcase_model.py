@@ -964,6 +964,9 @@ def fg_waveform_refusal(steps: list[TestStep]) -> tuple[int, str] | None:
             if module.DUTY_WAVEFORMS == (FG_WAVE_ACTIONS["FG_WAVE_PULSE"],):
                 return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Puls – Kanal "
                                  "{channel} steht hier auf {wave}", n=index + 1, channel=key[1], wave=wave)
+            if FG_WAVE_ACTIONS["FG_WAVE_PULSE"] not in module.DUTY_WAVEFORMS:   # MHS-5200A (1.0.3)
+                return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Rechteck – Kanal "
+                                 "{channel} steht hier auf {wave}", n=index + 1, channel=key[1], wave=wave)
             return index, tr("Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Rechteck und Puls – Kanal "
                              "{channel} steht hier auf {wave}", n=index + 1, channel=key[1], wave=wave)
         elif step.action == "FG_AMPL" and known.get(key) == "FG_WAVE_DC":

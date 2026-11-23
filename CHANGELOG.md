@@ -18,6 +18,17 @@ Semantic Versioning (`lab_gui/version.py`).
   MHS-5225A): alle Eigenheiten wie unter 01.210; neu richtig sind die Daten bei 2,5 GS/s (die Grenze 1,25 GS/s
   bleibt für ältere Firmware) und `CHANnel:ZOFFset?`. Zwei Kanäle mit Trigger an CH2 jetzt am Gerät geprüft.
   Der Simulator meldet 02.202.
+### Hinzugefügt
+- **Funktionsgenerator MHS-5200A (MHS-5206A … 5225A) über USB.** Neuer Treiber `device-driver/mhs5200a`
+  (serielles Protokoll mit 57600 Baud, RTS/CTS) mit Simulator auf Ebene der seriellen Zeilen. Gleiche Geräteart
+  `fg`, Aktionen und Kachel wie der JDS2915; erkannt am CH340-Port nach dessen Handshake und als
+  `fg:mhs5200a-<Port>` geführt (der Ablauf-Editor erkennt so die Regeln des Geräts). Zwei Kanäle; Sinus,
+  Rechteck, Dreieck, Rampen, Arbiträr 1–16; Tastverhältnis nur bei Rechteck; Offset in Volt (das Gerät rechnet in
+  Prozent der Amplitude, LabControl hält ihn beim Amplitudenwechsel fest); −20-dB-Dämpfung bis 2 V automatisch,
+  ohne Überhöhung beim Umschalten. Keine Phase: am Gerät ergibt die Einstellung p einen Versatz von 180° − (p mod
+  180°). **Am MHS-5225A geprüft**, Ausgang mit dem RTB2002 nachgemessen: `tools/check_mhs5200a.py --hardware`
+  grün. Puls und DC lehnt der Treiber ab; Tastgrad-Hinweise in Kachel und Ablauf-Editor kennen jetzt auch „nur bei
+  Rechteck“.
 
 ## [1.0.2] – 2026-11-22
 

@@ -33,6 +33,7 @@ from korad_kel102.driver import KoradKEL102, LoadError
 from korad_kel102.mock import MockKoradKEL102
 from jds66xx.driver import FunctionGeneratorError, FunctionGeneratorValueError, JDS66xx
 from jds66xx.mock import MockJDS66xx
+from mhs5200a import driver as mhs_driver
 from unit_mso_awg import driver as awg_driver
 from unit_mso_awg.driver import UnitMsoAwg
 from fg_profiles import FG_PARAM_ACTIONS, FG_WAVE_ACTIONS, module_of_device as fg_module
@@ -1579,8 +1580,11 @@ class DeviceWorker(QObject):
 
     def _reconnect_fgs(self) -> None:
         """Verbindet Funktionsgeneratoren. Kandidaten sind alle CH340-Ports,
-        bestaetigt wird per Handshake (JDS66xx.probe) -- die VID/PID allein
-        beweist nichts (siehe jds66xx.driver.USB_VID und FG_REPROBE_INTERVAL_S).
+        bestaetigt wird per Handshake (JDS66xx.probe, sonst MHS5200A.probe) --
+        die VID/PID allein beweist nichts (siehe jds66xx.driver.USB_VID und
+        FG_REPROBE_INTERVAL_S). Ein MHS-5200A steht unter eigener ID
+        (mhs5200a.driver.device_id_for); sein Port gilt deshalb ueber den Port
+        als belegt, nicht ueber die ID.
 
         Anders als beim Netzteil werden die Ausgaenge beim Verbinden NICHT
         veraendert: das Geraet meldet seinen Zustand wahrheitsgemaess zurueck
@@ -1593,8 +1597,9 @@ class DeviceWorker(QObject):
             del self._fg_probe_after[port]
         now = time.monotonic()
         candidates = _resolve_device_ids("fg", infos)
+        busy_ports = {getattr(fg, "port", None) for fg in self._fgs.values()}
         for device_id, info in candidates.items():
-            if device_id in self._fgs:
+            if device_id in self._fgs or info.device in busy_ports:
                 continue
             if self._fg_probe_after.get(info.device, 0.0) > now:
                 continue
@@ -1607,9 +1612,13 @@ class DeviceWorker(QObject):
             candidate = JDS66xx(port)
             if not candidate.probe():
                 candidate.close()
-                # Die Sperrfrist (FG_REPROBE_INTERVAL_S) setzt der Worker selbst.
-                self._reconnect_done.emit("fg_rejected", device_id, None, port)
-                return
+                # 1.0.3: derselbe CH340 kann einen MHS-5200A tragen (57600 Baud, eigenes Protokoll)
+                candidate = mhs_driver.MHS5200A(port)
+                if not candidate.probe():
+                    candidate.close()
+                    # Die Sperrfrist (FG_REPROBE_INTERVAL_S) setzt der Worker selbst.
+                    self._reconnect_done.emit("fg_rejected", device_id, None, port)
+                    return
         except OSError:
             # Port wird von einem anderen Prozess gehalten -- naechster Tick
             # versucht es erneut (analog zu _load_connect_job).
@@ -1870,6 +1879,8 @@ class DeviceWorker(QObject):
             return
         if candidate is None:
             return
+        if kind == "fg" and isinstance(candidate, mhs_driver.MHS5200A):
+            device_id = mhs_driver.device_id_for(device_id)
         registry = {"load": self._loads, "psu": self._psus, "fg": self._fgs}[kind]
         if device_id in registry:
             candidate.close()   # inzwischen anderweitig verbunden

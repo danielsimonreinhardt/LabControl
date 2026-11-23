@@ -22,6 +22,7 @@ flowchart LR
 | MANSON HCS-3xxx (Netzteil) | USB (CP210x, virtueller COM-Port) | automatisch | `psu:<USB-Seriennummer>` | ja |
 | KORAD KEL102 (elektronische Last) | USB (CDC) | automatisch, VID/PID `0416:5011` | `load:<USB-Seriennummer>` | ja |
 | JDS66xx / JDS2915 (Funktionsgenerator) | USB (CH340) | automatisch mit Handshake | `fg:COM6` | ja (ohne Messung am Ausgang) |
+| MHS-5200A (Funktionsgenerator, z. B. MHS-5225A) | USB (CH340) | automatisch mit Handshake | `fg:mhs5200a-COM7` | ja (MHS-5225A, mit Messung am Ausgang) |
 | Funktionsgenerator im UNI-T MSO1000HD-S | LAN (über das Oszilloskop) | automatisch mit dem Oszilloskop | `fg:<IP>:AWG1` | ja (MSO1154HD-S) |
 | PicoScope 2204A/2205A | USB | automatisch | `picoscope:…` | ja |
 | UNI-T MSO1000HD | LAN (SCPI) | IP-Adresse eintragen | `scpiscope:<IP>` | nein, nur Simulator |
@@ -184,6 +185,43 @@ in DC die Amplitude, startet gar nicht erst; sonst scheitert der Schritt im Lauf
   tatsächlich eingestellten Wert.
 - Am Ausgang gemessen (Oszilloskop) sind nur DC und Tastverhältnis (17.11.2026); die Umsetzung in LabControl ist
   nur gegen die Nachbildung geprüft.
+
+## Funktionsgenerator MHS-5200A
+
+- **Anschluss:** USB (CH340 wie beim JDS2915, 57600 Baud). Zweikanalige DDS-Generatoren MHS-5206A … 5225A, geprüft
+  mit dem MHS-5225A (25 MHz). Die Obergrenze der Frequenz liest LabControl aus der Kennung des Geräts.
+- **Erkennung:** am selben CH340-Port nach der Kennungsabfrage des JDS2915; antwortet dort ein MHS-5200A, erscheint
+  er als `fg:mhs5200a-…`. Beim Verbinden schaltet LabControl nichts.
+
+```mermaid
+flowchart LR
+  P["CH340-Port"] --> J{"JDS2915?"}
+  J -- ja --> FJ["fg:COM…"]
+  J -- nein --> M{"MHS-5200A?"}
+  M -- ja --> FM["fg:mhs5200a-COM…"]
+  M -- nein --> W["30 s warten"] --> J
+```
+
+| Feld in der Kachel | Bedeutung |
+|---|---|
+| Form | Sinus, Rechteck, Dreieck, Rampe steigend/fallend, Arbiträr 1–16 (kein Puls, kein DC) |
+| Frequenz | bis 25 MHz (je nach Modell), Auflösung 0,01 Hz |
+| Amplitude | Spitze-Spitze im Leerlauf, 0,005 … 20 V; bis 2 V schaltet LabControl die −20-dB-Dämpfung ein (Stufen 1 mV statt 10 mV) |
+| Offset | in Volt, höchstens ±120 % der halben Amplitude |
+| Tastverhältnis | in %, nur bei **Rechteck** bedienbar |
+| Ausgang EIN / AUS | je Kanal, alle Signalwerte bleiben |
+
+- **Offset hängt an der Amplitude:** Das Gerät stellt ihn in Prozent der halben Amplitude ein (Stufen 1 %).
+  LabControl rechnet in Volt: Wird die Amplitude geändert, schreibt LabControl den Prozentwert so nach, dass der
+  Offset in Volt bleibt. Geht das nicht (Offset größer als 120 % der neuen halben Amplitude), wird die Amplitude
+  **abgelehnt** – erst den Offset senken.
+- **Keine Phase:** Am Gerät ergibt die Einstellung p einen Versatz von 180° − (p mod 180°); Werte zwischen 180°
+  und 360° lassen sich nicht einstellen. LabControl bietet die Phase deshalb nicht an.
+- **Testablauf, MCP, Verbund:** dieselben Aktionen wie beim JDS2915 ohne Phase; „Wellenform Puls“ und „DC“ werden
+  abgelehnt, „Tastverhältnis setzen“ nur bei Rechteck.
+- **Gemessen** (MHS-5225A, 23.11.2026, Oszilloskop 1 MΩ): Amplitude 1–4 % über dem Sollwert, Offset bis 5 % zu
+  klein, dazu etwa +0,02 … +0,07 V Nullpunkt; Tastverhältnis 25 % → 25,1 %. Einzelheiten in
+  `device-driver/mhs5200a/README.md`.
 
 ## Funktionsgenerator im UNI-T-Oszilloskop (MSO1000HD-S)
 
@@ -547,7 +585,7 @@ Unter **Verriegelung Netzteil/Last im Testablauf** legst du mit **+** Paare aus 
 |---|---|
 | Netzteil | Ausgang aus (mit Rückkontrolle); in Handbedienung: nichts |
 | Last | Eingang aus |
-| Funktionsgenerator | alle Ausgänge aus (JDS2915 beide, UNI-T AWG1), Signalwerte bleiben |
+| Funktionsgenerator | alle Ausgänge aus (JDS2915 und MHS-5200A beide, UNI-T AWG1), Signalwerte bleiben |
 | microHIL | Digitalausgänge, Relais, 12-V-Ausgänge aus; Analogausgänge 0 mV, PWM 0 |
 | Batterie-Simulator | Ausgang gesperrt, Senden läuft weiter |
 | CAN | ein laufender Restbus stoppt |

@@ -709,6 +709,8 @@
   "Kopie": "Kopie",
   "Spitze-Spitze an der eingestellten Last": "Spitze-Spitze an der eingestellten Last",
   "nur bei Rechteck und Puls": "nur bei Rechteck und Puls",
+  "nur bei Rechteck": "nur bei Rechteck",
+  "Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Rechteck – Kanal {channel} steht hier auf {wave}": "Schritt {n}: „Tastverhältnis setzen“ wirkt nur bei Wellenform Rechteck – Kanal {channel} steht hier auf {wave}",
   "Modulation und Last": "Modulation und Last",
   "Last, an der Amplitude und Offset gelten; 1 000 000 Ω = hochohmig": "Last, an der Amplitude und Offset gelten; 1 000 000 Ω = hochohmig",
   "Hochohmig": "Hochohmig",
