@@ -1323,5 +1323,6 @@
   "Belegt (Testlauf läuft)": "In use (test run)",
   "Nicht verbunden": "Not connected",
   "Unbekannt": "Unknown",
-  "Nicht verbundene Geräte ausblenden": "Hide disconnected devices"
+  "Nicht verbundene Geräte ausblenden": "Hide disconnected devices",
+  "Mehr als {mb} MB warten lokal aufs Netzlaufwerk ({reason}) -- Netzlaufwerk prüfen": "More than {mb} MB waiting locally for the network drive ({reason}) -- check the network drive"
 }

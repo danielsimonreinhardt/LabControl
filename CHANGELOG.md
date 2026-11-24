@@ -16,6 +16,19 @@ Semantic Versioning (`lab_gui/version.py`).
   `check_arrange_overlay`, `check_touch_ui`, `check_translations` grün), in der .exe noch nicht angesehen.
 
 ### Behoben
+- **Netzlaufwerk nur lesbar: Abläufe bleiben sichtbar (PI-91 a).** War das Netzlaufwerk nicht beschreibbar (am
+  23./24.11. meldete der USB-Speicher an der FRITZ!Box „nicht genug Speicherplatz“), suchten Ablaufliste, REST und
+  MCP `list_testcases` nur im leeren lokalen Ordner. Die gemeinsamen Ordner (Abläufe, Bausteine, Varianten) kommen
+  jetzt vom Netzlaufwerk, solange es lesbar ist (der Hintergrund-Thread prüft das, die Oberfläche wartet nie
+  darauf); Erfassungen und Berichte bleiben wie bisher lokal und werden nachgeschoben. `/api/v1/testcases` nennt
+  `source` (`network`, `network_readonly`, `local`, `off`) und `problem`, MCP `list_testcases` dazu einen Hinweis.
+  Geprüft: `check_data_store` (neu: nur lesbar, ganz weg), am echten, gerade nur lesbaren Netzlaufwerk (11 Abläufe
+  gefunden, Quelle `network_readonly`), `check_runs_api`, `check_network_share`, `check_variants`,
+  `check_linked_blocks`, `check_headless_run` grün; in der .exe noch nicht.
+- **Am PC keine wartenden Erfassungen mehr löschen (PI-92 a).** Über 200 MB lokal wartender Dateien löschte
+  LabControl auch am PC die ältesten – am 24.11. ging so eine nie verschobene Erfassung verloren. Am PC wird jetzt
+  nichts gelöscht, sondern einmal gewarnt (Log und Statusleiste); auf der SD-Karte des Pi bleibt die Grenze.
+  Geprüft: `check_data_store` (PC: nichts gelöscht, Warnung einmal; Pi: wie bisher).
 - **Log: pyvisa-Fehlermeldungen bei ausgeschaltetem SCPI-Oszilloskop.** pyvisa schrieb jeden gescheiterten
   Verbindungsversuch der Erkennung (alle 10 s) selbst als ERROR mit Traceback ins Log, 5 517 Zeilen an einem Tag.
   Seine eigene Ausgabe kommt jetzt erst ab CRITICAL; die Treiber melden Verbindungsfehler weiter selbst. Geprüft:

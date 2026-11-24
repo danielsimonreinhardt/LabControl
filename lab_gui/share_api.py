@@ -1337,7 +1337,10 @@ def _dispatch_runs(method: str, route, header_get, state, snapshot: dict, query:
         return denied
     if kind == "testcases":
         lister = getattr(state, "list_testcases", None)
-        return _json(200, {"v": API_VERSION, "testcases": lister() if lister is not None else []})
+        source = getattr(state, "testcases_source", None)
+        info = source() if source is not None else {}
+        # source/problem (PI-91 a, 1.0.3): eine leere Liste soll nicht stumm bleiben, wenn das Netzlaufwerk fehlt
+        return _json(200, {"v": API_VERSION, "testcases": lister() if lister is not None else [], **info})
     if kind == "runs":
         return _json(200, {"v": API_VERSION, "runs": registry.list()})
     if not what:

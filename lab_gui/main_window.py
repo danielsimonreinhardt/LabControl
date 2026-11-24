@@ -1729,7 +1729,15 @@ class MainWindow(QMainWindow):
 
     def _update_storage_status(self) -> None:
         self.settings_tab.set_log_status(app_logging.status())
-        self.settings_tab.set_data_status(data_store.store().status())
+        status = data_store.store().status()
+        self.settings_tab.set_data_status(status)
+        # PI-92 a (1.0.3): am PC wird nichts Unverschobenes mehr geloescht -- einmal sichtbar warnen
+        over = bool(status.get("over_limit"))
+        if over and not getattr(self, "_storage_over_limit", False):
+            self.statusBar().showMessage(tr(
+                "Mehr als {mb} MB warten lokal aufs Netzlaufwerk ({reason}) -- Netzlaufwerk prüfen",
+                mb=status.get("limit_mb", 0), reason=status.get("reason") or tr("nicht erreichbar")), 30000)
+        self._storage_over_limit = over
 
     def _on_reset_devices_requested(self) -> None:
         """Reagiert auf den "Geraetezuordnung loeschen"-Button (settings_tab.
@@ -2439,6 +2447,7 @@ class MainWindow(QMainWindow):
         self._last_refusal = ""
         self._run_all_off_at_end = False          # Lauf von der Kommandozeile: am Ende ALLE AUS
         self._live_state.list_testcases = self._list_testcases
+        self._live_state.testcases_source = lambda: data_store.store().shared_source("testcases")
         data_store.store().on_moved(self._runs.relocate)
         self._test_runner.step_started.connect(
             lambda index, _step: self._run_id and self._runs.step_started(self._run_id, index))

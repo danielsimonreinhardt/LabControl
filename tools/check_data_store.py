@@ -4,8 +4,11 @@
 - erreichbar: fertige Dateien (aelter als MIN_AGE) wandern nach <netz>/<rechner>/<art>, lokal geloescht,
   Rueckmeldung mit neuem Pfad; frische Dateien bleiben bis zur naechsten Runde
 - Namensgleichheit: gleiche Groesse = schon kopiert (nur lokal loeschen), sonst neuer Name "-1"
-- nicht erreichbar: Dateien bleiben lokal, Grund im Status; ueber der Grenze werden die aeltesten
-  geloescht und das steht im Log; danach wieder erreichbar -> nachgeschoben
+- nicht erreichbar: Dateien bleiben lokal, Grund im Status; ueber der Grenze werden auf der SD-Karte (Pi)
+  die aeltesten geloescht und das steht im Log; am PC wird nichts geloescht, nur gewarnt (PI-92 a, 1.0.3);
+  danach wieder erreichbar -> nachgeschoben
+- nur lesbar (Schreiben scheitert): gemeinsame Ordner (Ablaeufe/Bausteine/Varianten) weiter vom
+  Netzlaufwerk, Rechner-Ordner lokal, shared_source "network_readonly" (PI-91 a, 1.0.3)
 - Schreibfehler beim Kopieren: lokal bleibt, Status "local" mit Grund
 - Ordner fuer Dialoge: Netzlaufwerk (Rechner-Unterordner bzw. gemeinsam), sonst lokal
 - Thread: Umstellen des Netzlaufwerks loest sofort eine Runde aus
@@ -123,6 +126,7 @@ def check_move() -> None:
 def check_unreachable_and_limit() -> None:
     print("Netzlaufwerk nicht erreichbar, lokale Grenze")
     s = new_store(limit_bytes=2500)
+    s._limit_on_sd = True   # Pi: Datenordner auf der SD-Karte
     files = [make(s, "captures", f"c{i}.csv", 1000, age_s=300 - i) for i in range(4)]   # c0 aeltester
     missing = pathlib.Path(tempfile.mkdtemp(prefix="lc-weg-"))
     missing.rmdir()   # eindeutiger Name, der (noch) nicht existiert
@@ -147,6 +151,66 @@ def check_unreachable_and_limit() -> None:
     check("wieder erreichbar: nachgeschoben", not files[2].exists() and (missing / "pi-test" / "captures" / "c3.csv").is_file())
     check("Wechsel zurueck im Log", any(m.startswith("Datenablage: Netzlaufwerk") and m.endswith(" erreichbar")
                                         for m in LOG), str(LOG))
+
+
+def check_limit_on_pc() -> None:
+    print("PC: Grenze ueberschritten, nichts loeschen (PI-92 a)")
+    s = new_store(limit_bytes=2500)
+    s._limit_on_sd = False
+    files = [make(s, "captures", f"c{i}.csv", 1000, age_s=300 - i) for i in range(4)]
+    missing = pathlib.Path(tempfile.mkdtemp(prefix="lc-weg-"))
+    missing.rmdir()
+    s.set_network_dir(str(missing))
+    LOG.clear()
+    s.sync_once()
+    check("nichts geloescht", all(f.exists() for f in files))
+    check("Status: ueber der Grenze", s.status()["over_limit"] is True, str(s.status()))
+    check("Warnung im Log", any("nichts geloescht" in m for m in LOG), str(LOG))
+    LOG.clear()
+    s.sync_once()
+    check("Warnung nur einmal", not any("nichts geloescht" in m for m in LOG), str(LOG))
+    files[0].unlink()
+    files[1].unlink()
+    s.sync_once()
+    check("wieder unter der Grenze: Status zurueck", s.status()["over_limit"] is False)
+
+
+def check_read_only_network() -> None:
+    print("Netzlaufwerk nur lesbar (PI-91 a)")
+    s = new_store()
+    net = network_base()
+    (net / "testcases").mkdir()
+    (net / "testcases" / "a.json").write_text("{}", encoding="utf-8")
+    f = make(s, "captures", "c.csv")
+    s.set_network_dir(str(net))
+    real = shutil.copy2
+
+    def failing(*_a, **_k):
+        raise OSError(28, "No space left on device")
+
+    ds.shutil.copy2 = failing
+    try:
+        s.sync_once()
+    finally:
+        ds.shutil.copy2 = real
+    st = s.status()
+    check("Status lokal mit Grund, gemeinsame Ordner lesbar", st["target"] == "local" and st["shared_readable"]
+          and "No space" in st["reason"], str(st))
+    check("Ablaeufe weiter vom Netzlaufwerk", s.target_dir("testcases") == net / "testcases")
+    check("Erfassung bleibt lokal", f.exists())
+    check("Rechner-Ordner lokal", s.target_dir("recordings") == s.local_dir("recordings"))
+    src = s.shared_source("testcases")
+    check("Quelle: network_readonly mit Grund", src["source"] == "network_readonly" and "No space" in src["problem"],
+          str(src))
+
+    print("Netzlaufwerk ganz weg")
+    gone = pathlib.Path(tempfile.mkdtemp(prefix="lc-weg-"))
+    gone.rmdir()
+    s.set_network_dir(str(gone))
+    s.sync_once()
+    src = s.shared_source("testcases")
+    check("Quelle: lokal mit Grund", src["source"] == "local" and src["problem"] == "Ordner nicht erreichbar", str(src))
+    check("Ablaeufe lokal", s.target_dir("testcases") == s.local_dir("testcases"))
 
 
 def check_copy_error() -> None:
@@ -224,6 +288,8 @@ def main() -> int:
     check_without_network()
     check_move()
     check_unreachable_and_limit()
+    check_limit_on_pc()
+    check_read_only_network()
     check_copy_error()
     check_thread()
     check_capture_store_and_tab()
