@@ -138,7 +138,10 @@ def main() -> int:
           and re.fullmatch(r"\d\d:\d\d:\d\d", clock.text()) is not None
           and clock.height() == w._safety_status_label.height(), f"{clock.text()!r} {clock.geometry()}")
     before, width = clock.text(), clock.width()
-    QTest.qWait(1100)
+    for _ in range(30):   # CI-Runner sind langsam: bis zu 3 s auf den naechsten Sekundentakt warten
+        QTest.qWait(100)
+        if clock.text() != before:
+            break
     check("Uhr laeuft, Breite bleibt", clock.text() != before and clock.width() == width, f"{before} {clock.text()}")
     area.horizontalScrollBar().setValue(area.horizontalScrollBar().maximum())
     app.processEvents()

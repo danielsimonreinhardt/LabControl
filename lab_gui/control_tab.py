@@ -133,7 +133,7 @@ TILE_SPANS: dict[str, tuple[int, int]] = {
 # Breite.
 TILE_SIZE_BY_KIND: dict[str, str] = {
     "load": "small", "psu": "small", "hil": "big", "fg": "big", "picoscope": "small", "scpiscope": "small",
-    "battsim": "big",
+    "battsim": "big", "jlink": "small",
 }
 
 # Obergrenze fuer das Strombegrenzung-Eingabefeld (HilControlGroup) -- rein
@@ -1077,8 +1077,18 @@ class _FgChannelBox(QGroupBox):
         self.device_waveform: int | None = None
         self.retranslate()
 
+    def set_single(self, single: bool) -> None:
+        """Einziger Kanal des Generators (1.0.4): ohne Rahmen und Titel "Kanal 1", die Kachel ist der Rahmen."""
+        self.single = single
+        self.layout().setContentsMargins(*((0, 0, 0, 0) if single else (11, 11, 11, 11)))
+        for spin in (self.freq_spin, self.ampl_spin, self.offs_spin, self.duty_spin):
+            spin.setMaximumWidth(140 if single else 150)   # einspaltig: Kachel passt in eine Rasterspalte
+        self.setStyleSheet("QGroupBox { border: none; margin-top: 0px; padding-top: 0px; "
+                           "background-color: transparent; }" if single else "")
+        self.retranslate()
+
     def retranslate(self) -> None:
-        self.setTitle(tr("Kanal {n}", n=self.channel))
+        self.setTitle("" if getattr(self, "single", False) else tr("Kanal {n}", n=self.channel))
         labels = (tr("Form:"), tr("Frequenz:"), tr("Amplitude:"), tr("Offset:"), tr("Tastverhältnis:"))
         for row, text in zip(self.rows, labels):
             self.form.labelForField(row).setText(text)
@@ -1190,7 +1200,8 @@ class _FgModulationBox(QGroupBox):
         "sweep_stop": ("FG_SWEEP_STOP", 2, 1.0, 1000.0),
         "sweep_time": ("FG_SWEEP_TIME", 3, 0.01, 1.0),
     }
-    LABELS = {"mode": "Modulation:", "mod_wave": "Modulationsform:", "mod_freq": "Modulationsfrequenz:",
+    # Kurz "Mod.-Form/-Frequenz" (1.0.4): die laengste Beschriftung bestimmt die Breite der einspaltigen Kachel
+    LABELS = {"mode": "Modulation:", "mod_wave": "Mod.-Form:", "mod_freq": "Mod.-Frequenz:",
               "am_depth": "AM-Tiefe:", "fm_dev": "FM-Hub:", "fsk_rate": "Umtastrate:", "fsk_freq": "Sprungfrequenz:",
               "sweep_type": "Wobbelart:", "sweep_start": "Startfrequenz:", "sweep_stop": "Stoppfrequenz:",
               "sweep_time": "Wobbelzeit:", "load": "Last:"}
@@ -1199,6 +1210,8 @@ class _FgModulationBox(QGroupBox):
         super().__init__()
         from unit_mso_awg import driver as awg
         self._awg = awg
+        # Im Kanalkasten eingebettet (Generator mit einem Kanal, 1.0.4): ohne eigenen Rahmen und Titel
+        self.embedded = False
         self.form = QFormLayout(self)
         self.rows: dict[str, QWidget] = {}
         self.widgets: dict[str, QWidget] = {}
@@ -1222,6 +1235,7 @@ class _FgModulationBox(QGroupBox):
         for field in ("sweep_start", "sweep_stop", "sweep_time"):
             self._numeric_row(field)
         load = self._spin(0, awg.MIN_LOAD_OHM, awg.MAX_LOAD_OHM, "Ω", 1.0, 50.0)
+        load.setMaximumWidth(100)   # "1000000 Ω" passt; mit zwei Knoepfen sonst breiteste Zeile (1.0.4)
         load_button = IconButton("mdi.check", "")
         load_button.clicked.connect(lambda: self.action.emit("FG_LOAD", load.value()))
         self._high_z_button = IconButton("mdi.infinity", "")
@@ -1254,8 +1268,22 @@ class _FgModulationBox(QGroupBox):
         self.form.addRow(" ", row)
         _detint_label(self.form, row)
 
+    def set_embedded(self, embedded: bool) -> None:
+        """Eingebettet unter den Feldern des Kanals statt als eigener Kasten daneben (1.0.4)."""
+        self.embedded = embedded
+        self.form.setContentsMargins(*((0, 0, 0, 0) if embedded else (11, 11, 11, 11)))
+        for field, widget in self.widgets.items():
+            if field in self.NUMERIC:
+                widget.setMaximumWidth(140 if embedded else 150)
+        self.setStyleSheet("QGroupBox { border: none; margin-top: 0px; padding-top: 0px; "
+                           "background-color: transparent; }" if embedded else "")
+        self.retranslate()
+
+    def labels(self) -> list[QWidget]:
+        return [self.form.labelForField(row) for row in self.rows.values()]
+
     def retranslate(self) -> None:
-        self.setTitle(tr("Modulation und Last"))
+        self.setTitle("" if self.embedded else tr("Modulation und Last"))
         for field, row in self.rows.items():
             self.form.labelForField(row).setText(tr(self.LABELS[field]))
         names = {"mode": self._awg.MODE_NAMES, "mod_wave": self._awg.MOD_WAVE_NAMES,
@@ -1321,11 +1349,14 @@ class FgControlGroup(QGroupBox):
     fg_action = Signal(str, str, float, int)
     panel_color_requested = Signal(str, object)  # device_id, color_key (str | None)
     rename_requested = Signal(str, str, str)  # kind, device_id, new_label
+    # Kachelgroesse im Raster geaendert (tile_size_key, 1.0.4): Steuerung legt neu an
+    tile_size_changed = Signal(str)   # device_id
 
     def __init__(self, device_id: str, label: str) -> None:
         super().__init__()
         self._device_id = device_id
         self._color_key: str | None = None
+        self._single = False   # ein Kanal: Modulation/Last unter dem Kanal, Kachel eine Spalte breit (1.0.4)
         self._module = jds_driver   # Treibermodul laut letzter Meldung (fg_profiles), bis dahin JDS2915
         self.setTitle(label)
 
@@ -1392,7 +1423,9 @@ class FgControlGroup(QGroupBox):
         if self._module is jds_driver:
             self._subtitle.setText(tr("Funktionsgenerator (JDS66xx)"))
         else:
-            self._subtitle.setText(tr("Funktionsgenerator ({model})", model=self._module.TITLE))
+            # Einspaltig (1.0.4) kurz "Generator", sonst bestimmt der Untertitel die Breite der Kachel
+            self._subtitle.setText(tr("Generator ({model})" if self._single else "Funktionsgenerator ({model})",
+                                      model=self._module.TITLE))
         self._color_button.setToolTip(tr("Panel-Farbe wählen…"))
         self._rename_button.setToolTip(tr("Gerät umbenennen"))
         self._phase_form.labelForField(self._phase_row).setText(tr("Phase (Kanal 2 zu 1):"))
@@ -1400,10 +1433,17 @@ class FgControlGroup(QGroupBox):
         for box in self._boxes.values():
             box.retranslate()
         self._modulation.retranslate()
+        self._align_single_labels()
+
+    def tile_size_key(self) -> str:
+        """Kachelgroesse im Raster (ControlTab._tile_span): ein Kanal eine Spalte (mid_v), sonst 2 x 2 (1.0.4)."""
+        return "mid_v" if self._single else "big"
 
     def _apply_module(self, module) -> None:
         """Anderes Geraeteprofil gemeldet (1.0.2): Kanaele, Phase, Modulation/Last danach ein-/ausblenden."""
         self._module = module
+        # Zuerst umhaengen: Qt blendet ein Widget beim Wechsel des Eltern-Widgets aus
+        self._set_single(len(module.CHANNELS) == 1)
         for n, box in self._boxes.items():
             box.apply_module(module)
             box.setVisible(n in module.CHANNELS)
@@ -1411,6 +1451,38 @@ class FgControlGroup(QGroupBox):
         self._modulation.setVisible(module.HAS_MODULATION or module.HAS_LOAD)
         self._last_phase = None
         self._retranslate()
+
+    def _set_single(self, single: bool) -> None:
+        """Ein Kanal (UNI-T, 1.0.4): Modulation und Last unter die Felder des Kanals (vor "Ausgang"), die Kachel
+        braucht dann eine statt zwei Spalten. Vorher standen sie als eigener Kasten daneben, die Kachel war
+        2 x 2 Zellen gross und halb leer (Nutzer 24.11.2026)."""
+        if single == self._single:
+            return
+        self._single = single
+        box = self._boxes[1]
+        if single:
+            self._channels_row.removeWidget(self._modulation)
+            box.layout().insertWidget(1, self._modulation)   # nach den Feldern, vor Abstand und "Ausgang"
+        else:
+            box.layout().removeWidget(self._modulation)
+            self._channels_row.addWidget(self._modulation)
+        self._modulation.set_embedded(single)
+        box.set_single(single)
+        self.tile_size_changed.emit(self._device_id)
+
+    def _align_single_labels(self) -> None:
+        """Eingebettet: Beschriftungen von Kanal und Modulation gleich breit, damit die Felder untereinander
+        stehen (zwei Formulare haben sonst je ihre eigene Spalte)."""
+        box = self._boxes[1]
+        labels = [box.form.labelForField(row) for row in box.rows]
+        labels.append(box.output_form.labelForField(box.output_layout))
+        labels += self._modulation.labels()
+        for label in labels:
+            label.setMinimumWidth(0)
+        if self._single:
+            width = max(label.sizeHint().width() for label in labels)
+            for label in labels:
+                label.setMinimumWidth(width)
 
     def _emit_waveform(self, channel: int) -> None:
         code = self._boxes[channel].wave_combo.currentData()
@@ -2442,9 +2514,8 @@ class JLinkControlGroup(QGroupBox):
         self._rename_button = IconButton("mdi.pencil-outline", "")
         self._rename_button.clicked.connect(self._on_rename_clicked)
         subtitle_row = QHBoxLayout()
-        subtitle_row.addWidget(self._subtitle, 1)
-        subtitle_row.addWidget(self._color_button)
-        subtitle_row.addWidget(self._rename_button)
+        # Kein Untertitel "J-Link" (doppelt zum Kachelnamen): die Knoepfe brauchen die Breite (1.0.4)
+        self._subtitle.hide()
         outer.addLayout(subtitle_row)
 
         self._form = QFormLayout()
@@ -2472,7 +2543,12 @@ class JLinkControlGroup(QGroupBox):
                          self._flash_button)
         self._button_row = _row(self._check_button, self._reset_button, self._halt_button, self._go_button,
                                 self._flash_button)
-        outer.addWidget(self._button_row)
+        # Knoepfe in der Kopfzeile statt einer eigenen Zeile (1.0.4): so passt die Kachel in eine Rasterzelle
+        # wie Netzteil und Oszilloskop, statt zwei Zellen hoch zu sein (Nutzer 24.11.2026)
+        subtitle_row.addWidget(self._button_row)
+        subtitle_row.addStretch(1)
+        subtitle_row.addWidget(self._color_button)
+        subtitle_row.addWidget(self._rename_button)
         outer.addStretch(1)
 
         ThemeManager.instance().changed.connect(self._on_theme_changed)
@@ -3291,6 +3367,7 @@ class ControlTab(QWidget):
             section = HilControlGroup(device_id, label)
         elif kind == "fg":
             section = FgControlGroup(device_id, label)
+            section.tile_size_changed.connect(lambda _d: self._relayout_grid())
         elif kind == "picoscope":
             # Seit 0.20.0 mit eigener Kachel (Name, Farbe, Status), siehe
             # PicoscopeControlGroup -- vorher fiel es hier bewusst heraus.
@@ -3561,7 +3638,9 @@ class ControlTab(QWidget):
 
     def _tile_span(self, device_id: str) -> tuple[int, int]:
         kind = self._section_kind.get(device_id, "")
-        size_key = TILE_SIZE_BY_KIND.get(kind, "mid_v")
+        # Kachel kann ihre Groesse selbst bestimmen (Funktionsgenerator mit einem Kanal, 1.0.4)
+        own = getattr(self._sections.get(device_id), "tile_size_key", None)
+        size_key = own() if own is not None else TILE_SIZE_BY_KIND.get(kind, "mid_v")
         return TILE_SPANS[size_key]
 
     # -- Drag & Drop (Kachel-Anordnung im Raster) -----------------------------

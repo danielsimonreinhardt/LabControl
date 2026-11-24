@@ -4,6 +4,29 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [1.0.4] – 2026-11-24
+
+### Geändert
+- **Steuerung: J-Link-Kachel eine Rasterzelle statt zwei.** Die Kachel war zwei Zellen hoch, die untere Hälfte leer.
+  Die fünf Knöpfe (Prüfen, Reset, Anhalten, Starten, Flashen) stehen jetzt in der Kopfzeile neben Farbe und
+  Umbenennen; der Untertitel „J-Link“ (doppelt zum Kachelnamen) entfällt. Die Kachel ist damit so groß wie eine
+  Oszilloskop-Kachel (gemessen 298 × 166 px bei 300 × 180 px Zelle).
+- **Steuerung: Generator im UNI-T (ein Kanal) eine Spalte breit statt 2 × 2 Zellen.** Modulation und Last standen
+  als eigener Kasten neben dem Kanal, darunter blieb viel Platz frei. Jetzt stehen sie unter den Feldern des Kanals
+  vor „Ausgang“, ohne eigene Rahmen; die Kachel braucht eine Spalte und zwei Zellen (297 × 364 px). Dafür kürzer:
+  „Mod.-Form“, „Mod.-Frequenz“, Untertitel „Generator (…)“, Eingabefelder 140 px, Last 100 px. Generatoren mit
+  zwei Kanälen (JDS2915, MHS-5200A) bleiben wie bisher. Kacheln mit gespeichertem Platz bleiben dort; die frei
+  gewordene Spalte lässt sich durch Verschieben füllen.
+- **Panel-Farben: zehn statt sieben, besser unterscheidbar.** Neu Oliv, Braun und Weinrot; Blau, Türkis, Grün,
+  Orange, Violett, Pink und Grau neu abgestimmt. Kleinster Farbabstand (CIEDE2000) zweier Töne im dunklen Theme
+  jetzt 14,5 (vorher 8,0 bei Blau/Grau, 11,1 bei Türkis/Grün), im hellen 10,0 (vorher 5,0); Text und gedämpfter
+  Text auf jeder Farbe mindestens 4,5:1. Gespeicherte Farben bleiben, nur ihr Ton ändert sich.
+- Geprüft (nur Oberfläche bzw. rechnerisch, keine Hardware): neu `check_control_tile_sizes` (unter Windows mit
+  echten Pixelmaßen) und `check_panel_tints`; `check_unit_mso_awg`, `check_mhs5200a`, `check_control_tab`,
+  `check_translations`, `check_touch_ui`, `check_dashboard_relayout`, `check_arrange_overlay`,
+  `check_hide_offline_tiles`, `check_scope_tile_offline`, `check_partner_devices`, `check_jlink`,
+  `check_device_reset` grün. In der .exe noch nicht angesehen.
+
 ## [1.0.3] – 2026-11-22
 
 ### Hinzugefügt

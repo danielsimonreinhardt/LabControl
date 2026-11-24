@@ -110,7 +110,10 @@ METRICS = Metrics()
 # Reihenfolge bestimmt die Anzeigereihenfolge im Panel-Farbmenue (siehe
 # panel_color.PanelColorButton). Bewusst ohne reines Rot/Ampel-Gruen/Amber-Gelb
 # -- Verwechslungsgefahr mit Fail/Pass-Zeilen bzw. dem Sicherheits-Banner.
-PANEL_COLOR_ORDER = ["blue", "teal", "green", "orange", "violet", "pink", "gray"]
+# 1.0.4: zehn statt sieben Farben (Oliv, Braun, Weinrot neu), Tuerkis/Gruen/Grau deutlich getrennt -- jedes Geraet
+# soll eine eigene Farbe bekommen koennen (Nutzer 24.11.2026). Gemessen (CIEDE2000, tools/check_panel_tints.py):
+# kleinster Abstand zweier Toene dunkel >= 14, hell >= 9; Text und gedaempfter Text darauf >= 4,5:1.
+PANEL_COLOR_ORDER = ["blue", "teal", "green", "orange", "violet", "pink", "olive", "brown", "wine", "gray"]
 PANEL_COLOR_LABELS = {
     "blue": "Blau",
     "teal": "Türkis",
@@ -118,6 +121,9 @@ PANEL_COLOR_LABELS = {
     "orange": "Orange",
     "violet": "Violett",
     "pink": "Pink",
+    "olive": "Oliv",
+    "brown": "Braun",
+    "wine": "Weinrot",
     "gray": "Grau",
 }
 
@@ -153,13 +159,16 @@ LIGHT = Palette(
     plot_signal="#0284c7",
     plot_ref="#d97706",
     panel_tints={
-        "blue": "#dbeafe",
-        "teal": "#cffafe",
-        "green": "#d1fae5",
-        "orange": "#ffedd5",
-        "violet": "#ede9fe",
-        "pink": "#fce7f3",
-        "gray": "#e2e8f0",
+        "blue": "#b9d8fd",
+        "teal": "#a8e8f4",
+        "green": "#b5f2cf",
+        "orange": "#fed7aa",
+        "violet": "#d9cdfc",
+        "pink": "#fbc6e2",
+        "olive": "#d3f0a8",
+        "brown": "#eee49c",
+        "wine": "#fcc6b4",
+        "gray": "#d5d8dd",
     },
     drag_outline="#0369a1",
 )
@@ -190,13 +199,16 @@ DARK = Palette(
     # Deutlich heller als surface (BUGS.md #10d), aber kein Neon-/Statuston,
     # und dunkel genug, dass auch text_muted darauf >= 4.5:1 erreicht.
     panel_tints={
-        "blue": "#2a4a75",
-        "teal": "#1b544d",
-        "green": "#265431",
-        "orange": "#6b4117",
-        "violet": "#4f3878",
-        "pink": "#763356",
-        "gray": "#404c5e",
+        "blue": "#1c4689",
+        "teal": "#0b4d5e",
+        "green": "#204d37",
+        "orange": "#763c0c",
+        "violet": "#5c3591",
+        "pink": "#802866",
+        "olive": "#334f00",
+        "brown": "#51400d",
+        "wine": "#6f2a33",
+        "gray": "#474b55",
     },
     drag_outline="#7dd3fc",
 )

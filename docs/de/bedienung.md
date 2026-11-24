@@ -179,7 +179,7 @@ Klick wiederherstellen.
 | Knopf in der Kachel | Wirkung |
 |---|---|
 | Stift (Tooltip „Gerät umbenennen“) | neuer Name für Kachel, Dashboard, Leiste oben, Testablauf und Bericht |
-| Farbkreis (Tooltip „Panel-Farbe wählen…“) | Hintergrundfarbe: Blau, Türkis, Grün, Orange, Violett, Pink, Grau oder „Kein (Standard)“ |
+| Farbkreis (Tooltip „Panel-Farbe wählen…“) | Hintergrundfarbe: Blau, Türkis, Grün, Orange, Violett, Pink, Oliv, Braun, Weinrot, Grau oder „Kein (Standard)“ |
 
 - Den Farbkreis gibt es nur mit Häkchen **Kachelfarben** in **Einstellungen → Allgemein**. Beim ersten Einschalten
   bekommt jedes bekannte Gerät eine eigene Farbe.
