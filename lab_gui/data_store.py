@@ -13,11 +13,15 @@ Ablauf (nie blockierend): Erfassungen und Berichte entstehen zuerst im lokalen D
 (wie bisher). Ein eigener Thread schiebt sie aufs Netzlaufwerk, sobald es erreichbar ist,
 und loescht danach die lokale Datei. Ein haengendes Netzlaufwerk haelt so weder Oberflaeche
 noch Geraete-Worker auf. Ist das Netzlaufwerk eingestellt (oder liegt der Datenordner auf
-einer SD-Karte), bleibt lokal hoechstens LOCAL_LIMIT_BYTES liegen; darueber werden die
-aeltesten wartenden Dateien geloescht und das steht im Log.
+einer SD-Karte), bleibt lokal hoechstens LOCAL_LIMIT_BYTES liegen. Auf der SD-Karte (Pi) werden
+darueber die aeltesten wartenden Dateien geloescht; am PC wird nichts geloescht, sondern gewarnt
+(status()["over_limit"], Log) -- PI-92 a, 1.0.3: dort ging eine nie verschobene Erfassung verloren.
 
-Speichern-Dialoge (PDF, Aufzeichnung) und die Ordner fuer Testablaeufe/Bausteine zeigen aufs
-Netzlaufwerk, wenn es bei der letzten Pruefung erreichbar war, sonst lokal.
+Speichern-Dialoge (PDF, Aufzeichnung) zeigen aufs Netzlaufwerk, wenn es bei der letzten Pruefung
+beschreibbar war, sonst lokal. Die gemeinsamen Ordner (Testablaeufe, Bausteine, Varianten) gelten
+schon, wenn das Netzlaufwerk nur noch LESBAR ist (PI-91 a, 1.0.3: ein volles bzw. nur lesend
+eingehaengtes Laufwerk liess sonst die Ablaufliste leer). Ob es lesbar ist, prueft der Thread --
+die Oberflaeche wartet nie auf ein haengendes Laufwerk.
 Ohne eingestelltes Netzlaufwerk aendert sich nichts gegenueber frueher.
 """
 from __future__ import annotations
@@ -67,6 +71,8 @@ class DataStore:
         self._limit = limit_bytes
         self._base: Path | None = None
         self._reachable = False
+        self._readable = False     # lesbar, auch wenn Schreiben scheitert (gemeinsame Ordner, PI-91 a)
+        self._over_limit = False   # PC: lokal mehr als die Grenze, nichts geloescht (PI-92 a)
         self._reason = ""
         self._pending = (0, 0)
         self._last_sync: float | None = None
@@ -89,6 +95,7 @@ class DataStore:
         with self._lock:
             self._base = Path(directory).expanduser() if directory else None
             self._reachable = False
+            self._readable = False
             self._reason = ""
         self.sync_now()
 
@@ -111,9 +118,21 @@ class DataStore:
             base = self._base
         return base / kind if kind in SHARED_KINDS else base / self.host / kind
 
+    def _readonly_shared_dir(self, kind: str) -> Path | None:
+        """Gemeinsamer Ordner auf einem Netzlaufwerk, das nur noch lesbar ist (PI-91 a)."""
+        if kind not in SHARED_KINDS:
+            return None
+        with self._lock:
+            if self._base is None or self._reachable or not self._readable:
+                return None
+            base = self._base
+        return base / kind
+
     def target_dir(self, kind: str) -> Path:
         """Ordner fuer Dialoge: Netzlaufwerk, wenn bei der letzten Pruefung erreichbar, sonst lokal.
-        Legt ihn an; scheitert das, gilt der lokale Ordner."""
+        Legt ihn an; scheitert das, gilt der lokale Ordner. Gemeinsame Ordner (Ablaeufe, Bausteine,
+        Varianten) auch dann vom Netzlaufwerk, wenn es nur noch lesbar ist -- Speichern scheitert dort
+        dann sichtbar, statt still lokal neben den anderen zu landen."""
         net = self._network_dir(kind)
         if net is not None:
             try:
@@ -121,6 +140,13 @@ class DataStore:
                 return net
             except OSError as exc:
                 logger.warning("Netzlaufwerk-Ordner %s nicht nutzbar (%s), nehme lokal", net, exc)
+        readonly = self._readonly_shared_dir(kind)
+        if readonly is not None:
+            try:
+                if readonly.is_dir():
+                    return readonly
+            except OSError:
+                pass
         local = self.local_dir(kind)
         local.mkdir(parents=True, exist_ok=True)
         return local
@@ -143,7 +169,20 @@ class DataStore:
                 target = "network" if self._reachable else "local"
             return {"target": target, "path": str(self._base / self.host) if self._base else "",
                     "reason": self._reason, "pending_files": files, "pending_bytes": size,
-                    "last_sync": self._last_sync}
+                    "last_sync": self._last_sync, "shared_readable": self._reachable or self._readable,
+                    "over_limit": self._over_limit, "limit_mb": self._limit // (1024 * 1024)}
+
+    def shared_source(self, kind: str = "testcases") -> dict:
+        """Woher ein gemeinsamer Ordner gerade kommt (fuer REST/MCP, PI-91 a): source "network" (beschreibbar),
+        "network_readonly" (nur lesbar), "local" (Netzlaufwerk eingestellt, aber nicht lesbar) oder "off"."""
+        with self._lock:
+            if self._base is None:
+                return {"source": "off", "problem": ""}
+            if self._reachable:
+                return {"source": "network", "problem": ""}
+            if self._readable:
+                return {"source": "network_readonly", "problem": self._reason}
+            return {"source": "local", "problem": self._reason or "wird geprüft"}
 
     # -- Thread ------------------------------------------------------------------
 
@@ -170,6 +209,7 @@ class DataStore:
                     moved = self._move_all(base)
                 except OSError as exc:
                     problem = f"Schreiben fehlgeschlagen: {exc}"
+            self._set_readable(base, not problem or _readable_dir(base))
             self._set_reachable(base, problem)
             if moved:
                 logger.info("Datenablage: %d Datei(en) aufs Netzlaufwerk %s verschoben", moved, base / self.host)
@@ -177,6 +217,15 @@ class DataStore:
             self._enforce_limit()
         self._pending = self._count_pending()
         self._last_sync = time.time()
+
+    def _set_readable(self, base: Path, readable: bool) -> None:
+        with self._lock:
+            if self._base != base:
+                return
+            changed = readable != self._readable
+            self._readable = readable
+        if changed and readable:
+            logger.info("Datenablage: gemeinsame Ordner auf %s bleiben lesbar (Ablaeufe, Bausteine, Varianten)", base)
 
     def _set_reachable(self, base: Path, problem: str) -> None:
         with self._lock:
@@ -243,6 +292,16 @@ class DataStore:
     def _enforce_limit(self) -> None:
         files = self._local_files()
         total = sum(_size(p) for p in files)
+        if not self._limit_on_sd:
+            # PC (PI-92 a): nichts Unverschobenes loeschen, nur warnen -- einmal beim Ueberschreiten.
+            over = total > self._limit
+            with self._lock:
+                crossed = over and not self._over_limit
+                self._over_limit = over
+            if crossed:
+                logger.warning("Datenablage: lokal mehr als %d MB warten aufs Netzlaufwerk (%.0f MB) -- nichts "
+                               "geloescht, Netzlaufwerk pruefen", self._limit // (1024 * 1024), total / 1_048_576)
+            return
         dropped = 0
         for path in files:              # aelteste zuerst
             if total <= self._limit:
@@ -263,6 +322,15 @@ class DataStore:
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
+
+
+def _readable_dir(path: Path) -> bool:
+    """Laesst sich der Ordner auflisten? (lesend, auch wenn Schreiben scheitert)"""
+    try:
+        next(iter(path.iterdir()), None)
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _mtime(path: Path) -> float:

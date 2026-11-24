@@ -600,6 +600,10 @@ class DashboardWidget(QGroupBox):
         # deaktivierte Auswahl beim Wieder-Aktivieren erhalten bleibt.
         self._panel_colors: dict[str, str | None] = {}
         self._colors_enabled = False
+        # Nicht verbundene Kacheln ausblenden (Einstellung, 1.0.3): ausgeblendete Kacheln bleiben in _panels und
+        # behalten ihren Platz in der gespeicherten Reihenfolge, sie fallen nur aus Anordnung und Anzeige.
+        self._hide_offline = False
+        self._offline: set[str] = set()
         self._compact = False
         self._user_compact = False   # Wahl am PC (set_compact); Touch ist immer kompakt
         self._large = False          # Touch: Kompaktkacheln etwas groesser (_apply_view)
@@ -705,11 +709,23 @@ class DashboardWidget(QGroupBox):
         zuletzt PERSISTIERTEN Stand zuruecksetzen, noch bevor der Nutzer
         ueberhaupt loslassen konnte (an echter Hardware/Interaktion
         reproduziert -- ohne diesen Vorrang blieb die Vorschau wirkungslos)."""
+        hidden = self._hidden_ids()
         if self._drag_preview_order is not None:
-            return [d for d in self._drag_preview_order if d in self._panels]
-        known_ordered = [d for d in self._pending_panel_order if d in self._panels]
-        remaining = [d for d in self._panels if d not in self._pending_panel_order]
+            return [d for d in self._drag_preview_order if d in self._panels and d not in hidden]
+        known_ordered = [d for d in self._pending_panel_order if d in self._panels and d not in hidden]
+        remaining = [d for d in self._panels if d not in self._pending_panel_order and d not in hidden]
         return known_ordered + remaining
+
+    def _hidden_ids(self) -> set[str]:
+        """Ausgeblendete Kacheln: nicht verbundene, wenn die Einstellung an ist."""
+        return self._offline if self._hide_offline else set()
+
+    def set_hide_offline(self, enabled: bool) -> None:
+        """Einstellung "Nicht verbundene Geräte ausblenden" (1.0.3)."""
+        if enabled == self._hide_offline:
+            return
+        self._hide_offline = enabled
+        self._relayout_panels()
 
     def _tile_span(self, device_id: str) -> tuple[int, int]:
         """(col_span, row_span) in Rastereinheiten.
@@ -1251,6 +1267,15 @@ class DashboardWidget(QGroupBox):
             panel.show()
 
     def _persist_panel_order(self, order: list[str]) -> None:
+        # Ausgeblendete Kacheln (nicht verbunden, Einstellung an) an ihrer bisherigen Stelle behalten,
+        # sonst verloeren sie durch ein Verschieben der sichtbaren ihren Platz.
+        hidden = [d for d in self._pending_panel_order if d in self._hidden_ids() and d not in order]
+        if hidden:
+            merged = list(order)
+            for device_id in hidden:
+                old_index = self._pending_panel_order.index(device_id)
+                merged.insert(min(old_index, len(merged)), device_id)
+            order = merged
         self._pending_panel_order = order
         self._relayout_panels()
         self.panel_order_changed.emit(order)
@@ -1367,6 +1392,13 @@ class DashboardWidget(QGroupBox):
 
             for panel in self._panels.values():
                 self._panel_layout.removeWidget(panel)
+            # Nur Kacheln der Anordnung zeigen (ausgeblendete nicht verbundene bleiben verborgen); die gerade
+            # gezogene Kachel bleibt waehrend des Ziehens unsichtbar (siehe _start_panel_drag).
+            shown = set(order)
+            for device_id, panel in self._panels.items():
+                if panel is self._drag_hidden_panel:
+                    continue
+                panel.setVisible(device_id in shown)
             if self._compact:
                 # Kompaktansicht: wie die Normalansicht ein bis zu 2-zeiliges
                 # Raster (siehe pack_tiles_by_row/_tile_rects), frueher stur
@@ -1650,6 +1682,10 @@ class DashboardWidget(QGroupBox):
         panel.set_value("ud_last", state.get("last_short") or "--")
 
     def _set_online(self, device_id: str, online: bool) -> None:
+        if online:
+            self._offline.discard(device_id)
+        else:
+            self._offline.add(device_id)
         panel = self._panels.get(device_id)
         if panel is None:
             return

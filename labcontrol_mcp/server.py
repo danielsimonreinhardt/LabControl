@@ -341,7 +341,17 @@ def list_testcases() -> dict:
     Laeufe mit Ergebnis."""
     names = _checked("GET", "/api/v1/testcases")
     runs = _checked("GET", "/api/v1/runs")
-    return {"testcases": names.get("testcases", []), "recent_runs": runs.get("runs", [])[:10]}
+    result = {"testcases": names.get("testcases", []), "recent_runs": runs.get("runs", [])[:10]}
+    source, problem = names.get("source", ""), names.get("problem", "")
+    if source:
+        result["source"] = source
+    if source == "local" and problem:
+        result["note"] = (f"Der gemeinsame Ordner auf dem Netzlaufwerk ist nicht erreichbar ({problem}); gezeigt "
+                          "wird nur der lokale Ordner. Den Nutzer bitten, das Netzlaufwerk zu pruefen.")
+    elif source == "network_readonly":
+        result["note"] = (f"Netzlaufwerk nur lesbar ({problem}): Ablaeufe laufen, Berichte und Erfassungen bleiben "
+                          "lokal, bis es wieder beschreibbar ist.")
+    return result
 
 
 @server.tool(annotations=ToolAnnotations(

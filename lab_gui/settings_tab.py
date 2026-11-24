@@ -765,6 +765,7 @@ class SettingsTab(QWidget):
     safety_limit_changed = Signal(str, str, bool, float)  # device_id, field, enabled, value
     notifications_toggled = Signal(bool)
     panel_colors_toggled = Signal(bool)
+    hide_offline_toggled = Signal(bool)
     can_configs_changed = Signal(list)  # list[dict]: interface/channel/bitrate/serial_baudrate/label/dbc_path
     scpi_scopes_changed = Signal(list)  # list[str]: Adressen der SCPI-Oszilloskope
     # Nutzer hat die Rueckfrage in _on_reset_devices_clicked bereits mit Ja
@@ -846,6 +847,9 @@ class SettingsTab(QWidget):
         self._panel_colors_checkbox = QCheckBox()
         self._panel_colors_checkbox.toggled.connect(self.panel_colors_toggled)
         layout.addWidget(self._panel_colors_checkbox)
+        self._hide_offline_checkbox = QCheckBox()
+        self._hide_offline_checkbox.toggled.connect(self.hide_offline_toggled)
+        layout.addWidget(self._hide_offline_checkbox)
 
         language_row = QHBoxLayout()
         self._language_label = QLabel()
@@ -1430,6 +1434,7 @@ class SettingsTab(QWidget):
         self._touch_checkbox.setText(touch_text)
         self._notify_checkbox.setText(tr("Desktop-Benachrichtigungen"))
         self._panel_colors_checkbox.setText(tr("Kachelfarben"))
+        self._hide_offline_checkbox.setText(tr("Nicht verbundene Geräte ausblenden"))
         self._language_label.setText(tr("Sprache:"))
         self._network_dir_label.setText(tr("Netzlaufwerk:"))
         self._network_dir_edit.setPlaceholderText(tr("leer = nur lokal"))
@@ -1502,6 +1507,11 @@ class SettingsTab(QWidget):
         self._panel_colors_checkbox.blockSignals(True)
         self._panel_colors_checkbox.setChecked(enabled)
         self._panel_colors_checkbox.blockSignals(False)
+
+    def set_hide_offline_enabled(self, enabled: bool) -> None:
+        self._hide_offline_checkbox.blockSignals(True)
+        self._hide_offline_checkbox.setChecked(enabled)
+        self._hide_offline_checkbox.blockSignals(False)
 
     def set_language(self, language: str) -> None:
         index = self._language_combo.findData(language)

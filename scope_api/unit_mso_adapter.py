@@ -71,6 +71,10 @@ MAX_RATE_HZ = 2.5e9
 ARM_GRACE_S = 0.3
 # Status, ab denen das Gerät auf den Trigger wartet (am Gerät READY; Simulator WAIT).
 ARMED_STATES = ("READY", "WAIT", "TRIGED", "AUTO")
+# Ab 100 ms/div arbeitet das Geraet im Scan-Betrieb: Status dauerhaft "SCAN", nie READY -- ob ein Ereignis nach dem
+# Scharf schalten dort sauber mit Vorlauf erfasst wird, ist nicht geprueft. Scharf schalten deshalb nur bis
+# 50 ms/div (PI-93 c, 1.0.3); acquire bleibt erlaubt.
+ARM_MAX_SCALE_S = 0.05
 POLL_S = 0.02
 WAIT_MARGIN_S = 2.0
 _EPS = 1e-9
@@ -99,6 +103,7 @@ def capabilities_for(model: str, serial: str, simulated: bool = False) -> Capabi
             "rund 2 s mit einem Kanal, 5 s mit vier (Einstellen, Erfassen, binär über LAN lesen).",
             "2,5 GS/s gelten für einen aktiven Kanal; mit mehr Kanälen teilt das Gerät die Rate. Die "
             "tatsächliche Rate steht im Ergebnis.",
+            "Scharf schalten (arm, Ablaufschritt) nur bis 0,4 s Fenster (50 ms/div); längere Fenster nur mit acquire.",
             "Nur Flanken-Trigger. Die Bildschirmeinstellungen am Gerät werden durch jede Erfassung "
             "überschrieben; danach steht das Gerät gestoppt mit dieser Erfassung.",
         ),
@@ -137,6 +142,17 @@ class UnitMsoScope:
                 raise ScopeError("setting_not_supported", f"Kanal {ch.name!r} gibt es am {self._model} nicht.",
                                  allowed=[f"CH{i}" for i in range(1, self._channels + 1)])
             numbers[ch.name] = n
+
+        if on_armed is not None:
+            # Vor jedem Geraetebefehl pruefen (PI-93 c): die Zeitbasis-Wahl fasst das Geraet nicht an.
+            arm_scale_s = self._choose_timing(request.timing, len(numbers))[0]
+            if arm_scale_s > ARM_MAX_SCALE_S * (1 + _EPS):
+                limit = RECORD_DIVS * ARM_MAX_SCALE_S
+                raise ScopeError("setting_not_supported",
+                                 f"Scharf schalten am {self._model} nur bis {ARM_MAX_SCALE_S * 1000:g} ms/div "
+                                 f"(Fenster bis {limit:g} s): langsamer arbeitet das Gerät im Scan-Betrieb und meldet "
+                                 "nicht, wann es auf den Trigger wartet. Kürzeres Fenster wählen oder acquire verwenden.",
+                                 max_duration_s=limit)
 
         dev = self._device
         dev.stop()

@@ -4,21 +4,16 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
-## [Unreleased]
+## [1.0.3] – 2026-11-22
 
-### Behoben
-- **RTB2000: Zeitpunkt 0 an der Triggerflanke auch bei langen Aufzeichnungen.** Ab 200 000 Punkten
-  (`ACQuire:POINts`) liefert das RTB2002 die Daten gegen den Kopf verschoben: die Flanke lag rund 50 Punkte
-  (zwei Kanäle: rund 28) nach t = 0, bei 5 ms Fenster also 0,8 µs. Der Adapter verschiebt den Trigger-Index um
-  die gemessene Tabelle `rs_rtb2000.driver.TRIGGER_DELAY_POINTS`; danach ±5 Punkte. Der Simulator bildet den
-  Nachlauf nach, `check_rs_rtb` prüft die Lage der Flanke jetzt auf ±2 (Simulator) bzw. ±10 Punkte (Gerät).
-
-### Geändert
-- **RTB2002 mit Firmware 02.202 nachgeprüft** (`check_rs_rtb --hardware --signal-ch1` bei 1 und 10 kHz, Signal vom
-  MHS-5225A): alle Eigenheiten wie unter 01.210; neu richtig sind die Daten bei 2,5 GS/s (die Grenze 1,25 GS/s
-  bleibt für ältere Firmware) und `CHANnel:ZOFFset?`. Zwei Kanäle mit Trigger an CH2 jetzt am Gerät geprüft.
-  Der Simulator meldet 02.202.
 ### Hinzugefügt
+- **Einstellungen → Allgemein: „Nicht verbundene Geräte ausblenden“.** Bisher blieben bekannte, aber getrennte Geräte
+  als graue Kachel in der Übersicht stehen; mit dem Häkchen verschwinden sie, die verbundenen rücken auf. Kommt ein
+  Gerät zurück, erscheint seine Kachel an ihrer alten Stelle; Verschieben der sichtbaren Kacheln behält den Platz der
+  ausgeblendeten. Standard aus (Verhalten wie bisher), gespeichert in `settings.json` (`hide_offline_tiles`). Die
+  Steuerungs-Ansicht blendete getrennte Geräte schon vorher aus. Nur Oberfläche geprüft (`check_hide_offline_tiles`
+  mit Übersicht und Hauptfenster im Simulationsmodus; `check_dashboard_relayout`, `check_dashboard_detach`,
+  `check_arrange_overlay`, `check_touch_ui`, `check_translations` grün), in der .exe noch nicht angesehen.
 - **Funktionsgenerator MHS-5200A (MHS-5206A … 5225A) über USB.** Neuer Treiber `device-driver/mhs5200a`
   (serielles Protokoll mit 57600 Baud, RTS/CTS) mit Simulator auf Ebene der seriellen Zeilen. Gleiche Geräteart
   `fg`, Aktionen und Kachel wie der JDS2915; erkannt am CH340-Port nach dessen Handshake und als
@@ -29,6 +24,49 @@ Semantic Versioning (`lab_gui/version.py`).
   180°). **Am MHS-5225A geprüft**, Ausgang mit dem RTB2002 nachgemessen: `tools/check_mhs5200a.py --hardware`
   grün. Puls und DC lehnt der Treiber ab; Tastgrad-Hinweise in Kachel und Ablauf-Editor kennen jetzt auch „nur bei
   Rechteck“.
+
+### Geändert
+- **RTB2002 mit Firmware 02.202 nachgeprüft** (`check_rs_rtb --hardware --signal-ch1` bei 1 und 10 kHz, Signal vom
+  MHS-5225A): alle Eigenheiten wie unter 01.210; neu richtig sind die Daten bei 2,5 GS/s (die Grenze 1,25 GS/s
+  bleibt für ältere Firmware) und `CHANnel:ZOFFset?`. Zwei Kanäle mit Trigger an CH2 jetzt am Gerät geprüft.
+  Der Simulator meldet 02.202.
+
+### Behoben
+- **Netzlaufwerk nur lesbar: Abläufe bleiben sichtbar (PI-91 a).** War das Netzlaufwerk nicht beschreibbar (am
+  23./24.11. meldete der USB-Speicher an der FRITZ!Box „nicht genug Speicherplatz“), suchten Ablaufliste, REST und
+  MCP `list_testcases` nur im leeren lokalen Ordner. Die gemeinsamen Ordner (Abläufe, Bausteine, Varianten) kommen
+  jetzt vom Netzlaufwerk, solange es lesbar ist (der Hintergrund-Thread prüft das, die Oberfläche wartet nie
+  darauf); Erfassungen und Berichte bleiben wie bisher lokal und werden nachgeschoben. `/api/v1/testcases` nennt
+  `source` (`network`, `network_readonly`, `local`, `off`) und `problem`, MCP `list_testcases` dazu einen Hinweis.
+  Geprüft: `check_data_store` (neu: nur lesbar, ganz weg), am echten, gerade nur lesbaren Netzlaufwerk (11 Abläufe
+  gefunden, Quelle `network_readonly`), `check_runs_api`, `check_network_share`, `check_variants`,
+  `check_linked_blocks`, `check_headless_run` grün; in der .exe noch nicht.
+- **Am PC keine wartenden Erfassungen mehr löschen (PI-92 a).** Über 200 MB lokal wartender Dateien löschte
+  LabControl auch am PC die ältesten – am 24.11. ging so eine nie verschobene Erfassung verloren. Am PC wird jetzt
+  nichts gelöscht, sondern einmal gewarnt (Log und Statusleiste); auf der SD-Karte des Pi bleibt die Grenze.
+  Geprüft: `check_data_store` (PC: nichts gelöscht, Warnung einmal; Pi: wie bisher).
+- **UNI-T: Scharf schalten bei langsamer Zeitbasis (PI-93 c).** Ab 100 ms/div arbeitet das MSO1154HD-S im
+  Scan-Betrieb und meldet dauerhaft „SCAN“ statt „READY“; `arm` wurde dann erst beim Auslösen (oder nie) „scharf“
+  (Evalboard-Termin 23.11., Fenster 8 s). Scharf schalten (MCP `arm`, Ablaufschritt) geht am UNI-T jetzt bis
+  50 ms/div (Fenster bis 0,4 s) und wird darüber sofort mit Meldung abgelehnt, bevor ein Befehl ans Gerät geht;
+  `acquire` bleibt bei jeder Zeitbasis erlaubt. Ob „SCAN“ ein Ereignis nach dem Scharf schalten sauber erfasst,
+  wird später am Gerät geprüft. Am Gerät geprüft: 50 ms/div → READY nach 0,7 s, 8-s-Fenster abgelehnt ohne
+  Gerätebefehl; Simulator: `check_unit_mso`, `check_scope_arm` grün.
+- **Log: pyvisa-Fehlermeldungen bei ausgeschaltetem SCPI-Oszilloskop.** pyvisa schrieb jeden gescheiterten
+  Verbindungsversuch der Erkennung (alle 10 s) selbst als ERROR mit Traceback ins Log, 5 517 Zeilen an einem Tag.
+  Seine eigene Ausgabe kommt jetzt erst ab CRITICAL; die Treiber melden Verbindungsfehler weiter selbst. Geprüft:
+  pyvisa-Meldung unterdrückt, eigene Meldungen bleiben (nur Prozess, nicht in der .exe).
+- **Getrenntes Oszilloskop stand als „Belegt (andere App?)“ in der Kachel.** Beim Trennen (PicoScope abgesteckt,
+  UNI-T nicht mehr erreichbar) setzte die Übersichtskachel den Status auf „belegt“; intern (MCP, `list_scopes`) stand
+  es richtig auf „offline“. Jetzt eigener Status „Nicht verbunden“ (auch vor dem ersten gemeldeten Zustand, in der
+  Steuerungs-Kachel ebenso); die Statustexte der Oszilloskop-Kachel haben jetzt auch eine englische Fassung. Nur
+  Oberfläche geprüft (`check_scope_tile_offline`; `check_control_tab`, `check_partner_link`, `check_translations`,
+  `check_partner_devices`, `check_dashboard_relayout` grün), am Gerät und in der .exe noch nicht angesehen.
+- **RTB2000: Zeitpunkt 0 an der Triggerflanke auch bei langen Aufzeichnungen.** Ab 200 000 Punkten
+  (`ACQuire:POINts`) liefert das RTB2002 die Daten gegen den Kopf verschoben: die Flanke lag rund 50 Punkte
+  (zwei Kanäle: rund 28) nach t = 0, bei 5 ms Fenster also 0,8 µs. Der Adapter verschiebt den Trigger-Index um
+  die gemessene Tabelle `rs_rtb2000.driver.TRIGGER_DELAY_POINTS`; danach ±5 Punkte. Der Simulator bildet den
+  Nachlauf nach, `check_rs_rtb` prüft die Lage der Flanke jetzt auf ±2 (Simulator) bzw. ±10 Punkte (Gerät).
 
 ## [1.0.2] – 2026-11-22
 

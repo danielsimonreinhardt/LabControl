@@ -49,11 +49,12 @@ from theme import current as current_palette
 
 STATUS_ICON = {
     "free": "mdi.check-circle-outline", "busy": "mdi.lock-outline", "test": "mdi.flask-outline",
-    "mcp": "mdi.lan-connect",
+    "mcp": "mdi.lan-connect", "offline": "mdi.link-variant-off",
 }
+# "offline" (1.0.2): Geraet getrennt -- vorher stand dann "Belegt (andere App?)" in der Kachel.
 STATUS_TEXT = {
     "free": "Frei", "busy": "Belegt (andere App?)", "test": "Belegt (Testlauf läuft)",
-    "mcp": "Verbunden (MCP)",
+    "mcp": "Verbunden (MCP)", "offline": "Nicht verbunden",
 }
 STATUS_ICON_SIZE = 18
 
@@ -80,7 +81,7 @@ class PicoscopePanel(QGroupBox):
         self._with_launch = with_launch
         self._display_only = False   # Partnergeraet (set_display_only)
         self._online = True
-        self._status = "busy"
+        self._status = "offline"   # bis der erste Zustand kommt
         self._variant = ""
         self._serial = ""
         self._color_key: str | None = None
@@ -246,7 +247,7 @@ class PicoscopePanel(QGroupBox):
         dasselbe wie "frei" -- siehe set_state()."""
         self._online = online
         if not online:
-            self._status = "busy"
+            self._status = "offline"
             self._variant = ""
             self._serial = ""
             self._release_button.setVisible(False)

@@ -1319,5 +1319,12 @@
   "Wobbel-Startfrequenz setzen": "Set sweep start frequency",
   "Wobbel-Stoppfrequenz setzen": "Set sweep stop frequency",
   "Wobbelzeit setzen": "Set sweep time",
-  "Lastwiderstand setzen": "Set load resistance"
+  "Lastwiderstand setzen": "Set load resistance",
+  "Frei": "Free",
+  "Belegt (andere App?)": "In use (other app?)",
+  "Belegt (Testlauf läuft)": "In use (test run)",
+  "Nicht verbunden": "Not connected",
+  "Unbekannt": "Unknown",
+  "Nicht verbundene Geräte ausblenden": "Hide disconnected devices",
+  "Mehr als {mb} MB warten lokal aufs Netzlaufwerk ({reason}) -- Netzlaufwerk prüfen": "More than {mb} MB waiting locally for the network drive ({reason}) -- check the network drive"
 }

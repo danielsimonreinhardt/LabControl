@@ -134,6 +134,8 @@ class LiveState(QObject):
         self.runs = RunRegistry()
         # Namen der Ablaeufe im gemeinsamen Ordner fuer /api/v1/testcases (MainWindow setzt die Funktion)
         self.list_testcases = lambda: []
+        # Woher die Liste kommt (PI-91 a, 1.0.3): {"source": network|network_readonly|local|off, "problem": ...}
+        self.testcases_source = lambda: {}
         # Verbund-Partner (PI-32 a): seine Kacheln, wie sie der Abfrage-Thread zuletzt geliefert hat --
         # share_api reicht sie an Aufrufer auf DIESEM Rechner (MCP) durch. {} = kein Partner verbunden.
         self._partner: dict = {}
