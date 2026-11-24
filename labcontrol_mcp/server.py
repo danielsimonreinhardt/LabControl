@@ -131,6 +131,9 @@ Vorgehen:
   FG_OFFS value=Spannung; am Ausgang liegt Offset + 5 mV (in DC gibt das Geraet Offset + Amplitude/2 aus, bei
   Amplitude genau 0 nur ~1/10 des Offsets). FG_AMPL ist in DC abgelehnt. FG_DUTY wirkt nur bei FG_WAVE_PULSE
   und ist sonst abgelehnt (Rechteck bleibt am Geraet 50 %) -- erst die Form setzen, nie umgehen.
+- Funktionsgenerator MHS-5200A (fg, ID 'fg:mhs5200a-...', Feld profile='mhs5200a'): zwei Kanaele, keine Phase,
+  kein Puls, kein DC. FG_DUTY nur bei FG_WAVE_SQUARE. FG_OFFS in Volt, hoechstens 120 % der halben Amplitude;
+  FG_AMPL haelt den Offset in Volt und wird abgelehnt, wenn er nicht mehr passt (erst FG_OFFS senken).
 - Generator im UNI-T-Oszilloskop (fg, ID '...:AWG1', Feld profile='unit_mso_awg'): EIN Kanal (channel=1), keine
   Phase. Dieselben FG_*-Aktionen; DC: FG_WAVE_DC, dann FG_OFFS = Spannung (keine Amplitude). FG_DUTY nur bei
   Rechteck und Puls. FG_WAVE_TRIANGLE = Rampe (Dreieck). Dazu Modulation: FG_MODE_BASE/AM/FM/ASK/FSK/SWEEP,

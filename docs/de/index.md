@@ -45,6 +45,7 @@ Was LabControl von einzelnen Herstellerprogrammen unterscheidet:
 | Korad KEL102 | Elektronische Last | USB (virtueller COM-Port) | am Gerät geprüft |
 | Manson HCS-3xxx (Treiber für HCS-3400/3402/3404) | Labornetzteil | USB (virtueller COM-Port) | am Gerät geprüft (HCS-3404 mit 60 V und ein 16-V-Modell) |
 | Joy-IT JDS2915 (Protokoll JDS66xx) | Funktionsgenerator, 2 Kanäle | USB (CH340-Wandler) | am Gerät geprüft |
+| MHS-5200A (z. B. MHS-5225A) | Funktionsgenerator, 2 Kanäle | USB (CH340-Wandler) | am Gerät geprüft (MHS-5225A) |
 | PicoScope 2204A/2205A | USB-Oszilloskop | USB (PicoSDK) | am Gerät geprüft (2204A) |
 | UNI-T MSO1000HD, z. B. MSO1154HD-S | Oszilloskop | LAN (SCPI, ohne NI-VISA) | **bisher nur gegen den Simulator geprüft** |
 | Rohde & Schwarz RTB2002/RTB2004 | Oszilloskop | LAN (SCPI, ohne NI-VISA) | am Gerät geprüft (RTB2002) |

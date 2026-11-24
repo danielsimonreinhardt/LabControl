@@ -19,7 +19,7 @@ Der Treiber bleibt "dumm" (synchron, blockierend, ein Aufrufer-Thread) und
 kennt nur Gerätebefehle. Die Übersetzung aus der herstellerneutralen
 Erfassungsanfrage macht scope_api/rs_rtb_adapter.py.
 
-STAND: am RTB2002 (Firmware 01.210) über LAN geprüft, siehe README.md. Was
+STAND: am RTB2002 (Firmware 01.210 und 02.202) über LAN geprüft, siehe README.md. Was
 dort noch nicht nachgemessen ist, ist mit ``HARDWARE-PRÜFUNG`` markiert.
 """
 from __future__ import annotations
@@ -46,6 +46,24 @@ BLOCK_END_TIMEOUT_S = 0.5
 SOCKET_PORT = 5025
 SIM_RESOURCE = "SIM-RTB"
 SIM_DEVICE_ID = f"{KIND}:{SIM_RESOURCE}"
+# Bei langen Aufzeichnungen laufen die Daten dem Kopf nach: Ab 200k Punkten
+# (ACQuire:POINts) liegt die Triggerflanke nicht bei t = 0 laut XStart,
+# sondern so viele Punkte später -- unabhängig von Abtastrate, Flanke,
+# Triggerquelle und Pre-Trigger, bei gleicher Einstellung auf ±1 Punkt
+# wiederholbar, zwischen Einstellungen ±5 Punkte um den Tabellenwert (5M: ±7). Mit
+# zwei aktiven Kanälen etwa die Hälfte, für beide Kanäle gleich (der Abstand
+# CH1 -> CH2 stimmt also). Bis 100k Punkte kein Versatz. Gemessen am RTB2002
+# (Firmware 02.202) mit Rechteck-Flanken, siehe README.md.
+# ACQuire:POINts -> (Versatz mit 1 Kanal, mit 2 und mehr Kanälen) in Punkten.
+# 10M mit 2 Kanälen und mehr als 2 Kanäle (RTB2004): HARDWARE-PRÜFUNG.
+TRIGGER_DELAY_POINTS = {
+    200_000: (61.5, 29.5),
+    500_000: (51.0, 27.0),
+    1_000_000: (54.0, 29.0),
+    2_000_000: (52.0, 27.5),
+    5_000_000: (55.0, 29.0),   # streut hier stärker: 48..62 bei einem Kanal
+    10_000_000: (50.5, 29.0),
+}
 # Grundbandbreite RTB2002/RTB2004 ohne Bandbreiten-Option (Datenblatt S. 12).
 BASE_BANDWIDTH_HZ = 70e6
 # Bandbreiten-Optionen RTB-B22x (2 Kanäle) bzw. RTB-B24x (4 Kanäle), x = 1/2/3.
@@ -113,6 +131,16 @@ def parse_model(model: str, options: str = "") -> ModelInfo:
     for opt in re.findall(r"B2[24]([123])\b", options.upper()):
         bandwidth = max(bandwidth, OPTION_BANDWIDTH_HZ[opt])
     return ModelInfo(channels=channels, bandwidth_hz=bandwidth)
+
+
+def trigger_delay_points(record_length: int, active_channels: int) -> float:
+    """Um so viele Punkte liegt der Trigger in CHANnel:DATA? hinter dem Punkt
+    bei t = 0 laut Kopf (TRIGGER_DELAY_POINTS); 0 unter 200k Punkten."""
+    lengths = [r for r in sorted(TRIGGER_DELAY_POINTS) if r <= record_length]
+    if not lengths:
+        return 0.0
+    one, more = TRIGGER_DELAY_POINTS[lengths[-1]]
+    return one if active_channels <= 1 else more
 
 
 def socket_resource(resource: str) -> str | None:

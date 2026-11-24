@@ -14,6 +14,22 @@ Semantic Versioning (`lab_gui/version.py`).
   Steuerungs-Ansicht blendete getrennte Geräte schon vorher aus. Nur Oberfläche geprüft (`check_hide_offline_tiles`
   mit Übersicht und Hauptfenster im Simulationsmodus; `check_dashboard_relayout`, `check_dashboard_detach`,
   `check_arrange_overlay`, `check_touch_ui`, `check_translations` grün), in der .exe noch nicht angesehen.
+- **Funktionsgenerator MHS-5200A (MHS-5206A … 5225A) über USB.** Neuer Treiber `device-driver/mhs5200a`
+  (serielles Protokoll mit 57600 Baud, RTS/CTS) mit Simulator auf Ebene der seriellen Zeilen. Gleiche Geräteart
+  `fg`, Aktionen und Kachel wie der JDS2915; erkannt am CH340-Port nach dessen Handshake und als
+  `fg:mhs5200a-<Port>` geführt (der Ablauf-Editor erkennt so die Regeln des Geräts). Zwei Kanäle; Sinus,
+  Rechteck, Dreieck, Rampen, Arbiträr 1–16; Tastverhältnis nur bei Rechteck; Offset in Volt (das Gerät rechnet in
+  Prozent der Amplitude, LabControl hält ihn beim Amplitudenwechsel fest); −20-dB-Dämpfung bis 2 V automatisch,
+  ohne Überhöhung beim Umschalten. Keine Phase: am Gerät ergibt die Einstellung p einen Versatz von 180° − (p mod
+  180°). **Am MHS-5225A geprüft**, Ausgang mit dem RTB2002 nachgemessen: `tools/check_mhs5200a.py --hardware`
+  grün. Puls und DC lehnt der Treiber ab; Tastgrad-Hinweise in Kachel und Ablauf-Editor kennen jetzt auch „nur bei
+  Rechteck“.
+
+### Geändert
+- **RTB2002 mit Firmware 02.202 nachgeprüft** (`check_rs_rtb --hardware --signal-ch1` bei 1 und 10 kHz, Signal vom
+  MHS-5225A): alle Eigenheiten wie unter 01.210; neu richtig sind die Daten bei 2,5 GS/s (die Grenze 1,25 GS/s
+  bleibt für ältere Firmware) und `CHANnel:ZOFFset?`. Zwei Kanäle mit Trigger an CH2 jetzt am Gerät geprüft.
+  Der Simulator meldet 02.202.
 
 ### Behoben
 - **Netzlaufwerk nur lesbar: Abläufe bleiben sichtbar (PI-91 a).** War das Netzlaufwerk nicht beschreibbar (am
@@ -46,6 +62,11 @@ Semantic Versioning (`lab_gui/version.py`).
   Steuerungs-Kachel ebenso); die Statustexte der Oszilloskop-Kachel haben jetzt auch eine englische Fassung. Nur
   Oberfläche geprüft (`check_scope_tile_offline`; `check_control_tab`, `check_partner_link`, `check_translations`,
   `check_partner_devices`, `check_dashboard_relayout` grün), am Gerät und in der .exe noch nicht angesehen.
+- **RTB2000: Zeitpunkt 0 an der Triggerflanke auch bei langen Aufzeichnungen.** Ab 200 000 Punkten
+  (`ACQuire:POINts`) liefert das RTB2002 die Daten gegen den Kopf verschoben: die Flanke lag rund 50 Punkte
+  (zwei Kanäle: rund 28) nach t = 0, bei 5 ms Fenster also 0,8 µs. Der Adapter verschiebt den Trigger-Index um
+  die gemessene Tabelle `rs_rtb2000.driver.TRIGGER_DELAY_POINTS`; danach ±5 Punkte. Der Simulator bildet den
+  Nachlauf nach, `check_rs_rtb` prüft die Lage der Flanke jetzt auf ±2 (Simulator) bzw. ±10 Punkte (Gerät).
 
 ## [1.0.2] – 2026-11-22
 

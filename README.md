@@ -26,7 +26,7 @@ source in [`docs/de/`](docs/de/index.md). The user interface can be switched to 
 
 ## Supported devices
 
-MANSON HCS-3xxx power supplies · KORAD KEL102 electronic load · Joy-IT JDS2915 (JDS66xx) function generator ·
+MANSON HCS-3xxx power supplies · KORAD KEL102 electronic load · Joy-IT JDS2915 (JDS66xx) and MHS-5200A function generators ·
 PicoScope 2204A/2205A · UNI-T MSO1000HD and Rohde & Schwarz RTB2000 (SCPI over LAN) · microHIL I/O box ·
 SEGGER J-Link · CAN interfaces
 (Vector, PCAN, SLCAN, SocketCAN) · self-built 14-cell battery simulator. Details per device in

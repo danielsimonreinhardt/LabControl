@@ -1150,11 +1150,13 @@ class _FgChannelBox(QGroupBox):
         self.offs_spin.setToolTip(tr("Gleichspannung am Ausgang (Leerlauf)") if dc else "")
         self.freq_spin.setEnabled(not dc)
         self.freq_button.setEnabled(not dc)
-        # PI-80 a: JDS2915 nur Puls; Generator im UNI-T-Oszilloskop Rechteck und Puls (1.0.2)
+        # PI-80 a: JDS2915 nur Puls; Generator im UNI-T-Oszilloskop Rechteck und Puls (1.0.2); MHS-5200A nur
+        # Rechteck (1.0.3)
         duty_ok = self.device_waveform is None or self.device_waveform in self.module.DUTY_WAVEFORMS
         self.duty_spin.setEnabled(duty_ok)
         self.duty_button.setEnabled(duty_ok)
         self.duty_spin.setToolTip("" if duty_ok else tr("nur bei Puls") if self.module.DUTY_WAVEFORMS == (WAVE_PULSE,)
+                                  else tr("nur bei Rechteck") if WAVE_PULSE not in self.module.DUTY_WAVEFORMS
                                   else tr("nur bei Rechteck und Puls"))
 
     def set_output_state(self, on: bool) -> None:
