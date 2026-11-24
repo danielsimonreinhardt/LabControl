@@ -29,6 +29,13 @@ Semantic Versioning (`lab_gui/version.py`).
   LabControl auch am PC die ältesten – am 24.11. ging so eine nie verschobene Erfassung verloren. Am PC wird jetzt
   nichts gelöscht, sondern einmal gewarnt (Log und Statusleiste); auf der SD-Karte des Pi bleibt die Grenze.
   Geprüft: `check_data_store` (PC: nichts gelöscht, Warnung einmal; Pi: wie bisher).
+- **UNI-T: Scharf schalten bei langsamer Zeitbasis (PI-93 c).** Ab 100 ms/div arbeitet das MSO1154HD-S im
+  Scan-Betrieb und meldet dauerhaft „SCAN“ statt „READY“; `arm` wurde dann erst beim Auslösen (oder nie) „scharf“
+  (Evalboard-Termin 23.11., Fenster 8 s). Scharf schalten (MCP `arm`, Ablaufschritt) geht am UNI-T jetzt bis
+  50 ms/div (Fenster bis 0,4 s) und wird darüber sofort mit Meldung abgelehnt, bevor ein Befehl ans Gerät geht;
+  `acquire` bleibt bei jeder Zeitbasis erlaubt. Ob „SCAN“ ein Ereignis nach dem Scharf schalten sauber erfasst,
+  wird später am Gerät geprüft. Am Gerät geprüft: 50 ms/div → READY nach 0,7 s, 8-s-Fenster abgelehnt ohne
+  Gerätebefehl; Simulator: `check_unit_mso`, `check_scope_arm` grün.
 - **Log: pyvisa-Fehlermeldungen bei ausgeschaltetem SCPI-Oszilloskop.** pyvisa schrieb jeden gescheiterten
   Verbindungsversuch der Erkennung (alle 10 s) selbst als ERROR mit Traceback ins Log, 5 517 Zeilen an einem Tag.
   Seine eigene Ausgabe kommt jetzt erst ab CRITICAL; die Treiber melden Verbindungsfehler weiter selbst. Geprüft:

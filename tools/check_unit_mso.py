@@ -164,6 +164,14 @@ def check_sim() -> None:
                                                    trigger={"mode": "single", "source": "CH1", "level_v": 3})))
         expect_error("Zu viele Samples", "setting_not_supported",
                      lambda: scope.acquire(request(timing={"duration_s": 1.0, "samples": 10_000_000})))
+        # PI-93 c (1.0.3): Scharf schalten nur bis 50 ms/div (Fenster 0,4 s), acquire weiter erlaubt
+        expect_error("Scharf schalten mit 1-s-Fenster abgelehnt", "setting_not_supported",
+                     lambda: scope.acquire(request(timing={"duration_s": 1.0}), on_armed=lambda: None))
+        armed = []
+        cap = scope.acquire(request(timing={"duration_s": 0.4, "pre_trigger_pct": 20}), on_armed=lambda: armed.append(1))
+        check("Scharf schalten mit 0,4-s-Fenster erlaubt", bool(armed) and cap.triggered is True, str(armed))
+        cap = scope.acquire(request(timing={"duration_s": 1.0}))
+        check("acquire mit 1-s-Fenster weiter erlaubt", cap.channels["CH1"].volts.size > 0)
 
         mock.SimulatedInstrument.hang_after_run = True
         try:
