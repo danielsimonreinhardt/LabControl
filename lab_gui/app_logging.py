@@ -321,6 +321,10 @@ def setup_logging(network_dir: str = "") -> None:
     global _pipeline
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    # pyvisa meldet jeden gescheiterten Verbindungsversuch selbst als ERROR mit Traceback -- bei einem
+    # ausgeschalteten SCPI-Oszilloskop alle 10 s (Erkennung), 5 517 Zeilen an einem Tag (1.0.3). Die Treiber
+    # uebersetzen diese Fehler ohnehin in eigene Meldungen; pyvisas eigene Ausgabe nur noch ab CRITICAL.
+    logging.getLogger("pyvisa").setLevel(logging.CRITICAL)
     if _pipeline is None:
         _pipeline = _LogPipeline()
         root.addHandler(_pipeline.handler(MAIN))

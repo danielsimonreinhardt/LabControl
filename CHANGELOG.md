@@ -16,6 +16,10 @@ Semantic Versioning (`lab_gui/version.py`).
   `check_arrange_overlay`, `check_touch_ui`, `check_translations` grün), in der .exe noch nicht angesehen.
 
 ### Behoben
+- **Log: pyvisa-Fehlermeldungen bei ausgeschaltetem SCPI-Oszilloskop.** pyvisa schrieb jeden gescheiterten
+  Verbindungsversuch der Erkennung (alle 10 s) selbst als ERROR mit Traceback ins Log, 5 517 Zeilen an einem Tag.
+  Seine eigene Ausgabe kommt jetzt erst ab CRITICAL; die Treiber melden Verbindungsfehler weiter selbst. Geprüft:
+  pyvisa-Meldung unterdrückt, eigene Meldungen bleiben (nur Prozess, nicht in der .exe).
 - **Getrenntes Oszilloskop stand als „Belegt (andere App?)“ in der Kachel.** Beim Trennen (PicoScope abgesteckt,
   UNI-T nicht mehr erreichbar) setzte die Übersichtskachel den Status auf „belegt“; intern (MCP, `list_scopes`) stand
   es richtig auf „offline“. Jetzt eigener Status „Nicht verbunden“ (auch vor dem ersten gemeldeten Zustand, in der
