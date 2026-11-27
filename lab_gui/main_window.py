@@ -1445,7 +1445,8 @@ class MainWindow(QMainWindow):
         self._all_off_button.setStyleSheet(
             f"QPushButton {{ background-color: {pal.danger}; color: {pal.on_status}; font-weight: bold; "
             f"border: 1px solid {pal.danger}; border-radius: {METRICS.radius_sm}px; padding: {padding}; }}"
-            f"QPushButton:focus {{ border: {METRICS.focus_width}px solid {pal.focus}; }}"
+            # Touch: ohne Fokusrahmen, der nach dem Tippen stehen blieb (1.0.6)
+            + ("" if self._touch else f"QPushButton:focus {{ border: {METRICS.focus_width}px solid {pal.focus}; }}")
         )
         self._all_off_button.setMinimumSize(*((96, TOUCH_H) if self._touch else (0, TOP_BUTTON_H_PC)))
 

@@ -65,7 +65,7 @@ from panel_color import PanelColorButton, apply_panel_tint
 from picoscope_panel import STATUS_TEXT as PICOSCOPE_STATUS_TEXT
 from presets import PresetStore, SLOT_COUNT
 from step_spinbox import SteppedDoubleSpinBox, SteppedSpinBox
-from theme import METRICS, Palette, ThemeManager, form_control_qss, set_tone
+from theme import METRICS, Palette, ThemeManager, form_control_qss, set_tone, touch_active
 from touch_keypad import attach_hex_keypad, set_apply_partner
 from theme import current as current_palette
 from tile_grid import (
@@ -309,7 +309,8 @@ def _style_digital_out_toggle(button: _DigitalOutToggle, on: bool, pal: Palette)
     theme.py: die EIN/AUS-Anzeige eines Ausgangs ist sicherheitsrelevant und
     muss deshalb in beiden Themes gruen bleiben)."""
     # Siehe _style_toggle_buttons: nur bei geaendertem Zustand/geaenderter Palette neu setzen.
-    style_key = (on, pal.check_pass, pal.text_muted, pal.text, pal.border, pal.surface_alt, pal.focus)
+    touch = touch_active()
+    style_key = (on, pal.check_pass, pal.text_muted, pal.text, pal.border, pal.surface_alt, pal.focus, touch)
     if getattr(button, "_toggle_style_key", None) == style_key:
         return
     button._toggle_style_key = style_key
@@ -318,7 +319,7 @@ def _style_digital_out_toggle(button: _DigitalOutToggle, on: bool, pal: Palette)
     button.setStyleSheet(
         f"QPushButton {{ border: 1px solid {pal.border}; border-radius: {METRICS.radius_md}px; "
         f"background-color: {pal.surface_alt}; }}"
-        f"QPushButton:focus {{ border-color: {pal.focus}; }}"
+        + ("" if touch else f"QPushButton:focus {{ border-color: {pal.focus}; }}")   # Touch: 1.0.6
     )
 
 
@@ -3096,6 +3097,14 @@ class _PresetSlotButton(QWidget):
         (globales Stylesheet), damit sie sich als "kleinere Nebenaktion" vom
         Haupt-Button abheben."""
         tint = pal.panel_tints["blue"]
+        # Touch: ohne :focus/:hover, die nach dem Tippen stehen blieben (1.0.6)
+        focus_hover = "" if touch_active() else f"""
+            QPushButton:focus {{
+                border: {METRICS.focus_width}px solid {pal.focus};
+            }}
+            QPushButton:hover {{
+                border: 2px solid {pal.accent};
+            }}"""
         self._main_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {tint};
@@ -3105,12 +3114,7 @@ class _PresetSlotButton(QWidget):
                 font-weight: bold;
                 padding: 2px 4px;
             }}
-            QPushButton:focus {{
-                border: {METRICS.focus_width}px solid {pal.focus};
-            }}
-            QPushButton:hover {{
-                border: 2px solid {pal.accent};
-            }}
+            {focus_hover}
             QPushButton:pressed {{
                 border: 2px solid {pal.accent_hover};
             }}

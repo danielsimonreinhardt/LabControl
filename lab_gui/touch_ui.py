@@ -439,9 +439,14 @@ def touch_qss(pal: Palette) -> str:
     """
 
 
-def shell_qss(pal: Palette) -> str:
+def shell_qss(pal: Palette, touch: bool = False) -> str:
     """Rahmen der App (Navigation links, Leiste oben) -- am PC und im Touch-Profil gleich (seit 0.53.0,
-    Nutzerwunsch 12.11.2026: das Touch-Konzept auch am PC)."""
+    Nutzerwunsch 12.11.2026: das Touch-Konzept auch am PC). Nur ohne Touch mit Hover (bliebe nach dem Tippen
+    stehen, 1.0.6)."""
+    nav_hover = "" if touch else f"""
+    QWidget#touchNav QToolButton:hover {{
+        color: {pal.text};
+    }}"""
     return f"""
     /* Haupt-Reiter: die Navigation ersetzt die Reiterleiste, der Rahmen um den Inhalt wirkte mit den
        Kacheln darin wie Rahmen im Rahmen (Nutzerhinweis 11.11.2026) */
@@ -459,9 +464,7 @@ def shell_qss(pal: Palette) -> str:
         border-radius: {METRICS.radius_md}px;
         padding: 6px 2px;
     }}
-    QWidget#touchNav QToolButton:hover {{
-        color: {pal.text};
-    }}
+    {nav_hover}
     QWidget#touchNav QToolButton:checked {{
         background-color: {pal.selection};
         color: {pal.text};

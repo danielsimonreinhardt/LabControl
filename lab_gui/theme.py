@@ -214,7 +214,41 @@ DARK = Palette(
 )
 
 
-def form_control_qss(pal: Palette) -> str:
+def touch_active() -> bool:
+    """Touch-Profil aktiv (Pi): Knoepfe ohne Fokus- und Hover-Faerbung (1.0.6) -- nach einem Tipp blieb der Knopf
+    fokussiert (und unter dem gedachten Mauszeiger) und sah dadurch aus wie eingeschaltet."""
+    return ThemeManager.instance().touch
+
+
+def _button_state_qss(sel: str, pal: Palette, touch: bool) -> str:
+    """:focus/:hover/:pressed eines Knopftyps. Im Touch-Profil nur :pressed (Rueckmeldung beim Tippen), dafuer mit
+    der Schrift- und Rahmenfarbe, die am PC der darunterliegende :hover-Zustand liefert."""
+    if touch:
+        return f"""
+    {sel}:pressed {{
+        background-color: {pal.accent_hover};
+        color: {pal.on_accent};
+        border-color: {pal.accent_hover};
+    }}"""
+    return f"""
+    /* Tastaturfokus (Tab-Taste): Fokusfarbe als Rahmen plus Auswahl-Toenung,
+       ohne Rahmenbreite/Padding zu aendern (kein Springen des Layouts).
+       Steht VOR :hover, damit ein Hover auf einem fokussierten Knopf gewinnt. */
+    {sel}:focus {{
+        border-color: {pal.focus};
+        background-color: {pal.selection};
+    }}
+    {sel}:hover {{
+        background-color: {pal.accent};
+        color: {pal.on_accent};
+        border-color: {pal.accent};
+    }}
+    {sel}:pressed {{
+        background-color: {pal.accent_hover};
+    }}"""
+
+
+def form_control_qss(pal: Palette, touch: bool | None = None) -> str:
     """QPushButton-/QLineEdit-/QDoubleSpinBox-/QSpinBox-/QComboBox-Regeln,
     geteilt zwischen dem globalen stylesheet() und panel_color.apply_panel_tint.
 
@@ -234,8 +268,12 @@ def form_control_qss(pal: Palette) -> str:
     betroffen sind. Fix: apply_panel_tint setzt dieselben Regeln zusaetzlich
     als eigenes (staerker priorisiertes) Stylesheet auf die Buttons/
     Eingabefelder, sodass sie nicht mehr beim Vorfahren (der GroupBox)
-    nachschauen muessen."""
+    nachschauen muessen.
+
+    touch: None = aktuelles Profil (touch_active()); im Touch-Profil ohne :focus/:hover der Knoepfe (1.0.6)."""
     M = METRICS
+    if touch is None:
+        touch = touch_active()
     return f"""
     QPushButton {{
         background-color: {pal.surface_alt};
@@ -244,21 +282,7 @@ def form_control_qss(pal: Palette) -> str:
         border-radius: {M.radius_sm}px;
         padding: {M.pad_button};
     }}
-    /* Tastaturfokus (Tab-Taste): Fokusfarbe als Rahmen plus Auswahl-Toenung,
-       ohne Rahmenbreite/Padding zu aendern (kein Springen des Layouts).
-       Steht VOR :hover, damit ein Hover auf einem fokussierten Knopf gewinnt. */
-    QPushButton:focus {{
-        border-color: {pal.focus};
-        background-color: {pal.selection};
-    }}
-    QPushButton:hover {{
-        background-color: {pal.accent};
-        color: {pal.on_accent};
-        border-color: {pal.accent};
-    }}
-    QPushButton:pressed {{
-        background-color: {pal.accent_hover};
-    }}
+    {_button_state_qss("QPushButton", pal, touch)}
     QPushButton:disabled {{
         color: {pal.text_muted};
         background-color: {pal.surface_alt};
@@ -286,21 +310,7 @@ def form_control_qss(pal: Palette) -> str:
            bleibt (per Screenshot-Vergleich austariert). */
         padding-right: 22px;
     }}
-    /* Tastaturfokus (Tab-Taste): Fokusfarbe als Rahmen plus Auswahl-Toenung,
-       ohne Rahmenbreite/Padding zu aendern (kein Springen des Layouts).
-       Steht VOR :hover, damit ein Hover auf einem fokussierten Knopf gewinnt. */
-    QToolButton:focus {{
-        border-color: {pal.focus};
-        background-color: {pal.selection};
-    }}
-    QToolButton:hover {{
-        background-color: {pal.accent};
-        color: {pal.on_accent};
-        border-color: {pal.accent};
-    }}
-    QToolButton:pressed {{
-        background-color: {pal.accent_hover};
-    }}
+    {_button_state_qss("QToolButton", pal, touch)}
     QToolButton:disabled {{
         color: {pal.text_muted};
         background-color: {pal.surface_alt};
@@ -351,8 +361,13 @@ def form_control_qss(pal: Palette) -> str:
     """
 
 
-def stylesheet(pal: Palette) -> str:
+def stylesheet(pal: Palette, touch: bool = False) -> str:
     M = METRICS
+    # Touch: −/+ Tasten der Zahlenfelder ohne Hover-Faerbung (bliebe nach dem Tippen stehen), nur :pressed
+    spin_hover = "" if touch else f"""
+    QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{
+        background-color: {pal.accent};
+    }}"""
     return f"""
     QWidget {{
         background-color: {pal.bg};
@@ -400,7 +415,7 @@ def stylesheet(pal: Palette) -> str:
     QTabBar::tab:hover {{
         color: {pal.text};
     }}
-    {form_control_qss(pal)}
+    {form_control_qss(pal, touch)}
     QComboBox::drop-down {{
         border: none;
     }}
@@ -423,9 +438,7 @@ def stylesheet(pal: Palette) -> str:
         subcontrol-position: bottom right;
         border-bottom-right-radius: {M.radius_sm}px;
     }}
-    QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{
-        background-color: {pal.accent};
-    }}
+    {spin_hover}
     QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {{
         background-color: {pal.accent_hover};
     }}
@@ -614,7 +627,7 @@ class ThemeManager(QObject):
         if app is None:
             return
         from touch_ui import shell_qss, touch_qss   # lokal: touch_ui importiert theme
-        qss = stylesheet(self._palette) + shell_qss(self._palette)
+        qss = stylesheet(self._palette, self._touch) + shell_qss(self._palette, self._touch)
         if self._touch:
             qss += touch_qss(self._palette)
         app.setStyleSheet(qss)

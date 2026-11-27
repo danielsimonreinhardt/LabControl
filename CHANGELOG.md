@@ -4,6 +4,21 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [1.0.6] – 2026-11-27
+
+### Behoben
+- **Touch-Bildschirm (Pi): Knöpfe behalten nach dem Tippen keine Farbe mehr.** Ein getippter Knopf blieb
+  fokussiert und damit blau getönt mit hellem Rahmen. So sah z. B. „Handbedienung“ nach dem Ausschalten aus wie
+  eingeschaltet. Dazu bleibt am Touch-Bildschirm der Hover-Zustand nach dem Tippen stehen, weil kein Mauszeiger
+  die Fläche verlässt. Im Touch-Profil haben Knöpfe deshalb keine Fokus- und Hover-Färbung mehr. Das gilt global,
+  in eingefärbten Kacheln, für OUT-Schalter, Preset-Plätze, „Alles AUS“, die −/+ Tasten und die Navigation.
+  Während des Drückens ist der Knopf weiter hervorgehoben. Am PC bleibt alles wie bisher, Tastaturfokus und
+  Hover sind dort sichtbar.
+- Geprüft (nur Oberfläche, keine Hardware): neues `check_touch_focus`. Es zeichnet jeden Knopftyp vor und nach
+  einem simulierten Tipp (Fokus und Zeiger darüber): Im Touch-Profil sind beide Bilder gleich, am PC
+  verschieden, beim Drücken hervorgehoben. `check_touch_ui`, `check_control_tab`, `check_control_tile_sizes`
+  und `check_arrange_overlay` sind grün. Am Pi selbst noch nicht angetippt.
+
 ## [1.0.5] – 2026-11-27
 
 ### Geändert
