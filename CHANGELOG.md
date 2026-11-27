@@ -4,6 +4,25 @@ Alle nennenswerten Änderungen an der Labor-Steuerungs-App. Format angelehnt an
 [Keep a Changelog](https://keepachangelog.com/de/1.0.0/), Versionierung nach
 Semantic Versioning (`lab_gui/version.py`).
 
+## [1.0.5] – 2026-11-27
+
+### Behoben
+- **Anordnen am Touch-Bildschirm (Pi): Kacheln rücken beim Ziehen zur Seite.** Im verkleinerten Abbild bewegte
+  sich bisher nur die gegriffene Kachel; wohin sie fällt, zeigte sich erst nach dem Loslassen. Jetzt ordnet sich
+  die Ansicht schon während des Ziehens um wie am PC: die gegriffene Kachel hinterlässt einen gestrichelten
+  Platz an der Stelle, an der sie landen wird, die anderen Kacheln gleiten zur Seite und machen dort Platz.
+  Abgelegt wird genau im gezeigten Platz. Gilt für Übersicht und Steuerung; ein Tipp ohne Bewegung ändert
+  weiterhin nichts.
+- **Steuerung: Raster manchmal nur ein bis zwei Spalten breit (seit 1.0.4).** Der Generator im UNI-T meldete
+  seine neue Größe (eine Spalte), solange er noch zwei Kanäle breit war; die Rasterzelle (wächst nur) wurde
+  dadurch rund 580 px breit. Die Meldung kommt jetzt erst, wenn Kanal 2 ausgeblendet ist.
+- Geprüft (nur Oberfläche/Simulation, keine Hardware): `check_arrange_overlay` erweitert (Kacheln weichen
+  schon beim Ziehen aus, Ablage im gezeigten Platz), `check_control_tile_sizes` erweitert (Zelle nicht breiter
+  als nötig), `check_control_tab` (war wegen des Spaltenfehlers rot), `check_unit_mso_awg`, `check_mhs5200a`,
+  `check_dashboard_relayout`, `check_touch_ui`, `check_hide_offline_tiles`, `check_scope_tile_offline`,
+  `check_translations` grün. Bilder des Ziehens im Touch-Profil 1024 × 600 angesehen. Am Pi selbst noch nicht
+  ausprobiert.
+
 ## [1.0.4] – 2026-11-24
 
 ### Geändert
