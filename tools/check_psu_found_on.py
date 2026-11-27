@@ -152,10 +152,14 @@ def section_found_on() -> None:
     connect(worker, "psu:T2", handover)
     check("Uebergabezustand 1 V / 0 A EIN -> kein Chip", not [f for f in probe.found if f[0] == "psu:T2"]
           and not tile2.found_on_visible(), str(probe.found))
+    check("PI-94 a: Uebergabezustand beim Verbinden -> Ausgang AUS (1.0.5)", handover.get_output() is False
+          and worker._psu_output_seen.get("psu:T2") is False, str(handover.get_output()))
     # Sollspannung hochgedreht, Strom weiter 0 A: liefert nichts -> auch kein Chip
-    connect(worker, "psu:T3", mock_psu(24.0, 0.0, True))
+    t3 = mock_psu(24.0, 0.0, True)
+    connect(worker, "psu:T3", t3)
     check("24 V / 0 A EIN -> kein Chip (Strombegrenzung entscheidet)",
           not [f for f in probe.found if f[0] == "psu:T3"], str(probe.found))
+    check("PI-94 a: 24 V / 0 A EIN -> ebenfalls Ausgang AUS", t3.get_output() is False, str(t3.get_output()))
     # Ausgang AUS beim Verbinden
     connect(worker, "psu:T4", mock_psu(12.0, 2.0, False))
     check("Ausgang AUS beim Verbinden -> kein Chip", not [f for f in probe.found if f[0] == "psu:T4"],

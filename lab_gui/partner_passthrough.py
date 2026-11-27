@@ -7,8 +7,8 @@ RemoteBridge.partner_action_requested hier an.
 Fuer Claude gelten dieselben Regeln wie fuer einen gemeinsamen Ablauf:
 
 - Belegung: bevor ein Befehl an ein Partnergeraet geht, belegt dieser Rechner es beim Partner (Lauf
-  "Claude (MCP)"). Am Partner ist die Kachel dann gesperrt ("belegt durch PC"), ALLE AUS, Handbedienung
-  und Sicherheitsabschaltung gehen dort weiter. Weitere Geraete kommen dazu, indem die Belegung mit der
+  "Claude (MCP)"). Am Partner zeigt die Kachel dann nur "MCP" und bleibt bedienbar (PI-95 a, 1.0.5; vorher
+  gesperrt wie bei einem Testablauf). Fremde Aufrufer lehnt der Partner weiter ab (409 leased). Weitere Geraete kommen dazu, indem die Belegung mit der
   erweiterten Liste neu angefordert wird.
 - Lebenszeichen: PartnerLink meldet sich jede Sekunde; fehlt es 3 s (PC haengt, Kabel ab), schaltet der
   Partner die belegten Geraete ab.

@@ -5,7 +5,8 @@ Geraete, die der Ablauf nutzt. Solange die Belegung besteht:
   * nimmt der Besitzer Bedienungen fuer diese Geraete nur vom Leitstand an (Kopf LEASE_HEADER mit
     der Belegungs-ID); jeder andere Aufrufer bekommt 409 "leased" (share_api);
   * sperrt der Besitzer die Kacheln dieser Geraete fuer die Bedienung vor Ort ("belegt durch PC"),
-    ALLE AUS, Handbedienung und Sicherheitsabschaltung bleiben (main_window/control_tab);
+    ALLE AUS, Handbedienung und Sicherheitsabschaltung bleiben (main_window/control_tab) -- ausser bei
+    einer Belegung fuer Claude (MCP): dort nur der Hinweis "MCP" (PI-95 a, 1.0.5);
   * muss der Leitstand sich mindestens alle `ttl_s` melden (renew). Bleibt das Lebenszeichen aus,
     gibt pop_expired() die Belegung heraus und der Besitzer schaltet die Geraete ab -- dasselbe
     Prinzip wie beim Batterie-Simulator ohne 0x130.

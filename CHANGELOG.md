@@ -6,6 +6,19 @@ Semantic Versioning (`lab_gui/version.py`).
 
 ## [1.0.5] – 2026-11-27
 
+### Geändert
+- **Netzteil im Übergabezustand wird beim Verbinden ausgeschaltet (PI-94 a).** Beim Beenden übergibt LabControl
+  jedes HCS-Netzteil mit 1 V / 0 A und Ausgang EIN (das Gerät hat keine Ausgangstaste). Fand die App es nach dem
+  Neustart so vor, bedeutete das erste „Strom setzen“ sofort Spannung am Prüfling, ohne dass „Ausgang EIN“
+  geschickt wurde (Pi-Neustart 24.11.: 12 V am Evalboard). Jetzt schaltet LabControl ein Netzteil, das beim
+  Verbinden mit Ausgang EIN und 0 A Strombegrenzung steht, auf Ausgang AUS. Ausgang EIN mit Strom > 0 (Hinweis
+  „beim Verbinden EIN“, PI-81 a) und Handbedienung bleiben unberührt.
+- **Claude (MCP) sperrt Partnergeräte nicht mehr (PI-95 a).** Nutzte Claude über den PC ein Pi-Gerät, war dessen
+  Kachel am Pi bis 10 min nach dem letzten Claude-Befehl gesperrt, am PC dagegen bedienbar. Jetzt steht am Pi
+  nur „⇄ MCP“, die Kachel bleibt bedienbar – wie bei den Geräten am PC selbst. Die Belegung bleibt: fehlt das
+  Lebenszeichen des PCs 3 s, schaltet der Pi wie bisher ab („Aus bei Verbindungsverlust“), fremde Aufrufer
+  bekommen weiter 409. Testabläufe sperren unverändert.
+
 ### Behoben
 - **Anordnen am Touch-Bildschirm (Pi): Kacheln rücken beim Ziehen zur Seite.** Im verkleinerten Abbild bewegte
   sich bisher nur die gegriffene Kachel; wohin sie fällt, zeigte sich erst nach dem Loslassen. Jetzt ordnet sich
@@ -22,6 +35,11 @@ Semantic Versioning (`lab_gui/version.py`).
   `check_dashboard_relayout`, `check_touch_ui`, `check_hide_offline_tiles`, `check_scope_tile_offline`,
   `check_translations` grün. Bilder des Ziehens im Touch-Profil 1024 × 600 angesehen. Am Pi selbst noch nicht
   ausprobiert.
+- Geprüft für PI-94 a/PI-95 a (nur Mock/Simulation, keine Hardware): `check_psu_found_on` erweitert
+  (Übergabezustand und 24 V / 0 A werden ausgeschaltet), `check_verbund_v4` angepasst (Kachel beim Besitzer
+  „⇄ MCP“, bedienbar), `check_partner_v2` (Testablauf sperrt weiter), `check_partner_link`,
+  `check_partner_devices`, `check_fg_dc_duty`, `check_device_reset`, `check_psu_manual_window`,
+  `check_network_share` grün. Am echten HCS erst mit dem nächsten Pi-Neustart.
 
 ## [1.0.4] – 2026-11-24
 

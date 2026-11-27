@@ -1036,7 +1036,8 @@ Freigabe des PCs zeigt Claude zusätzlich die Partnergeräte als
 `@raspberrypi/psu:0001` und reicht Befehle daran an den Partner weiter. Dafür
 muss am PC „Claude (MCP) darf steuern“ angehakt sein; am Partner braucht es
 nichts weiter. Vor dem ersten Befehl belegt der PC das Gerät beim
-Partner („belegt durch PC · Claude (MCP)“) und meldet sich jede Sekunde; fehlt
+Partner und meldet sich jede Sekunde. Am Partner steht in der Kachel nur
+„MCP“; sie bleibt dort bedienbar, Mensch und Claude bedienen gemeinsam. Fehlt
 das 3 Sekunden, endet die Belegung, und das Gerät wird abgeschaltet (außer ohne
 Haken „Aus bei Verbindungsverlust“).
 Sonst endet sie nach

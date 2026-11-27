@@ -4204,10 +4204,11 @@ class ControlTab(QWidget):
 
     # -- Belegung durch den Verbund-Leitstand (PI-25 a) ------------------------------
 
-    def set_lease(self, device_id: str, text: str) -> None:
+    def set_lease(self, device_id: str, text: str, lock: bool = True) -> None:
         """text: "belegt durch PC · Ablauf" sperrt die Kachel fuer die Bedienung vor Ort und zeigt den
         Hinweis oben in der Kachel; "" hebt die Sperre auf. Der Schalter "Handbedienung" bleibt
-        bedienbar (ALLE AUS und Sicherheitsabschaltung sitzen ohnehin nicht in der Kachel)."""
+        bedienbar (ALLE AUS und Sicherheitsabschaltung sitzen ohnehin nicht in der Kachel).
+        lock=False (Claude per MCP, PI-95 a): nur der Hinweis, die Kachel bleibt bedienbar."""
         section = self._sections.get(device_id)
         if section is None:
             return
@@ -4223,6 +4224,8 @@ class ControlTab(QWidget):
                 self._lease_banners[device_id] = banner
             banner.setText("⇄ " + text)
             banner.show()
+            if not lock:
+                return
             disabled = self._lease_locked.setdefault(device_id, [])
             keep = getattr(section, "_manual_button", None)
             # Wird regelmaessig erneut aufgerufen (MainWindow, 250 ms): Zustandsmeldungen eines Geraets

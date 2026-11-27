@@ -369,7 +369,8 @@ sequenceDiagram
   Note over B: Fehlt das Lebenszeichen 3 s,<br/>hebt B die Belegung auf<br/>und schaltet ab (je Gerät abwählbar)
 ```
 
-- **Belegung:** Kachel beim Besitzer gesperrt mit „belegt durch <Rechner> · <Ablauf>“. Die Handbedienung des
+- **Belegung:** Kachel beim Besitzer gesperrt mit „belegt durch <Rechner> · <Ablauf>“. Nutzt Claude (MCP)
+  das Gerät, steht dort nur „MCP“ und die Kachel bleibt bedienbar. Die Handbedienung des
   Netzteils bleibt möglich; Bedienungen anderer werden abgelehnt.
 - **Lebenszeichen:** Der Leitstand bricht den Lauf nach 3 s ohne bestätigtes Lebenszeichen ab. Der Besitzer hebt
   die Belegung dann auf und schaltet die belegten Geräte ab. Ausnahme: Geräte, bei denen beim Besitzer unter
