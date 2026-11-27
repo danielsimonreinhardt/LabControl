@@ -228,7 +228,12 @@ def main() -> int:
           lease is not None and lease.holder_name() == app_logging.host_name() and lease.run == "Claude (MCP)",
           str(lease and (lease.holder_name(), lease.run)))
     spin(app, 0.6)
-    check("Kachel bei B gesperrt", "belegt durch" in window_b.control_tab.lease_text(dw.SIM_PSU_ID),
+    # PI-95 a (1.0.5): Claude sperrt die Kachel beim Besitzer nicht, Hinweis nur "MCP"
+    section_b = window_b.control_tab._sections.get(dw.SIM_PSU_ID)
+    check("Kachel bei B mit Hinweis 'MCP', nicht gesperrt (PI-95 a)",
+          window_b.control_tab.lease_text(dw.SIM_PSU_ID) == "⇄ MCP"
+          and not window_b.control_tab._lease_locked.get(dw.SIM_PSU_ID)
+          and section_b is not None and section_b._voltage_spin.isEnabled(),
           window_b.control_tab.lease_text(dw.SIM_PSU_ID))
     status, body = http_async(app, port_b, TOKEN_B, "POST", f"/api/v1/tiles/{dw.SIM_PSU_ID}/actions",
                               {"action": "PSU_OUT_OFF"})

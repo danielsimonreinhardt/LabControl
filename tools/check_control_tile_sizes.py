@@ -136,6 +136,13 @@ def section_control_tab(app) -> None:
         awg = tab._sections[dw.SIM_AWG_ID]
         check("UNI-T-Generator eine Spalte breit", awg.minimumWidth() == tab._cell_width,
               f"{awg.minimumWidth()} / {tab._cell_width}")
+        # 1.0.5: die Groessenmeldung kam, als die Kachel noch zwei Kanaele breit war -- die Zelle (waechst nur)
+        # wurde dadurch ~580 px breit, in die Steuerung passten nur noch ein bis zwei Spalten
+        from control_tab import cell_size_ratchet
+        need = cell_size_ratchet(0, [(tab._sections[d].sizeHint().width(), tab._tile_span(d)[0])
+                                     for d in tab._placed_ids()])
+        check("Rasterzelle nicht breiter als die Kacheln brauchen", tab._cell_width <= need,
+              f"Zelle {tab._cell_width} px, noetig {need} px")
     finally:
         window.close()
         app.processEvents()

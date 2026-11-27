@@ -815,11 +815,48 @@ class DashboardWidget(QGroupBox):
         container = self._scroll_area.widget()
         return container.grab(), tile_rects_in(container, self._panels)
 
+    def arrange_begin(self, device_id: str) -> None:
+        """Anordnen-Abbild hebt eine Kachel an: wie _start_panel_drag ausblenden, ihr Platz bleibt frei."""
+        panel = self._panels.get(device_id)
+        if panel is None:
+            return
+        self._set_keeps_space_when_hidden(panel, True)
+        panel.hide()
+        self._drag_hidden_panel = panel
+        self._drag_preview_order = None
+
+    def arrange_preview(self, device_id: str, pos, _grab) -> bool:
+        """Vorschau wie beim Ziehen am PC (_preview_panel_drag), ohne Animation -- das Abbild nimmt die
+        Ansicht danach neu auf und laesst die Kacheln selbst gleiten. True, wenn sich etwas geaendert hat."""
+        if device_id not in self._panels:
+            return False
+        order = self._order_with_dragged_at(device_id, pos)
+        if order == self._current_order():
+            return False
+        self._drag_preview_order = order
+        self._relayout_panels()
+        self._panel_layout.activate()
+        return True
+
     def arrange_drop(self, device_id: str, pos, _grab) -> None:
-        """Reihenfolge wie beim Loslassen an `pos` (Container-Koordinaten), speichern und neu anordnen."""
-        if device_id in self._panels:
-            self._drag_preview_order = None
-            self._persist_panel_order(self._order_with_dragged_at(device_id, pos))
+        """Reihenfolge wie beim Loslassen an `pos` (Container-Koordinaten), speichern und neu anordnen.
+        Lief eine Vorschau (arrange_begin), gilt wie am PC die zuletzt gezeigte (_drop_panel)."""
+        if device_id not in self._panels:
+            return
+        if self._drag_hidden_panel is not None:
+            self._drop_panel(device_id, pos)
+            return
+        self._drag_preview_order = None
+        self._persist_panel_order(self._order_with_dragged_at(device_id, pos))
+
+    def arrange_cancel(self, _device_id: str) -> None:
+        panel = self._drag_hidden_panel
+        self._drag_hidden_panel = None
+        self._drag_preview_order = None
+        if panel is not None:
+            self._set_keeps_space_when_hidden(panel, False)
+            panel.show()
+        self._relayout_panels()
 
     def set_multi_row(self, on: bool) -> None:
         """Touch-Profil (Reiter "Übersicht"): Kacheln brechen an der verfuegbaren Breite um und

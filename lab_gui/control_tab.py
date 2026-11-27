@@ -1443,7 +1443,7 @@ class FgControlGroup(QGroupBox):
         """Anderes Geraeteprofil gemeldet (1.0.2): Kanaele, Phase, Modulation/Last danach ein-/ausblenden."""
         self._module = module
         # Zuerst umhaengen: Qt blendet ein Widget beim Wechsel des Eltern-Widgets aus
-        self._set_single(len(module.CHANNELS) == 1)
+        size_changed = self._set_single(len(module.CHANNELS) == 1)
         for n, box in self._boxes.items():
             box.apply_module(module)
             box.setVisible(n in module.CHANNELS)
@@ -1451,13 +1451,18 @@ class FgControlGroup(QGroupBox):
         self._modulation.setVisible(module.HAS_MODULATION or module.HAS_LOAD)
         self._last_phase = None
         self._retranslate()
+        if size_changed:
+            # Erst jetzt melden, wenn Kanal 2 schon ausgeblendet ist: frueher kam die Meldung aus _set_single, die
+            # Kachel hatte da noch die Breite von zwei Kanaelen (602 px) und die Rasterzelle (waechst nur) wurde
+            # bei einer Spalte so breit, dass in die Steuerung nur noch ein bis zwei Spalten passten (1.0.5)
+            self.tile_size_changed.emit(self._device_id)
 
-    def _set_single(self, single: bool) -> None:
+    def _set_single(self, single: bool) -> bool:
         """Ein Kanal (UNI-T, 1.0.4): Modulation und Last unter die Felder des Kanals (vor "Ausgang"), die Kachel
         braucht dann eine statt zwei Spalten. Vorher standen sie als eigener Kasten daneben, die Kachel war
         2 x 2 Zellen gross und halb leer (Nutzer 24.11.2026)."""
         if single == self._single:
-            return
+            return False
         self._single = single
         box = self._boxes[1]
         if single:
@@ -1468,7 +1473,7 @@ class FgControlGroup(QGroupBox):
             self._channels_row.addWidget(self._modulation)
         self._modulation.set_embedded(single)
         box.set_single(single)
-        self.tile_size_changed.emit(self._device_id)
+        return True
 
     def _align_single_labels(self) -> None:
         """Eingebettet: Beschriftungen von Kanal und Modulation gleich breit, damit die Felder untereinander
@@ -3505,13 +3510,43 @@ class ControlTab(QWidget):
         container = self._scroll_area.widget()
         return container.grab(), tile_rects_in(container, self._sections)
 
+    def arrange_begin(self, device_id: str) -> None:
+        """Anordnen-Abbild hebt eine Kachel an: wie _start_tile_drag ausblenden, die Zelle bleibt belegt."""
+        section = self._sections.get(device_id)
+        if section is None:
+            return
+        self._set_keeps_space_when_hidden(section, True)
+        self._drag_hidden_section = section
+        self._drag_preview_cells = None
+        section.hide()
+
+    def arrange_preview(self, device_id: str, pos, grab) -> bool:
+        """Vorschau wie beim Ziehen am PC (_preview_tile_drag), ohne Animation -- das Abbild nimmt die
+        Ansicht danach neu auf und laesst die Kacheln selbst gleiten. True, wenn sich etwas geaendert hat."""
+        if device_id not in self._sections:
+            return False
+        self._drag_hotspot = grab
+        cells = self._cells_with_dragged_at(device_id, pos)
+        if cells == self._positions(self._placed_ids()):
+            return False
+        self._drag_preview_cells = cells
+        self._relayout_grid()
+        self._grid.activate()
+        return True
+
     def arrange_drop(self, device_id: str, pos, grab) -> None:
-        """Wie ein Drop beim Ziehen: Zielzelle aus der Ecke des Abbilds (Zeiger minus Griffpunkt)."""
+        """Wie ein Drop beim Ziehen: die zuletzt gezeigte Vorschau gilt; ohne Vorschau Zielzelle aus der
+        Ecke des Abbilds (Zeiger minus Griffpunkt)."""
         if device_id not in self._sections:
             return
-        self._drag_preview_cells = None
+        if self._drag_hidden_section is None:
+            self._drag_preview_cells = None
         self._drag_hotspot = grab
         self._drop_tile(device_id, pos)
+
+    def arrange_cancel(self, _device_id: str) -> None:
+        self._finish_tile_drag()
+        self._relayout_grid()
 
     def set_tile_order(self, order: list[str]) -> None:
         """Wendet eine gespeicherte Kachel-Reihenfolge an (siehe settings.py:
@@ -4169,10 +4204,11 @@ class ControlTab(QWidget):
 
     # -- Belegung durch den Verbund-Leitstand (PI-25 a) ------------------------------
 
-    def set_lease(self, device_id: str, text: str) -> None:
+    def set_lease(self, device_id: str, text: str, lock: bool = True) -> None:
         """text: "belegt durch PC · Ablauf" sperrt die Kachel fuer die Bedienung vor Ort und zeigt den
         Hinweis oben in der Kachel; "" hebt die Sperre auf. Der Schalter "Handbedienung" bleibt
-        bedienbar (ALLE AUS und Sicherheitsabschaltung sitzen ohnehin nicht in der Kachel)."""
+        bedienbar (ALLE AUS und Sicherheitsabschaltung sitzen ohnehin nicht in der Kachel).
+        lock=False (Claude per MCP, PI-95 a): nur der Hinweis, die Kachel bleibt bedienbar."""
         section = self._sections.get(device_id)
         if section is None:
             return
@@ -4188,6 +4224,8 @@ class ControlTab(QWidget):
                 self._lease_banners[device_id] = banner
             banner.setText("⇄ " + text)
             banner.show()
+            if not lock:
+                return
             disabled = self._lease_locked.setdefault(device_id, [])
             keep = getattr(section, "_manual_button", None)
             # Wird regelmaessig erneut aufgerufen (MainWindow, 250 ms): Zustandsmeldungen eines Geraets

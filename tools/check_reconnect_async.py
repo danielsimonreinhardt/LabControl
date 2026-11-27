@@ -65,7 +65,9 @@ class FakePsu:
         return True   # Geraet war schon eingeschaltet (von Hand/frueherer Sitzung)
 
     def get_setpoint(self):
-        return 12.0, 0.0
+        # mit Strombegrenzung > 0: wirklich eingeschaltet -- 0 A waere der Uebergabezustand, den LabControl seit
+        # 1.0.5 beim Verbinden ausschaltet (PI-94 a, check_psu_found_on)
+        return 12.0, 0.5
 
     def get_ovp(self):
         return 15.0

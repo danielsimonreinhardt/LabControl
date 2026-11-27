@@ -2184,13 +2184,26 @@ class DeviceWorker(QObject):
         mit 0 A Strombegrenzung liefert der Ausgang nichts, egal welche Spannung eingestellt ist. Deshalb
         entscheidet allein die Strombegrenzung (> PSU_FOUND_ON_MIN_CURRENT_A, eine halbe Anzeigestelle), nicht die
         Spannung. Sind die Sollwerte nicht lesbar, gilt der Ausgang vorsichtshalber als vorgefunden. Kein
-        automatisches Schalten."""
+        automatisches Schalten.
+
+        PI-94 a (1.0.5): den Uebergabezustand (Ausgang EIN, Strombegrenzung 0 A) schaltet LabControl beim Verbinden
+        auf Ausgang AUS. Sonst bedeutete das erste "Strom setzen" sofort Spannung am Pruefling, ohne dass jemand
+        "Ausgang EIN" geschickt hat (Pi-Neustart 24.11.: 12 V am Evalboard). Handbedienung bleibt unberuehrt."""
         if self._psu_output_seen.get(device_id) is not True:
             self._set_psu_found_on(device_id, None)
             return
         setpoints = self._psu_setpoints.get(device_id)
         if setpoints is not None and setpoints[1] <= PSU_FOUND_ON_MIN_CURRENT_A:
             self._set_psu_found_on(device_id, None)
+            if device_id in self._psu_manual:
+                return
+            ok, error = self._guard_psu(device_id, lambda psu: psu.set_output(False))
+            if ok:
+                logger.warning("Netzteil %s beim Verbinden im Übergabezustand (Ausgang EIN, %g V / 0 A) -> "
+                               "Ausgang AUS", device_id, setpoints[0])
+                self._emit_psu_output(device_id, False)
+            else:
+                logger.error("Netzteil %s: Übergabezustand nicht ausgeschaltet: %s", device_id, error)
             return
         info = {"voltage": setpoints[0] if setpoints else None, "current": setpoints[1] if setpoints else None}
         logger.warning("Netzteil %s beim Verbinden mit Ausgang EIN vorgefunden (Soll %s) -- nichts geschaltet",

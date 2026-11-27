@@ -63,7 +63,7 @@ from jlink_service import JLinkService
 from pairing_dialog import PairConfirmDialog, PairingDialog, PairingSession
 from partner_client import normalize_url, resolve_partner_ip
 from partner_link import PartnerLink
-from partner_passthrough import PartnerPassthrough
+from partner_passthrough import LEASE_RUN as CLAUDE_LEASE_RUN, PartnerPassthrough
 from partner_devices import PartnerDevices
 from share_remote import RemoteBridge
 from share_server import ShareServer, is_verbund_client
@@ -558,7 +558,7 @@ class MainWindow(QMainWindow):
         # Claude (MCP) im Verbund (PI-32 a): Befehle an durchgereichte Partnerkacheln
         self._passthrough = PartnerPassthrough(self._partner, self._share_bridge, self._passthrough_blocked, self)
         # Besitzer (V2): Belegungen durch den Partner anzeigen, abgelaufene abschalten
-        self._lease_view: dict[str, str] = {}
+        self._lease_view: dict[str, tuple[str, bool]] = {}   # Hinweis, Kachel gesperrt
         self._lease_timer = QTimer(self)
         self._lease_timer.setInterval(250)
         self._lease_timer.timeout.connect(self._check_leases)
@@ -1222,13 +1222,22 @@ class MainWindow(QMainWindow):
                                    holder=lease.holder_name(), devices=names))
             if messages:
                 self.statusBar().showMessage(" · ".join(messages), 30000)
-        view = {device_id: tr("belegt durch {holder} · {run}", holder=lease.holder_name(),
-                              run=lease.run or tr("Testablauf"))
-                for device_id, lease in leases.snapshot().items()}
+        # PI-95 a (1.0.5): eine Belegung fuer Claude (MCP) sperrt die Kachel nicht -- Mensch und Claude bedienen
+        # gemeinsam wie bei den eigenen Geraeten des PCs; das Lebenszeichen (Abschalten bei Verbindungsverlust)
+        # bleibt. Hinweis nur "MCP". Testablaeufe sperren weiter.
+        view = {}
+        for device_id, lease in leases.snapshot().items():
+            if lease.run == CLAUDE_LEASE_RUN:
+                view[device_id] = ("MCP", False)
+            else:
+                view[device_id] = (tr("belegt durch {holder} · {run}", holder=lease.holder_name(),
+                                      run=lease.run or tr("Testablauf")), True)
         for device_id in set(self._lease_view) - set(view):
             self.control_tab.set_lease(device_id, "")
-        for device_id, text in view.items():
-            self.control_tab.set_lease(device_id, text)
+        for device_id, (text, lock) in view.items():
+            if device_id in self._lease_view and self._lease_view[device_id] != (text, lock):
+                self.control_tab.set_lease(device_id, "")   # Art gewechselt: alte Sperre erst aufheben
+            self.control_tab.set_lease(device_id, text, lock=lock)
         self._lease_view = view
 
     def _render_sim_chip(self, *_args) -> None:

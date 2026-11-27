@@ -6,6 +6,7 @@ Bereichs waren nicht erreichbar.
 - Kachel im Abbild greifen und auf eine andere ziehen: Reihenfolge (Uebersicht) bzw. Zelle (Steuerung)
   aendert sich und wird gespeichert
 - Tipp ohne Bewegung aendert nichts
+- seit 1.0.5: schon beim Ziehen ruecken die anderen Kacheln zur Seite, abgelegt wird im gezeigten Platz
 - Anordnen aus: Abbild weg
 
 Offscreen, Simulation, keine Hardware.  Aufruf:  python tools/check_arrange_overlay.py
@@ -44,11 +45,13 @@ def pump(app, n: int = 20) -> None:
         QTest.qWait(10)
 
 
-def drag(overlay, start: QPointF, end: QPointF) -> None:
+def drag(overlay, start: QPointF, end: QPointF, before_release=None) -> None:
     a, b = start.toPoint(), end.toPoint()
     QTest.mousePress(overlay, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, a)
     for i in range(1, 6):
         QTest.mouseMove(overlay, a + (b - a) * i / 5)
+    if before_release is not None:
+        before_release()
     QTest.mouseRelease(overlay, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, b)
 
 
@@ -98,7 +101,17 @@ def main() -> int:
     check("Tipp ohne Bewegung aendert nichts", w.dashboard._current_order() == order_before)
 
     target = dash_overlay._to_overlay(rects[last])
-    drag(dash_overlay, start, QPointF(target.right() - 2, target.center().y()))
+    during: dict = {}
+
+    def look_dash() -> None:
+        during["rects"] = dict(dash_overlay._rects)
+        during["hidden"] = w.dashboard._panels[first].isHidden()
+        during["order"] = w.dashboard._current_order()
+
+    drag(dash_overlay, start, QPointF(target.right() - 2, target.center().y()), look_dash)
+    moved = [d for d in rects if d != first and d in during["rects"] and during["rects"][d] != rects[d]]
+    check("Uebersicht: beim Ziehen ruecken andere Kacheln zur Seite (1.0.5)", bool(moved) and during["hidden"]
+          and during["order"].index(first) > during["order"].index(last), f"{moved} {during['order']}")
     pump(app)
     order_after = w.dashboard._current_order()
     check("Uebersicht: gezogene Kachel steht jetzt hinten", order_after.index(first) > order_after.index(last),
@@ -128,11 +141,25 @@ def main() -> int:
     ct._grid.activate()
     debug = (f"Abbild-Rechteck {b}: {crects[b].getRect()}, Raster-Zelle {ct._grid.cellRect(*cells_before[b]).getRect()}, "
              f"Ziel aus Abbild {ct._nearest_grid_cell(crects[b].x(), crects[b].y())}, touch={ct._touch_layout}")
+    seen: dict = {}
+
+    def look_ctrl() -> None:
+        seen["preview"] = dict(ct._drag_preview_cells or {})
+        seen["rects"] = dict(ctrl_overlay._rects)
+
     drag(ctrl_overlay, ctrl_overlay._to_overlay(crects[a]).topLeft() + QPointF(6, 6),
-         ctrl_overlay._to_overlay(crects[b]).topLeft() + QPointF(6, 6))
+         ctrl_overlay._to_overlay(crects[b]).topLeft() + QPointF(6, 6), look_ctrl)
     pump(app)
     cells_after = dict(w.control_tab._positions(w.control_tab._placed_ids()))
-    check("Steuerung: Kachel hat die Zelle gewechselt", cells_after.get(a) == cells_before.get(b),
+    shifted = [d for d in crects if d != a and d in seen["rects"] and seen["rects"][d] != crects[d]]
+    check("Steuerung: beim Ziehen ruecken andere Kacheln zur Seite (1.0.5)", bool(shifted), str(seen["preview"]))
+    check("Steuerung: Kachel landet im beim Loslassen gezeigten Platz", seen["preview"].get(a) is not None
+          and cells_after.get(a) == seen["preview"].get(a), f"{seen['preview'].get(a)} -> {cells_after.get(a)}")
+    # Beim Ziehen nach unten ruecken die Kacheln darueber nach oben: unter dem Finger liegt am Ende hoechstens
+    # eine Zeile weiter als die Zielkachel vorher
+    check("Steuerung: Kachel hat die Zelle gewechselt (an der Zielkachel)",
+          cells_after.get(a) != cells_before.get(a) and abs(cells_after[a][0] - cells_before[b][0]) <= 1
+          and cells_after[a][1] == cells_before[b][1],
           f"{debug}; {a}: {cells_before.get(a)} -> {cells_after.get(a)}, Ziel {b} {cells_before.get(b)}, "
           f"Spannen {w.control_tab._tile_span(a)}/{w.control_tab._tile_span(b)}, Spalten {w.control_tab._max_cols}, "
           f"vorher {sorted(cells_before.items(), key=lambda kv: kv[1])}, nachher {sorted(cells_after.items(), key=lambda kv: kv[1])}")
